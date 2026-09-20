@@ -1,6 +1,6 @@
 # fieldkit command-line application
 [build-system]
-requires = ["hatchling==1.26.3"]
+requires = ["hatchling==1.32.0"]
 build-backend = "hatchling.build"
 
 [project]
@@ -264,7 +264,7 @@ banned-module-level-imports = [
 
 [dependency-groups]
 release-build = [
-    "hatchling==1.26.3",
+    "hatchling==1.32.0",
 ]
 dev = [
     "gaze-py>=0.9.3",
