@@ -107,7 +107,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           version: "0.12.5"
           enable-cache: false
@@ -206,7 +206,7 @@ jobs:
         with:
           name: release-candidate-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
           path: .
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           version: "0.12.5"
           enable-cache: false
@@ -263,7 +263,7 @@ jobs:
           (cd candidate/bundle && sha256sum --strict --check SHA256SUMS)
           mkdir release-dist
           cp candidate/bundle/*.whl candidate/bundle/*.tar.gz release-dist/
-      - uses: pypa/gh-action-pypi-publish@ec4db0b4ddc65acdf4bff5fa45ac92d78b56bdf0 # v1.9.0
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           packages-dir: release-dist
           repository-url: https://test.pypi.org/legacy/
@@ -289,7 +289,7 @@ jobs:
           (cd candidate/bundle && sha256sum --strict --check SHA256SUMS)
           mkdir release-dist
           cp candidate/bundle/*.whl candidate/bundle/*.tar.gz release-dist/
-      - uses: pypa/gh-action-pypi-publish@ec4db0b4ddc65acdf4bff5fa45ac92d78b56bdf0 # v1.9.0
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           packages-dir: release-dist
 
