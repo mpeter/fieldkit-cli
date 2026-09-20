@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mpeter/fieldkit-cli/blob/main/docs/release-readiness/release-consumer-evidence.schema.json",
+  "title": "fieldkit public-index consumer verification evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "status", "repository", "source_commit", "planned_tag", "index_endpoint", "environment", "artifacts", "scenarios", "findings"],
+  "properties": {
+    "schema_version": {"const": 5},
+    "status": {"enum": ["success", "pending", "failed"]},
+    "repository": {"type": "string", "pattern": "^[a-z0-9-]+/fieldkit-cli$"},
+    "source_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "planned_tag": {"const": "v1.0.0"},
+    "index_endpoint": {"type": "string", "pattern": "^https://"},
+    "environment": {"$ref": "#/$defs/environment"},
+    "artifacts": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"$ref": "#/$defs/artifact"}},
+    "scenarios": {"type": "array", "items": {"$ref": "#/$defs/scenario"}},
+    "findings": {"type": "array", "items": {"type": "string"}}
+  },
+  "$defs": {
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["system", "machine", "python_version"],
+      "properties": {
+        "system": {"type": "string", "minLength": 1},
+        "machine": {"type": "string", "minLength": 1},
+        "python_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+$"}
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "name", "sha256", "observed", "downloaded"],
+      "properties": {
+        "kind": {"enum": ["wheel", "sdist"]},
+        "name": {"type": "string", "pattern": "^[^/\\\\\\u0000\\r\\n]+$"},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "observed": {"type": "boolean"},
+        "downloaded": {"type": "boolean"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"downloaded": {"const": true}}, "required": ["downloaded"]},
+          "then": {"properties": {"observed": {"const": true}}}
+        }
+      ]
+    },
+    "scenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact_name", "id", "argv", "exit_status", "status"],
+      "properties": {
+        "artifact_name": {"type": "string", "pattern": "^[^/\\\\\\u0000\\r\\n]+$"},
+        "id": {"type": "string", "pattern": "^CONSUMER[0-9]{3}$"},
+        "argv": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+        "exit_status": {"type": ["integer", "null"], "minimum": 0},
+        "status": {"enum": ["pass", "fail", "not_run"]}
+      }
+    }
+  }
+}

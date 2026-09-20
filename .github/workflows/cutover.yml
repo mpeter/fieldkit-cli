@@ -1,0 +1,27 @@
+name: Cutover verification
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify-root:
+    if: github.event.before == '0000000000000000000000000000000000000000'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.5"
+          enable-cache: false
+      - name: Prove the initial public commit is a root commit
+        run: test "$(git rev-list --parents -n 1 HEAD)" = "$GITHUB_SHA"
+      - name: Run the frozen full repository gate
+        run: make quality-full

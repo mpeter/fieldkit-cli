@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "candidate": {
+    "repository": "mpeter/fieldkit-cli",
+    "package": "fieldkit-cli",
+    "planned_tag": "v1.0.0"
+  },
+  "roles": {
+    "preparer": "release-maintainer",
+    "approver": "release-owner",
+    "incident": "release-maintainer"
+  },
+  "support": {
+    "compatibility_policy": "docs/release-readiness/compatibility-policy.json",
+    "supported_line": "1.x best-effort community support"
+  },
+  "external_controls": [
+    {
+      "id": "github-release-environment",
+      "status": "pending",
+      "evidence": null
+    },
+    {
+      "id": "pypi-trusted-publisher",
+      "status": "pending",
+      "evidence": null
+    }
+  ]
+}

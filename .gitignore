@@ -1,0 +1,122 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Tools
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.cache/
+.coverage
+.coverage.*
+coverage.json
+node_modules/
+.agentready/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Agent of Empires — local session config
+.agent-of-empires/
+
+# IDE
+.idea/
+.vscode/
+.zed/
+*.code-workspace
+
+# Claude Code — ignore machine-specific content
+.claude/settings.local.json
+# .claude/agents/ and .claude/commands/ are tracked so the custom divisor
+# agents and operator commands travel with the repo (needed in ephemeral cloud
+# sandboxes that only have the git clone). hooks/ stay symlink-installed and
+# worktrees/ are transient, so both remain ignored.
+.claude/hooks/
+.claude/worktrees/
+# Per-run driver scratch created inside an ephemeral worktree:
+# isolated runtime data + nested harness worktrees. The driver worktree is a
+# checkout of this repo, so these must be ignored there too.
+.fieldkit-data/
+.fieldkit-harness/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Generated
+routines/briefs/
+data/
+
+
+# Gmail cache database (local only, managed by gmail-cache pipeline)
+tools/gmail_cache/gmail.db
+tools/gmail-cache/
+
+# Enrich pipeline: generated contact and search files (contain personal/customer data — never commit)
+fieldkit/enrich/contacts_raw.json
+fieldkit/enrich/contacts_enriched.json
+fieldkit/enrich/.contacts_raw_prev.json
+fieldkit/enrich/.contacts_enriched_prev.json
+fieldkit/enrich/web_search_batch.json
+fieldkit/enrich/web_search_results.json
+# src/ layout equivalents (post-modernize)
+src/fieldkit/commands/enrich/web_search_batch.json
+src/fieldkit/commands/enrich/web_search_results.json
+src/fieldkit/commands/enrich/contacts_raw.json
+src/fieldkit/commands/enrich/contacts_enriched.json
+src/fieldkit/commands/enrich/.contacts_raw_prev.json
+src/fieldkit/commands/enrich/.contacts_enriched_prev.json
+
+# Build and runtime artifacts
+
+*.log
+coverage/
+tmp/
+issues/*.md
+
+# Speckit (specify) — bash scripts are tool-generated and exempt from no-.sh rule
+# They live on disk for the specify tool but must never be staged/committed.
+.specify/scripts/bash/
+.specify/extensions/*/scripts/bash/
+
+# Unbound Force — managed by uf init
+# Runtime data under .uf/ (databases, caches, locks, logs)
+.uf/workflows/
+.uf/artifacts/
+.uf/replicator/*.db
+.uf/replicator/*.db-shm
+.uf/replicator/*.db-wal
+.uf/replicator/*.lock
+.uf/muti-mind/artifacts/
+.uf/muti-mind/backlog/
+.uf/mx-f/data/
+.uf/feedback/
+# .devcontainer/ is intentionally tracked — Linux-portable Podman container config
+# Legacy tool directories (renamed to .uf/ in Spec 025)
+.hive/
+.unbound-force/
+.muti-mind/
+.mx-f/
+
+mcpjungle.db
+# mcpjungle live config with real secrets — only the .example.yaml is tracked
+config/mcpjungle.yaml
+reports/
+mutants/
+# src/ is now the package source root — do not ignore
+# Ignore .gaze/ contents (not the dir itself) so the negation below can re-include
+# one file — a file cannot be re-included once its parent dir is excluded.
+.gaze/*
+# ...but the committed CRAP regression baseline is tracked (see `make gaze-baseline`).
+!.gaze/baseline.json
+.tach/

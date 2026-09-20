@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "required_families": [
+    {
+      "id": "ART101",
+      "name": "python-package",
+      "source_globs": ["src/fieldkit/**/*.py", "src/fieldkit/py.typed"]
+    },
+    {
+      "id": "ART102",
+      "name": "schemas",
+      "source_globs": ["src/fieldkit/_data/*.json"]
+    },
+    {
+      "id": "ART103",
+      "name": "templates",
+      "source_globs": ["src/fieldkit/_data/*.md"]
+    },
+    {
+      "id": "ART104",
+      "name": "sql",
+      "source_globs": ["src/fieldkit/**/*.sql"]
+    },
+    {
+      "id": "ART105",
+      "name": "bundled-skills",
+      "source_globs": ["src/fieldkit/skills/**/*"]
+    },
+    {
+      "id": "ART106",
+      "name": "web-static",
+      "source_globs": ["src/fieldkit/web/static/*"]
+    }
+  ],
+  "allowed_paths": {
+    "wheel": ["fieldkit/**", "fieldkit_cli-*.dist-info/**"],
+    "sdist": [".gitignore", "LICENSE", "README.md", "pyproject.toml", "PKG-INFO", "src/fieldkit/**"]
+  },
+  "tracked_payload": {"id": "ART220", "source_root": "src/fieldkit"},
+  "forbidden_paths": [
+    {"id": "ART201", "glob": "**/tests/**", "category": "test-tree"},
+    {"id": "ART202", "glob": "**/__pycache__/**", "category": "cache"},
+    {"id": "ART203", "glob": "**/*.py[co]", "category": "cache"},
+    {"id": "ART204", "glob": "**/*credential*", "category": "credential"},
+    {"id": "ART205", "glob": "**/*secret*", "category": "credential"},
+    {"id": "ART206", "glob": "**/*.db", "category": "runtime-state"},
+    {"id": "ART207", "glob": "**/*.sqlite*", "category": "runtime-state"},
+    {"id": "ART208", "glob": "**/.env*", "category": "private-config"},
+    {"id": "ART209", "glob": "**/config.yaml", "category": "private-config"},
+    {"id": "ART210", "glob": "**/accounts.yaml", "category": "private-config"},
+    {"id": "ART211", "glob": "**/AGENTS.md", "category": "agent-state"},
+    {"id": "ART212", "glob": "**/.claude/**", "category": "agent-state"},
+    {"id": "ART213", "glob": "**/.codex/**", "category": "agent-state"},
+    {"id": "ART214", "glob": "**/.opencode/**", "category": "agent-state"},
+    {"id": "ART215", "glob": "**/.serena/**", "category": "agent-state"},
+    {"id": "ART216", "glob": "**/.planning/**", "category": "planning-history"},
+    {"id": "ART217", "glob": "**/openspec/**", "category": "planning-history"},
+    {"id": "ART218", "glob": "**/specs/**", "category": "planning-history"},
+    {"id": "ART219", "glob": "**/.git/**", "category": "history"},
+    {"id": "ART221", "glob": "**/*token*", "category": "credential"},
+    {"id": "ART222", "glob": "**/*.pem", "category": "credential"},
+    {"id": "ART223", "glob": "**/*.key", "category": "credential"},
+    {"id": "ART224", "glob": "**/*.p12", "category": "credential"}
+  ]
+}

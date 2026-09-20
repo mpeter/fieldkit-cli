@@ -1,0 +1,60 @@
+name: Release approval
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: Successful fieldkit-release-inputs workflow run that retained the approval input
+        required: true
+        type: string
+
+permissions: {}
+
+env:
+  RELEASE_INPUT_REPOSITORY: ${{ vars.RELEASE_INPUT_REPOSITORY }}
+
+jobs:
+  approve:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: release-approval
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Create a least-privilege private-input token
+        id: input_token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.RELEASE_INPUT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_INPUT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ vars.RELEASE_INPUT_REPOSITORY }}
+          permission-actions: read
+      - name: Download the exact retained private approval input
+        env:
+          GH_TOKEN: ${{ steps.input_token.outputs.token }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+        run: |
+          [[ "$SOURCE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          run="$(timeout 60s gh api "repos/$RELEASE_INPUT_REPOSITORY/actions/runs/$SOURCE_RUN_ID")"
+          jq -e '.status == "completed" and .conclusion == "success" and (.run_attempt | type == "number") and (.head_sha | test("^[0-9a-f]{40}$"))' <<< "$run" > /dev/null
+          attempt="$(jq -r '.run_attempt' <<< "$run")"
+          head_sha="$(jq -r '.head_sha' <<< "$run")"
+          expected_name="release-approval-source-${SOURCE_RUN_ID}-${attempt}-${head_sha}"
+          artifacts="$(timeout 60s gh api --paginate --slurp "repos/$RELEASE_INPUT_REPOSITORY/actions/runs/$SOURCE_RUN_ID/artifacts?per_page=100")"
+          artifact_id="$(jq -r --arg name "$expected_name" '[.[].artifacts[] | select(.name == $name and .expired == false)] | if length == 1 then .[0].id else empty end' <<< "$artifacts")"
+          [[ "$artifact_id" =~ ^[1-9][0-9]*$ ]]
+          timeout 60s gh api "repos/$RELEASE_INPUT_REPOSITORY/actions/artifacts/$artifact_id/zip" > approval-input.zip
+      - name: Safely extract and verify the approval input
+        run: |
+          python scripts/release_approval_archive.py --archive approval-input.zip --destination approval-artifact
+          python scripts/release_approval_input.py --input approval-artifact/approval-input --repo-root .
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-approval-input-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          path: approval-artifact/
+          if-no-files-found: error
+          retention-days: 90

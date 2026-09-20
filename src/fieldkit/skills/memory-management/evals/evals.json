@@ -1,0 +1,31 @@
+{
+  "skill_name": "memory-management",
+  "static_checks": [
+    {
+      "id": "two_tier",
+      "type": "contains_all",
+      "patterns": [
+        "CLAUDE.md",
+        "memory/"
+      ],
+      "message": "Must reference both CLAUDE.md hot cache and memory/ deep storage"
+    },
+    {
+      "id": "decodes_shorthand",
+      "type": "contains",
+      "pattern": "shorthand",
+      "message": "Must decode workplace shorthand and nicknames"
+    }
+  ],
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "remember that 'the renewal' for {{primary_account}} means the {{primary_pursuit}} pursuit",
+      "expected_behavior": "Stores the shorthand mapping in appropriate memory tier",
+      "assertions": [
+        "Stores the 'the renewal' → {{primary_pursuit}} shorthand mapping in memory",
+        "Chooses appropriate tier (CLAUDE.md for hot access or memory/ for persistence)"
+      ]
+    }
+  ]
+}

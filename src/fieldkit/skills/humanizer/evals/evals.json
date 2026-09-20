@@ -1,0 +1,51 @@
+{
+  "skill_name": "humanizer",
+  "static_checks": [
+    {
+      "id": "pattern_catalog",
+      "type": "contains",
+      "pattern": "29",
+      "message": "Must carry the 29-pattern catalog"
+    },
+    {
+      "id": "hollow_affirmations",
+      "type": "contains",
+      "pattern": "Great question!",
+      "message": "Must name hollow affirmations as a pattern to delete"
+    },
+    {
+      "id": "conclusion_signposts",
+      "type": "contains",
+      "pattern": "In conclusion",
+      "message": "Must flag essay-closing signposts"
+    },
+    {
+      "id": "triage",
+      "type": "contains",
+      "pattern": "Heuristics for Fast Triage",
+      "message": "Must offer a fast-triage mode, not only full rewrites"
+    }
+  ],
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "humanize this before I send it: \"Certainly! Great question. I hope this message finds you well. In conclusion, our platform delivers robust, scalable solutions. Please don't hesitate to reach out!\"",
+      "expected_behavior": "Rewrites the text removing the AI patterns (hollow opener, formal register, conclusion signpost, boilerplate closer) while preserving the actual message",
+      "assertions": [
+        "Removes the hollow opener (Certainly!/Great question) and the 'finds you well' formal register",
+        "Drops the 'In conclusion' signpost and the 'don't hesitate to reach out' boilerplate",
+        "Preserves the substantive claim about the platform rather than deleting meaning along with the patterns",
+        "Returns rewritten text, not just a critique"
+      ]
+    },
+    {
+      "id": 1,
+      "prompt": "does this draft sound like AI? just check, don't rewrite yet",
+      "expected_behavior": "Runs the fast-triage scan and reports which of the 29 patterns are present without rewriting",
+      "assertions": [
+        "Identifies specific named patterns present rather than a vague 'sounds fine/robotic' verdict",
+        "Respects the don't-rewrite instruction — reports findings and offers the rewrite as a next step"
+      ]
+    }
+  ]
+}

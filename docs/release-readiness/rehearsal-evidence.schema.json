@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mpeter/fieldkit-cli/blob/main/docs/release-readiness/rehearsal-evidence.schema.json",
+  "title": "fieldkit release rehearsal evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "subject", "environment", "artifacts", "verified_blocks", "scenarios", "review"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_sha", "documentation_contract_sha256", "clean_export_tree", "repository", "public_commit_sha", "workflow_name", "workflow_path", "workflow_event", "workflow_run_id", "workflow_run_attempt"],
+      "properties": {
+        "source_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "documentation_contract_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "clean_export_tree": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "repository": {"const": "mpeter/fieldkit-cli"},
+        "public_commit_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "workflow_name": {"const": "Cutover verification"},
+        "workflow_path": {"const": ".github/workflows/cutover.yml"},
+        "workflow_event": {"const": "push"},
+        "workflow_run_id": {"type": "integer", "minimum": 1},
+        "workflow_run_attempt": {"type": "integer", "minimum": 1}
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["os", "architecture", "python", "uv", "git", "make"],
+      "properties": {
+        "os": {"type": "string", "minLength": 1},
+        "architecture": {"type": "string", "minLength": 1},
+        "python": {"type": "string", "minLength": 1},
+        "uv": {"type": "string", "minLength": 1},
+        "git": {"type": "string", "minLength": 1},
+        "make": {"type": "string", "minLength": 1}
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "sha256"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        }
+      }
+    },
+    "verified_blocks": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]*$"}
+    },
+    "scenarios": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "actor", "proof_type", "documented_block_sha256", "status", "started_at", "duration_seconds", "verified_blocks", "commands"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "actor": {"enum": ["automated", "external_user", "external_contributor", "maintainer", "operator"]},
+          "proof_type": {"enum": ["credentialed-integration", "release-cutover"]},
+          "documented_block_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+          "status": {"enum": ["pass", "fail"]},
+          "started_at": {"type": "string", "format": "date-time"},
+          "duration_seconds": {"type": "number", "minimum": 0},
+          "verified_blocks": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]*$"}
+          },
+          "commands": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["argv", "exit_code", "stdout", "stderr", "stdout_sha256", "stderr_sha256", "assertions"],
+              "properties": {
+                "argv": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+                "exit_code": {"type": "integer"},
+                "stdout": {"type": "string", "maxLength": 4000},
+                "stderr": {"type": "string", "maxLength": 4000},
+                "stdout_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                "stderr_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                "assertions": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["stream", "contains"],
+                    "properties": {
+                      "stream": {"enum": ["stdout", "stderr"]},
+                      "contains": {"type": "string", "minLength": 1, "maxLength": 200}
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reviewer", "reviewed_at", "immutable_url"],
+      "properties": {
+        "reviewer": {"type": "string", "minLength": 1},
+        "reviewed_at": {"type": "string", "format": "date-time"},
+        "immutable_url": {"type": "string", "pattern": "^https://"}
+      }
+    }
+  }
+}

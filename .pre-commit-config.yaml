@@ -1,0 +1,82 @@
+# pre-commit <4.6.1 installs `language: node` hooks by invoking npm with
+# --ignore-prepublish (pre_commit/languages/node.py). npm >=12 rejects unknown
+# flags with EUNKNOWNCONFIG, so the markdown-link-check environment fails to
+# install and *every* commit aborts — including commits touching no markdown,
+# because pre-commit builds all hook environments regardless of staged files.
+# 4.6.1 installs node hooks via git instead (upstream #3719).
+minimum_pre_commit_version: '4.6.1'
+
+repos:
+  - repo: local
+    hooks:
+      - id: no-shell-scripts
+        name: Block .sh files
+        entry: uv run python hooks/pre_commit.py
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format
+        language: system
+        types: [python]
+
+      - id: ruff-check
+        name: ruff check
+        entry: uv run python hooks/lint_check.py
+        language: system
+        types: [python]
+
+      - id: mypy
+        name: mypy
+        entry: uv run python hooks/type_check.py
+        language: system
+        types: [python]
+        pass_filenames: false
+
+      - id: pii-guard
+        name: Block personal/user-specific data
+        entry: uv run python hooks/pii_guard.py
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+
+      - id: shim-guard
+        name: Block new backward-compat shim files (R25)
+        entry: uv run python hooks/shim_guard.py
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+
+      - id: pii-guard-commit-msg
+        name: Block personal/user-specific data in commit message
+        entry: uv run python hooks/pii_guard.py --commit-msg
+        language: system
+        stages: [commit-msg]
+
+      - id: no-direct-main-push
+        name: Block direct push to main
+        entry: uv run python hooks/pre_push.py
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+
+  - repo: https://github.com/tcort/markdown-link-check
+    rev: v3.12.2
+    hooks:
+      - id: markdown-link-check
+        args: [-q, --config, .markdown-link-check.json]
+        files: ^((AGENTS|CHANGELOG|CONTRIBUTING|GOVERNANCE|README|SECURITY|SUPPORT)\.md|docs/.*\.md|\.opencode/(agents|commands|skills)/.*\.md|\.claude/(agents|commands)/.*\.md|src/fieldkit/skills/.*\.md)$
+        # Pin the toolchain: pre-commit's node runner passes --ignore-prepublish
+        # (languages/node.py), which npm >=12 rejects with EUNKNOWNCONFIG. Using
+        # the system node picks up whatever npm is installed and breaks on fresh
+        # clones. Node 22 ships npm 10, which accepts the flag.
+        language_version: '22.23.1'
+
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: 8dc49e5ea0cab89785161620aa22a26f263661ca  # v3.4.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+        args: [feat, fix, docs, chore, refactor, test, ci, style, perf, spec, merge]

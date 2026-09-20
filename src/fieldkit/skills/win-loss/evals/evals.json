@@ -1,0 +1,67 @@
+{
+  "skill_name": "win-loss",
+  "static_checks": [
+    {
+      "id": "reads_pursuit",
+      "type": "contains",
+      "pattern": "pursuit file",
+      "message": "Must read the pursuit file directly"
+    },
+    {
+      "id": "writes_lessons",
+      "type": "contains",
+      "pattern": "lessons-learned",
+      "message": "Must write to memory/system/lessons-learned.md"
+    },
+    {
+      "id": "user_confirm",
+      "type": "contains",
+      "pattern": "confirm",
+      "message": "Must confirm with user before writing"
+    },
+    {
+      "id": "updates_frontmatter",
+      "type": "contains_all",
+      "patterns": [
+        "closed-won",
+        "closed-lost"
+      ],
+      "message": "Must handle both closed-won and closed-lost outcomes"
+    }
+  ],
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "record win on {{primary_account}} {{primary_pursuit}}",
+      "expected_behavior": "Reads the pursuit, runs structured win debrief, confirms before writing, updates to closed-won, writes lessons-learned",
+      "assertions": [
+        "Reads the {{primary_account}} {{primary_pursuit}} pursuit file directly from disk",
+        "Asks structured debrief questions covering outcome, why won, MEDDPICC factor, what to change, and relationship intelligence",
+        "Confirms with user before writing lessons-learned or updating frontmatter",
+        "Writes dated lessons-learned entry to memory/system/lessons-learned.md",
+        "Updates pursuit frontmatter stage to closed-won"
+      ]
+    },
+    {
+      "id": 1,
+      "prompt": "debrief the {{accounts.2}} {{primary_pursuit}} loss",
+      "expected_behavior": "Runs win/loss for a loss — asks about loss reasons, updates to closed-lost, writes lessons-learned",
+      "assertions": [
+        "Reads the relevant {{accounts.2}} pursuit file",
+        "Updates frontmatter stage to closed-lost",
+        "Captures loss reasons and competitive position in lessons-learned.md"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "debrief {{primary_account}} {{primary_pursuit}} — we won it, the VP signed the SOW yesterday",
+      "expected_behavior": "Reads the pursuit, runs win debrief incorporating VP signed SOW signal, confirms before writing",
+      "assertions": [
+        "Reads the {{primary_account}} {{primary_pursuit}} pursuit file",
+        "Runs structured win debrief and collects context including deal mechanics and relationship signals",
+        "Requires user confirmation before writing any file — does not write autonomously",
+        "Writes dated entry to memory/system/lessons-learned.md"
+      ]
+    }
+  ]
+}

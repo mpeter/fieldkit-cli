@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "pipeline-overview",
+      "utterance": "Show me the overall health of my pipeline and where it is thin.",
+      "expected_skill": "pipeline"
+    },
+    {
+      "id": "single-pursuit-audit",
+      "utterance": "Audit this pursuit for missing evidence and weak qualification.",
+      "expected_skill": "pursuit-auditor"
+    },
+    {
+      "id": "local-task-planning",
+      "utterance": "Help me organize and prioritize the tasks in this account workspace.",
+      "expected_skill": "task-management"
+    },
+    {
+      "id": "task-system-sync",
+      "utterance": "Reconcile my local tasks with Google Tasks.",
+      "expected_skill": "task-sync"
+    },
+    {
+      "id": "prepare-for-meeting",
+      "utterance": "Prepare me for tomorrow's customer meeting with an agenda and questions.",
+      "expected_skill": "meeting"
+    },
+    {
+      "id": "process-meeting-notes",
+      "utterance": "Turn these meeting notes into follow-ups and pursuit updates.",
+      "expected_skill": "post-meeting"
+    },
+    {
+      "id": "refresh-salesforce-data",
+      "utterance": "Refresh the local Salesforce data for my account pursuits.",
+      "expected_skill": "sf-sync"
+    },
+    {
+      "id": "ingest-source-material",
+      "utterance": "Ingest this transcript into the account workspace.",
+      "expected_skill": "ingest"
+    }
+  ]
+}

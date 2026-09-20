@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "evidence_schema_version": 5,
+  "core": {
+    "status": "supported",
+    "python": ["3.11", "3.12", "3.13", "3.14"],
+    "operating_systems": ["ubuntu-24.04", "macos-15"]
+  },
+  "linux_family": {
+    "status": "supported",
+    "container": "fedora:43",
+    "python": "system"
+  },
+  "optional_profiles": {
+    "status": "supported",
+    "artifact_smoke": "all",
+    "python": "3.11",
+    "operating_systems": ["ubuntu-24.04", "macos-15"]
+  },
+  "experimental": [
+    {
+      "operating_system": "windows",
+      "reason": "Native Windows remains experimental until identical path, subprocess, and file-write evidence passes."
+    }
+  ],
+  "integration_limits": {
+    "chrome-auth": ["linux"],
+    "systemd-units": ["linux"]
+  }
+}

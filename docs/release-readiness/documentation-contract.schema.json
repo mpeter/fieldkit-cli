@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mpeter/fieldkit-cli/blob/main/docs/release-readiness/documentation-contract.schema.json",
+  "title": "fieldkit public documentation contract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "roadmap", "verification", "example_verifications", "documents"],
+  "properties": {
+    "schema_version": {"const": 2},
+    "roadmap": {"type": "string", "minLength": 1},
+    "verification": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["evidence", "paths"],
+        "properties": {
+          "evidence": {"type": "string", "minLength": 1},
+          "paths": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+        }
+      }
+    },
+    "example_verifications": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["classification", "evidence", "mode"],
+        "properties": {
+          "classification": {
+            "enum": [
+              "safe_automated_command",
+              "generated_reference",
+              "structural_assertion",
+              "credentialed_manual_integration",
+              "exact_release_cutover_proof"
+            ]
+          },
+          "evidence": {"type": "string", "minLength": 1},
+          "mode": {"enum": ["automated", "manual_evidence"]}
+        }
+      }
+    },
+    "documents": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "content_type",
+          "fenced_blocks",
+          "reader_action",
+          "source_fingerprint",
+          "sources"
+        ],
+        "properties": {
+          "content_type": {
+            "enum": ["concept", "how-to", "overview", "policy", "reference", "roadmap", "tutorial"]
+          },
+          "reader_action": {"type": "string", "minLength": 1},
+          "source_fingerprint": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+          "sources": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string", "minLength": 1},
+            "uniqueItems": true
+          },
+          "fenced_blocks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["id", "language", "sha256", "classification", "verification_id"],
+              "properties": {
+                "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]*$"},
+                "language": {"type": "string"},
+                "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                "classification": {
+                  "enum": [
+                    "safe_automated_command",
+                    "generated_reference",
+                    "structural_assertion",
+                    "credentialed_manual_integration",
+                    "exact_release_cutover_proof"
+                  ]
+                },
+                "verification_id": {"type": "string", "minLength": 1}
+              }
+            }
+          },
+          "tables": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["id", "sha256", "classification", "verification_id"],
+              "properties": {
+                "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]*$"},
+                "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                "classification": {
+                  "enum": [
+                    "safe_automated_command",
+                    "generated_reference",
+                    "structural_assertion",
+                    "credentialed_manual_integration",
+                    "exact_release_cutover_proof"
+                  ]
+                },
+                "verification_id": {"type": "string", "minLength": 1}
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

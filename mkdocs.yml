@@ -1,0 +1,84 @@
+site_name: fieldkit
+site_description: A local-first productivity CLI for account engineering workflows
+repo_url: https://github.com/mpeter/fieldkit-cli
+edit_uri: edit/main/docs/
+strict: true
+
+theme:
+  name: mkdocs
+  user_color_mode_toggle: true
+
+markdown_extensions:
+  - admonition
+  - tables
+  - toc:
+      permalink: true
+
+validation:
+  omitted_files: warn
+  not_found: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
+exclude_docs: |
+  adr/
+  archive/
+  audit/
+  handoffs/
+  ops/
+  pre-mortem/
+  release-readiness/
+  subtleties/
+  work-orders/
+  agent-harness.md
+  agent-verification.md
+  autonomy-roadmap.md
+  bootstrap.md
+  container-architecture.md
+  cli-architecture.md
+  dependency-map.md
+  documentation-contract.json
+  dev-conventions.md
+  hooks-and-skills.md
+  ops-runbook.md
+  pii-history-rewrite-runbook.md
+  reference/gaze-gate-history.md
+  skill-journey-map.md
+  skill-premortem-2026-07-18.md
+  succession-plan.md
+  threat-model.md
+  true-up-ledger-2026-07-18.md
+  true-up-ledger-2026-07-28.md
+  true-up-tuning-log.md
+
+nav:
+  - Home: index.md
+  - Get started:
+      - Installation and first success: getting-started.md
+      - What fieldkit does: user-guide.md
+  - Concepts:
+      - Product model: concepts.md
+      - Integrations and profiles: integrations.md
+      - Local data and privacy: privacy.md
+      - Compatibility: compatibility.md
+      - Dependency security: dependency-security.md
+  - How-to guides:
+      - Initialize a workspace: guides/init.md
+      - Connect Salesforce: guides/salesforce-auth.md
+      - Connect Gmail: guides/gmail.md
+      - Generate a morning brief: guides/morning-brief.md
+      - Work with pipeline data: guides/pipeline-workflow.md
+      - Run watchers: guides/watchers.md
+      - Connect ShadowBot: guides/shadowbot-auth.md
+  - Reference:
+      - CLI: cli-reference.md
+      - Configuration file: reference/config-file.md
+      - Environment variables: reference/environment-vars.md
+      - Exit codes: reference/exit-codes.md
+      - Troubleshooting: reference/troubleshooting.md
+      - Release history: releases.md
+  - Roadmap: https://github.com/mpeter/fieldkit-cli/blob/main/ROADMAP.md
+  - Contributing: https://github.com/mpeter/fieldkit-cli/blob/main/CONTRIBUTING.md
+  - Support: https://github.com/mpeter/fieldkit-cli/blob/main/SUPPORT.md
+  - Security: https://github.com/mpeter/fieldkit-cli/blob/main/SECURITY.md

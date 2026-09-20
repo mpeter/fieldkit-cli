@@ -1,0 +1,170 @@
+{
+  "schema_version": 1,
+  "max_text_bytes": 2097152,
+  "archives": {
+    "max_members": 5000,
+    "max_member_bytes": 2097152,
+    "max_total_bytes": 67108864,
+    "max_archive_bytes": 16777216
+  },
+  "text_rules": [
+    {
+      "id": "PII001",
+      "category": "personal_email",
+      "pattern": "(?i)\\b[A-Z0-9._%+-]+@(?!(?:[A-Z0-9.-]+[.])?example\\.(?:com|net|org)\\b|acme-corp\\.com\\b)[A-Z0-9.-]+\\.[A-Z]{2,}\\b"
+    },
+    {
+      "id": "SECRET001",
+      "category": "private_key",
+      "pattern": "-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----"
+    },
+    {
+      "id": "SECRET002",
+      "category": "aws_access_key",
+      "pattern": "\\b(?:AKIA|ASIA)[A-Z0-9]{16}\\b"
+    },
+    {
+      "id": "SECRET003",
+      "category": "github_token",
+      "pattern": "\\b(?:gh[pousr]_[A-Za-z0-9]{36,255}|github_pat_[A-Za-z0-9_]{40,255})\\b"
+    },
+    {
+      "id": "SECRET004",
+      "category": "slack_token",
+      "pattern": "\\bxox[baprs]-[A-Za-z0-9-]{10,255}\\b"
+    },
+    {
+      "id": "SECRET005",
+      "category": "google_api_key",
+      "pattern": "\\bAIza[0-9A-Za-z_-]{35}\\b"
+    },
+    {
+      "id": "PRIVATE001",
+      "category": "legacy_private_context",
+      "pattern": "(?i)\\b(?:aeos|fieldkit-cmd)\\b"
+    },
+    {
+      "id": "PRIVATE002",
+      "category": "private_tracker_identifier",
+      "pattern": "(?i)\\b(?:BUG|ENH|BI)[_-]?[0-9]+(?:[A-Z]+)?\\b"
+    },
+    {
+      "id": "DOC001",
+      "category": "archived_spec_placeholder",
+      "pattern": "TBD - created by archiving change"
+    }
+  ],
+  "text_allowances": [
+    {
+      "rule_id": "DOC001",
+      "path": "docs/release-readiness/public-tree-scan-policy.json",
+      "pattern": "TBD - created by archiving change",
+      "classification": "policy_rule",
+      "rationale": "The fail-closed exported-spec scanner must name the prohibited archive placeholder."
+    },
+    {
+      "rule_id": "PRIVATE001",
+      "path": "docs/release-readiness/public-tree-scan-policy.json",
+      "pattern": "(?i)\\b(?:aeos|fieldkit-cmd)\\b",
+      "classification": "policy_rule",
+      "rationale": "The fail-closed private-context detector must name the prohibited legacy identifiers."
+    },
+    {
+      "rule_id": "PRIVATE001",
+      "path": "docs/release-readiness/public-identity-policy.json",
+      "pattern": "aeos",
+      "classification": "policy_rule",
+      "rationale": "The public-identity policy must recognize an unsafe legacy workspace path."
+    },
+    {
+      "rule_id": "PRIVATE001",
+      "path": "pyproject.toml",
+      "pattern": "aeos",
+      "classification": "legacy_import_tombstone",
+      "rationale": "Ruff's explicit import tombstones prevent deleted legacy modules from being reintroduced; their surrounding comments explain the current fieldkit replacement."
+    },
+    {
+      "rule_id": "PII001",
+      "path": "hooks/pii_guard.py",
+      "pattern": "(?:gemini-notes@google[.]com|notifications@github[.]com)",
+      "classification": "public_system_sender",
+      "rationale": "The repository PII guard recognizes these public automated senders as safe test and product metadata."
+    },
+    {
+      "rule_id": "PII001",
+      "path": "scripts/pii_patterns.py",
+      "pattern": "gemini-notes@google[.]com",
+      "classification": "public_system_sender",
+      "rationale": "The shared PII redactor recognizes this public automated sender as safe metadata."
+    },
+    {
+      "rule_id": "PII001",
+      "path": "scripts/check_documentation_examples.py",
+      "pattern": "git@github[.]com",
+      "classification": "public_repository_transport",
+      "rationale": "The final-rehearsal verifier accepts Git's public SSH service account only in canonical upstream URLs."
+    },
+    {
+      "rule_id": "PII001",
+      "path": "scripts/cutover_record.py",
+      "pattern": "git@github[.]com",
+      "classification": "public_repository_transport",
+      "rationale": "The cutover verifier accepts Git's public SSH service account only in canonical upstream URLs."
+    },
+    {
+      "rule_id": "PII001",
+      "path": "src/fieldkit/gmail/discover.py",
+      "pattern": "gemini-notes@google[.]com",
+      "classification": "public_system_sender",
+      "rationale": "Gmail discovery queries the public automated sender that delivers meeting notes."
+    },
+    {
+      "rule_id": "PII001",
+      "path": "tests/test_account_filter_plumbing.py",
+      "pattern": "gemini-notes@google[.]com",
+      "classification": "public_system_sender",
+      "rationale": "Account-filter tests use the product's public automated meeting-notes sender."
+    },
+    {
+      "rule_id": "PII001",
+      "path": "tests/test_gmail_discover.py",
+      "pattern": "gemini-notes@google[.]com",
+      "classification": "public_system_sender",
+      "rationale": "Discovery tests exercise the product's public automated meeting-notes sender."
+    },
+    {
+      "rule_id": "PII001",
+      "path": "tests/test_ingest_cli.py",
+      "pattern": "gemini-notes@google[.]com",
+      "classification": "public_system_sender",
+      "rationale": "Ingest tests exercise the product's public automated meeting-notes sender."
+    },
+    {
+      "rule_id": "PII001",
+      "path": "tests/test_gmail_query_and_sync_fixes.py",
+      "pattern": "(?i)(?:notifications@google[.]com|mailer@docusign[.]net|user@mail[.]google[.]com|user@na3[.]docusign[.]net|user@google[.]com)",
+      "classification": "public_system_sender_test",
+      "rationale": "System-address tests verify exact matching and non-matching for public Google and Docusign automated-sender domains."
+    }
+  ],
+  "binary_allowances": [
+    {
+      "path": "src/fieldkit/web/static/icon-192.png",
+      "blob_oid": "1d52ba6c845412475d100ce0f82c79bbacb4ee70",
+      "sha256": "dc35253c31420728f1bb191f076c5616e5a7e9939dc181ba1d087bc03c367922",
+      "media_type": "image/png",
+      "max_bytes": 510,
+      "classification": "public_product_asset",
+      "rationale": "Installed web application icon rendered by the public local control plane."
+    },
+    {
+      "path": "src/fieldkit/web/static/icon-512.png",
+      "blob_oid": "82cfcb7e09179bdade091ff91c224af93dc3349d",
+      "sha256": "56b1a2ab8726bc515d06d2b58eeb2f9520af1b1dbd7218a7c68b36393c43103b",
+      "media_type": "image/png",
+      "max_bytes": 2027,
+      "classification": "public_product_asset",
+      "rationale": "Installed web application icon rendered by the public local control plane."
+    }
+  ]
+}

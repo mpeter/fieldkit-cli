@@ -1,0 +1,46 @@
+{
+  "skill_name": "workstream-discover",
+  "static_checks": [
+    {
+      "id": "multi_source",
+      "type": "contains_all",
+      "patterns": [
+        "fieldkit-sales",
+        "gws gmail",
+        "tvly search"
+      ],
+      "message": "Must use Backstory, Gmail, and web search"
+    },
+    {
+      "id": "slackcli",
+      "type": "contains",
+      "pattern": "slackcli",
+      "message": "Must use slackcli for delivery team signals"
+    },
+    {
+      "id": "reads_projects",
+      "type": "contains",
+      "pattern": "projects",
+      "message": "Must read active delivery projects"
+    },
+    {
+      "id": "actionable_output",
+      "type": "contains",
+      "pattern": "expansion",
+      "message": "Must produce expansion opportunity output"
+    }
+  ],
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "discover expansion opportunities for {{primary_account}}",
+      "expected_behavior": "Reads current projects, pulls signals from Backstory/Gmail/Slack/web, surfaces expansion workstreams",
+      "assertions": [
+        "Reads {{primary_account}} active delivery projects",
+        "Pulls Backstory signals for engagement and new activity",
+        "Searches Gmail for signals of new pain or initiatives",
+        "Outputs specific, actionable expansion workstream opportunities"
+      ]
+    }
+  ]
+}

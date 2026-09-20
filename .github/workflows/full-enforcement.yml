@@ -1,0 +1,58 @@
+name: Full enforcement
+
+on:
+  schedule:
+    - cron: "20 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality-full:
+    name: Full quality enforcement
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
+        with:
+          enable-cache: true
+          cache-python: true
+          prune-cache: true
+      - name: Install dependencies
+        run: uv sync --locked --all-extras --dev
+      - name: Run complete quality gate
+        run: make quality-full
+      - name: Summarize full-repository coverage
+        if: always()
+        run: >-
+          uv run python scripts/ci_evidence.py coverage
+          --input coverage.json
+          --output reports/coverage-summary.json
+          --step-summary "$GITHUB_STEP_SUMMARY"
+          --source-revision "$GITHUB_SHA"
+          --scope full-repository
+          --command 'make quality-full'
+          --minimum-percent 80
+      - name: Upload full-repository coverage evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: coverage-full-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          path: |
+            coverage.json
+            reports/coverage-summary.json
+          retention-days: 30
+          if-no-files-found: error
+      - name: Upload AgentReady report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: agentready-report-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          path: .agentready/report-latest.html
+          retention-days: 30
+          if-no-files-found: error

@@ -1,0 +1,171 @@
+{
+  "skill_name": "tool-routing",
+  "static_checks": [
+    {
+      "id": "cli_first_decision_tree",
+      "type": "contains",
+      "pattern": "If `fieldkit`, `gws`, `chrome-use`, `tvly`, `slackcli`, `gh`, Git, native files,",
+      "message": "Decision tree must enumerate CLI routes before MCP"
+    },
+    {
+      "id": "workspace_gws",
+      "type": "contains",
+      "pattern": "`gws <service> ...`",
+      "message": "Google Workspace must route through gws"
+    },
+    {
+      "id": "browser_cli",
+      "type": "contains",
+      "pattern": "`chrome-use`",
+      "message": "Browser automation must route through chrome-use"
+    },
+    {
+      "id": "vault_cli",
+      "type": "contains",
+      "pattern": "native files, `rg`, Git, `qmd`",
+      "message": "Ordinary vault operations must use native and qmd routes"
+    },
+    {
+      "id": "sales_necessity",
+      "type": "contains",
+      "pattern": "MCP-NECESSITY fieldkit-sales:",
+      "message": "Sales MCP exception must carry its necessity marker"
+    },
+    {
+      "id": "dataverse_necessity",
+      "type": "contains",
+      "pattern": "MCP-NECESSITY fieldkit-dataverse:",
+      "message": "Dataverse MCP exception must carry its necessity marker"
+    },
+    {
+      "id": "search_necessity",
+      "type": "contains",
+      "pattern": "MCP-NECESSITY direct global `brave_search`:",
+      "message": "Brave MCP exception must carry its necessity marker"
+    },
+    {
+      "id": "dev_necessity",
+      "type": "contains",
+      "pattern": "MCP-NECESSITY direct global `context7`:",
+      "message": "Context7 MCP exception must carry its necessity marker"
+    },
+    {
+      "id": "code_pattern_necessity",
+      "type": "contains",
+      "pattern": "MCP-NECESSITY direct global `gh_grep`:",
+      "message": "grep.app MCP exception must carry its necessity marker"
+    }
+  ],
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "Draft a reply in Gmail but do not send it",
+      "expected_behavior": "Uses gws Gmail drafts and preserves the no-send boundary",
+      "assertions": [
+        "Routes draft creation through `gws gmail users drafts create` without requiring an MCP gateway",
+        "Does not send the message"
+      ]
+    },
+    {
+      "id": 1,
+      "prompt": "Add a label to this Gmail message",
+      "expected_behavior": "Uses the gws Gmail message mutation route and verifies the stored result",
+      "assertions": [
+        "Routes the label change through `gws gmail users messages modify`",
+        "Reads the affected resource back after the authorized write"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Add a formatted Summary heading to the top of this Google Doc",
+      "expected_behavior": "Inspects, updates, and verifies the Doc through gws",
+      "assertions": [
+        "Reads the document with `gws docs documents get` before editing",
+        "Uses `gws docs documents batchUpdate` for the edit",
+        "Reads the document back to verify the change"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Create a two-hour focus-time block on my calendar tomorrow",
+      "expected_behavior": "Uses the gws Calendar API route after inspecting its schema",
+      "assertions": [
+        "Inspects the Calendar event method schema rather than guessing fields",
+        "Creates the focus-time event with `gws calendar events insert`"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Move this existing calendar event to 3 PM",
+      "expected_behavior": "Patches and verifies the event through gws",
+      "assertions": [
+        "Updates the event with `gws calendar events patch`",
+        "Reads the event back after the authorized mutation"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Use my logged-in browser to update the web form and prove it saved",
+      "expected_behavior": "Uses chrome-use and verifies the saved state",
+      "assertions": [
+        "Routes browser automation through `chrome-use` without an MCP gateway",
+        "Verifies the stored result instead of treating a click as completion"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Search my vault for prior decisions about retry policy",
+      "expected_behavior": "Uses native exact search or qmd retrieval",
+      "assertions": [
+        "Uses native file search or `qmd` for the vault query",
+        "Does not require an MCP gateway"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Find the shortest backlink connection path between two vault notes",
+      "expected_behavior": "Reports that the retired vault graph capability has no maintained backend",
+      "assertions": [
+        "States that connection-path graph operations have no maintained route",
+        "Does not invent or revive a removed vault MCP endpoint"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "Get the recent People.ai Backstory activity for this account",
+      "expected_behavior": "Uses the fieldkit-sales exception because Backstory is proprietary",
+      "assertions": [
+        "Routes account-level Backstory activity through `fieldkit-sales`",
+        "Checks the MCP gateway only after selecting that necessity exception"
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "Tavily results are thin; get a second opinion from Brave's independent index",
+      "expected_behavior": "Uses the narrow direct global Brave exception",
+      "assertions": [
+        "Uses direct global `brave_search` only for Brave's independent index",
+        "Does not route ordinary Tavily search through MCP"
+      ]
+    },
+    {
+      "id": 10,
+      "prompt": "Find this exact API-call pattern across public GitHub repositories",
+      "expected_behavior": "Uses direct global gh_grep for cross-repository code-pattern search",
+      "assertions": [
+        "Uses direct global `gh_grep` for the cross-repository pattern search",
+        "Keeps ordinary GitHub issue, pull request, release, and API work on `gh`"
+      ]
+    },
+    {
+      "id": 11,
+      "prompt": "Context7 is not loaded in this client; use it to answer this library question",
+      "expected_behavior": "Reports the exact direct server as unavailable without checking mcpjungle or silently substituting a source",
+      "assertions": [
+        "Checks whether the client loaded direct global `context7`",
+        "Does not look for Context7 in mcpjungle",
+        "Stops and reports the unavailable route instead of claiming an equivalent fallback"
+      ]
+    }
+  ]
+}
