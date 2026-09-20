@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mpeter/fieldkit-cli/blob/main/docs/release-readiness/release-approval-input.schema.json",
+  "title": "fieldkit retained release approval input",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "status", "candidate", "public", "files"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "status": {"const": "pass"},
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "private_source_sha", "exported_tree", "planned_tag", "artifacts"],
+      "properties": {
+        "repository": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"},
+        "private_source_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "exported_tree": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "planned_tag": {"type": "string", "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$"},
+        "artifacts": {"$ref": "#/$defs/artifacts"}
+      }
+    },
+    "public": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["initial_commit", "initial_tree"],
+      "properties": {
+        "initial_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "initial_tree": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
+      }
+    },
+    "files": {
+      "type": "array",
+      "minItems": 6,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "sha256"],
+        "properties": {
+          "path": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$"},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "artifacts": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "kind", "sha256"],
+        "properties": {
+          "name": {"type": "string", "pattern": "^[^/\\\\\\u0000\\r\\n]+$"},
+          "kind": {"enum": ["wheel", "sdist"]},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        }
+      },
+      "allOf": [
+        {"contains": {"properties": {"kind": {"const": "wheel"}}, "required": ["kind"]}},
+        {"contains": {"properties": {"kind": {"const": "sdist"}}, "required": ["kind"]}}
+      ]
+    }
+  }
+}

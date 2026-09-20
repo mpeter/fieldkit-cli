@@ -1,0 +1,39 @@
+name: PII Guard
+
+# Auto-redact personal data from issue/PR bodies and comments as soon as
+# they are submitted or edited. Applies the same patterns as hooks/pii_guard.py.
+# On a PII match the body is patched in-place and a notice comment is posted.
+# The handler runs only trusted default-branch code. A failed required edit
+# fails visibly; the workflow never claims a redaction that did not happen.
+
+on:
+  issues:
+    types: [opened, edited]
+  pull_request_target:
+    types: [opened, edited]
+  issue_comment:
+    types: [created, edited]
+  pull_request_review_comment:
+    types: [created, edited]
+
+permissions:
+  contents: read
+
+jobs:
+  pii-guard:
+    name: PII guard (auto-redact)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Run PII guard
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/check_pii_payload.py

@@ -1,0 +1,395 @@
+{
+  "skill_name": "meeting",
+  "static_checks": [
+    {
+      "id": "backstory",
+      "type": "contains",
+      "pattern": "fieldkit-sales",
+      "message": "Must pull Backstory signals via fieldkit-sales"
+    },
+    {
+      "id": "calendar",
+      "type": "contains",
+      "pattern": "gws calendar",
+      "message": "Must read calendar event via gws calendar"
+    },
+    {
+      "id": "contact_lookup",
+      "type": "contains",
+      "pattern": "fieldkit contact find",
+      "message": "Must use fieldkit contact find for attendee profiles"
+    },
+    {
+      "id": "sections",
+      "type": "contains_all",
+      "patterns": [
+        "agenda",
+        "question"
+      ],
+      "message": "Must include agenda and questions sections"
+    },
+    {
+      "id": "domain_matching",
+      "type": "contains",
+      "pattern": "domain",
+      "message": "Batch mode must match attendee domains to configured accounts"
+    },
+    {
+      "id": "qbr-prep_backstory",
+      "type": "contains",
+      "pattern": "fieldkit-sales",
+      "message": "Must pull Backstory signals"
+    },
+    {
+      "id": "reads_account",
+      "type": "contains",
+      "pattern": "account.md",
+      "message": "Must read account.md"
+    },
+    {
+      "id": "web_research",
+      "type": "contains",
+      "pattern": "tvly search",
+      "message": "Must include web research for company news"
+    },
+    {
+      "id": "output_template",
+      "type": "contains",
+      "pattern": "output-template",
+      "message": "Must use output-template.md"
+    },
+    {
+      "id": "projects_command",
+      "type": "contains",
+      "pattern": "fieldkit pursuit projects",
+      "message": "Must use fieldkit pursuit projects for project health data"
+    },
+    {
+      "id": "health_command",
+      "type": "contains",
+      "pattern": "fieldkit pursuit health",
+      "message": "Must use fieldkit pursuit health for pursuit data"
+    },
+    {
+      "id": "email_signal",
+      "type": "contains",
+      "pattern": "fieldkit gmail query account",
+      "message": "Must query gmail for email signal"
+    },
+    {
+      "id": "save_path",
+      "type": "contains",
+      "pattern": "meetings/",
+      "message": "Must save snapshot to accounts/<account>/meetings/"
+    },
+    {
+      "id": "four_sections",
+      "type": "contains_all",
+      "patterns": [
+        "Active Delivery",
+        "Active Pursuits",
+        "Email Signal",
+        "Backstory Signal"
+      ],
+      "message": "Snapshot must have all four required sections"
+    },
+    {
+      "id": "zombie_detection",
+      "type": "contains",
+      "pattern": "ZOMBIE",
+      "message": "Must detect and flag zombie projects"
+    },
+    {
+      "id": "all_flag",
+      "type": "contains",
+      "pattern": "--all",
+      "message": "Must document --all flag for cross-account run"
+    },
+    {
+      "id": "no_backstory_flag",
+      "type": "contains",
+      "pattern": "--no-backstory",
+      "message": "Must document --no-backstory offline mode flag"
+    },
+    {
+      "id": "commands_exist",
+      "type": "commands_exist",
+      "commands": [
+        "fieldkit gmail query blindspots",
+        "fieldkit gmail backstory-gap"
+      ]
+    },
+    {
+      "id": "no_wrong_people_flag",
+      "type": "not_contains",
+      "pattern": "sync data/gmail.db --account",
+      "message": "Must not use wrong 'sync --account' flag (removed)"
+    },
+    {
+      "id": "no_uv_run",
+      "type": "not_contains",
+      "pattern": "uv run python",
+      "message": "Must not use 'uv run python'"
+    },
+    {
+      "id": "backstory_tools",
+      "type": "contains_all",
+      "patterns": [
+        "find_account",
+        "get_account_status",
+        "get_recent_account_activity"
+      ],
+      "message": "Must document all three Backstory account-level tools"
+    },
+    {
+      "id": "output_format",
+      "type": "contains",
+      "pattern": "Needs Action",
+      "message": "Must include output format with classification buckets"
+    },
+    {
+      "id": "multi_source",
+      "type": "contains_all",
+      "patterns": [
+        "gws gmail",
+        "fieldkit-sales",
+        "gws calendar"
+      ],
+      "message": "Must pull from multiple sources: Gmail, Backstory, Calendar"
+    },
+    {
+      "id": "slackcli",
+      "type": "contains",
+      "pattern": "slackcli",
+      "message": "Must use slackcli for Slack signals"
+    },
+    {
+      "id": "writes_account_md",
+      "type": "contains",
+      "pattern": "account.md",
+      "message": "Must write/update account.md with stakeholder map"
+    },
+    {
+      "id": "buying_committee",
+      "type": "contains",
+      "pattern": "buying",
+      "message": "Must frame output as buying committee map"
+    },
+    {
+      "id": "forecast_command",
+      "type": "contains",
+      "pattern": "fieldkit pursuit forecast",
+      "message": "Must use fieldkit pursuit forecast for pipeline numbers"
+    },
+    {
+      "id": "one-on-one_health_command",
+      "type": "contains",
+      "pattern": "fieldkit pursuit health",
+      "message": "Must use fieldkit pursuit health for at-risk detection"
+    },
+    {
+      "id": "five_sections",
+      "type": "contains_all",
+      "patterns": [
+        "Closed",
+        "Wins",
+        "At Risk",
+        "Pipeline Numbers",
+        "This Week"
+      ],
+      "message": "Must have all five required output sections"
+    },
+    {
+      "id": "manager_asks",
+      "type": "contains",
+      "pattern": "manager ask",
+      "message": "Must auto-suggest manager asks for at-risk deals"
+    },
+    {
+      "id": "one-on-one_save_path",
+      "type": "contains",
+      "pattern": "one-on-ones/",
+      "message": "Must save update to fieldkit-data/archive/one-on-ones/"
+    },
+    {
+      "id": "slack_flag",
+      "type": "contains",
+      "pattern": "--slack",
+      "message": "Must document --slack compact format flag"
+    },
+    {
+      "id": "qbr_mode",
+      "type": "contains",
+      "pattern": "--qbr-mode",
+      "message": "Must document --qbr-mode quarterly expansion flag"
+    },
+    {
+      "id": "at_risk_criteria",
+      "type": "contains",
+      "pattern": "21 days",
+      "message": "Must define at-risk criteria including stall threshold"
+    }
+  ],
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "meeting prep for my call with <account-slug> tomorrow",
+      "expected_behavior": "Reads calendar, pulls attendee profiles, Backstory signals, account context, produces brief",
+      "assertions": [
+        "Gets tomorrow's calendar events via gws calendar",
+        "Calls Backstory for <account-slug> account signals",
+        "Runs fieldkit contact find for each external attendee",
+        "Produces a meeting brief with agenda, questions, and talking points"
+      ]
+    },
+    {
+      "id": 1,
+      "prompt": "prep for my {{primary_account}} {{primary_pursuit}} deal review",
+      "expected_behavior": "Focuses on the pursuit, reads exact native ClosePlan questions, and surfaces question-level evidence needs while preserving pending/unavailable states",
+      "assertions": [
+        "Reads the {{primary_pursuit}} pursuit file for {{primary_account}}",
+        "Uses the exact Salesforce Opportunity and ClosePlan deal identity rather than historical local scores",
+        "Surfaces exact native question IDs and wording as questions to ask",
+        "Reports ambiguous metadata as pending and missing or failed reads as unavailable"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "auto-prep for tomorrow",
+      "expected_behavior": "Scans tomorrow's calendar, identifies external meetings via domain matching, auto-generates prep briefs for each",
+      "assertions": [
+        "Gets tomorrow's calendar events via gws calendar",
+        "Filters to external meetings only (non-internal-domain attendees)",
+        "Matches attendee domains to configured accounts from accounts.yaml",
+        "Generates prep brief for each matched external meeting",
+        "Outputs a summary table of all events with brief status"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "prep QBR for {{accounts.0}}",
+      "expected_behavior": "Reads account context, Backstory signals, company news, produces QBR package",
+      "assertions": [
+        "Reads accounts/{{accounts.0}}/account.md",
+        "Calls Backstory for account health and activity",
+        "Searches for recent company news via `tvly search`",
+        "Produces a structured QBR package following output-template.md"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "I have a QBR with {{accounts.1}} next week",
+      "expected_behavior": "Recognizes as qbr-prep trigger, runs prep for {{accounts.1}}",
+      "assertions": [
+        "Recognizes this as a qbr-prep trigger",
+        "Preps for {{accounts.1}} specifically"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "/account-snapshot <account-slug>",
+      "assertions": [
+        "Runs fieldkit pursuit projects for <account-slug>",
+        "Runs fieldkit pursuit health for <account-slug>",
+        "Queries gmail for 14-day email signal",
+        "Pulls Backstory signals",
+        "Saves snapshot to accounts/<account-slug>/meetings/ with week number"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "/account-snapshot --all",
+      "assertions": [
+        "Runs snapshot for every configured account",
+        "Saves one file per account",
+        "Prints summary table at end"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "/account-snapshot <account-slug> --no-backstory",
+      "assertions": [
+        "Skips Backstory API calls",
+        "Still produces project, pursuit, and email sections",
+        "Notes Backstory section unavailable"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "account pulse",
+      "expected_behavior": "Runs pulse across all accounts, pulls Backstory account-level signals, classifies each account",
+      "assertions": [
+        "Runs the full pulse pipeline for every configured active account (not just one)",
+        "Runs 'fieldkit gmail query blindspots' for each account to surface uncontacted contacts",
+        "Assigns each account to Needs Action / Active / Trigger / Quiet bucket",
+        "Runs 'fieldkit gmail query blindspots' for each account",
+        "Produces a structured markdown output with clear account sections"
+      ]
+    },
+    {
+      "id": 9,
+      "prompt": "pulse on {{primary_account}}",
+      "expected_behavior": "Focuses only on {{primary_account}} account, runs full Backstory and Gmail pipeline for that account",
+      "assertions": [
+        "Only processes {{primary_account}}, not {{accounts.1}} or {{accounts.2}}",
+        "Still runs full pipeline (Backstory account-level signals, blindspots, gap) for {{primary_account}} only"
+      ]
+    },
+    {
+      "id": 10,
+      "prompt": "how are my accounts doing",
+      "expected_behavior": "Triggers account-pulse skill and runs full pulse across all accounts",
+      "assertions": [
+        "Recognizes this as an account-pulse trigger and runs it without asking for clarification",
+        "Presents Backstory signals as account-level context \u2014 does not attribute signals to specific opportunities"
+      ]
+    },
+    {
+      "id": 11,
+      "prompt": "pulse on {{primary_account}} \u2014 two key contacts are showing email decay signals",
+      "expected_behavior": "Incorporates contact decay context and surfaces it in the account classification",
+      "assertions": [
+        "Surfaces contact decay signals in the {{primary_account}} account section as part of the pulse output",
+        "Classifies {{primary_account}} as Needs Action or Active (not Quiet) when decay signals are present"
+      ]
+    },
+    {
+      "id": 12,
+      "prompt": "build a stakeholder map for {{primary_account}}",
+      "expected_behavior": "Reads existing contacts, enriches from Gmail/Backstory/Calendar/Slack, produces buying committee map",
+      "assertions": [
+        "Reads existing {{primary_account}} account.md stakeholder data",
+        "Pulls contact signals from Gmail, Backstory, Calendar",
+        "Organizes output as a buying committee map with roles",
+        "Updates or proposes updates to account.md"
+      ]
+    },
+    {
+      "id": 13,
+      "prompt": "/one-on-one",
+      "assertions": [
+        "Checks for closed-won deals in last 7 days",
+        "Runs fieldkit pursuit forecast for pipeline numbers",
+        "Identifies at-risk deals with manager asks",
+        "Shows top 3 priorities from TASKS.md",
+        "Saves to archive/one-on-ones/"
+      ]
+    },
+    {
+      "id": 14,
+      "prompt": "/one-on-one --slack",
+      "assertions": [
+        "Produces compact bullet format without headers",
+        "Still covers all key sections"
+      ]
+    },
+    {
+      "id": 15,
+      "prompt": "/one-on-one --qbr-mode",
+      "assertions": [
+        "Expands lookback to 30 days",
+        "Adds YTD numbers"
+      ]
+    }
+  ]
+}

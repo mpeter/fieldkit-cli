@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "package": {
+    "distribution": "fieldkit-cli",
+    "command": "fieldkit",
+    "import_package": "fieldkit",
+    "version_source": "pyproject.toml",
+    "first_public_version": "1.0.0"
+  },
+  "compatibility": {
+    "scheme": "semantic-versioning-2.0.0",
+    "supported_line": "latest-patch-of-latest-minor",
+    "support_policy_source": "SUPPORT.md",
+    "public_contract": [
+      "cli-commands-options",
+      "machine-readable-output-schemas",
+      "exit-codes",
+      "configuration-keys",
+      "persisted-data-schemas",
+      "explicitly-public-python-imports"
+    ]
+  },
+  "workflow": {
+    "path": ".github/workflows/release.yml",
+    "candidate_trigger": "protected-main-workflow-dispatch",
+    "production_trigger": "protected-signed-semver-tag",
+    "testpypi_environment": "testpypi",
+    "pypi_environment": "pypi",
+    "credential": "oidc-trusted-publishing",
+    "stored_index_tokens": false
+  },
+  "artifacts": {
+    "build_policy": "build-once-promote-by-digest",
+    "checksum": "sha256",
+    "sbom_scope": "installed-all-runtime-profile",
+    "required": [
+      "wheel",
+      "sdist",
+      "cyclonedx-json",
+      "sha256sums",
+      "release-evidence"
+    ]
+  },
+  "recovery": {
+    "allow_overwrite": false,
+    "allow_version_reuse": false,
+    "defective_release_actions": [
+      "document",
+      "yank-when-harmful-or-unusable",
+      "publish-successor-version"
+    ]
+  }
+}

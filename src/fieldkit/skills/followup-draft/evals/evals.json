@@ -1,0 +1,42 @@
+{
+  "skill_name": "followup-draft",
+  "static_checks": [
+    {
+      "id": "uses_template",
+      "type": "contains",
+      "pattern": "email-template",
+      "message": "Must use email-template.md for output format"
+    },
+    {
+      "id": "creates_draft",
+      "type": "contains",
+      "pattern": "gws gmail",
+      "message": "Must create Gmail draft via gws gmail"
+    },
+    {
+      "id": "saves_notes",
+      "type": "contains",
+      "pattern": "meetings/",
+      "message": "Must save meeting notes to the account meetings folder"
+    },
+    {
+      "id": "user_approval",
+      "type": "contains",
+      "pattern": "approv",
+      "message": "Must get user approval before sending/creating draft"
+    }
+  ],
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "draft a follow-up for the {{primary_account}} call today",
+      "expected_behavior": "Reads meeting notes/context, drafts follow-up email, saves notes, gets approval before creating Gmail draft",
+      "assertions": [
+        "Reads recent <account-slug> meeting notes or calendar event for context",
+        "Produces a follow-up email draft with outcomes and next steps",
+        "Presents draft and asks for approval before creating Gmail draft",
+        "After approval, creates draft via gws gmail group"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+{
+  "skill_name": "task-sync",
+  "static_checks": [
+    {
+      "id": "gws_cli",
+      "type": "contains",
+      "pattern": "gws tasks",
+      "message": "Must use the gws CLI for Google Tasks (operator ruling 2026-07-17; MCP hits a reauth loop)"
+    },
+    {
+      "id": "no_mcp",
+      "type": "contains",
+      "pattern": "never MCP",
+      "message": "Must state that the Google Tasks MCP route is not used"
+    },
+    {
+      "id": "managed_region",
+      "type": "contains",
+      "pattern": "TASKS.md",
+      "message": "Must reconcile the TASKS.md managed region"
+    },
+    {
+      "id": "google_wins",
+      "type": "contains",
+      "pattern": "Google wins",
+      "message": "Google Tasks is the source of truth on any conflict"
+    },
+    {
+      "id": "anchors",
+      "type": "contains",
+      "pattern": "gtask:",
+      "message": "Must carry gtask id anchors as line identity"
+    }
+  ],
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "sync my tasks — I completed two things on my phone this morning",
+      "expected_behavior": "Pulls the fieldkit list via gws (showCompleted), pushes anchor-less promoted lines and local [x] completions first, then regenerates the managed region from the pulled list with Google winning",
+      "assertions": [
+        "Uses the gws CLI (never the Google Tasks MCP route) and resolves the fieldkit list id at session start",
+        "Pushes promoted (anchor-less) managed lines and local completions to Google before regenerating",
+        "Regenerates the managed region from the pulled list — Google wins on conflict; mobile completions render as done, mobile deletions drop the line",
+        "Never deletes a Google task and never touches the backlog region below the marker",
+        "Reports a 3-6 line delta summary instead of dumping the whole list"
+      ]
+    }
+  ]
+}

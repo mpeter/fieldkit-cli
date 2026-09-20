@@ -1,0 +1,45 @@
+{
+  "skill_name": "handoffs",
+  "static_checks": [
+    {
+      "id": "requires_purpose",
+      "type": "contains",
+      "pattern": "stop and ask",
+      "message": "Must require an explicit purpose before writing a handoff, and ask if none was given"
+    },
+    {
+      "id": "writes_planning_dir",
+      "type": "contains",
+      "pattern": ".planning/handoffs/",
+      "message": "Must write handoff files under .planning/handoffs/"
+    },
+    {
+      "id": "surfaces_pickup",
+      "type": "contains",
+      "pattern": "/pickup",
+      "message": "Must tell the operator how to resume via /pickup"
+    }
+  ],
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "/handoffs I need to stop here, continue the auth refactor tomorrow",
+      "expected_behavior": "Writes a dated handoff file to .planning/handoffs/ capturing intent, files touched, and pending work, then tells the operator the file path and the /pickup command to resume",
+      "assertions": [
+        "Does not proceed without a stated purpose",
+        "Produces sections for Primary Request and Intent, Files and Code Sections, Pending Tasks, and Current Work",
+        "Names the output file in YYYY-MM-DD-<slug>.md format",
+        "Tells the operator to use /pickup to resume"
+      ]
+    },
+    {
+      "id": 1,
+      "prompt": "/handoffs",
+      "expected_behavior": "Stops immediately and asks the operator what the next session should pick up, since no purpose was given",
+      "assertions": [
+        "Does not write a handoff file",
+        "Asks for the purpose before doing anything else"
+      ]
+    }
+  ]
+}

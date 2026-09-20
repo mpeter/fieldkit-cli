@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mpeter/fieldkit-cli/blob/main/docs/release-readiness/release-manual-evidence.schema.json",
+  "title": "fieldkit same-candidate release evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "candidate", "criteria"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "source_sha", "exported_tree", "planned_tag", "artifacts"],
+      "properties": {
+        "repository": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"},
+        "source_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "exported_tree": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "planned_tag": {"type": "string", "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$"},
+        "artifacts": {
+          "type": "array", "minItems": 2, "maxItems": 2,
+          "items": {"type": "object", "additionalProperties": false, "required": ["name", "sha256"], "properties": {"name": {"type": "string", "minLength": 1}, "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}}
+        }
+      }
+    },
+    "criteria": {
+      "type": "array", "minItems": 10, "maxItems": 10,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "status", "record"],
+        "properties": {
+          "id": {"enum": ["github-release-environment", "pypi-trusted-publisher", "package-name-reservation", "repository-controls", "testpypi-rehearsal", "public-contributor-journeys", "public-user-journeys", "documentation-rehearsals", "frontier-final-review", "cutover-approval"]},
+          "status": {"const": "pass"},
+          "record": {"type": "object", "additionalProperties": false, "required": ["kind", "path", "uri", "sha256"], "properties": {"kind": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"}, "path": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*\\.json$"}, "uri": {"type": "string", "pattern": "^https://"}, "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}}
+        }
+      }
+    }
+  }
+}

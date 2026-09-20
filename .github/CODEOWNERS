@@ -1,0 +1,41 @@
+# Governance gate files — route review to the current operator.
+#
+# These paths are the enforcement layer for architectural invariants,
+# CI quality gates, module boundaries, and agent behavior. A driver PR
+# that bumps a ratchet ceiling or loosens a hook must be reviewed by
+# the operator before merge.
+
+tests/test_governance_invariants.py  @mpeter
+hooks/                               @mpeter
+.pre-commit-config.yaml              @mpeter
+.github/workflows/                   @mpeter
+.github/dependabot.yml               @mpeter
+.github/repository-settings.json     @mpeter
+.github/CODEOWNERS                   @mpeter
+pyproject.toml                       @mpeter
+uv.lock                              @mpeter
+tach.toml                            @mpeter
+scripts/check_agentready.py          @mpeter
+scripts/check_supply_chain_policy.py @mpeter
+scripts/_supply_chain_policy.py      @mpeter
+scripts/_repository_settings.py      @mpeter
+scripts/verify_repository_settings.py @mpeter
+scripts/check_documentation_contract.py @mpeter
+scripts/check_public_docs.py          @mpeter
+scripts/check_compatibility_policy.py @mpeter
+scripts/check_dependency_profiles.py  @mpeter
+scripts/check_public_identity.py      @mpeter
+scripts/check_workflow_security.py    @mpeter
+Makefile                              @mpeter
+docs/dependency-security.md          @mpeter
+docs/release-readiness/dependency-security-policy.json @mpeter
+docs/release-readiness/              @mpeter
+
+# Public community and trust surfaces — keep routing and authority changes explicit.
+/CONTRIBUTING.md                      @mpeter
+/GOVERNANCE.md                        @mpeter
+/ROADMAP.md                           @mpeter
+/SECURITY.md                          @mpeter
+/SUPPORT.md                           @mpeter
+/.github/ISSUE_TEMPLATE/              @mpeter
+/.github/PULL_REQUEST_TEMPLATE.md     @mpeter

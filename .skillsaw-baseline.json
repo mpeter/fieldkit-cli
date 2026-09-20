@@ -1,0 +1,381 @@
+{
+  "version": "1",
+  "generated_by": "skillsaw 0.16.0",
+  "generated_at": "2026-07-28T17:07:28.370444+00:00",
+  "violations": [
+    {
+      "fingerprint": "8190b1e8ded8aa65",
+      "rule_id": "agent-frontmatter",
+      "file_path": ".claude/agents/gaze-reporter.md",
+      "message": "Missing 'name' in frontmatter",
+      "severity": "error"
+    },
+    {
+      "fingerprint": "d265904e1afceb73",
+      "rule_id": "agent-frontmatter",
+      "file_path": ".claude/agents/gaze-test-generator.md",
+      "message": "Missing 'name' in frontmatter",
+      "severity": "error"
+    },
+    {
+      "fingerprint": "5c91d89181806e7a",
+      "rule_id": "agent-frontmatter",
+      "file_path": ".claude/agents/journeyman.md",
+      "message": "Missing 'name' in frontmatter",
+      "severity": "error"
+    },
+    {
+      "fingerprint": "a92bd956e5ec567a",
+      "rule_id": "content-critical-position",
+      "file_path": ".claude/commands/address-feedback.md",
+      "line": 122,
+      "message": "'MUST' instruction at line 119 is in the attention dead zone (20-80%) \u2014 Move to the first 20% or last 20% of the file for better attention",
+      "severity": "warning"
+    },
+    {
+      "fingerprint": "8ce06d2dc16ee858",
+      "rule_id": "content-critical-position",
+      "file_path": ".claude/commands/address-feedback.md",
+      "line": 191,
+      "message": "'MUST' instruction at line 188 is in the attention dead zone (20-80%) \u2014 Move to the first 20% or last 20% of the file for better attention",
+      "severity": "warning"
+    },
+    {
+      "fingerprint": "2e1105326912171d",
+      "rule_id": "content-critical-position",
+      "file_path": ".claude/commands/address-feedback.md",
+      "line": 192,
+      "message": "'MUST' instruction at line 189 is in the attention dead zone (20-80%) \u2014 Move to the first 20% or last 20% of the file for better attention",
+      "severity": "warning"
+    },
+    {
+      "fingerprint": "bfcb9fbf67448929",
+      "rule_id": "content-critical-position",
+      "file_path": ".claude/commands/address-feedback.md",
+      "line": 193,
+      "message": "'MUST' instruction at line 190 is in the attention dead zone (20-80%) \u2014 Move to the first 20% or last 20% of the file for better attention",
+      "severity": "warning"
+    },
+    {
+      "fingerprint": "9d04d762e872fe18",
+      "rule_id": "content-critical-position",
+      "file_path": ".claude/commands/address-feedback.md",
+      "line": 254,
+      "message": "'MUST' instruction at line 251 is in the attention dead zone (20-80%) \u2014 Move to the first 20% or last 20% of the file for better attention",
+      "severity": "warning"
+    },
+    {
+      "fingerprint": "f641c350ec76d85b",
+      "rule_id": "content-critical-position",
+      "file_path": ".claude/commands/agent-brief.md",
+      "line": 138,
+      "message": "'MUST' instruction at line 130 is in the attention dead zone (20-80%) \u2014 Move to the first 20% or last 20% of the file for better attention",
+      "severity": "warning"
+    },
+    {
+      "fingerprint": "01d1c73d36f2fdf1",
+      "rule_id": "content-critical-position",
+      "file_path": ".claude/commands/agent-brief.md",
+      "line": 370,
+      "message": "'MUST' instruction at line 362 is in the attention dead zone (20-80%) \u2014 Move to the first 20% or last 20% of the file for better attention",
+      "severity": "warning"
+    },
+    {
+      "fingerprint": "b914f911c992d411",
+      "rule_id": "content-critical-position",
+      "file_path": ".claude/commands/opsx-propose.md",
+      "line": 27,
+      "message": "'IMPORTANT' instruction at line 24 is in the attention dead zone (20-80%) \u2014 Move to the first 20% or last 20% of the file for better attention",
+      "severity": "warning"
+    },
+    {
+      "fingerprint": "ef6a202a67ec7e96",
+      "rule_id": "content-critical-position",
+      "file_path": ".claude/commands/true-up.md",
+      "line": 134,
+      "message": "'MUST' instruction at line 131 is in the attention dead zone (20-80%) \u2014 Move to the first 20% or last 20% of the file for better attention",
+      "severity": "warning"
+    },
+    {
+      "fingerprint": "bcc9680d7256c496",
+      "rule_id": "content-critical-position",
+      "file_path": ".claude/agents/gaze-test-generator.md",
+      "line": 250,
+      "message": "'MUST' instruction at line 234 is in the attention dead zone (20-80%) \u2014 Move to the first 20% or last 20% of the file for better attention",
+      "severity": "warning"
+    },
+    {
+      "fingerprint": "b7f7e4096613e212",
+      "rule_id": "content-critical-position",
+      "file_path": "src/fieldkit/skills/tool-routing/references/docs-layout-workflow.md",
+      "line": 122,
+      "message": "'ALWAYS' instruction at line 122 is in the attention dead zone (20-80%) \u2014 Move to the first 20% or last 20% of the file for better attention",
+      "severity": "warning"
+    },
+    {
+      "fingerprint": "eb82ccdde951bc96",
+      "rule_id": "content-critical-position",
+      "file_path": "src/fieldkit/skills/tool-routing/references/drive.md",
+      "line": 236,
+      "message": "'IMPORTANT' instruction at line 236 is in the attention dead zone (20-80%) \u2014 Move to the first 20% or last 20% of the file for better attention",
+      "severity": "warning"
+    },
+    {
+      "fingerprint": "27d33cd04ec8026e",
+      "rule_id": "content-critical-position",
+      "file_path": ".claude/skills/always-on-guidance/SKILL.md",
+      "line": 136,
+      "message": "'MUST' instruction at line 122 is in the attention dead zone (20-80%) \u2014 Move to the first 20% or last 20% of the file for better attention",
+      "severity": "warning"
+    },
+    {
+      "fingerprint": "d2111a84704a335a",
+      "rule_id": "content-critical-position",
+      "file_path": ".claude/skills/openspec-archive-change/SKILL.md",
+      "line": 51,
+      "message": "'MUST' instruction at line 35 is in the attention dead zone (20-80%) \u2014 Move to the first 20% or last 20% of the file for better attention",
+      "severity": "warning"
+    },
+    {
+      "fingerprint": "5b61319558083a0d",
+      "rule_id": "content-critical-position",
+      "file_path": ".claude/skills/openspec-archive-change/SKILL.md",
+      "line": 62,
+      "message": "'IMPORTANT' instruction at line 46 is in the attention dead zone (20-80%) \u2014 Move to the first 20% or last 20% of the file for better attention",
+      "severity": "warning"
+    },
+    {
+      "fingerprint": "e1decc2bbb65652a",
+      "rule_id": "content-critical-position",
+      "file_path": ".claude/skills/openspec-propose/SKILL.md",
+      "line": 70,
+      "message": "'IMPORTANT' instruction at line 53 is in the attention dead zone (20-80%) \u2014 Move to the first 20% or last 20% of the file for better attention",
+      "severity": "warning"
+    },
+    {
+      "fingerprint": "980dfead7a77a2d0",
+      "rule_id": "content-critical-position",
+      "file_path": ".claude/skills/openspec-propose/SKILL.md",
+      "line": 138,
+      "message": "'IMPORTANT' instruction at line 121 is in the attention dead zone (20-80%) \u2014 Move to the first 20% or last 20% of the file for better attention",
+      "severity": "warning"
+    },
+    {
+      "fingerprint": "fa891b29c9eea104",
+      "rule_id": "content-critical-position",
+      "file_path": ".claude/skills/openspec-sync-specs/SKILL.md",
+      "line": 61,
+      "message": "'IMPORTANT' instruction at line 44 is in the attention dead zone (20-80%) \u2014 Move to the first 20% or last 20% of the file for better attention",
+      "severity": "warning"
+    },
+    {
+      "fingerprint": "2dd846a2058d6a4b",
+      "rule_id": "content-critical-position",
+      "file_path": ".claude/skills/proctor/SKILL.md",
+      "line": 52,
+      "message": "'CRITICAL' instruction at line 40 is in the attention dead zone (20-80%) \u2014 Move to the first 20% or last 20% of the file for better attention",
+      "severity": "warning"
+    },
+    {
+      "fingerprint": "7a97de6e35bcad9e",
+      "rule_id": "content-critical-position",
+      "file_path": ".claude/skills/proctor/SKILL.md",
+      "line": 61,
+      "message": "'MUST' instruction at line 49 is in the attention dead zone (20-80%) \u2014 Move to the first 20% or last 20% of the file for better attention",
+      "severity": "warning"
+    },
+    {
+      "fingerprint": "053998d564f1fc06",
+      "rule_id": "content-critical-position",
+      "file_path": ".claude/skills/proctor/SKILL.md",
+      "line": 88,
+      "message": "'CRITICAL' instruction at line 76 is in the attention dead zone (20-80%) \u2014 Move to the first 20% or last 20% of the file for better attention",
+      "severity": "warning"
+    },
+    {
+      "fingerprint": "8cdb9c09cf9b7dfb",
+      "rule_id": "content-critical-position",
+      "file_path": ".claude/skills/proctor/SKILL.md",
+      "line": 90,
+      "message": "'CRITICAL' instruction at line 78 is in the attention dead zone (20-80%) \u2014 Move to the first 20% or last 20% of the file for better attention",
+      "severity": "warning"
+    },
+    {
+      "fingerprint": "0a54cfed30987a07",
+      "rule_id": "content-critical-position",
+      "file_path": ".claude/skills/proctor/references/catalogue.md",
+      "line": 145,
+      "message": "'MUST' instruction at line 145 is in the attention dead zone (20-80%) \u2014 Move to the first 20% or last 20% of the file for better attention",
+      "severity": "warning"
+    },
+    {
+      "fingerprint": "cca57f69a28c6fe8",
+      "rule_id": "content-critical-position",
+      "file_path": ".claude/skills/proctor/references/lenses.md",
+      "line": 91,
+      "message": "'MUST' instruction at line 91 is in the attention dead zone (20-80%) \u2014 Move to the first 20% or last 20% of the file for better attention",
+      "severity": "warning"
+    },
+    {
+      "fingerprint": "8cd43db021bf4c05",
+      "rule_id": "content-critical-position",
+      "file_path": ".claude/skills/proctor/references/lenses.md",
+      "line": 113,
+      "message": "'CRITICAL' instruction at line 113 is in the attention dead zone (20-80%) \u2014 Move to the first 20% or last 20% of the file for better attention",
+      "severity": "warning"
+    },
+    {
+      "fingerprint": "7e8f9f51586816a7",
+      "rule_id": "content-critical-position",
+      "file_path": ".claude/skills/proctor/references/model-routing.md",
+      "line": 22,
+      "message": "'CRITICAL' instruction at line 22 is in the attention dead zone (20-80%) \u2014 Move to the first 20% or last 20% of the file for better attention",
+      "severity": "warning"
+    },
+    {
+      "fingerprint": "118f13c4ea5df98f",
+      "rule_id": "content-critical-position",
+      "file_path": ".claude/skills/review-context/SKILL.md",
+      "line": 133,
+      "message": "'MUST' instruction at line 118 is in the attention dead zone (20-80%) \u2014 Move to the first 20% or last 20% of the file for better attention",
+      "severity": "warning"
+    },
+    {
+      "fingerprint": "f2729641168550e0",
+      "rule_id": "content-critical-position",
+      "file_path": ".claude/skills/review-context/SKILL.md",
+      "line": 135,
+      "message": "'MUST' instruction at line 120 is in the attention dead zone (20-80%) \u2014 Move to the first 20% or last 20% of the file for better attention",
+      "severity": "warning"
+    },
+    {
+      "fingerprint": "74565c3af9ea7394",
+      "rule_id": "content-negative-only",
+      "file_path": "src/fieldkit/skills/tool-routing/references/fieldkit-tasks.md",
+      "line": 1,
+      "message": "Negative-only instruction without alternative: '<group>fieldkit-tasks \u2014 DO NOT USE (operator ruling 2026-07-17)</group>'",
+      "severity": "warning"
+    },
+    {
+      "fingerprint": "e8b0115b79b79f7d",
+      "rule_id": "content-negative-only",
+      "file_path": "src/fieldkit/skills/tool-routing/references/tasks.md",
+      "line": 1,
+      "message": "Negative-only instruction without alternative: '> **Do not use these MCP tools** \u2014 Google Tasks work goes through the       CLI '",
+      "severity": "warning"
+    },
+    {
+      "fingerprint": "a1101fefa806e2ef",
+      "rule_id": "content-placeholder-text",
+      "file_path": ".claude/agents/gaze-test-generator.md",
+      "line": 174,
+      "message": "Placeholder text (TODO marker): 'TODO'",
+      "severity": "warning"
+    },
+    {
+      "fingerprint": "ca6010ad517558c6",
+      "rule_id": "content-weak-language",
+      "file_path": ".claude/commands/address-feedback.md",
+      "line": 197,
+      "message": "Weak language (non-actionable): 'note that' \u2014 Restructure \u2014 state the constraint directly",
+      "severity": "warning"
+    },
+    {
+      "fingerprint": "d51e63f50228404e",
+      "rule_id": "content-weak-language",
+      "file_path": ".claude/skills/openspec-apply-change/SKILL.md",
+      "line": 53,
+      "message": "Weak language (vagueness): 'gracefully' \u2014 Replace 'gracefully' with specific error handling behavior",
+      "severity": "warning"
+    },
+    {
+      "fingerprint": "e138856303c10804",
+      "rule_id": "content-weak-language",
+      "file_path": ".claude/skills/openspec-explore/SKILL.md",
+      "line": 381,
+      "message": "Weak language (vagueness): 'gracefully' \u2014 Replace 'gracefully' with specific error handling behavior",
+      "severity": "warning"
+    },
+    {
+      "fingerprint": "7a8bc7ea7befade0",
+      "rule_id": "context-budget",
+      "file_path": ".claude/commands/address-feedback.md",
+      "message": "Estimated 4,892 tokens exceeds command error limit of 4,000",
+      "severity": "error",
+      "value": 4892,
+      "baseline_mode": "ceiling"
+    },
+    {
+      "fingerprint": "6ba83accbc9e5b43",
+      "rule_id": "context-budget",
+      "file_path": ".claude/commands/agent-brief.md",
+      "message": "Estimated 4,806 tokens exceeds command error limit of 4,000",
+      "severity": "error",
+      "value": 4806,
+      "baseline_mode": "ceiling"
+    },
+    {
+      "fingerprint": "2941c45fa51375e5",
+      "rule_id": "context-budget",
+      "file_path": ".claude/commands/check-skill-integrity.md",
+      "message": "Estimated 2,334 tokens exceeds command warn limit of 2,000",
+      "severity": "warning",
+      "value": 2334,
+      "baseline_mode": "ceiling"
+    },
+    {
+      "fingerprint": "9c8d71f27095f939",
+      "rule_id": "context-budget",
+      "file_path": ".claude/commands/foreman.md",
+      "message": "Estimated 2,099 tokens exceeds command warn limit of 2,000",
+      "severity": "warning",
+      "value": 2099,
+      "baseline_mode": "ceiling"
+    },
+    {
+      "fingerprint": "96ebb9c2bbff05a2",
+      "rule_id": "context-budget",
+      "file_path": ".claude/commands/true-up.md",
+      "message": "Estimated 4,377 tokens exceeds command error limit of 4,000",
+      "severity": "error",
+      "value": 4377,
+      "baseline_mode": "ceiling"
+    },
+    {
+      "fingerprint": "f15869be520c922b",
+      "rule_id": "context-budget",
+      "file_path": ".claude/agents/gaze-test-generator.md",
+      "message": "Estimated 2,814 tokens exceeds agent warn limit of 2,000",
+      "severity": "warning",
+      "value": 2814,
+      "baseline_mode": "ceiling"
+    },
+    {
+      "fingerprint": "9c60e4c5bf759d95",
+      "rule_id": "context-budget",
+      "file_path": ".claude/skills/openspec-explore/SKILL.md",
+      "message": "Estimated 3,461 tokens exceeds skill warn limit of 3,000",
+      "severity": "warning",
+      "value": 3461,
+      "baseline_mode": "ceiling"
+    },
+    {
+      "fingerprint": "6cea6a0f64d33a54",
+      "rule_id": "context-budget",
+      "file_path": ".claude/skills/python-quality/SKILL.md",
+      "message": "Estimated 4,683 tokens exceeds skill warn limit of 3,000",
+      "severity": "warning",
+      "value": 4683,
+      "baseline_mode": "ceiling"
+    },
+    {
+      "fingerprint": "6cea6a0f64d33a54",
+      "rule_id": "context-budget",
+      "file_path": ".claude/skills/python-quality/SKILL.md",
+      "message": "Estimated 4,759 tokens exceeds skill warn limit of 3,000",
+      "severity": "warning",
+      "value": 4759,
+      "baseline_mode": "ceiling"
+    }
+  ]
+}

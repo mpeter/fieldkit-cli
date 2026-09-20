@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mpeter/fieldkit-cli/blob/main/docs/release-readiness/release-governance-policy.schema.json",
+  "title": "fieldkit release governance policy",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "candidate", "roles", "support", "external_controls"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "package", "planned_tag"],
+      "properties": {
+        "repository": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"},
+        "package": {"type": "string", "minLength": 1},
+        "planned_tag": {"type": "string", "pattern": "^v.+"}
+      }
+    },
+    "roles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["preparer", "approver", "incident"],
+      "properties": {
+        "preparer": {"type": "string", "minLength": 1},
+        "approver": {"type": "string", "minLength": 1},
+        "incident": {"type": "string", "minLength": 1}
+      }
+    },
+    "support": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["compatibility_policy", "supported_line"],
+      "properties": {
+        "compatibility_policy": {"type": "string", "minLength": 1},
+        "supported_line": {"type": "string", "minLength": 1}
+      }
+    },
+    "external_controls": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "uniqueItems": true,
+      "allOf": [
+        {"contains": {"properties": {"id": {"const": "github-release-environment"}}}},
+        {"contains": {"properties": {"id": {"const": "pypi-trusted-publisher"}}}}
+      ],
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "status", "evidence"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
+          "status": {"enum": ["pending", "evidenced"]},
+          "evidence": {
+            "additionalProperties": false,
+            "required": ["candidate", "record"],
+            "properties": {
+              "candidate": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["repository", "revision", "package", "planned_tag"],
+                "properties": {
+                  "repository": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"},
+                  "revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+                  "package": {"type": "string", "minLength": 1},
+                  "planned_tag": {"type": "string", "pattern": "^v.+"}
+                }
+              },
+              "record": {"type": "string", "pattern": "^https://"}
+            }
+          }
+        },
+        "allOf": [
+          {
+            "if": {"properties": {"status": {"const": "pending"}}},
+            "then": {"properties": {"evidence": {"type": "null"}}}
+          },
+          {
+            "if": {"properties": {"status": {"const": "evidenced"}}},
+            "then": {"properties": {"evidence": {"type": "object"}}}
+          }
+        ]
+      }
+    }
+  }
+}

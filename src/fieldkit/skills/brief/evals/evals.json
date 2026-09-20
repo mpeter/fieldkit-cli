@@ -1,0 +1,272 @@
+{
+  "skill_name": "brief",
+  "static_checks": [
+    {
+      "id": "cache_awareness",
+      "type": "contains",
+      "pattern": "brief.json",
+      "message": "Must check for a today-dated brief.json before re-running the pipeline"
+    },
+    {
+      "id": "force_fresh",
+      "type": "contains",
+      "pattern": "--fresh",
+      "message": "Must carry the force-fresh escape hatch"
+    },
+    {
+      "id": "task_sync_first",
+      "type": "contains",
+      "pattern": "/task-sync",
+      "message": "Must reconcile Google Tasks before synthesizing"
+    },
+    {
+      "id": "native_qualification_boundary",
+      "type": "contains",
+      "pattern": "pending (live ClosePlan fetch required)",
+      "message": "Must distinguish a linked pursuit from a completed native qualification read"
+    },
+    {
+      "id": "staleness",
+      "type": "contains",
+      "pattern": "auth sf",
+      "message": "Dead SF session degrades to cache with age flags, prompting auth sf"
+    },
+    {
+      "id": "ws_sync_sf",
+      "type": "contains",
+      "pattern": "fieldkit sync --sf",
+      "message": "week-start op: must use fieldkit sync --sf for full weekly refresh including SF"
+    },
+    {
+      "id": "ws_pipeline_review",
+      "type": "contains",
+      "pattern": "fieldkit pipeline",
+      "message": "week-start op: must run fieldkit pipeline for weekly pipeline review"
+    },
+    {
+      "id": "ws_account_snapshot",
+      "type": "contains",
+      "pattern": "account-snapshot",
+      "message": "week-start op: must invoke account-snapshot for each account"
+    },
+    {
+      "id": "ws_projects_command",
+      "type": "contains",
+      "pattern": "fieldkit pursuit projects",
+      "message": "week-start op: must check project health via fieldkit pursuit projects"
+    },
+    {
+      "id": "ws_task_sync",
+      "type": "contains",
+      "pattern": "task-sync",
+      "message": "week-start op: must run task-sync after setting priorities"
+    },
+    {
+      "id": "ws_output_sections",
+      "type": "contains_all",
+      "patterns": [
+        "Data Refreshed",
+        "Pipeline Summary",
+        "Project Alerts",
+        "This Week"
+      ],
+      "message": "week-start op: output must have all required sections"
+    },
+    {
+      "id": "ws_skip_snapshots_flag",
+      "type": "contains",
+      "pattern": "--skip-snapshots",
+      "message": "week-start op: must document the --skip-snapshots option"
+    },
+    {
+      "id": "we_sf_audit",
+      "type": "contains",
+      "pattern": "fieldkit pursuit audit",
+      "message": "week-end op: must run fieldkit pursuit audit for SF hygiene check"
+    },
+    {
+      "id": "we_waiting_on_audit",
+      "type": "contains",
+      "pattern": "Waiting On",
+      "message": "week-end op: must audit TASKS.md Waiting On section for overdue follow-ups"
+    },
+    {
+      "id": "we_1on1_op",
+      "type": "contains",
+      "pattern": "one-on-one",
+      "message": "week-end op: must invoke the meeting skill's one-on-one op for the 1:1 draft"
+    },
+    {
+      "id": "we_lessons_learned",
+      "type": "contains",
+      "pattern": "lessons-learned",
+      "message": "week-end op: must offer to capture lessons to lessons-learned.md"
+    },
+    {
+      "id": "we_tasks_reset",
+      "type": "contains",
+      "pattern": "TASKS.md",
+      "message": "week-end op: must reset TASKS.md for next week"
+    },
+    {
+      "id": "we_skip_1on1_flag",
+      "type": "contains",
+      "pattern": "--skip-1on1",
+      "message": "week-end op: must document the --skip-1on1 option"
+    },
+    {
+      "id": "we_no_reset_flag",
+      "type": "contains",
+      "pattern": "--no-reset",
+      "message": "week-end op: must document the --no-reset option"
+    },
+    {
+      "id": "we_output_sections",
+      "type": "contains_all",
+      "patterns": [
+        "Accomplished",
+        "SF Hygiene",
+        "Follow-Ups",
+        "1:1 Draft",
+        "TASKS.md Reset"
+      ],
+      "message": "week-end op: output must have all five required sections"
+    },
+    {
+      "id": "up_no_uv_run",
+      "type": "not_contains",
+      "pattern": "uv run python",
+      "message": "update op: must not use 'uv run python'"
+    },
+    {
+      "id": "up_no_days_flag",
+      "type": "not_contains",
+      "pattern": "--days",
+      "message": "update op: --days does not exist on gmail query — must use --since"
+    },
+    {
+      "id": "up_since_flag",
+      "type": "contains",
+      "pattern": "--since",
+      "message": "update op: must use --since for date-filtered queries"
+    },
+    {
+      "id": "up_staleness_checks",
+      "type": "contains_all",
+      "patterns": [
+        "sf_last_pulled",
+        "7 days",
+        "90 days"
+      ],
+      "message": "update op: must include SF data staleness and contact memory staleness checks"
+    },
+    {
+      "id": "up_tasks_md",
+      "type": "contains",
+      "pattern": "TASKS.md",
+      "message": "update op: must reference TASKS.md as the task store"
+    }
+  ],
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "orient me — what do I have today?",
+      "expected_behavior": "If no today-dated brief.json, runs the full pipeline (task-sync first), then synthesizes whispers -> Today -> Slack threads -> staleness flags instead of dumping raw output",
+      "assertions": [
+        "Checks for a today-dated brief.json and only runs the full pipeline when it is missing or the operator demands fresh",
+        "Runs /task-sync before synthesizing so mobile edits reach Today",
+        "Presents whispers first, then Today, then unanswered Slack threads, then staleness flags — synthesis, not a dump",
+        "States cache age instead of presenting stale data as current when a refresh failed",
+        "Reports native qualification as pending or unavailable and never substitutes historical local scores; points to /grill for an exact read-only review"
+      ]
+    },
+    {
+      "id": 1,
+      "prompt": "what about the platform deal? (asked right after this morning's pulse)",
+      "expected_behavior": "Answers the follow-up from today's cached brief.json without re-running the pipeline",
+      "assertions": [
+        "Answers from the existing today-dated brief.json rather than re-pulling live SF/Gmail",
+        "Would still run the full refresh if the operator said 'pull latest' or '--fresh'"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "start the week — it's Monday morning",
+      "expected_behavior": "Routes to the week-start op and runs the full start-of-week orchestration",
+      "assertions": [
+        "Reads ops/week-start.md rather than treating this as the daily brief",
+        "Runs fieldkit sync --sf",
+        "Generates pipeline review",
+        "Creates per-account snapshots",
+        "Checks project health for zombies and expiring projects",
+        "Presents top 5 priority suggestions and confirms before writing",
+        "Writes confirmed priorities to the TASKS.md Today section"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "set up my week but skip the account snapshots",
+      "expected_behavior": "Runs the week-start op with snapshot generation skipped",
+      "assertions": [
+        "Skips account snapshot generation",
+        "Still runs data sync, pipeline review, and priority setting"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "close out the week — Friday wrap",
+      "expected_behavior": "Routes to the week-end op and runs the full close-out",
+      "assertions": [
+        "Reads ops/week-end.md rather than treating this as the daily brief",
+        "Checks SF data freshness and next steps for all active pursuits",
+        "Audits Waiting On items for overdue follow-ups",
+        "Summarises tasks completed and meetings this week",
+        "Prompts for lessons learned",
+        "Drafts the 1:1 update via the meeting skill's one-on-one op",
+        "Resets TASKS.md and syncs to Google Tasks"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "end of week wrap-up, but don't draft the 1:1",
+      "expected_behavior": "Runs the week-end op without the 1:1 draft step",
+      "assertions": [
+        "Runs all steps except the 1:1 draft",
+        "Still does SF hygiene, follow-up audit, and tasks reset"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "prep for next week but leave my tasks alone",
+      "expected_behavior": "Runs the week-end op without resetting TASKS.md",
+      "assertions": [
+        "Skips the TASKS.md reset",
+        "Still does SF hygiene, follow-up audit, lessons, and 1:1 draft"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "catch me up — I've been in meetings all morning, what did I miss?",
+      "expected_behavior": "Routes to the update op for a mid-session refresh, not a full start-of-day run",
+      "assertions": [
+        "Reads ops/update.md rather than re-running the full start-of-day brief",
+        "Reads TASKS.md",
+        "Checks sf_last_pulled for each pursuit (flags > 7 days)",
+        "Pulls Backstory signals via the fieldkit-sales group",
+        "Produces an Update complete summary",
+        "Uses 'fieldkit gmail sync' not 'uv run python -m fieldkit gmail sync'"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "give me a comprehensive refresh of what's changed",
+      "expected_behavior": "Runs the update op in comprehensive mode — full refresh plus deep Gmail and calendar scan",
+      "assertions": [
+        "Runs 'fieldkit gmail sync' and 'fieldkit gmail account-tags'",
+        "Queries recent activity using the --since flag (not --days)",
+        "Runs 'fieldkit gmail decay <account>' for each account",
+        "Runs 'fieldkit gmail query blindspots' for new contacts"
+      ]
+    }
+  ]
+}

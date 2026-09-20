@@ -1,0 +1,64 @@
+{
+  "skill_name": "slack-digest",
+  "static_checks": [
+    {
+      "id": "slackcli",
+      "type": "contains",
+      "pattern": "slackcli",
+      "message": "Must use slackcli for Slack access"
+    },
+    {
+      "id": "watch_first",
+      "type": "contains",
+      "pattern": "fieldkit watch run slack-threads",
+      "message": "Must offer the fieldkit watch run slack-threads watcher pathway"
+    },
+    {
+      "id": "dealroom_sweep",
+      "type": "contains",
+      "pattern": "dealroom/scan.py",
+      "message": "Must offer the deterministic deal-room sweep pathway"
+    },
+    {
+      "id": "no_mcp",
+      "type": "contains",
+      "pattern": "no Slack MCP",
+      "message": "Must note there is no Slack MCP server"
+    },
+    {
+      "id": "read_only",
+      "type": "contains",
+      "pattern": "read-only",
+      "message": "Must declare the skill never posts to Slack"
+    },
+    {
+      "id": "resolution_rule",
+      "type": "contains",
+      "pattern": "Unresolved: U0XXXXXX",
+      "message": "Must carry the unknown-user resolution rule"
+    }
+  ],
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "what's happening in the deal rooms?",
+      "expected_behavior": "Collects deterministically (scan.py sweep and/or slack-threads watcher) before judging, resolves unknown user ids, then synthesizes ball-in-our-court / customer signals / team concerns per account",
+      "assertions": [
+        "Collects before judging — runs the scan.py sweep or slack-threads watcher and reads the on-disk output rather than ad-hoc searching first",
+        "Resolves unresolved user ids via slackcli search people, marking failures [Unresolved: ...] instead of guessing",
+        "Synthesizes per account in the ball-in-our-court / customer signals / team concerns order",
+        "Labels surfaced items [Slack intel] and writes nothing to pursuit or account files without operator confirmation",
+        "Never posts, drafts, or sends Slack messages"
+      ]
+    },
+    {
+      "id": 1,
+      "prompt": "any Slack activity on {{primary_account}} today",
+      "expected_behavior": "Scopes the sweep to the named account, reports threads needing attention",
+      "assertions": [
+        "Scopes collection to the named account (scan.py --account or watcher --account)",
+        "Flags unanswered threads or threads needing response"
+      ]
+    }
+  ]
+}

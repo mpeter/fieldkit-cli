@@ -1,0 +1,65 @@
+name: Locked dependency audit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "pyproject.toml"
+      - "uv.lock"
+      - "docs/release-readiness/dependency-security-policy.json"
+      - "scripts/check_supply_chain_policy.py"
+      - "scripts/_supply_chain_policy.py"
+      - ".github/workflows/dependency-audit.yml"
+  schedule:
+    - cron: "23 8 * * 2"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        scope: [runtime-all-extras, development]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
+        with:
+          version: "0.12.5"
+          enable-cache: false
+      - name: Audit exact locked graph
+        env:
+          AUDIT_SCOPE: ${{ matrix.scope }}
+          REVISION: ${{ github.sha }}
+          UV_PREVIEW_FEATURES: audit-command,json-output
+        run: |
+          mkdir -p reports
+          set +e
+          if [ "$AUDIT_SCOPE" = "runtime-all-extras" ]; then
+            uv audit --locked --no-dev --output-format json > "reports/${AUDIT_SCOPE}-raw.json"
+          else
+            uv audit --locked --only-dev --output-format json > "reports/${AUDIT_SCOPE}-raw.json"
+          fi
+          scanner_exit_code=$?
+          set -e
+          python3 scripts/check_supply_chain_policy.py audit-report \
+            --input "reports/${AUDIT_SCOPE}-raw.json" \
+            --output "reports/${AUDIT_SCOPE}.json" \
+            --scope "$AUDIT_SCOPE" \
+            --revision "$REVISION" \
+            --tool-version "uv 0.12.5" \
+            --scanner-exit-code "$scanner_exit_code"
+      - name: Upload locked dependency audit evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: dependency-audit-${{ matrix.scope }}-${{ github.run_id }}-${{ github.sha }}
+          path: reports/${{ matrix.scope }}*.json
+          if-no-files-found: error
+          retention-days: 30

@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "vulnerability_threshold": "low",
+  "allowed_spdx_licenses": [
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CNRI-Python",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "PSF-2.0"
+  ],
+  "unknown_license_policy": "fail-unless-excepted",
+  "license_exceptions": [
+    {
+      "package_url": "pkg:pypi/google-crc32c@1.8.0",
+      "spdx_license": "Apache-2.0",
+      "owner": "@mpeter",
+      "evidence_url": "https://github.com/googleapis/python-crc32c/blob/9652503fb296eef101d84b9b631f454cc7c1d538/LICENSE",
+      "rationale": "The installed distribution metadata reports UNKNOWN, while the tagged upstream source carries Apache-2.0.",
+      "expires_on": "2026-12-10",
+      "review_condition": "Review on any package version or license-metadata change, and no later than the expiry date."
+    }
+  ]
+}

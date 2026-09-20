@@ -1,0 +1,167 @@
+{
+  "skill_name": "contact",
+  "static_checks": [
+    {
+      "id": "command_correct",
+      "type": "contains",
+      "pattern": "fieldkit contact find",
+      "message": "Must use 'fieldkit contact find', not 'uv run python -m'"
+    },
+    {
+      "id": "json_flag",
+      "type": "contains",
+      "pattern": "--affiliations --json",
+      "message": "Must pass --affiliations --json to get merged payload"
+    },
+    {
+      "id": "no_hardcoded_db",
+      "type": "not_contains",
+      "pattern": "data/gmail.db",
+      "message": "Must not hardcode db path"
+    },
+    {
+      "id": "three_outcomes",
+      "type": "contains_all",
+      "patterns": [
+        "resolved",
+        "ambiguous",
+        "not_found"
+      ],
+      "message": "Must handle all three outcome types"
+    },
+    {
+      "id": "sowhat",
+      "type": "contains",
+      "pattern": "So what",
+      "message": "Must include So what synthesis instruction"
+    },
+    {
+      "id": "research_groups",
+      "type": "contains_all",
+      "patterns": [
+        "fieldkit-sales",
+        "tvly search"
+      ],
+      "message": "Must use the Backstory MCP exception and tvly CLI"
+    },
+    {
+      "id": "slackcli",
+      "type": "contains",
+      "pattern": "slackcli search",
+      "message": "Must use slackcli for Slack field intel"
+    },
+    {
+      "id": "battlecard_output",
+      "type": "contains",
+      "pattern": "battlecard",
+      "message": "Must produce a battlecard output"
+    },
+    {
+      "id": "saves_battlecard",
+      "type": "contains",
+      "pattern": "artifacts/battlecard",
+      "message": "Must save battlecard to the account artifacts folder"
+    },
+    {
+      "id": "correct_paths",
+      "type": "not_contains",
+      "pattern": "fieldkit/enrich/contacts_raw",
+      "message": "Must not reference old site-packages path \u2014 use data_root/contact-enrich/"
+    },
+    {
+      "id": "no_run_pipeline_sh",
+      "type": "not_contains",
+      "pattern": "run_pipeline.sh",
+      "message": "run_pipeline.sh does not exist \u2014 removed"
+    },
+    {
+      "id": "fieldkit_enrich_commands",
+      "type": "contains_all",
+      "patterns": [
+        "fieldkit contact enrich --discover",
+        "fieldkit contact enrich --apply-web",
+        "fieldkit contact enrich",
+        "fieldkit contact report"
+      ],
+      "message": "Must use fieldkit contact subcommands"
+    },
+    {
+      "id": "tavily_web_search",
+      "type": "contains",
+      "pattern": "tvly search",
+      "message": "Must specify Tavily as the web search tool for enrichment"
+    }
+  ],
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "look up contact@{{accounts.1}}.com",
+      "expected_behavior": "Calls contact-lookup CLI with --affiliations --json, renders full contact card",
+      "assertions": [
+        "Runs 'fieldkit contact find \"contact@{{accounts.1}}.com\" --affiliations --json'",
+        "Produces a contact card with Identity, Communication, Signals sections",
+        "Includes a 'So what' synthesis line about relationship posture",
+        "Does not pass --db flag (uses configured path)"
+      ]
+    },
+    {
+      "id": 1,
+      "prompt": "who is Chandra at <account-slug>",
+      "expected_behavior": "Resolves name to email, runs contact lookup",
+      "assertions": [
+        "Passes 'Chandra' (or 'Chandra <account-slug>') as the query argument",
+        "If ambiguous result, presents candidates and asks user to pick"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "what do we know about someone@unknown.example.com",
+      "expected_behavior": "Reports not_found cleanly, still shows any pursuit affiliations",
+      "assertions": [
+        "Reports 'No contact found' rather than crashing or staying silent",
+        "Still displays any pursuit file affiliations even when not in email DB"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "competitive intel on OpenShift vs VMware for Globalpay",
+      "expected_behavior": "Pulls account context, searches Backstory and web for VMware intel, produces battlecard saved to the account artifacts folder",
+      "assertions": [
+        "Reads the {{primary_account}} account.md directly from disk (the account named in the prompt)",
+        "Queries Backstory for competitor mentions via fieldkit-sales",
+        "Uses `tvly search` for VMware competitive intelligence",
+        "Runs slackcli search for VMware field intel",
+        "Outputs a structured battlecard",
+        "Saves the battlecard to accounts/<account>/artifacts/"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "what are our win themes against competitors in this platform category?",
+      "expected_behavior": "Recognizes as competitive-intel trigger, runs research even without specific account named",
+      "assertions": [
+        "Recognizes competitive intel trigger and runs the skill",
+        "Produces positioning content and talk tracks"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "discover new contacts",
+      "expected_behavior": "Runs fieldkit contact enrich --discover across all accounts",
+      "assertions": [
+        "Invokes 'fieldkit contact enrich --discover'",
+        "Reports the total number of contacts discovered (summary count)"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "enrich contacts",
+      "expected_behavior": "Runs discover \u2192 contacts --full (generates web_search_batch.json) \u2192 Claude does Tavily search \u2192 apply-web \u2192 enrich \u2192 generate-report",
+      "assertions": [
+        "Runs all pipeline stages: discover, contacts --full, apply-web, enrich, generate-report",
+        "Uses the `tvly search` CLI for web enrichment",
+        "References data_root/contact-enrich/ for output files, not fieldkit/enrich/"
+      ]
+    }
+  ]
+}

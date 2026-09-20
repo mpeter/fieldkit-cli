@@ -1,0 +1,165 @@
+# tach.toml — Architecture boundary enforcement for fieldkit
+# Run: uv run tach check
+# Docs: https://docs.gauge.sh/
+#
+# Single package: src/fieldkit/
+#
+# Domain modules (no click imports allowed):
+#   fieldkit.errors   — no deps (pure exception hierarchy; imported by all domains)
+#   fieldkit.config   — no fieldkit deps (pure foundation)
+#   fieldkit.llm      — depends on fieldkit.config, fieldkit.errors
+#   fieldkit.tasks    — no fieldkit deps (pure foundation)
+#   fieldkit.sf       — depends on fieldkit.config, fieldkit.errors
+#   fieldkit.gmail    — depends on fieldkit.config, fieldkit.errors (no ingest dep — D2d resolved)
+#   fieldkit.pursuit  — depends on fieldkit.config, fieldkit.errors
+#   fieldkit.watch    — depends on fieldkit.config
+#   fieldkit.skill    — depends on fieldkit.config
+#   fieldkit.ingest   — depends on fieldkit.config, fieldkit.llm, fieldkit.errors
+#   fieldkit.enrich   — depends on fieldkit.config, fieldkit.gmail
+#   fieldkit.shadowbot — depends on fieldkit.config, fieldkit.errors
+#
+# Top-level fieldkit module (cli_exit, dotenv_compat):
+#   depends on fieldkit.config + fieldkit.errors (fieldkit.llm removed — cli_exit now imports from fieldkit.errors directly)
+#
+# CLI adapters: fieldkit.commands.* — depends on domain modules
+#
+source_roots = ["src", "."]
+# The ingest/Gmail circular dependency is avoided: GmailCandidate lives in
+# fieldkit.gmail.discover;
+# fieldkit.ingest.sources consumes _CandidateProtocol (structural typing, no import).
+
+exclude = [
+    ".venv",
+    "__pycache__",
+    "*.egg-info",
+    "build",
+]
+
+[[modules]]
+path = "fieldkit"
+depends_on = ["fieldkit.config", "fieldkit.errors"]
+
+[[modules]]
+path = "fieldkit.errors"
+depends_on = []
+
+[[modules]]
+path = "fieldkit.google_oauth"
+depends_on = ["fieldkit.errors"]  # Shared OAuth refresh and private token persistence.
+
+[[modules]]
+path = "fieldkit.driver"
+depends_on = ["fieldkit.config", "fieldkit.errors", "fieldkit.util", "fieldkit.llm"]  # The driver stores run status atomically and resolves the LLM log database.
+
+[[modules]]
+path = "fieldkit.provenance"
+depends_on = ["fieldkit.pursuit"]  # Derived-document markers use pursuit.io's safe YAML renderer.
+
+[[modules]]
+path = "fieldkit.circuit_breaker"
+depends_on = []  # Zero-dependency resilience utility; importable by any domain.
+
+[[modules]]
+path = "fieldkit.util"
+depends_on = []  # Zero-dependency atomic-write primitives; importable by any domain.
+
+[[modules]]
+path = "fieldkit.config"
+depends_on = ["fieldkit.errors", "fieldkit.util"]  # Uses the shared atomic YAML writer.
+
+[[modules]]
+path = "fieldkit.llm"
+depends_on = ["fieldkit.config", "fieldkit.errors"]  # Configured Vertex location takes priority over environment variables.
+
+[[modules]]
+path = "fieldkit.tasks"
+depends_on = []
+
+[[modules]]
+path = "fieldkit.sf"
+depends_on = ["fieldkit.config", "fieldkit.errors"]
+
+[[modules]]
+path = "fieldkit.gmail"
+depends_on = ["fieldkit.config", "fieldkit.errors", "fieldkit.google_oauth"]
+
+[[modules]]
+path = "fieldkit.pursuit"
+depends_on = ["fieldkit.config", "fieldkit.errors"]
+
+[[modules]]
+path = "fieldkit.watch"
+depends_on = ["fieldkit.config", "fieldkit.util", "fieldkit.pursuit", "fieldkit.circuit_breaker", "fieldkit.ingest", "fieldkit.errors", "fieldkit.companion"]  # Morning brief reads the companion outbox through its public API.
+
+[[modules]]
+path = "fieldkit.skill"
+depends_on = ["fieldkit.config", "fieldkit.llm", "fieldkit.errors"]
+
+[[modules]]
+path = "fieldkit.ingest"
+depends_on = ["fieldkit.config", "fieldkit.llm", "fieldkit.errors", "fieldkit.google_oauth", "fieldkit.pursuit", "fieldkit.tasks"]  # Completed-meeting writebacks update pursuit activity and tasks.
+
+[[modules]]
+path = "fieldkit.enrich"
+depends_on = ["fieldkit.config", "fieldkit.gmail"]
+
+[[modules]]
+path = "fieldkit.contact"
+depends_on = ["fieldkit.config", "fieldkit.gmail", "fieldkit.enrich", "fieldkit.pursuit", "fieldkit.provenance"]  # Contact domain owns resolution, indexing, enrichment, and reporting.
+
+[[modules]]
+path = "fieldkit.meeting"
+depends_on = ["fieldkit.config", "fieldkit.errors", "fieldkit.pursuit", "fieldkit.ingest"]  # Pursuit Workbook logic uses the ingest domain's Google Docs and Drive clients.
+
+[[modules]]
+path = "fieldkit.shadowbot"
+depends_on = ["fieldkit.config", "fieldkit.errors"]
+
+[[modules]]
+path = "fieldkit.health"
+depends_on = ["fieldkit.config", "fieldkit.errors", "fieldkit.util"]  # Health owns a gate table and runner; filing uses an injected protocol.
+
+[[modules]]
+path = "fieldkit.companion"
+depends_on = ["fieldkit.config", "fieldkit.errors", "fieldkit.util"]  # companion loop: feed reads workspace files, cursor via locked_json_update
+
+[[modules]]
+path = "fieldkit.gtask"
+depends_on = ["fieldkit.config", "fieldkit.errors"]  # Shared Google Tasks domain.
+
+[[modules]]
+path = "fieldkit.web"
+depends_on = ["fieldkit.config", "fieldkit.errors", "fieldkit.llm", "fieldkit.companion", "fieldkit.gtask"]  # Dashboard reads shared Tasks and companion outbox domains.
+
+[[modules]]
+path = "fieldkit.commands"
+depends_on = [
+    "fieldkit",
+    "fieldkit.circuit_breaker",
+    "fieldkit.config",
+    "fieldkit.errors",
+    "fieldkit.llm",
+    "fieldkit.sf",
+    "fieldkit.gmail",
+    "fieldkit.google_oauth",
+    "fieldkit.pursuit",
+    "fieldkit.ingest",
+    "fieldkit.watch",
+    "fieldkit.skill",
+    "fieldkit.tasks",
+    "fieldkit.enrich",
+    "fieldkit.shadowbot",
+    "fieldkit.util",  # Shared non-empty post-write guard.
+    "fieldkit.provenance",  # Derived-document marker on emitted summaries.
+    "fieldkit.driver",  # fieldkit.commands.driver delegates to fieldkit.driver domain
+    "fieldkit.web",  # fieldkit.commands.web delegates to fieldkit.web domain
+    "fieldkit.companion",  # fieldkit.commands.companion delegates to fieldkit.companion domain
+    "fieldkit.health",  # fieldkit.commands.health delegates to the health domain.
+    "fieldkit.meeting",  # fieldkit.commands.meeting delegates to the meeting domain.
+    "fieldkit.contact",  # fieldkit.commands.contact delegates to the contact domain.
+    "fieldkit.gtask",  # fieldkit.commands.gtask delegates to the Google Tasks domain.
+]
+
+[[modules]]
+path = "hooks"
+depends_on = ["fieldkit", "fieldkit.config", "fieldkit.enrich", "fieldkit.errors"]

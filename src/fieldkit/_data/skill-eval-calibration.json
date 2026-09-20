@@ -1,0 +1,62 @@
+[
+  {
+    "id": "cal-1-explicit-covered",
+    "boundary": "anchor: verbatim coverage",
+    "skill_excerpt": "## Workflow\n1. Run `fieldkit pursuit forecast --json` and parse the output.\n2. For each pursuit, multiply `amount` by the stage probability from the weights table.\n3. Render a table sorted by weighted value, largest first.",
+    "prompt": "generate a pipeline forecast",
+    "assertion": "Applies stage-probability weights to each pursuit amount",
+    "gold_verdict": "covered",
+    "gold_reason": "Step 2 explicitly multiplies amount by the stage probability for each pursuit.",
+    "calibration_note": "The easy anchor. A judge that fails this is misreading the task, not exercising judgment."
+  },
+  {
+    "id": "cal-2-omission-not-covered",
+    "boundary": "anchor: silent omission",
+    "skill_excerpt": "## Workflow\n1. Run `fieldkit pursuit forecast --json` and parse the output.\n2. Render a table of pursuits sorted by amount, largest first.",
+    "prompt": "generate a pipeline forecast",
+    "assertion": "Excludes archived pursuits from the forecast",
+    "gold_verdict": "not-covered",
+    "gold_reason": "No step filters by pursuit status; archived pursuits are never mentioned.",
+    "calibration_note": "Omission, not contradiction. The judge must not credit the CLI with filtering the skill text never asks for \u2014 the harness grades the text, not the tool (design D1)."
+  },
+  {
+    "id": "cal-3-contradiction-not-covered",
+    "boundary": "contradiction beats mention",
+    "skill_excerpt": "## Workflow\n1. Draft the updated next-steps text from the meeting notes.\n2. Run `fieldkit sf set-next-steps <opportunity-id> --text \"<draft>\"` to write it to Salesforce immediately.\n3. Show the user what was written.",
+    "prompt": "update next steps after the meeting",
+    "assertion": "Asks the user to confirm before writing to Salesforce",
+    "gold_verdict": "not-covered",
+    "gold_reason": "Step 2 writes to Salesforce before step 3 shows the user anything; confirmation is contradicted, not just missing.",
+    "calibration_note": "The workflow MENTIONS the user and MENTIONS the write \u2014 a keyword-matching judge says covered. The ordering makes it a contradiction. This fixture catches lenient judges."
+  },
+  {
+    "id": "cal-4-gesture-unclear",
+    "boundary": "gesture without a concrete step",
+    "skill_excerpt": "## Workflow\n1. Load the pursuit file for the account.\n2. Review the deal's qualification and note anything weak.\n3. Summarize your impressions for the user.",
+    "prompt": "qualify this deal",
+    "assertion": "Fetches and presents every exact native ClosePlan question",
+    "gold_verdict": "unclear",
+    "gold_reason": "Step 2 gestures at qualification but prescribes no Salesforce read or exact question-level presentation.",
+    "calibration_note": "Not 'not-covered' \u2014 the topic is genuinely engaged \u2014 but nothing guarantees the specific asserted behavior. This is the canonical 'unclear' per the D2 verdict rules."
+  },
+  {
+    "id": "cal-5-entailment-covered",
+    "boundary": "hard: entailed but not verbatim",
+    "skill_excerpt": "## Workflow\n1. Run `fieldkit pursuit list --active --json`.\n2. For every file path in the returned list, read the pursuit and extract `close_date`.\n3. Flag any pursuit whose close date is in the past.",
+    "prompt": "find overdue deals",
+    "assertion": "Enumerates all active pursuit files",
+    "gold_verdict": "covered",
+    "gold_reason": "Iterating over every path returned by `pursuit list --active` necessarily enumerates all active pursuit files.",
+    "calibration_note": "The assertion's wording appears nowhere in the text. A judge that demands verbatim phrasing answers 'unclear' and fails this fixture \u2014 bias-to-unclear must not become literalism when entailment is one deterministic step."
+  },
+  {
+    "id": "cal-6-runtime-dependent-unclear",
+    "boundary": "hard: claim depends on tool output, not skill text",
+    "skill_excerpt": "## Workflow\n1. Run `fieldkit pursuit list --account <account-slug>`.\n2. Render the standard pursuit summary for each result.\n3. End with a one-line recommended next action.",
+    "prompt": "how is this account doing?",
+    "assertion": "Output includes each opportunity's Salesforce URL",
+    "gold_verdict": "unclear",
+    "gold_reason": "'The standard pursuit summary' is undefined in the text; whether it contains SF URLs depends on tool output the skill never specifies.",
+    "calibration_note": "The mirror of cal-5: here the gap is bridged by an EXTERNAL contract, not by entailment within the text. Knowledge that the CLI does print URLs must not leak into the verdict \u2014 the judge grades only the provided text (D2 preamble)."
+  }
+]

@@ -1,0 +1,81 @@
+{
+  "skill_name": "sf-sync",
+  "static_checks": [
+    {
+      "id": "commands_exist",
+      "type": "commands_exist",
+      "commands": [
+        "fieldkit sf listview",
+        "fieldkit sf opportunity",
+        "fieldkit sf account",
+        "fieldkit auth sf"
+      ]
+    },
+    {
+      "id": "no_ingest",
+      "type": "not_contains",
+      "pattern": "sf ingest",
+      "message": "sf ingest was removed — must not reference it"
+    },
+    {
+      "id": "auth_documented",
+      "type": "contains",
+      "pattern": "auth sf",
+      "message": "Must document auth sf as the auth method"
+    },
+    {
+      "id": "three_modes",
+      "type": "contains_all",
+      "patterns": [
+        "listview",
+        "opportunity",
+        "account"
+      ],
+      "message": "Must define all three modes"
+    },
+    {
+      "id": "error_handling",
+      "type": "contains",
+      "pattern": "Auth failure",
+      "message": "Must document auth failure handling"
+    }
+  ],
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "sync salesforce for {{primary_account}}",
+      "expected_behavior": "Runs listview or account mode for {{primary_account}} — does not use opportunity mode without an opp ID",
+      "assertions": [
+        "Defaults to listview or account mode (not opportunity mode) when an account name is given",
+        "Runs fieldkit sf listview or fieldkit sf account with the named account as the argument"
+      ]
+    },
+    {
+      "id": 1,
+      "prompt": "sync opportunity {{example_sf_id}}",
+      "expected_behavior": "Recognizes the 15- or 18-char alphanumeric ID as a Salesforce opportunity ID, runs opportunity mode",
+      "assertions": [
+        "Invokes fieldkit sf opportunity {{example_sf_id}}",
+        "Does not run listview mode for an opportunity ID"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "sf-sync but the session is expired",
+      "expected_behavior": "Stops on session expiry and tells user exactly how to get sid from browser and run auth sf",
+      "assertions": [
+        "Instructs user to run 'fieldkit auth sf'",
+        "Tells user where to get the sid (browser cookies at the Salesforce domain)"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "sync {{primary_account}} {{primary_pursuit}} — the sf_opportunity_id field is null in the pursuit frontmatter",
+      "expected_behavior": "Surfaces the missing sf_opportunity_id as a blocker and instructs user to set it manually before running opportunity sync",
+      "assertions": [
+        "Logs {{primary_pursuit}} as SKIP (no sf_opportunity_id) rather than failing",
+        "Reports the skip in the sync summary so the user knows the pursuit was not synced"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,79 @@
+{
+  "skill_name": "create-cli",
+  "static_checks": [
+    {
+      "id": "canonical_agent_guide",
+      "type": "contains",
+      "pattern": "AGENTS.md",
+      "message": "Must read the public repository agent guide"
+    },
+    {
+      "id": "canonical_exits",
+      "type": "contains",
+      "pattern": "docs/reference/exit-codes.md",
+      "message": "Must use canonical exit semantics"
+    },
+    {
+      "id": "option_plumbing",
+      "type": "contains",
+      "pattern": "end-to-end plumbing",
+      "message": "Must require observable option plumbing"
+    },
+    {
+      "id": "machine_output",
+      "type": "contains_all",
+      "patterns": [
+        "--json",
+        "stdout",
+        "stderr"
+      ],
+      "message": "Must define machine and stream contracts"
+    },
+    {
+      "id": "upstream_license",
+      "type": "contains",
+      "pattern": "UPSTREAM-LICENSE.txt",
+      "message": "Must retain upstream attribution"
+    }
+  ],
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "Design a new fieldkit sf renewals command before we implement it",
+      "expected_behavior": "Produces a fieldkit-specific command contract before code",
+      "assertions": [
+        "Inspects the live Click tree and canonical CLI architecture and exit-code docs",
+        "Defines command tree, arguments, options, help, stdout, stderr, JSON, and 0/1/2/3 failures",
+        "Provides grep-checkable acceptance and tests for observable plumbing"
+      ]
+    },
+    {
+      "id": 1,
+      "prompt": "Add --account to fieldkit pipeline export and make it work in human and JSON modes",
+      "expected_behavior": "Specifies the material option change end to end",
+      "assertions": [
+        "Traces --account from Click parsing through domain filtering to observable human and JSON output",
+        "Defines unknown-account and accepted-but-ignored regression tests",
+        "Covers compatibility, generated docs, and non-interactive behavior"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Design a fieldkit delete command that automation can run safely",
+      "expected_behavior": "Defines preview and explicit mutation safety",
+      "assertions": [
+        "Defines default preview or dry-run behavior and explicit confirmation semantics",
+        "Specifies TTY and non-interactive behavior without putting secrets in argv",
+        "Defines idempotence, partial failures, stdout/stderr, JSON, and canonical exits"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Refactor the internal Salesforce response parser without changing CLI behavior",
+      "expected_behavior": "Does not route to create-cli for an ordinary domain refactor",
+      "assertions": [
+        "Does not require a new CLI interface spec solely because the parser is command-reachable"
+      ]
+    }
+  ]
+}

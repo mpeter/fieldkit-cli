@@ -1,0 +1,34 @@
+# fieldkit config.yaml — main configuration file
+#
+# Copy to ~/.config/fieldkit/config.yaml and fill in real values.
+# See docs/reference/config-file.md for full reference.
+
+# Path to your fieldkit workspace (accounts, pursuits, memory)
+fieldkit_home: ~/fieldkit-workspace
+
+# Optional repository used by GitHub-backed issue and web PR commands.
+# github_repo: owner/repository
+
+# Your work email address (used by gmail commands to identify your messages)
+email: you@example.com
+
+# Companion is read-only by default. An act tier also requires an exact command allowlist.
+# companion:
+#   tier: read
+#   act_allowlist: []
+
+# ShadowBot configuration — REQUIRED for all shadowbot commands.
+# api_base, token_endpoint, auth_endpoint, and redirect_uri have no defaults and must be
+# explicitly configured. Omitting any of these raises ConfigError naming the
+# missing key.
+shadowbot:
+  api_base: https://your-shadowbot-host.example.com/sales-assistant
+  token_endpoint: https://your-auth-host.example.com/protocol/openid-connect/token
+  auth_endpoint: https://your-auth-host.example.com/protocol/openid-connect/auth
+  redirect_uri: https://your-shadowbot-host.example.com/oauth/callback
+  # Optional — defaults to "shadowbot-ui" (generic ShadowBot product default)
+  client_id: shadowbot-ui
+  # Optional — defaults to "sales_assistant_v2" (generic ShadowBot product default)
+  assistant_id: sales_assistant_v2
+  # Optional — path to Chrome Cookies file for silent OIDC auth
+  # chrome_cookies_path: ~/.config/google-chrome/Default/Cookies
