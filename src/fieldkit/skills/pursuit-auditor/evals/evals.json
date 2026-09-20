@@ -1,0 +1,42 @@
+{
+  "skill_name": "pursuit-auditor",
+  "static_checks": [
+    {
+      "id": "sf_field_naming",
+      "type": "contains",
+      "pattern": "sf_*",
+      "message": "Must reference sf_* field naming convention"
+    },
+    {
+      "id": "qualification_unavailable",
+      "type": "contains",
+      "pattern": "current qualification is",
+      "message": "Must report local audit qualification as unavailable"
+    },
+    {
+      "id": "compliance_report",
+      "type": "contains",
+      "pattern": "compliance",
+      "message": "Must produce a compliance report"
+    },
+    {
+      "id": "no_local_score_validation",
+      "type": "not_contains",
+      "pattern": "all 8 elements must be present",
+      "message": "Must not require or interpret the former local scorecard"
+    }
+  ],
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "audit pursuits",
+      "expected_behavior": "Scans all pursuit files for structural and timeline compliance, reports current qualification unavailable without a live ClosePlan read, and writes a dated compliance report",
+      "assertions": [
+        "Enumerates all pursuit files via fieldkit pursuit audit",
+        "Checks required frontmatter fields and flags hyphenated sf-* keys as errors without requiring a local meddpicc scorecard",
+        "Reports qualification unavailable and never interprets legacy_meddpicc as current qualification",
+        "Writes a dated compliance report to accounts/.audit/"
+      ]
+    }
+  ]
+}

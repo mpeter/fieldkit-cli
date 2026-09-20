@@ -1,0 +1,40 @@
+name: Support question
+description: Ask for help using or configuring fieldkit
+title: "question: "
+labels:
+  - question
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Support is best-effort. Search the documentation and existing issues first. Do not include
+        credentials, customer data, email content, private hosts, or unredacted logs.
+  - type: textarea
+    id: goal
+    attributes:
+      label: What are you trying to do?
+      description: Describe the end result and the fieldkit capability involved.
+    validations:
+      required: true
+  - type: textarea
+    id: tried
+    attributes:
+      label: What have you tried?
+      description: Include generic commands, documentation consulted, and redacted results.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Include fieldkit version, operating system, Python version, and installation profile.
+      placeholder: fieldkit 1.0.0, Ubuntu, Python 3.12, base profile
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy check
+      options:
+        - label: I removed all credentials, customer data, email content, private hosts, and personal paths.
+          required: true

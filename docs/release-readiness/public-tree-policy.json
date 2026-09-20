@@ -1,0 +1,253 @@
+{
+  "schema_version": 1,
+  "expected_repository": "mpeter/fieldkit-cli",
+  "planned_tag": "v1.0.0",
+  "rules": [
+    {
+      "id": "include-product-source",
+      "action": "include",
+      "category": "product",
+      "patterns": [
+        "src/**",
+        "config/accounts.yaml.example",
+        "config/config.yaml.example"
+      ],
+      "rationale": "Installed application source, package data, and portable configuration examples."
+    },
+    {
+      "id": "include-tests",
+      "action": "include",
+      "category": "test",
+      "patterns": ["tests/**"],
+      "rationale": "Public behavioral and regression test suite."
+    },
+    {
+      "id": "include-build-root",
+      "action": "include",
+      "category": "build",
+      "patterns": [
+        ".agentready-config.yaml",
+        ".gaze.yaml",
+        ".gitignore",
+        ".markdown-link-check.json",
+        ".pre-commit-config.yaml",
+        ".python-version",
+        ".skillsaw-baseline.json",
+        ".skillsaw.yaml",
+        "Makefile",
+        "mkdocs.yml",
+        "pyproject.toml",
+        "tach.toml",
+        "uv.lock"
+      ],
+      "rationale": "Reproducible contributor, package, documentation, and quality configuration."
+    },
+    {
+      "id": "include-build-directories",
+      "action": "include",
+      "category": "build",
+      "patterns": [".devcontainer/**", ".gaze/**", "hooks/**"],
+      "rationale": "Contributor environment, frozen quality baseline, and versioned repository safeguards."
+    },
+    {
+      "id": "include-community-root",
+      "action": "include",
+      "category": "contribution",
+      "patterns": [
+        "AGENTS.md",
+        "CONTRIBUTING.md",
+        "GOVERNANCE.md",
+        "LICENSE",
+        "README.md",
+        "RELEASING.md",
+        "ROADMAP.md",
+        "SECURITY.md",
+        "SUPPORT.md",
+        "THREAT_MODEL.md"
+      ],
+      "rationale": "Public project and community entry points."
+    },
+    {
+      "id": "include-community-github",
+      "action": "include",
+      "category": "contribution",
+      "patterns": [
+        ".github/CODEOWNERS",
+        ".github/ISSUE_TEMPLATE/**",
+        ".github/PULL_REQUEST_TEMPLATE.md"
+      ],
+      "rationale": "Public ownership, issue intake, and pull-request guidance."
+    },
+    {
+      "id": "include-release-infrastructure",
+      "action": "include",
+      "category": "release_infrastructure",
+      "patterns": [
+        ".github/dependabot.yml",
+        ".github/repository-settings.json",
+        ".github/workflows/**",
+        "CHANGELOG.md",
+        "changelog.d/README.md",
+        "scripts/**"
+      ],
+      "rationale": "CI, security, dependency, release, generation, and verification infrastructure; CHANGELOG.md is the approved public record of shipped release history."
+    },
+    {
+      "id": "include-public-documentation",
+      "action": "include",
+      "category": "public_documentation",
+      "patterns": [
+        "docs/cli-reference.md",
+        "docs/compatibility.md",
+        "docs/concepts.md",
+        "docs/adr/0001-local-first-roots.md",
+        "docs/adr/0002-optional-integrations.md",
+        "docs/adr/0003-thin-command-adapters.md",
+        "docs/adr/0004-safe-persistence.md",
+        "docs/adr/0005-verifiable-public-release.md",
+        "docs/design/local-first-cli.md",
+        "docs/dependency-map.md",
+        "docs/dependency-security.md",
+        "docs/documentation-contract.json",
+        "docs/getting-started.md",
+        "docs/guides/gmail.md",
+        "docs/guides/init.md",
+        "docs/guides/morning-brief.md",
+        "docs/guides/pipeline-workflow.md",
+        "docs/guides/salesforce-auth.md",
+        "docs/guides/shadowbot-auth.md",
+        "docs/guides/watchers.md",
+        "docs/index.md",
+        "docs/integrations.md",
+        "docs/privacy.md",
+        "docs/patterns/README.md",
+        "docs/reference/config-file.md",
+        "docs/reference/environment-vars.md",
+        "docs/reference/exit-codes.md",
+        "docs/reference/troubleshooting.md",
+        "docs/release-readiness/artifact-policy.json",
+        "docs/release-readiness/compatibility-policy.json",
+        "docs/release-readiness/dependency-ownership.json",
+        "docs/release-readiness/dependency-security-policy.json",
+        "docs/release-readiness/documentation-contract.schema.json",
+        "docs/release-readiness/public-identity-policy.json",
+        "docs/release-readiness/public-surface-policy.json",
+        "docs/release-readiness/release-governance-policy.json",
+        "docs/release-readiness/release-governance-policy.schema.json",
+        "docs/release-readiness/release-policy.json",
+        "docs/release-readiness/public-tree-scan-policy.json",
+        "docs/release-readiness/public-tree-manifest.schema.json",
+        "docs/release-readiness/public-tree-policy.json",
+        "docs/release-readiness/public-tree-policy.schema.json",
+        "docs/release-readiness/release-bundle-provenance.schema.json",
+        "docs/release-readiness/release-consumer-evidence.schema.json",
+        "docs/release-readiness/cutover-record.schema.json",
+        "docs/release-readiness/release-approval-input.schema.json",
+        "docs/release-readiness/release-evidence-record.schema.json",
+        "docs/release-readiness/release-manual-evidence.schema.json",
+        "docs/release-readiness/release-promotion-evidence.schema.json",
+        "docs/release-readiness/rehearsal-evidence.schema.json",
+        "docs/releases.md",
+        "docs/user-guide.md"
+      ],
+      "rationale": "Evergreen public user, contributor, architecture, and machine-readable verification contracts; docs/releases.md is the approved public release-history page."
+    },
+    {
+      "id": "include-current-spec-contract",
+      "action": "include",
+      "category": "product",
+      "patterns": ["openspec/config.yaml", "openspec/schemas/**", "openspec/specs/**"],
+      "rationale": "Canonical current specification system and implemented capability contracts."
+    },
+    {
+      "id": "exclude-agent-local-state",
+      "action": "exclude",
+      "category": "local_tool_state",
+      "patterns": [
+        ".claude/**",
+        ".codex/**",
+        ".cursorrules",
+        ".mcp.json",
+        ".opencode/**",
+        ".serena/**",
+        "CLAUDE.md",
+        "opencode.json"
+      ],
+      "rationale": "Private operator-specific agent configuration, commands, memory, and compatibility links."
+    },
+    {
+      "id": "exclude-private-deployment-configuration",
+      "action": "exclude",
+      "category": "private_operations",
+      "patterns": ["config/mcpjungle.example.yaml", "config/systemd/**"],
+      "rationale": "Internal gateway registry and operator-specific service units depend on private infrastructure and are not portable product configuration."
+    },
+    {
+      "id": "exclude-legacy-spec-tooling",
+      "action": "exclude",
+      "category": "legacy_specification_history",
+      "patterns": [".github/agents/**", ".github/prompts/**", ".specify/**", "specs/**"],
+      "rationale": "Retired Speckit surfaces and historical planning records."
+    },
+    {
+      "id": "exclude-openspec-execution-history",
+      "action": "exclude",
+      "category": "private_execution_history",
+      "patterns": ["openspec/archive/**", "openspec/changes/**"],
+      "rationale": "Archived and in-flight execution records; implemented contracts remain public."
+    },
+    {
+      "id": "exclude-private-documentation",
+      "action": "exclude",
+      "category": "private_history",
+      "patterns": [
+        "docs/adr/0001-src-layout-single-package.md",
+        "docs/adr/0002-litellm-vertex-ai-routing.md",
+        "docs/adr/0003-lazy-group-cli-dispatcher.md",
+        "docs/adr/0004-sosl-over-soql-sf-integration.md",
+        "docs/adr/0005-local-first-xdg-storage-layout.md",
+        "docs/adr/0006-derive-not-persist-affiliations.md",
+        "docs/adr/0007-gates-must-read-only-in-repo-state.md",
+        "docs/adr/0008-shell-free-independent-completion-verification.md",
+        "docs/adr/0009-ingest-meeting-writebacks.md",
+        "docs/adr/0010-promote-approved-release-input.md",
+        "docs/agent-harness.md",
+        "docs/agent-verification.md",
+        "docs/archive/**",
+        "docs/audit/**",
+        "docs/autonomy-roadmap.md",
+        "docs/bootstrap.md",
+        "docs/cli-architecture.md",
+        "docs/container-architecture.md",
+        "docs/dev-conventions.md",
+        "docs/handoffs/**",
+        "docs/hooks-and-skills.md",
+        "docs/ops-runbook.md",
+        "docs/ops/**",
+        "docs/pii-history-rewrite-runbook.md",
+        "docs/pre-mortem/**",
+        "docs/reference/gaze-gate-history.md",
+        "docs/release-readiness/*.md",
+        "docs/release-readiness/community-documentation-evidence.json",
+        "docs/release-readiness/distribution-baseline.json",
+        "docs/skill-journey-map.md",
+        "docs/skill-premortem-2026-07-18.md",
+        "docs/subtleties/**",
+        "docs/succession-plan.md",
+        "docs/threat-model.md",
+        "docs/true-up-ledger-2026-07-18.md",
+        "docs/true-up-ledger-2026-07-28.md",
+        "docs/true-up-tuning-log.md",
+        "docs/work-orders/**"
+      ],
+      "rationale": "Audit, handoff, succession, work-order, internal operations, and private release evidence."
+    },
+    {
+      "id": "exclude-pre-1-0-fragments",
+      "action": "exclude",
+      "category": "pre_release_history",
+      "patterns": ["changelog.d/[a-z0-9]*.md"],
+      "rationale": "Release assembly consumes every valid pre-1.0 fragment; only the contributor format remains public."
+    }
+  ]
+}

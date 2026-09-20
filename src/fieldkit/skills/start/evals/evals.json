@@ -1,0 +1,42 @@
+{
+  "skill_name": "start",
+  "static_checks": [
+    {
+      "id": "creates_tasks_md",
+      "type": "contains",
+      "pattern": "TASKS.md",
+      "message": "Must create/load TASKS.md"
+    },
+    {
+      "id": "reads_accounts",
+      "type": "contains",
+      "pattern": "account.md",
+      "message": "Must read account files (accounts/<account>/account.md) directly"
+    },
+    {
+      "id": "gmail_sync",
+      "type": "contains",
+      "pattern": "fieldkit gmail sync",
+      "message": "Must suggest gmail sync (not uv run python)"
+    },
+    {
+      "id": "backstory",
+      "type": "contains",
+      "pattern": "fieldkit-sales",
+      "message": "Must pull Backstory signals"
+    }
+  ],
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "/start",
+      "expected_behavior": "Creates TASKS.md, loads all account/pursuit context, bootstraps working memory",
+      "assertions": [
+        "Creates or loads TASKS.md",
+        "Reads account.md for each configured account",
+        "Enumerates all pursuit files and loads key metadata",
+        "The main workflow steps reference 'fieldkit gmail sync' (Step 6) as the gmail sync command"
+      ]
+    }
+  ]
+}

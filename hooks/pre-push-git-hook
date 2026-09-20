@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Pre-push hook for fieldkit.
+# Runs branch-protection check unconditionally, then delegates to pre-commit.
+#
+# Re-install after cloning:
+#   uvx pre-commit install --hook-type pre-push
+#   then: make hooks
+
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+STDIN_CONTENT=$(cat)
+
+# 1. Branch protection — unconditional.
+echo "$STDIN_CONTENT" | uv run --directory "$REPO_ROOT" python "$REPO_ROOT/hooks/pre_push.py" "$@"
+STATUS=$?
+[ $STATUS -ne 0 ] && exit $STATUS
+
+# 2. pre-commit hooks on new commits.
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ARGS=(hook-impl --config=.pre-commit-config.yaml --hook-type=pre-push --hook-dir "$HERE" -- "$@")
+
+if command -v pre-commit > /dev/null 2>&1; then
+    echo "$STDIN_CONTENT" | pre-commit "${ARGS[@]}"
+else
+    echo "pre-push: pre-commit not found — skipping" >&2
+fi

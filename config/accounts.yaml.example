@@ -1,0 +1,81 @@
+# fieldkit accounts configuration
+#
+# This file defines your accounts, their Salesforce metadata, and internal
+# domains. Copy to your fieldkit-data/config/accounts.yaml and fill in
+# real values for your organization.
+
+# Salesforce org — REQUIRED for inject-sid and sf-cookies commands.
+# Set to your org's my.salesforce.com URL (or Lightning URL — it is auto-converted).
+# Without this key, 'fieldkit setup inject-sid' and 'fieldkit setup sf-cookies' will
+# raise a ConfigError naming this key.
+salesforce:
+  org_url: https://yourorg.my.salesforce.com
+
+# Domains that belong to your company — REQUIRED for internal-domain filtering.
+# Without this list, internal-domain filtering is disabled (empty set).
+# Contacts at these domains are excluded from decay, blindspot, and people reports.
+internal_domains:
+  - example.com
+  - parent-company.com
+
+# Gmail label prefix for account tagging (default: "ref/")
+# Create Gmail filters that apply labels like ref/acme-bank, ref/global-pay
+gmail_label_prefix: ref/
+
+accounts:
+  acme-bank:
+    domains:
+      - acmebank.com
+    # optional — Salesforce Account record ID; used for Account page navigation path
+    sf_mdm_id: MDM-000001
+    # Salesforce territory code for this account (e.g. FSI_SOUTH_TERR03)
+    # Used to pull all account objects via territory-based SF queries
+    sf_territory: FSI_REGION_TERR01
+    # Minimum message count to surface in blindspot reports
+    blindspots_min_messages: 20
+    # Days to look back for blindspot email scan (default: 14)
+    # NOTE: 'blindspot_days' is accepted for backward compat but has no effect;
+    #       use blindspots_min_messages + gmail sync date range instead.
+    # Watcher-specific overrides:
+    # Watch slack-threads — set false to skip this account in slack-threads watcher
+    slack_watch: true
+    # Override stall alert threshold for this account (default: global stall_threshold_days)
+    stall_threshold_days: 21
+    # Override backstory health score alert threshold (default: 60)
+    health_score_threshold: 55
+    # Display names for your org's team members in this account's threads
+    # Used by ingest to distinguish internal vs customer messages
+    internal_team_display_names:
+      - "Your Name"
+      - "Colleague Name"
+    team:
+      - colleague1@example.com
+      - colleague2@example.com
+    # Used by SOSL search for opportunity discovery
+    keywords:
+      - "Acme Bank"
+      - "ACME"
+
+  global-pay:
+    domains:
+      - globalpay.com
+    # optional — Salesforce Account record ID; used for Account page navigation path
+    sf_mdm_id: MDM-000002
+    sf_territory: FSI_REGION_TERR02
+    blindspots_min_messages: 20
+    team: []
+    # Used by SOSL search for opportunity discovery
+    keywords:
+      - "Global Pay"
+
+  shield-ins:
+    domains:
+      - shieldins.com
+    # optional — Salesforce Account record ID; used for Account page navigation path
+    sf_mdm_id: MDM-000003
+    sf_territory: FSI_REGION_TERR03
+    blindspots_min_messages: 20
+    team: []
+    # Used by SOSL search for opportunity discovery
+    keywords:
+      - "Shield Insurance"

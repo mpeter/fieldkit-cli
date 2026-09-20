@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#101418">
+  <title>fieldkit</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/static/icon-192.png">
+</head>
+<body>
+  <header>
+    <h1>fieldkit</h1>
+    <span id="conn" class="dot" title="event stream"></span>
+  </header>
+
+  <nav id="tabs">
+    <button data-tab="ops" class="active">Ops</button>
+    <button data-tab="feed">Feed</button>
+    <button data-tab="outbox">Outbox</button>
+    <button data-tab="brief">Brief</button>
+    <button data-tab="pipeline">Pipeline</button>
+    <button data-tab="alerts">Alerts</button>
+    <button data-tab="tasks">Tasks</button>
+    <button data-tab="prs">PRs</button>
+    <button data-tab="chat">Chat</button>
+  </nav>
+
+  <main>
+    <section id="tab-ops" class="tab active">
+      <div id="next-action" class="next-action">Loading current state…</div>
+      <div id="operations-list" class="operations-list"></div>
+    </section>
+
+    <section id="tab-feed" class="tab">
+      <div id="feed-list">Loading…</div>
+    </section>
+
+    <section id="tab-outbox" class="tab">
+      <div id="proposals-list">Loading…</div>
+    </section>
+
+    <section id="tab-brief" class="tab">
+      <div id="brief-content" class="md">Loading…</div>
+    </section>
+
+    <section id="tab-pipeline" class="tab">
+      <div id="quota-strip" class="strip"></div>
+      <div id="health-table"></div>
+    </section>
+
+    <section id="tab-alerts" class="tab">
+      <div id="alerts-list">Loading…</div>
+    </section>
+
+    <section id="tab-tasks" class="tab">
+      <div id="companion-tier" class="next-action">Loading companion controls…</div>
+      <form id="task-create-form" class="task-create-form">
+        <input id="task-title" required maxlength="1024" placeholder="New task">
+        <select id="task-section"><option value="today">Today</option><option value="active">Active</option></select>
+        <input id="task-account" placeholder="Account (optional)">
+        <input id="task-due" type="date">
+        <button id="task-create" type="submit">Create</button>
+      </form>
+      <div id="tasks-list">Loading…</div>
+    </section>
+
+    <section id="tab-prs" class="tab">
+      <div id="prs-list">Loading…</div>
+    </section>
+
+    <section id="tab-chat" class="tab">
+      <div id="chat-log"></div>
+      <form id="chat-form">
+        <input id="chat-input" type="text" placeholder="Ask about your pipeline…" autocomplete="off">
+        <button type="submit">Send</button>
+      </form>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

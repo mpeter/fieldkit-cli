@@ -1,0 +1,60 @@
+{
+  "skill_name": "pursuit-advance",
+  "static_checks": [
+    {
+      "id": "gate_check",
+      "type": "contains",
+      "pattern": "gate",
+      "message": "Must run stage gate check before advancing"
+    },
+    {
+      "id": "pending_native_policy",
+      "type": "contains",
+      "pattern": "Salesforce-native qualification policy",
+      "message": "Must report formerly score-dependent transitions as pending"
+    },
+    {
+      "id": "writes_stage",
+      "type": "contains",
+      "pattern": "pursuit file",
+      "message": "Must write the new stage to the pursuit file"
+    },
+    {
+      "id": "user_confirm",
+      "type": "contains",
+      "pattern": "confirm",
+      "message": "Must confirm with user before writing"
+    },
+    {
+      "id": "no_local_score_gate",
+      "type": "not_contains",
+      "pattern": "Required MEDDPICC Minimums",
+      "message": "Historical local scores must not define current stage policy"
+    }
+  ],
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "advance {{primary_account}} {{primary_pursuit}} to propose stage",
+      "expected_behavior": "Previews the transition as pending because native qualification policy is not ratified, leaves the pursuit unchanged, and offers only stop or an explicitly reasoned override",
+      "assertions": [
+        "Reads the {{primary_account}} {{primary_pursuit}} pursuit file",
+        "Runs fieldkit pursuit advance in dry-run mode for the propose transition",
+        "Reports pending rather than pass, fail, or a locally calculated score result",
+        "Does not use legacy_meddpicc or the former meddpicc block as current evidence",
+        "Requires both an explicit override reason and confirmation before writing the new stage"
+      ]
+    },
+    {
+      "id": 1,
+      "prompt": "run gate check on {{primary_account}} {{primary_pursuit}} for negotiate",
+      "expected_behavior": "Shows the negotiate transition as pending, explains that historical local scores cannot clear it, and requires an explicit override reason before any confirmed write",
+      "assertions": [
+        "Uses the CLI-owned policy preview for the negotiate transition",
+        "Reports the missing Salesforce-native policy reason",
+        "Does not interpret historical local scores",
+        "Asks for an override reason and user confirmation before writing the new stage"
+      ]
+    }
+  ]
+}

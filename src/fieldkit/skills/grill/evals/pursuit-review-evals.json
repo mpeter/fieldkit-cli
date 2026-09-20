@@ -1,0 +1,108 @@
+{
+  "skill_name": "grill",
+  "static_checks": [
+    {
+      "id": "reads_all_pursuits",
+      "type": "contains",
+      "pattern": "accounts/*/pursuits/*.md",
+      "message": "Must enumerate all pursuit files"
+    },
+    {
+      "id": "native_reader",
+      "type": "contains",
+      "pattern": "fieldkit sf meddpicc <opp_id> --json",
+      "message": "Pipeline review must use the current native ClosePlan reader"
+    },
+    {
+      "id": "native_qualification_column",
+      "type": "contains",
+      "pattern": "Native Qualification",
+      "message": "Must include the Native Qualification status column"
+    },
+    {
+      "id": "native_statuses",
+      "type": "contains_all",
+      "patterns": [
+        "read",
+        "pending",
+        "unavailable"
+      ],
+      "message": "Must distinguish native read, pending, and unavailable states"
+    },
+    {
+      "id": "exact_evidence_need",
+      "type": "contains_all",
+      "patterns": [
+        "Evidence Need",
+        "exact question ID"
+      ],
+      "message": "Pipeline action must use exact question-level evidence rather than arithmetic gaps"
+    },
+    {
+      "id": "sort_order",
+      "type": "contains",
+      "pattern": "Sort by stage",
+      "message": "Must define the portfolio sort order"
+    },
+    {
+      "id": "no_local_total",
+      "type": "not_contains",
+      "pattern": "X/24",
+      "message": "Must not show a legacy local qualification total"
+    },
+    {
+      "id": "no_arithmetic_gap",
+      "type": "not_contains",
+      "pattern": "Biggest Gap",
+      "message": "Must not rank deals by legacy required-minus-current arithmetic"
+    },
+    {
+      "id": "no_missing_zero",
+      "type": "not_contains",
+      "pattern": "0 for any missing element",
+      "message": "Missing native data must never become zero"
+    },
+    {
+      "id": "no_legacy_writer",
+      "type": "not_contains",
+      "pattern": "fieldkit sf frontmatter",
+      "message": "Pursuit review must not retain the legacy writer"
+    }
+  ],
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "pipeline review",
+      "expected_behavior": "Produces one row per active pursuit with operational fields and a live Native Qualification read/pending/unavailable status; uses exact native question evidence needs and never substitutes local scores or arithmetic gaps",
+      "assertions": [
+        "Reads every active pursuit across accounts and keeps rows whose native state is missing or unavailable",
+        "Deduplicates Opportunity IDs before running the exact native JSON reader and associates results back to pursuit rows",
+        "Table includes Deal, Account, Stage, Gate, Days, Native Qualification, SF Stage, SF Close Date, Evidence Need, and Next Action",
+        "A complete selected native read is labeled read without implying pass; ambiguity or missing metadata is pending; auth, not-found, missing linkage, and incomplete reads are unavailable",
+        "Evidence Need cites an exact unanswered question ID or a status reason, not a locally calculated numeric gap",
+        "Rows are sorted in reverse funnel order and followed by read, pending, unavailable, timing-risk, and staleness summaries"
+      ]
+    },
+    {
+      "id": 1,
+      "prompt": "where do my deals stand",
+      "expected_behavior": "Recognizes the pursuit-review trigger and runs the native-status portfolio review in read-only mode",
+      "assertions": [
+        "Recognizes the request as a pursuit review and scans all active pursuits",
+        "Reports Native Qualification read, pending, or unavailable for every row",
+        "Does not present historical local values as current qualification and performs no writes"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "show my pipeline even though one deal has no ClosePlan and another returned incomplete questions",
+      "expected_behavior": "Keeps both deals visible, labels Native Qualification unavailable with distinct reasons, and does not replace either condition with zero, a pass, or historical local state",
+      "assertions": [
+        "The no-ClosePlan row remains present and says unavailable because no native scorecard is linked",
+        "The incomplete row remains present and includes the reader issues or incomplete collection reason",
+        "Neither row receives an invented native value, qualification verdict, or arithmetic evidence gap",
+        "Next actions request linkage or a complete reread rather than a score write"
+      ]
+    }
+  ]
+}

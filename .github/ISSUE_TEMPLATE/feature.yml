@@ -1,0 +1,58 @@
+name: Feature proposal
+description: Propose a user problem or workflow improvement
+title: "feature: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Start with the problem and affected workflow. Maintainers may suggest a smaller design or
+        decline work that does not fit the portable product boundary.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Who is affected, what are they trying to do, and what fails or costs time today?
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Describe observable success without assuming a particular implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: workflow
+    attributes:
+      label: Example workflow
+      description: Show a generic command, input, and result when that clarifies the proposal.
+      render: shell
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Include current workarounds or smaller changes that might solve the problem.
+  - type: dropdown
+    id: capability
+    attributes:
+      label: Capability area
+      options:
+        - Portable core
+        - Salesforce
+        - Google or Gmail
+        - LLM-assisted workflow
+        - Web interface
+        - Agent skill
+        - Contributor or release tooling
+        - Other
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy check
+      options:
+        - label: Examples contain no credentials, customer data, email content, private hosts, or personal paths.
+          required: true

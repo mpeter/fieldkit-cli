@@ -1,0 +1,313 @@
+{
+  "schema_version": 1,
+  "scope": [
+    ".github/**",
+    "AGENTS.md",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "GOVERNANCE.md",
+    "Makefile",
+    "README.md",
+    "ROADMAP.md",
+    "SECURITY.md",
+    "SUPPORT.md",
+    "changelog.d/**",
+    "config/accounts.yaml.example",
+    "config/config.yaml.example",
+    "docs/adr/**",
+    "docs/cli-reference.md",
+    "docs/compatibility.md",
+    "docs/concepts.md",
+    "docs/dependency-security.md",
+    "docs/dev-conventions.md",
+    "docs/getting-started.md",
+    "docs/guides/**",
+    "docs/index.md",
+    "docs/ops-runbook.md",
+    "docs/privacy.md",
+    "docs/reference/**",
+    "docs/releases.md",
+    "docs/release-readiness/dependency-security-policy.json",
+    "docs/release-readiness/documentation-contract.schema.json",
+    "docs/release-readiness/public-surface-policy.json",
+    "docs/release-readiness/public-tree-manifest.schema.json",
+    "docs/release-readiness/public-tree-policy.json",
+    "docs/release-readiness/public-tree-policy.schema.json",
+    "docs/release-readiness/release-bundle-provenance.schema.json",
+    "docs/release-readiness/release-consumer-evidence.schema.json",
+    "docs/release-readiness/cutover-record.schema.json",
+    "docs/release-readiness/release-approval-input.schema.json",
+    "docs/release-readiness/release-evidence-record.schema.json",
+    "docs/release-readiness/release-manual-evidence.schema.json",
+    "docs/release-readiness/release-promotion-evidence.schema.json",
+    "docs/release-readiness/release-governance-policy.json",
+    "docs/release-readiness/release-governance-policy.schema.json",
+    "docs/release-readiness/rehearsal-evidence.schema.json",
+    "hooks/**",
+    "mkdocs.yml",
+    "openspec/specs/**",
+    "pyproject.toml",
+    "scripts/**",
+    "src/fieldkit/**",
+    "tests/**"
+  ],
+  "rules": [
+    {
+      "id": "PUBID001",
+      "category": "operator_identity",
+      "pattern": "(?i)(?<![A-Za-z0-9])(?:mpeter|Matt Peter)(?![A-Za-z0-9])"
+    },
+    {
+      "id": "PUBID002",
+      "category": "absolute_home_path",
+      "pattern": "/(?:home|Users)/[A-Za-z][A-Za-z0-9_.-]{1,30}/"
+    },
+    {
+      "id": "PUBID003",
+      "category": "organization_identity",
+      "pattern": "(?i)(?:red[ -]?hat|redhat(?:crm|-internal)?)"
+    },
+    {
+      "id": "PUBID004",
+      "category": "organization_workspace_layout",
+      "pattern": "(?:~|%h)/aeos/"
+    },
+    {
+      "id": "PUBID005",
+      "category": "private_cloud_project",
+      "pattern": "itpc-gcp-global-revenue-claude"
+    },
+    {
+      "id": "PUBID006",
+      "category": "organization_specific_acronym",
+      "pattern": "(?i)\\bsip[h]\\b"
+    },
+    {
+      "id": "PUBID007",
+      "category": "deployment_specific_language",
+      "pattern": "(?i)\\bthis[ ]org(?:anization)?(?:'s)?\\b"
+    },
+    {
+      "id": "PUBID009",
+      "category": "organization_identity_shorthand",
+      "pattern": "(?i)\\b(?:rh-(?:colleague|internal)|internal-rh)\\b"
+    },
+    {
+      "id": "PUBID008",
+      "category": "noncanonical_project_name",
+      "pattern": "(?<![A-Za-z0-9_])(?:Fieldkit|FIELDKIT)(?![A-Za-z0-9_])"
+    }
+  ],
+  "allowances": [
+    {
+      "rule_id": "PUBID001",
+      "path": ".github/CODEOWNERS",
+      "pattern": "@mpeter",
+      "classification": "public_project_identity",
+      "rationale": "The current public maintainer login is required for enforceable code ownership."
+    },
+    {
+      "rule_id": "PUBID001",
+      "path": ".github/ISSUE_TEMPLATE/config.yml",
+      "pattern": "https://github\\.com/mpeter/fieldkit-cli(?:/[^\\s\"]*)?",
+      "classification": "public_project_identity",
+      "rationale": "GitHub contact links require absolute URLs to the canonical public repository."
+    },
+    {
+      "rule_id": "PUBID001",
+      "path": "CONTRIBUTING.md",
+      "pattern": "https://github\\.com/mpeter/fieldkit-cli(?:\\.git)?",
+      "classification": "public_project_identity",
+      "rationale": "Contributor setup identifies the canonical upstream repository."
+    },
+    {
+      "rule_id": "PUBID001",
+      "path": "GOVERNANCE.md",
+      "pattern": "(?:@mpeter|https://github\\.com/mpeter)",
+      "classification": "public_project_identity",
+      "rationale": "The solo-maintainer governance policy must identify the person who actually holds authority."
+    },
+    {
+      "rule_id": "PUBID001",
+      "path": "README.md",
+      "pattern": "https://github\\.com/mpeter/fieldkit-cli(?:/[^\\s\\)]*)?",
+      "classification": "public_project_identity",
+      "rationale": "README badges must link to checks for the canonical public repository."
+    },
+    {
+      "rule_id": "PUBID001",
+      "path": "SECURITY.md",
+      "pattern": "https://github\\.com/mpeter/fieldkit-cli/security/advisories/new",
+      "classification": "public_project_identity",
+      "rationale": "The security policy must route vulnerabilities to the canonical repository's private advisory form."
+    },
+    {
+      "rule_id": "PUBID001",
+      "path": "docs/dependency-security.md",
+      "pattern": "https://github\\.com/mpeter/fieldkit-cli/blob/main/ROADMAP\\.md",
+      "classification": "public_project_identity",
+      "rationale": "Dependency policy links to the canonical public roadmap."
+    },
+    {
+      "rule_id": "PUBID001",
+      "path": "docs/getting-started.md",
+      "pattern": "https://github\\.com/mpeter/fieldkit-cli/blob/main/(?:CONTRIBUTING|SUPPORT)\\.md",
+      "classification": "public_project_identity",
+      "rationale": "The built documentation site links readers to community files in the canonical public repository."
+    },
+    {
+      "rule_id": "PUBID001",
+      "path": "docs/index.md",
+      "pattern": "https://github\\.com/mpeter/fieldkit-cli/blob/main/CONTRIBUTING\\.md",
+      "classification": "public_project_identity",
+      "rationale": "The built documentation site links readers to the canonical repository contribution guide."
+    },
+    {
+      "rule_id": "PUBID001",
+      "path": "docs/releases.md",
+      "pattern": "https://github\\.com/mpeter/fieldkit-cli/blob/main/ROADMAP\\.md",
+      "classification": "public_project_identity",
+      "rationale": "Release history links to the canonical public roadmap."
+    },
+    {
+      "rule_id": "PUBID001",
+      "path": "docs/release-readiness/release-evidence-record.schema.json",
+      "pattern": "https://github\\.com/mpeter/fieldkit-cli/blob/main/docs/release-readiness/release-evidence-record\\.schema\\.json",
+      "classification": "public_project_identity",
+      "rationale": "The public evidence schema needs its canonical immutable identifier."
+    },
+    {
+      "rule_id": "PUBID001",
+      "path": "docs/reference/troubleshooting.md",
+      "pattern": "https://github\\.com/mpeter/fieldkit-cli/blob/main/(?:SECURITY|SUPPORT)\\.md",
+      "classification": "public_project_identity",
+      "rationale": "The built troubleshooting page routes users to canonical public support and security policies."
+    },
+    {
+      "rule_id": "PUBID001",
+      "path": "mkdocs.yml",
+      "pattern": "https://github\\.com/mpeter/fieldkit-cli",
+      "classification": "public_project_identity",
+      "rationale": "The documentation site links to the canonical public repository."
+    },
+    {
+      "rule_id": "PUBID001",
+      "path": "pyproject.toml",
+      "pattern": "https://github\\.com/mpeter/fieldkit-cli(?:/[^\\s\"]*)?",
+      "classification": "public_project_identity",
+      "rationale": "Package metadata must identify the canonical public project pages."
+    },
+    {
+      "rule_id": "PUBID001",
+      "path": "docs/release-readiness/dependency-security-policy.json",
+      "pattern": "@mpeter",
+      "classification": "public_project_identity",
+      "rationale": "The solo maintainer owns this time-bounded public dependency-policy exception."
+    },
+    {
+      "rule_id": "PUBID001",
+      "paths": [
+        "docs/release-readiness/documentation-contract.schema.json",
+        "docs/release-readiness/public-tree-manifest.schema.json",
+        "docs/release-readiness/public-tree-policy.schema.json",
+        "docs/release-readiness/release-bundle-provenance.schema.json",
+        "docs/release-readiness/release-consumer-evidence.schema.json",
+        "docs/release-readiness/cutover-record.schema.json",
+        "docs/release-readiness/release-approval-input.schema.json",
+        "docs/release-readiness/release-manual-evidence.schema.json",
+        "docs/release-readiness/release-promotion-evidence.schema.json",
+        "docs/release-readiness/release-governance-policy.schema.json"
+      ],
+      "pattern": "https://github\\.com/mpeter/fieldkit-cli/blob/main/docs/release-readiness/[A-Za-z0-9._/-]+",
+      "classification": "public_project_identity",
+      "rationale": "Public release-evidence schemas use stable canonical URLs as their schema identifiers."
+    },
+    {
+      "rule_id": "PUBID001",
+      "path": "docs/release-readiness/release-governance-policy.json",
+      "pattern": "mpeter/fieldkit-cli",
+      "classification": "public_project_identity",
+      "rationale": "The public governance policy binds each candidate to the canonical repository identity."
+    },
+    {
+      "rule_id": "PUBID001",
+      "path": "docs/release-readiness/public-surface-policy.json",
+      "pattern": "https://github\\.com/mpeter/fieldkit-cli/(?:security/advisories/new|blob/main/SUPPORT\\.md)",
+      "classification": "public_project_identity",
+      "rationale": "The public-surface policy directs security and support traffic to canonical public routes."
+    },
+    {
+      "rule_id": "PUBID001",
+      "path": "docs/release-readiness/public-tree-policy.json",
+      "pattern": "mpeter/fieldkit-cli",
+      "classification": "public_project_identity",
+      "rationale": "The clean-tree policy binds the intended public repository identity."
+    },
+    {
+      "rule_id": "PUBID001",
+      "path": "docs/release-readiness/rehearsal-evidence.schema.json",
+      "pattern": "mpeter/fieldkit-cli",
+      "classification": "public_project_identity",
+      "rationale": "The rehearsal schema binds published evidence to the intended public repository."
+    },
+    {
+      "rule_id": "PUBID001",
+      "path": "scripts/check_documentation_examples.py",
+      "pattern": "mpeter/fieldkit-cli",
+      "classification": "public_project_identity",
+      "rationale": "The final-rehearsal verifier accepts only the intended public repository and its CI evidence."
+    },
+    {
+      "rule_id": "PUBID001",
+      "paths": [
+        "scripts/cutover_record.py",
+        "tests/test_cutover_record.py"
+      ],
+      "pattern": "mpeter/fieldkit-cli",
+      "classification": "public_project_identity",
+      "rationale": "The cutover verifier and its fixtures resolve only the canonical public repository identity."
+    },
+    {
+      "rule_id": "PUBID001",
+      "path": "tests/test_release_check.py",
+      "pattern": "mpeter/fieldkit-cli",
+      "classification": "release_cutover_policy",
+      "rationale": "The release-evidence fixture proves candidate binding to the canonical public repository."
+    },
+    {
+      "rule_id": "PUBID003",
+      "path": "hooks/pii_guard.py",
+      "pattern": "(?i)(?:red[ -]?hat|redhat(?:crm|-internal)?)",
+      "classification": "release_cutover_policy",
+      "rationale": "The privacy detector contains compatibility markers that it is responsible for detecting or exempting."
+    },
+    {
+      "rule_id": "PUBID003",
+      "path": "scripts/audit_check.py",
+      "pattern": "(?i)(?:red[ -]?hat|redhat(?:crm|-internal)?)",
+      "classification": "release_cutover_policy",
+      "rationale": "The audit detector retains a regression marker for the organization-default defect class."
+    },
+    {
+      "rule_id": "PUBID003",
+      "path": "scripts/check_public_docs.py",
+      "pattern": "(?i)(?:red[ -]?hat|redhat(?:crm|-internal)?)",
+      "classification": "release_cutover_policy",
+      "rationale": "The rendered-document validator contains the private organization markers it is responsible for detecting."
+    },
+    {
+      "rule_id": "PUBID001",
+      "path": "tests/test_documentation_examples.py",
+      "pattern": "mpeter/fieldkit-cli",
+      "classification": "release_cutover_policy",
+      "rationale": "The rehearsal-evidence test uses the canonical public repository identity as its schema-valid positive control."
+    },
+    {
+      "rule_id": "PUBID002",
+      "path": "tests/test_pii_patterns.py",
+      "pattern": "/(?:home|Users)/[A-Za-z][A-Za-z0-9_.-]{1,30}/",
+      "classification": "release_cutover_policy",
+      "rationale": "The test provides a positive control for absolute-home-path detection."
+    }
+  ]
+}

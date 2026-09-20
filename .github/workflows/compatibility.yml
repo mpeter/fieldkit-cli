@@ -1,0 +1,196 @@
+name: Artifact compatibility
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: compatibility-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build release candidate once
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
+      - name: Build immutable candidate
+        run: uv build --out-dir dist
+      - name: Upload immutable candidate and portable smoke runner
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: compatibility-candidate-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          path: |
+            dist/*
+            scripts/ci_evidence.py
+            scripts/smoke_artifact.py
+            pyproject.toml
+          if-no-files-found: error
+          retention-days: 30
+
+  core:
+    name: Core ${{ matrix.python-pair.first }} + ${{ matrix.python-pair.second }} on ${{ matrix.os }}
+    needs: build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+        python-pair: [{first: "3.11", second: "3.12"}, {first: "3.13", second: "3.14"}]
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: compatibility-candidate-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: ${{ matrix.python-pair.first }}
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: ${{ matrix.python-pair.second }}
+      - name: Smoke exact wheel digest with Python ${{ matrix.python-pair.first }}
+        run: |
+          mkdir -p reports
+          python${{ matrix.python-pair.first }} scripts/smoke_artifact.py --json --profile base dist/*.whl \
+            --source-revision "$GITHUB_SHA" \
+            > reports/smoke-${{ matrix.os }}-py${{ matrix.python-pair.first }}.json
+      - name: Smoke exact wheel digest with Python ${{ matrix.python-pair.second }}
+        run: |
+          python${{ matrix.python-pair.second }} scripts/smoke_artifact.py --json --profile base dist/*.whl \
+            --source-revision "$GITHUB_SHA" \
+            > reports/smoke-${{ matrix.os }}-py${{ matrix.python-pair.second }}.json
+      - name: Require non-empty smoke evidence
+        if: always()
+        run: |
+          test -s reports/smoke-${{ matrix.os }}-py${{ matrix.python-pair.first }}.json
+          test -s reports/smoke-${{ matrix.os }}-py${{ matrix.python-pair.second }}.json
+      - name: Upload platform smoke evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: compatibility-smoke-${{ matrix.os }}-py${{ matrix.python-pair.first }}-py${{ matrix.python-pair.second }}-${{ github.run_id }}-${{ github.sha }}
+          path: reports/smoke-${{ matrix.os }}-py*.json
+          if-no-files-found: error
+          retention-days: 30
+
+  optional-ubuntu:
+    name: Optional profiles on Ubuntu
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: compatibility-candidate-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Smoke and inspect candidate concurrently
+        run: |
+          mkdir -p reports
+          set +e
+          python scripts/smoke_artifact.py --json --profile all --installer uv dist/*.whl \
+            --source-revision "$GITHUB_SHA" \
+            > reports/smoke-optional-all-ubuntu-24.04.json &
+          profile_pid=$!
+          python scripts/check_artifacts.py --json dist/*.whl dist/*.tar.gz > reports/artifacts.json
+          artifact_status=$?
+          python scripts/check_public_identity.py --artifact dist/*.whl --artifact dist/*.tar.gz
+          identity_status=$?
+          python scripts/smoke_artifact.py --json --installer uv dist/*.tar.gz > reports/sdist-smoke.json
+          sdist_status=$?
+          wait "$profile_pid"
+          profile_status=$?
+          set -e
+          test -s reports/smoke-optional-all-ubuntu-24.04.json
+          test -s reports/artifacts.json
+          test -s reports/sdist-smoke.json
+          test "$profile_status" -eq 0
+          test "$artifact_status" -eq 0
+          test "$identity_status" -eq 0
+          test "$sdist_status" -eq 0
+      - name: Upload optional-profile evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: compatibility-smoke-optional-all-ubuntu-24.04-${{ github.run_id }}-${{ github.sha }}
+          path: reports/smoke-optional-all-ubuntu-24.04.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload candidate inspection evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: compatibility-evidence-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          path: |
+            reports/artifacts.json
+            reports/sdist-smoke.json
+          if-no-files-found: error
+          retention-days: 30
+
+  optional-macos:
+    name: Optional profiles on macOS
+    needs: build
+    runs-on: macos-15
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: compatibility-candidate-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Smoke complete optional-profile union
+        run: |
+          mkdir -p reports
+          python scripts/smoke_artifact.py --json --profile all --installer uv dist/*.whl \
+            --source-revision "$GITHUB_SHA" \
+            > reports/smoke-optional-all-macos-15.json
+      - name: Require non-empty optional-profile evidence
+        if: always()
+        run: test -s reports/smoke-optional-all-macos-15.json
+      - name: Upload optional-profile evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: compatibility-smoke-optional-all-macos-15-${{ github.run_id }}-${{ github.sha }}
+          path: reports/smoke-optional-all-macos-15.json
+          if-no-files-found: error
+          retention-days: 30
+
+  fedora-family:
+    name: Core in fedora:43
+    needs: build
+    runs-on: ubuntu-24.04
+    container: fedora:43
+    steps:
+      - name: Install runner prerequisites
+        run: dnf install -y python3
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: compatibility-candidate-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
+      - name: Smoke exact wheel digest
+        run: |
+          mkdir -p reports
+          python3 scripts/smoke_artifact.py --json --profile base --installer uv dist/*.whl \
+            --source-revision "$GITHUB_SHA" \
+            > reports/smoke-fedora-43.json
+      - name: Require non-empty smoke evidence
+        if: always()
+        run: test -s reports/smoke-fedora-43.json
+      - name: Upload Fedora smoke evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: compatibility-smoke-fedora-43-${{ github.run_id }}-${{ github.sha }}
+          path: reports/smoke-fedora-43.json
+          if-no-files-found: error
+          retention-days: 30

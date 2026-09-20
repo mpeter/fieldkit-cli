@@ -1,0 +1,2478 @@
+{
+  "documents": {
+    ".github/PULL_REQUEST_TEMPLATE.md": {
+      "content_type": "policy",
+      "fenced_blocks": [],
+      "reader_action": "Provide reviewable pull-request evidence.",
+      "source_fingerprint": "sha256:dcdd4fb6ecd21f44c8855bfb620cc6f0535acab0a13333d8ad7d35c9a70bfed6",
+      "sources": [
+        "CONTRIBUTING.md",
+        ".github/workflows/ci.yml"
+      ]
+    },
+    "AGENTS.md": {
+      "content_type": "policy",
+      "fenced_blocks": [
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "agents.md.block-1",
+          "language": "bash",
+          "sha256": "833432688a9e6d230c4d7ca18587178b5cbeef9548e178cc9ae48a9a7c0afa92",
+          "verification_id": "manual.release-cutover"
+        },
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "agents.md.block-2",
+          "language": "bash",
+          "sha256": "d6e181be67af40bfe717caf4622d78864f6a9b7b5c1c9537be93cf4093b4e60b",
+          "verification_id": "manual.release-cutover"
+        }
+      ],
+      "reader_action": "Apply repository engineering constraints.",
+      "source_fingerprint": "sha256:9ebd16de5e08c74fd49376e2e5328e7e0d56254dff7efedc7e4147bd093295e5",
+      "sources": [
+        "Makefile",
+        "pyproject.toml",
+        "src/fieldkit/__main__.py"
+      ]
+    },
+    "CONTRIBUTING.md": {
+      "content_type": "how-to",
+      "fenced_blocks": [
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "contributing.md.block-1",
+          "language": "console",
+          "sha256": "7769f7deff0e0af7477e292816063efb24722c38e8b10f29f0d2baae99ebaca5",
+          "verification_id": "manual.release-cutover"
+        },
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "contributing.md.block-2",
+          "language": "console",
+          "sha256": "de37eb43fbe796870e17f158c0696c72908d2332014bee4185e55349cf0da82d",
+          "verification_id": "manual.release-cutover"
+        }
+      ],
+      "reader_action": "Prepare and submit a contribution.",
+      "source_fingerprint": "sha256:b5db3b631292f68e1fd2d42a189dffc3f15b5e5a78f21b26419e4624f2d0513e",
+      "sources": [
+        "Makefile",
+        "pyproject.toml",
+        "scripts/sync_claude_dir.py",
+        ".github/workflows/ci.yml"
+      ]
+    },
+    "GOVERNANCE.md": {
+      "content_type": "policy",
+      "fenced_blocks": [],
+      "reader_action": "Understand current project authority.",
+      "source_fingerprint": "sha256:bd2e4e012b6c04d72b0330e6c38a3d43a38c0df824c23dc6f7006b8e5731a245",
+      "sources": [
+        ".github/CODEOWNERS",
+        ".github/repository-settings.json"
+      ]
+    },
+    "README.md": {
+      "content_type": "overview",
+      "fenced_blocks": [
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "readme.md.block-1",
+          "language": "console",
+          "sha256": "4fb449ef8f276bdd57515b4076d4987460537f112469df56b26cc4275780a87d",
+          "verification_id": "manual.release-cutover"
+        },
+        {
+          "classification": "safe_automated_command",
+          "id": "readme.md.block-2",
+          "language": "console",
+          "sha256": "91a6fd59a2ed21a20a416ef122a94d2f1a86a092f4ce2880539e41821795ab2c",
+          "verification_id": "automated.installed-base-artifact"
+        },
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "readme.md.block-3",
+          "language": "console",
+          "sha256": "b6b9bd4f55fa4c0266c5b7a3625f02c7d3923128371089f3f8211529da305af7",
+          "verification_id": "manual.release-cutover"
+        },
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "readme.md.block-4",
+          "language": "console",
+          "sha256": "92cee7cfe332837c7bca8da6569042da6f9586496bc30ba694be157f9122fdf6",
+          "verification_id": "manual.release-cutover"
+        }
+      ],
+      "reader_action": "Choose an installation or contribution path.",
+      "source_fingerprint": "sha256:704cec4c67a4d204348cb604232ce89d8b7a06a058c9bc88284c77730b750170",
+      "sources": [
+        "pyproject.toml",
+        "src/fieldkit/__main__.py",
+        ".github/workflows/compatibility.yml"
+      ]
+    },
+    "RELEASING.md": {
+      "content_type": "how-to",
+      "fenced_blocks": [
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "releasing.md.block-1",
+          "language": "console",
+          "sha256": "0a6138b5aff5ec91e22d1c67ff41ed9b9d8cbca1d2edc1d615fd9568e009d9e7",
+          "verification_id": "manual.release-cutover"
+        },
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "releasing.md.block-2",
+          "language": "console",
+          "sha256": "91d306195af669a48193a600aca9ba56e75563c75c04369c8266cea18fb67f13",
+          "verification_id": "manual.release-cutover"
+        },
+        {
+          "classification": "safe_automated_command",
+          "id": "releasing.md.block-3",
+          "language": "console",
+          "sha256": "c7132074ad25264fb2a98516db30d7c0a546b1b668cac64e671e1c282e1421df",
+          "verification_id": "automated.release-workflow-policy"
+        },
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "releasing.md.block-4",
+          "language": "console",
+          "sha256": "50a2887392175a0bde98a73e4a63398f2644c0204a51eb514358d94235e9ded3",
+          "verification_id": "manual.release-cutover"
+        }
+      ],
+      "reader_action": "Prepare, assess, and recover an operator-approved release candidate.",
+      "source_fingerprint": "sha256:ccf26dedf072a4ab1c7539e8b025576de3442ec54dcb0bec38218b363d81b9f3",
+      "sources": [
+        "Makefile",
+        ".github/workflows/release.yml",
+        ".github/workflows/release-approval.yml",
+        "docs/release-readiness/release-policy.json",
+        "docs/release-readiness/release-governance-policy.json",
+        "scripts/check_release_consumer.py"
+      ],
+      "tables": [
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "releasing.md.table-1",
+          "sha256": "35b71f5d88f8708f9b28441eb64327f5daf6b64934f825403c2ba37a589d4bb4",
+          "verification_id": "manual.release-cutover"
+        }
+      ]
+    },
+    "ROADMAP.md": {
+      "content_type": "roadmap",
+      "fenced_blocks": [],
+      "reader_action": "Review planned work.",
+      "source_fingerprint": "sha256:9eb547c341d0d401af5a278d267b323b08a25c4f1b510a1f3185c868a3dde421",
+      "sources": [
+        ".github/repository-settings.json",
+        "pyproject.toml",
+        "scripts/check_roadmap_contract.py"
+      ],
+      "tables": [
+        {
+          "classification": "structural_assertion",
+          "id": "roadmap.md.table-1",
+          "sha256": "e6757393fb9e8bff21282729d225783cfec3e285da8c92877c200e7411c90e34",
+          "verification_id": "automated.roadmap-contract"
+        },
+        {
+          "classification": "structural_assertion",
+          "id": "roadmap.md.table-2",
+          "sha256": "dba1bf4672cdb2700d999ffcfe0fa0002b3bcadf23ae5624921cabec9e75cc34",
+          "verification_id": "automated.roadmap-contract"
+        },
+        {
+          "classification": "structural_assertion",
+          "id": "roadmap.md.table-3",
+          "sha256": "5152bc472e238d3aa60e258909d5366769772b191c69750bb7029e99a1ee0229",
+          "verification_id": "automated.roadmap-contract"
+        },
+        {
+          "classification": "structural_assertion",
+          "id": "roadmap.md.table-5",
+          "sha256": "291f11b2f940661061646762b7e81919fb06616960c8a7398998e32cb71f71ce",
+          "verification_id": "automated.roadmap-contract"
+        },
+        {
+          "classification": "structural_assertion",
+          "id": "roadmap.md.table-6",
+          "sha256": "df50874b36665bb1508728b57deefe2ca28adcb74a785a93148254f0481358e2",
+          "verification_id": "automated.roadmap-contract"
+        }
+      ]
+    },
+    "SECURITY.md": {
+      "content_type": "policy",
+      "fenced_blocks": [],
+      "reader_action": "Report a vulnerability without public disclosure.",
+      "source_fingerprint": "sha256:49cd42a0609f67a3af799e6de89233b75382e69de87c836abdb6f1f5f97b059b",
+      "sources": [
+        ".github/repository-settings.json",
+        ".github/ISSUE_TEMPLATE/config.yml"
+      ],
+      "tables": [
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "security.md.table-1",
+          "sha256": "4f7e3f85c8cfe4bad607843704121e95827d4c47994ca14e8a7902cd747d38fd",
+          "verification_id": "manual.release-cutover"
+        }
+      ]
+    },
+    "SUPPORT.md": {
+      "content_type": "policy",
+      "fenced_blocks": [],
+      "reader_action": "Choose the correct support route.",
+      "source_fingerprint": "sha256:2558ee5ca269fb00738365af69df089d15c877657f5a44db07c96855874ce646",
+      "sources": [
+        ".github/ISSUE_TEMPLATE/config.yml",
+        ".github/ISSUE_TEMPLATE/*.yml"
+      ]
+    },
+    "THREAT_MODEL.md": {
+      "content_type": "policy",
+      "fenced_blocks": [],
+      "reader_action": "Assess the supported security boundary before enabling an integration or reporting a vulnerability.",
+      "source_fingerprint": "sha256:543266929add485ff629e2e8eefc01abfdfd1a672ec4fab5bfe25e4da3c32673",
+      "sources": [
+        "SECURITY.md",
+        "docs/privacy.md",
+        "src/fieldkit/cli_exit.py"
+      ],
+      "tables": [
+        {
+          "classification": "structural_assertion",
+          "id": "threat-model.md.table-1",
+          "sha256": "99046283e7a95d41b3d8ce54859dc6b40490e3608af8c74ed1795bb19f175867",
+          "verification_id": "automated.documentation-contract"
+        }
+      ]
+    },
+    "docs/adr/0001-local-first-roots.md": {
+      "content_type": "policy",
+      "fenced_blocks": [],
+      "reader_action": "Place new state in the correct configured root.",
+      "source_fingerprint": "sha256:dd6b9119e92c7d74139d0becc6cc767abff3440559d3102d5f2ac3ae9cbc2e19",
+      "sources": [
+        "src/fieldkit/config/**/*.py"
+      ]
+    },
+    "docs/adr/0002-optional-integrations.md": {
+      "content_type": "policy",
+      "fenced_blocks": [],
+      "reader_action": "Add an integration without changing the base installation boundary.",
+      "source_fingerprint": "sha256:a07d5fbd2bc17e8054112f1635d0e97dc6b1e6cf375d97703762f179f570a61a",
+      "sources": [
+        "pyproject.toml",
+        "src/fieldkit/__main__.py"
+      ]
+    },
+    "docs/adr/0003-thin-command-adapters.md": {
+      "content_type": "policy",
+      "fenced_blocks": [],
+      "reader_action": "Implement a command with the established command-to-domain boundary.",
+      "source_fingerprint": "sha256:fb670e6ed75cc712c9060dbbc1aa5ad85b46b0ee38be503b1cd6ea52f2491a96",
+      "sources": [
+        "src/fieldkit/__main__.py",
+        "src/fieldkit/cli_exit.py"
+      ]
+    },
+    "docs/adr/0004-safe-persistence.md": {
+      "content_type": "policy",
+      "fenced_blocks": [],
+      "reader_action": "Choose the canonical safe write mechanism for persistent state.",
+      "source_fingerprint": "sha256:76b93cc52b07a4b047e38649e3ee7b0f56b2197455a38bbfcd830967fb950fc2",
+      "sources": [
+        "src/fieldkit/**/*.py"
+      ]
+    },
+    "docs/adr/0005-verifiable-public-release.md": {
+      "content_type": "policy",
+      "fenced_blocks": [],
+      "reader_action": "Understand why public release artifacts require a deterministic clean export.",
+      "source_fingerprint": "sha256:324008d4aa018081c6894b0bc5711a884d817e02111246fd7d8cc0e631e82b0e",
+      "sources": [
+        "scripts/export_public_tree.py",
+        "scripts/check_public_tree_safety.py"
+      ]
+    },
+    "docs/cli-reference.md": {
+      "content_type": "reference",
+      "fenced_blocks": [
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-1",
+          "language": "",
+          "sha256": "8872cef658c3cb874eb9164d421dda4d03d2d9db55974dee4a89a2702030d890",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-2",
+          "language": "",
+          "sha256": "48a715c06d17acceda63baa5398baa38e5d65e433a8bb2fcd664e6798636f73b",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-3",
+          "language": "",
+          "sha256": "3b59ec6317e206e4337bdee1f5a635d66dad1d17113813a4f7078f426ff5b461",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-4",
+          "language": "",
+          "sha256": "8547dff65a7ce3e8d7d753729e99764cd7e76ce878a9478c47aa118a7494a223",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-5",
+          "language": "",
+          "sha256": "ff5cac0927d98b823eda48a7be6ce549d6ab1fd66434366b1678312fddfec642",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-143",
+          "language": "",
+          "sha256": "91ed47fe346d50e4d6dbd708b164d88dac60bfac56e79158991b2dcc10a3520a",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-6",
+          "language": "",
+          "sha256": "457ac3e93cfe7aab7223486619081304ca6c6826791e24457f9eb950c386c167",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-7",
+          "language": "",
+          "sha256": "d423c9dfe34bfad7896890a76a3410fed274e0f48e013cd7a40caa92476bc21f",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-8",
+          "language": "",
+          "sha256": "fe443aab764dc635a27d88287ea011a6f89f93471ad34b8ba9b2b0e3f2dd05bf",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-9",
+          "language": "",
+          "sha256": "cd7f26a16b3620005d5d83493d69b5bbff7157c3637dc6f765f909ff5c757cbe",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-10",
+          "language": "",
+          "sha256": "c3e521418bb5b8caea6deed635aa7a48d7c2e1f16e2d139855f2f102bd8651e5",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-11",
+          "language": "",
+          "sha256": "8e602369c15bf20cab8a40d8757364072b8ef832e9932b5d653afae6c9020074",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-12",
+          "language": "",
+          "sha256": "ae7203e3f6e35e4a7a585744d3748c027e3c7e08e2cdb8e4efc38b8219c62da6",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-13",
+          "language": "",
+          "sha256": "e70df4a4b10f0a439c0419f1dd42cf817a0c7e1f5b206f2988ce4ee6207e414d",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-14",
+          "language": "",
+          "sha256": "6680f87fec53acb53db9a5016bc5dca7a9525af58d26349b17f348905bc54876",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-15",
+          "language": "",
+          "sha256": "b548ddacbf95f8717a6846db713c11274abfbb432365cb98a5cef6f2692d947c",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-16",
+          "language": "",
+          "sha256": "bda209b6e8e51f7bc3ed75a921307880ae6358560103874f4d801e62419066b7",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-17",
+          "language": "",
+          "sha256": "cb930f17694f94746f441d5aac8c16ca027837a2270ebe857b82a2796d000e7d",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-18",
+          "language": "",
+          "sha256": "3d8a2d13061ab7fb3028b5ec44b6fd795bae663a2ead823c1d25dd3df830dfe7",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-19",
+          "language": "",
+          "sha256": "cbadb46a85a7ed9ff7eda58d6799828645df2ce7b5a384e70dd2c305501d6ad6",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-20",
+          "language": "",
+          "sha256": "f27e1bdacf7715e1e4d5ffdb0dbb5ec0e0bc17daf059ef4d4c88882d287fa095",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-21",
+          "language": "",
+          "sha256": "0c6a0b9c9f4cd87407f3a949c3ef3ec86fe6b703af7deac2f620f0606e970360",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-22",
+          "language": "",
+          "sha256": "f2ed59c0389cf772accf16f29f0a4c12d1cbc97930a67ab4401c0d5c916d2505",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-23",
+          "language": "",
+          "sha256": "63432c966b8f895a1047886430c63613be6dbf031dffc030b52bd871865c311f",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-24",
+          "language": "",
+          "sha256": "ceb7142d615e8e60f3ed0e40f3b57679be71e4bdcfa804d588d50b04857edce2",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-25",
+          "language": "",
+          "sha256": "79ca8571c9dbd089f2507009fdd007ff2ed989480dca3bc9556583ecff01c73f",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-26",
+          "language": "",
+          "sha256": "d7316bd3113845ca0f94478b0a3737789af0a7d281c1199f1cc01f06437c7feb",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-27",
+          "language": "",
+          "sha256": "7ef255d042de00ec6f8fe1b2f8d1e5dafb93b7ab19f2993064a1deed9e4c9ee9",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-28",
+          "language": "",
+          "sha256": "0a74b14585e333d7a6de9e259bad25742a826665165e8dcb8f9ec375b58fa3ae",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-29",
+          "language": "",
+          "sha256": "91f6dc11be38dee111765ce20f93b8b4304328b4ceef1aa2851bf4256be7a5c5",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-30",
+          "language": "",
+          "sha256": "041f5c70053395f4ea6209a3558e48ead8a2871c2f2116c9fd91c20c68b6fcbb",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-31",
+          "language": "",
+          "sha256": "4fcc58aae1867255e19a48faca128dbaa4ee9fe241ba801f1baf75c8cddea5cb",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-32",
+          "language": "",
+          "sha256": "18baee5457094eef82dc5e7144b3c0f91663bba1587abf02f0611979279835be",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-33",
+          "language": "",
+          "sha256": "a0773cfe5c5f6936410d8cc8865c4bf80ad1b1b6f1755e91d91a50cc82f7ba4d",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-34",
+          "language": "",
+          "sha256": "a2b1fd483c998a514423ac443c5b7af91b9da263e410c8bf2c7cd12c3cb2268b",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-35",
+          "language": "",
+          "sha256": "52050ad767868b9ebaa466a64b86670d56f5cf50655361665fbd021c0dfff86f",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-36",
+          "language": "",
+          "sha256": "a68df83e64e22c6d19807f6146b89b6ec96f3680400a5a9314763dca9f6f9ec6",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-37",
+          "language": "",
+          "sha256": "4823cbd8a205012da86236523db3c2fb91ae366fed066ed6024c49f09c155366",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-38",
+          "language": "",
+          "sha256": "b6b1e973706083812caa64b8afad3d5186e9f2f222e5ebaf8b1e96cc768f0406",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-39",
+          "language": "",
+          "sha256": "0d29c91c9cab7bf948922c3954cd48925d0e8c4d231e3ba6396e9df461a13680",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-40",
+          "language": "",
+          "sha256": "f74fd702d8ff167196e06b9dc7ea71571d83288f73a98872b8bf843010314e29",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-41",
+          "language": "",
+          "sha256": "33f8ced4fbb2ce20c95e1e6987bcf089b2ba4e4670e56912083fae8f3f81374d",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-42",
+          "language": "",
+          "sha256": "71b107723b3bf859cb22403acd551b6ecce0d4f48d168544ea114f52d9ebee17",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-43",
+          "language": "",
+          "sha256": "a95675d0ad194cca66d66a12da8dbbc8cd79643f753d1e68750b291ac6e7c524",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-44",
+          "language": "",
+          "sha256": "429656641aa6b1478357ac8f5e6a7d87b09e2c6b18dd8f639afd7e7409c816bc",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-45",
+          "language": "",
+          "sha256": "ecbe3221b39f28cd855107d4f8f3a62e08513142c5a6d016ee247535b3071bc3",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-46",
+          "language": "",
+          "sha256": "1ff94cde20f9376091be8cb7183decb32401917d4820ab4627d6154c21dcbaef",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-47",
+          "language": "",
+          "sha256": "3acede2eb97c283f438cee86a9594f74840c002afc347d1623b4a1c2fbbcef42",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-48",
+          "language": "",
+          "sha256": "450278bcaa0e64d8d8aaf0c13aaf1c8b4ccea7373fbe5eb2c56d0529ae5ab3d9",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-49",
+          "language": "",
+          "sha256": "329188889ff8188905e9d0922613aed224192d4c8d84d763f237513d536a3ec8",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-50",
+          "language": "",
+          "sha256": "e499d1a17a777b3e3913af7a1e06aec05b8914372e67f31743f6eff4b1f44ae5",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-51",
+          "language": "",
+          "sha256": "583d43765a5a6393cab4a05a215ebaface41d8005e09cd1372c0772ceb3d1eca",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-52",
+          "language": "",
+          "sha256": "7c9ebdbf47b9c2e7e6b70b20132d5bee4253892693502b7637c2c9cd70978f12",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-53",
+          "language": "",
+          "sha256": "c4391c4cd31353dac2c93a767144bab273fce54c470273c65a93c6660ad1c94b",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-54",
+          "language": "",
+          "sha256": "50dcc4b64d9bec2fc21f21841b5b3f33a261c322517b80e090848930fde4fcfe",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-55",
+          "language": "",
+          "sha256": "6ba5725f9eac3552c060c07f983922fe094a53ccf83f60263d3654a4d4a72dfd",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-56",
+          "language": "",
+          "sha256": "71940f6a325a71d648797be902c1cf30189284fc7ba358c3b8b3054e3ba32753",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-57",
+          "language": "",
+          "sha256": "0ee98edea499bbb6b571d0328279cbe4035c9200e52ee68369e7bf46987c82b6",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-58",
+          "language": "",
+          "sha256": "c94830977aec04c801ba8222d7c6dc4a42be6d9b9b0c50a6f008d3554afd9eea",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-59",
+          "language": "",
+          "sha256": "913ed71a48400b13e1269d74a0d5e89eeb646d6b026316082f4b689df9d3f705",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-60",
+          "language": "",
+          "sha256": "1ac26f6c99c6c061a0cae634e7302064d2033d2afe63440256f4f3fee4fb6850",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-61",
+          "language": "",
+          "sha256": "45f4af20a537f419dc53bfd024cdcbc128e5ca00f256138a4a879b89323e0b24",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-62",
+          "language": "",
+          "sha256": "cfe42a09197aebd8466957c6f2d9e85beb5674445af6019b2317fb23fe04a256",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-63",
+          "language": "",
+          "sha256": "9611aea6b909f80cb3889f0bdd1fbb39ce1a22986ad8b9257e51954e46e162bf",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-64",
+          "language": "",
+          "sha256": "d0445a614c8c68205ab2f0eeed88b4e118c7874ce57a4233169506afd83e5c62",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-65",
+          "language": "",
+          "sha256": "2da9aecc67651b7304a8d7a046ea7813aca1a38222bbd8c71bb6859f12e3a336",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-66",
+          "language": "",
+          "sha256": "c94f52cc1c716b3619a550b751fc8fdcb8a68431bdb7618834f702af8d0a6cc0",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-67",
+          "language": "",
+          "sha256": "60f4509132925730d40fa3f0339087dca6bf9e5cb520c98f5591a2dfc8e536fc",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-68",
+          "language": "",
+          "sha256": "c2a023b59f725f9bbc3fbeb218516546f0fd4f173b06274acd0690fbd502698d",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-69",
+          "language": "",
+          "sha256": "2ef7421572b52086bd900d2cae976e8e93da2bfe2a285d7a30a7387199c48117",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-70",
+          "language": "",
+          "sha256": "7df174f9c52cae603724e50ed7ee5df9d101bd526a1d41c40b24bbab1859f1b2",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-71",
+          "language": "",
+          "sha256": "482f963f171d7b83fc2d6736bbe445a3a6cd15eca810794d9aa4603ef0daa28f",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-72",
+          "language": "",
+          "sha256": "0ce481dc7da3757dec2314d529149087977543542984d726b1b2703737b2c0ad",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-73",
+          "language": "",
+          "sha256": "6877cc6b781384ec05383722264e5d61c91322bec22ebecdfd32ec3ca92a87ec",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-74",
+          "language": "",
+          "sha256": "9c101265eea031c4330b97626b015b63ae463a7d959a047990733ef246533819",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-75",
+          "language": "",
+          "sha256": "a85c8bb6435d171245a36710542cd5d34ad2c7861ad1149f9f343acd18e21212",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-76",
+          "language": "",
+          "sha256": "6c9207053a214903c5961e9fe12ffc7186108d587052f59b63f6f6f4315a0d69",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-77",
+          "language": "",
+          "sha256": "b2aace85130df36c329c5ccd6960575bd15939389e7a1437ab1365c7c71f5465",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-78",
+          "language": "",
+          "sha256": "26abd57ba22c35dd4f2ed12e2fa36f3210b042b96cfe40c6c922ccc6648328e9",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-79",
+          "language": "",
+          "sha256": "129ed009708871ce8fda02eecf1f18d28ccaf5b17dc28f471c5cda5aa486cb36",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-80",
+          "language": "",
+          "sha256": "7cba261ac853a9aa870ba18b36f54b7b83481c6a170b55b45614cf9595328206",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-81",
+          "language": "",
+          "sha256": "e5ed79e4eb8f3736042d5ac63483b9b1dc1ee8a6525c441aec972441fdd547a0",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-82",
+          "language": "",
+          "sha256": "d256328815b79b8146556a39df29bb88966686a3d61b249349a61e6f44393a95",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-83",
+          "language": "",
+          "sha256": "3cefdba959683197e4f4a953f4155cfe87ff85c7cdce07052537aa8003c08a21",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-84",
+          "language": "",
+          "sha256": "ccd579eabff4f624994a7a1349bc4ab768fc41c507e20deeaa3b9556e42d3a26",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-85",
+          "language": "",
+          "sha256": "2822fe23db8d74d298cb60a69894049b215ee78c71630dfac9f76449e39289c7",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-86",
+          "language": "",
+          "sha256": "01c1fa4d1c4323e2212b29796684b4e7d01a2bafc4a959cf5672d0a14b705b22",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-87",
+          "language": "",
+          "sha256": "a10d22be212955fc3824b4b9b648d79c68ba1f9ee201a5c657d3aae41abc66f4",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-88",
+          "language": "",
+          "sha256": "46b8801ec51be850393b30292906d5a1558a46c2e2c9d7555ad774e2f37ddb8e",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-89",
+          "language": "",
+          "sha256": "6cf9c6141e56151f15ecb4c88e30c24fdbaf7b1352d5b5e9ef111535d7d665c2",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-90",
+          "language": "",
+          "sha256": "0bb7984b5ca810fb7abc1b85418dfe0ec1ad76587f1ac253406f7009992e2ce3",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-91",
+          "language": "",
+          "sha256": "fb7a7f28ceb861356109d929b44211a2e506baa88992043270d2425da4b15ced",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-92",
+          "language": "",
+          "sha256": "96a9700c0b56cc9e3752fb500c81ccf09935beae176aa412f44b6efa6fd78b0b",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-93",
+          "language": "",
+          "sha256": "2eb97c6c5759b3ec7ec31edbb59b4b0a594afe1bc4dd57b99b09dfd64f30ea3e",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli-reference.block-141",
+          "language": "",
+          "sha256": "00eff4d2ea6cdb9349e63ecba36729125d7fbf594988d4e0b9e45abdb4773214",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli-reference.block-142",
+          "language": "",
+          "sha256": "29ecc674c6a9e2a529842e4b05927b6feafbf4ee7e2fd03245012d47a4104046",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-94",
+          "language": "",
+          "sha256": "8c8994f1b7201e836c7d931eecd8f20a1d79bb6135b7879a4664e48c32a573c9",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-95",
+          "language": "",
+          "sha256": "30b351ee0c537ddd7373435ac9411c5f4fac525a2a27f34bc1d7c0ffa5a413df",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-96",
+          "language": "",
+          "sha256": "64b17b1284bffe304c767546ebdc4c52f21f87926981005b9b48a8781941c332",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-97",
+          "language": "",
+          "sha256": "14605377a6f22c84469426a62c8c9dd9662cb53beff876a7e4216cad00784521",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-98",
+          "language": "",
+          "sha256": "8bf160a970122b89335e45f2f8db86c2c9b19974a7470575bd7e9e1fe2720f73",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-99",
+          "language": "",
+          "sha256": "56aa3c4e26a73c3255233170802b0b7fe5326beb99b4f81e8d60324f11b11e36",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-144",
+          "language": "",
+          "sha256": "ffc335e96545fdffdab22e83af27d71274f1a46877f6d7c689b905c7b97d9544",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-100",
+          "language": "",
+          "sha256": "cd98f2c033c7831f217501db794c6b4dd7a0286ddc2f2cc3401d71711c75602e",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-101",
+          "language": "",
+          "sha256": "7aa85444f4a7bbf461bcf2c3f3f0ac5e5118f41acc5915ce5b866cf10699f8ee",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-102",
+          "language": "",
+          "sha256": "1f3d8f4cf7c80a10ce3bc2008d2ee04904312e843ae1ce309e23bea886f62b29",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-103",
+          "language": "",
+          "sha256": "17ebcfd8ffeba264d76faab21fb07513b5b5ab18c566c2d1fed568a489a40e11",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-104",
+          "language": "",
+          "sha256": "1bef79b55f9fad151216879cea67997fa396bea0b0c528f53673a5170b14ce59",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-105",
+          "language": "",
+          "sha256": "326e4c6637bb518fa0c1401417add02a68353bdec45aed270ca0e5eda8f3e44c",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-106",
+          "language": "",
+          "sha256": "f709d4c058a290f3e2107586e54d5d3248719ca62604b2ae338a84a22383d38a",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-107",
+          "language": "",
+          "sha256": "aee9503543a12d86ea909adb6b7972c2b734123eeaf2f8e0db5f6c3278d704e0",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-108",
+          "language": "",
+          "sha256": "4ee59f0d92a37c8b789e7e6a601cd5f5a6221ec231ef4115ccc7e8da1392547b",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-109",
+          "language": "",
+          "sha256": "6942267dfbf4f9e91b14fa48252b543e18afe7fbf02b4cc4b9ec000ffe2b9bcd",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-110",
+          "language": "",
+          "sha256": "a286380959eb8088451bcb446b4a2376e72b471892f64f75bcd1271edfc85ac0",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-111",
+          "language": "",
+          "sha256": "bffd4dc0251ec6df51391353ebb6b512002b28671c918eb0e69b75465a39e7e6",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-112",
+          "language": "",
+          "sha256": "d7beeb71d9659b90df9dbee194240aa377552504bc6da9636a573468f1dd7aac",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-113",
+          "language": "",
+          "sha256": "e42854acf1b683c1e972458073b0b01e4d894da96639a2f336d7d5d8f83f3e10",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-114",
+          "language": "",
+          "sha256": "1a177f614b84ec28499f36659d4c92955f1e30ba41f4362e454416465a46cf89",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-115",
+          "language": "",
+          "sha256": "db1b2fcff08c98822eb81b350162994c8c27f26cccebe9f7a1866753dbc97c7f",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-116",
+          "language": "",
+          "sha256": "31a49f0dc58c16b5cfc5ede29099dc87f587f0caf0e5c882e167d7a1ad0d55aa",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-117",
+          "language": "",
+          "sha256": "8678aa71dab473b3cdca11ed325ea9bfa2dafba9b5548e768bb75627eac1c49d",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-118",
+          "language": "",
+          "sha256": "bb7a557a4ae71f685602f4702699e3ee2267b2765fe0444f571e52a57fea7d0b",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-119",
+          "language": "",
+          "sha256": "83af156edcfd56b73a4ee1564354550ee17403c0f15b24f2716c5777fb490dd5",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-120",
+          "language": "",
+          "sha256": "7bfd4c686a602936a406df47779e5328f9621484259756a27a3dc4d4dbc62fdc",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-121",
+          "language": "",
+          "sha256": "49d01be0fb300d80530b9a1667374894d1e732aea415961dae7075205616fa87",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-122",
+          "language": "",
+          "sha256": "1ac4e7d83059ccc9a6291af74bf4cca0bf9b82bb9b202bd2a0d869f84d935fe3",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-123",
+          "language": "",
+          "sha256": "e615b743f351dcf2dc4d1dd19bc0ac4e3f3817b37184d784fbb37f175e6ef532",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-124",
+          "language": "",
+          "sha256": "7ce64f62a00fedc0aa111caacd8e1e064947665b0a114e0d604c1cf623741818",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-125",
+          "language": "",
+          "sha256": "7cfdb6726203fbdc177c2a8cecb6f167ab59d07b2d683f09e6a549e377478168",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-126",
+          "language": "",
+          "sha256": "8eeae535b3b9760297e05c0adaf93c9816136e5241972e65cb456cb3b0635842",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-127",
+          "language": "",
+          "sha256": "f20dd7a7d2fd06470049a46f43f3923399f6cb0559c5bdbb255faaf75b04791a",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-128",
+          "language": "",
+          "sha256": "7ee4dff483243a172cc8f1de1d0892bc846c354c3d39356af04f5092e63a92c2",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-129",
+          "language": "",
+          "sha256": "b682f59941e4b84f8cecf694f714b6d8a90c1b47dea87f879cff1089f7a84f0b",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-130",
+          "language": "",
+          "sha256": "de625a30fa8a0957dd05a90b3ba6250a08f628c4de1fdf3d06d6fce3087aeb75",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-131",
+          "language": "",
+          "sha256": "19deceac8474927189306239424f01d94b020895c4bb9d8dcb4ec52b9d56404c",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-132",
+          "language": "",
+          "sha256": "fba55e5d1f956b0924373d5aff2e088f8f7be8f72aace17cf9b0dc190b5f041a",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-133",
+          "language": "",
+          "sha256": "55df82ec097a4b5e61c19a13bd4add56677f1e98cd88dfbceef7b9ba15f7b55d",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-134",
+          "language": "",
+          "sha256": "65fff0977526cb6662266aa4b7439fe04de0725978ab1494f31803bf0c51f474",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-135",
+          "language": "bash",
+          "sha256": "b3d84bf23256abcd56400d02e8f69b6d8834ec16cc6d88deffe10e3a079a48cb",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-136",
+          "language": "bash",
+          "sha256": "b8987f5ac8b2282283ca4b0c7471b12eb5dca899f86a599b1716be4e8a1f9e27",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-137",
+          "language": "bash",
+          "sha256": "42ed33d680f46085486c130772ce495ce28b55663fe985a0422c6ee5072ba234",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-138",
+          "language": "bash",
+          "sha256": "930c0f5350b016842a279746a78644080e340e94d35667af4785e141eb2cae88",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-139",
+          "language": "bash",
+          "sha256": "02e6e9ae667d4e489ab11a9f31c00b7feb79678fa71924fbdda5583f2b2fd482",
+          "verification_id": "automated.generated-reference"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.block-140",
+          "language": "bash",
+          "sha256": "33310af7b2c28909eadc97568849b4f85c0d669b0debef444b3cd85d683c6035",
+          "verification_id": "automated.generated-reference"
+        }
+      ],
+      "reader_action": "Look up command syntax and options.",
+      "source_fingerprint": "sha256:271a9a1ff0930879e222daa986366d283fd6c2408925d19e723a4ea00eed77e9",
+      "sources": [
+        "src/fieldkit/commands/**/*.py",
+        "src/fieldkit/__main__.py"
+      ],
+      "tables": [
+        {
+          "classification": "generated_reference",
+          "id": "docs.cli.reference.md.table-1",
+          "sha256": "de20b289c08fe208792bdba3790498e7240e25ea6017027b6bc9c1729a0e73ec",
+          "verification_id": "automated.generated-reference"
+        }
+      ]
+    },
+    "docs/compatibility.md": {
+      "content_type": "reference",
+      "fenced_blocks": [],
+      "reader_action": "Check whether an environment is supported.",
+      "source_fingerprint": "sha256:65dbb10fd47bf78b59f98e08200f56f1a33aae96090550c5ab83c02e5fdb6e2e",
+      "sources": [
+        "docs/release-readiness/compatibility-policy.json",
+        ".github/workflows/compatibility.yml",
+        "scripts/check_compatibility_policy.py"
+      ],
+      "tables": [
+        {
+          "classification": "structural_assertion",
+          "id": "docs.compatibility.md.table-1",
+          "sha256": "aaa71b4bc61185b8db551464151e85d6537eaad7f3fa2ebbd95251fd34735b86",
+          "verification_id": "automated.compatibility-policy"
+        }
+      ]
+    },
+    "docs/concepts.md": {
+      "content_type": "concept",
+      "fenced_blocks": [],
+      "reader_action": "Understand fieldkit's product and data model.",
+      "source_fingerprint": "sha256:210f0f211f5cb40e112a6e11afd1993c324bbf645e1e2c28ea38703a3946f4d2",
+      "sources": [
+        "src/fieldkit/config/**/*.py",
+        "src/fieldkit/pursuit/io.py"
+      ]
+    },
+    "docs/dependency-map.md": {
+      "content_type": "reference",
+      "fenced_blocks": [
+        {
+          "classification": "generated_reference",
+          "id": "docs.dependency.map.md.block-1",
+          "language": "",
+          "sha256": "78fb10a08cc8e74696f72c734d4b02ef362ab900362749a23142431700d004a0",
+          "verification_id": "automated.generated-dependency-map"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.dependency.map.md.block-2",
+          "language": "bash",
+          "sha256": "ef2eab342a9527fcbc063f85392ec4dc5765090f65e32aa80a3a31d87e1edebe",
+          "verification_id": "automated.generated-dependency-map"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.dependency.map.md.block-3",
+          "language": "bash",
+          "sha256": "7b7f99f578f4150c60203d935cbb06992171233820e03433fbc057dbc58727b3",
+          "verification_id": "automated.generated-dependency-map"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.dependency.map.md.block-4",
+          "language": "bash",
+          "sha256": "fc19f9ad7f9143755b12f2b1648f75cc1d69e5c7e593fd814741f681c8216b13",
+          "verification_id": "automated.generated-dependency-map"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.dependency.map.md.block-5",
+          "language": "bash",
+          "sha256": "10d02f6e1804a1c35ab5a8549c27a5e79555224271ce60d74168561b2616265a",
+          "verification_id": "automated.generated-dependency-map"
+        }
+      ],
+      "reader_action": "Inspect the generated module dependency graph.",
+      "source_fingerprint": "sha256:f179a1791f850d1de3fad3dfea37e5ba036b6dab0828fdf0a2e3902e4531b1c2",
+      "sources": [
+        "tach.toml",
+        "src/fieldkit/**/*.py",
+        "scripts/generate_dep_map.py"
+      ],
+      "tables": [
+        {
+          "classification": "generated_reference",
+          "id": "docs.dependency.map.md.table-1",
+          "sha256": "1d354d5988c80e3f4917cba7b8e6dfe044f6e26ba4150a1510a60346682353a1",
+          "verification_id": "automated.generated-dependency-map"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.dependency.map.md.table-2",
+          "sha256": "9fa76ab0ad5c761f74ec7885082644c60854dbe15fb3ac490a8594d56a200fc8",
+          "verification_id": "automated.generated-dependency-map"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.dependency.map.md.table-3",
+          "sha256": "a792fb30244ab442ac0233b3d33c455fb5e0e609a3e2ebd9a8605901bcc02fa3",
+          "verification_id": "automated.generated-dependency-map"
+        },
+        {
+          "classification": "generated_reference",
+          "id": "docs.dependency.map.md.table-4",
+          "sha256": "549e51bdad7465321c1fa706ec1a691d6097507de8dce881672500ef452ac788",
+          "verification_id": "automated.generated-dependency-map"
+        }
+      ]
+    },
+    "docs/dependency-security.md": {
+      "content_type": "policy",
+      "fenced_blocks": [],
+      "reader_action": "Review dependency trust and update requirements.",
+      "source_fingerprint": "sha256:c6cf9aaf9ebde14592334854e5d6df98c28a9892453b248ef62c133d9dace9ba",
+      "sources": [
+        "docs/release-readiness/dependency-security-policy.json",
+        "pyproject.toml",
+        "scripts/_supply_chain_policy.py",
+        "uv.lock",
+        "scripts/check_supply_chain_policy.py"
+      ]
+    },
+    "docs/design/local-first-cli.md": {
+      "content_type": "concept",
+      "fenced_blocks": [],
+      "reader_action": "Preserve local-first command, persistence, and integration invariants in a contribution.",
+      "source_fingerprint": "sha256:7c3c3b75c251e9462555db0bb23053be85ff23430a9e8c9a3ecd7e372105b221",
+      "sources": [
+        "AGENTS.md",
+        "src/fieldkit/__main__.py",
+        "src/fieldkit/cli_exit.py"
+      ]
+    },
+    "docs/getting-started.md": {
+      "content_type": "tutorial",
+      "fenced_blocks": [
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "docs.getting.started.md.block-1",
+          "language": "console",
+          "sha256": "20b482f6b211296d01f9552ef5fb15bad46b9efa043db45d34c49eaee0c2c0ad",
+          "verification_id": "manual.release-cutover"
+        },
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "docs.getting.started.md.block-2",
+          "language": "console",
+          "sha256": "4fb449ef8f276bdd57515b4076d4987460537f112469df56b26cc4275780a87d",
+          "verification_id": "manual.release-cutover"
+        },
+        {
+          "classification": "safe_automated_command",
+          "id": "docs.getting.started.md.block-3",
+          "language": "console",
+          "sha256": "23a8e6951fda3a6d9567976841c523ad873f876f14c9628b889eaf0f24cbc8e7",
+          "verification_id": "automated.installed-base-artifact"
+        },
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "docs.getting.started.md.block-4",
+          "language": "console",
+          "sha256": "0f5b8d004a4899dccfbceffeb778d12eb62c8c46430287335a569e6e271f4335",
+          "verification_id": "manual.release-cutover"
+        },
+        {
+          "classification": "safe_automated_command",
+          "id": "docs.getting.started.md.block-5",
+          "language": "console",
+          "sha256": "4ea09c2c7963151d2f6121265964326b545ceae50066d45bd37fbac5efc0f602",
+          "verification_id": "automated.installed-base-artifact"
+        },
+        {
+          "classification": "safe_automated_command",
+          "id": "docs.getting.started.md.block-6",
+          "language": "console",
+          "sha256": "b11d788984f9da3ebc4ce24ca6d852c81ab319e6ad963fba85eb5a2ad791a1e2",
+          "verification_id": "automated.installed-base-artifact"
+        },
+        {
+          "classification": "safe_automated_command",
+          "id": "docs.getting.started.md.block-7",
+          "language": "console",
+          "sha256": "e90e5a0cd85fae1c5e6cdb3fb5caf52e224c5dd89fed956adf4ed1c3309abdaf",
+          "verification_id": "automated.installed-base-artifact"
+        },
+        {
+          "classification": "safe_automated_command",
+          "id": "docs.getting.started.md.block-8",
+          "language": "console",
+          "sha256": "003a7bbba4dc89e3456c0d1820b875a54f81959baf42722cf78425e41ff03b23",
+          "verification_id": "automated.installed-base-artifact"
+        },
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "docs.getting.started.md.block-9",
+          "language": "console",
+          "sha256": "26b3fbfe69cbb7a056b9c83638c983a1cfe4142e2bc79c706877e0d41e41d778",
+          "verification_id": "manual.release-cutover"
+        }
+      ],
+      "reader_action": "Install fieldkit and complete a credential-free first run.",
+      "source_fingerprint": "sha256:169e6570dcd697fd06b522effcfb987973398bf0eaad6cc76e4ae0befe58053c",
+      "sources": [
+        "pyproject.toml",
+        "scripts/check_compatibility_policy.py",
+        "scripts/check_documentation_example_scenarios.py",
+        "scripts/smoke_artifact.py",
+        ".github/workflows/compatibility.yml"
+      ]
+    },
+    "docs/guides/gmail.md": {
+      "content_type": "how-to",
+      "fenced_blocks": [
+        {
+          "classification": "credentialed_manual_integration",
+          "id": "docs.guides.gmail.md.block-1",
+          "language": "",
+          "sha256": "13f441f859bde4966dccd251fe14c2fd0acdc08d92b5b9655813c62bc320d32c",
+          "verification_id": "manual.credentialed-integration"
+        },
+        {
+          "classification": "credentialed_manual_integration",
+          "id": "docs.guides.gmail.md.block-2",
+          "language": "",
+          "sha256": "13f441f859bde4966dccd251fe14c2fd0acdc08d92b5b9655813c62bc320d32c",
+          "verification_id": "manual.credentialed-integration"
+        },
+        {
+          "classification": "credentialed_manual_integration",
+          "id": "docs.guides.gmail.md.block-3",
+          "language": "",
+          "sha256": "a3299b4212518da7a523d8027f4bdece18abc8f466e188dd508ece5d8d9bfffc",
+          "verification_id": "manual.credentialed-integration"
+        },
+        {
+          "classification": "credentialed_manual_integration",
+          "id": "docs.guides.gmail.md.block-4",
+          "language": "",
+          "sha256": "f1b21beb48a78b83da32c94015d3f50f9ff14dbad2776d38918562a41a0e6159",
+          "verification_id": "manual.credentialed-integration"
+        },
+        {
+          "classification": "credentialed_manual_integration",
+          "id": "docs.guides.gmail.md.block-5",
+          "language": "",
+          "sha256": "542df9744ffb13c571b3873da22a7e992703b7301e30521d7c1c29e0686661f6",
+          "verification_id": "manual.credentialed-integration"
+        },
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "docs.guides.gmail.md.block-6",
+          "language": "",
+          "sha256": "e2ba67c5affaef253d3c951246388ff3f1e48b4cac59e1504b207af28ef48e71",
+          "verification_id": "manual.release-cutover"
+        },
+        {
+          "classification": "credentialed_manual_integration",
+          "id": "docs.guides.gmail.md.block-7",
+          "language": "",
+          "sha256": "1a6725dc56d62a9b3d9026863a02b6ea8e9ea83c88fe195a3fb6a608a982e10f",
+          "verification_id": "manual.credentialed-integration"
+        },
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "docs.guides.gmail.md.block-8",
+          "language": "",
+          "sha256": "8575cc5985c79e1799d6a9597f1cf2470f98fc76c94784ed01ceb788aea81f83",
+          "verification_id": "manual.release-cutover"
+        },
+        {
+          "classification": "credentialed_manual_integration",
+          "id": "docs.guides.gmail.md.block-9",
+          "language": "",
+          "sha256": "46f75ef32a549fdb5f7c854568dea2a0fb9137dfe150b859923352b0ca0b5ea8",
+          "verification_id": "manual.credentialed-integration"
+        },
+        {
+          "classification": "credentialed_manual_integration",
+          "id": "docs.guides.gmail.md.block-10",
+          "language": "",
+          "sha256": "13f441f859bde4966dccd251fe14c2fd0acdc08d92b5b9655813c62bc320d32c",
+          "verification_id": "manual.credentialed-integration"
+        },
+        {
+          "classification": "credentialed_manual_integration",
+          "id": "docs.guides.gmail.md.block-11",
+          "language": "",
+          "sha256": "dae3ad4145f7cc6bcb7c4821f642dd13d30ffb953dd530c61b24318eba96b17e",
+          "verification_id": "manual.credentialed-integration"
+        },
+        {
+          "classification": "credentialed_manual_integration",
+          "id": "docs.guides.gmail.md.block-12",
+          "language": "",
+          "sha256": "e205f6a820ffc03a5b30263ef57122084d05e41a5be8a39b257b4b1aeaf4fd96",
+          "verification_id": "manual.credentialed-integration"
+        }
+      ],
+      "reader_action": "Configure and use Gmail workflows.",
+      "source_fingerprint": "sha256:dabd968e1d97dba4b5e8cc83a22486e37fcf98a8ce16c0ca34a2dfa1fa425f79",
+      "sources": [
+        "src/fieldkit/commands/gmail/**/*.py",
+        "src/fieldkit/gmail/**/*.py"
+      ]
+    },
+    "docs/guides/init.md": {
+      "content_type": "how-to",
+      "fenced_blocks": [
+        {
+          "classification": "credentialed_manual_integration",
+          "id": "docs.guides.init.md.block-1",
+          "language": "text",
+          "sha256": "1276f0c7b062c33d205d93a7836976f2f5cc5dbeaaff722c5cd6426feaf3b759",
+          "verification_id": "manual.credentialed-integration"
+        },
+        {
+          "classification": "safe_automated_command",
+          "id": "docs.guides.init.md.block-2",
+          "language": "text",
+          "sha256": "0a6e1cac3a81eaa4b0f16681b4c242636a86c46b0de23f87aca5fc1e66e100d7",
+          "verification_id": "automated.installed-base-artifact"
+        },
+        {
+          "classification": "safe_automated_command",
+          "id": "docs.guides.init.md.block-3",
+          "language": "yaml",
+          "sha256": "8f0097dd49a4d1111baabb7084b723f8930301ce8d97f7bb876f56e370e70507",
+          "verification_id": "automated.installed-base-artifact"
+        }
+      ],
+      "reader_action": "Initialize a workspace.",
+      "source_fingerprint": "sha256:9b9293e7934dd96b3aeaf79e55cfc4e5defdf3bc55f58ca36ec806c1d47433d0",
+      "sources": [
+        "src/fieldkit/commands/init/**/*.py",
+        "src/fieldkit/config/**/*.py"
+      ]
+    },
+    "docs/guides/morning-brief.md": {
+      "content_type": "how-to",
+      "fenced_blocks": [
+        {
+          "classification": "safe_automated_command",
+          "id": "docs.guides.morning.brief.md.block-1",
+          "language": "console",
+          "sha256": "3043a03985761322b04d2c441237b3303b41d3e2bdd3779c58c8e3fd56576577",
+          "verification_id": "automated.installed-base-artifact"
+        },
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "docs.guides.morning.brief.md.block-2",
+          "language": "console",
+          "sha256": "31ec3d8f86e6b1ed1214754e950ba70d40f8b020a2700ead19554ac3fe92d64c",
+          "verification_id": "manual.release-cutover"
+        },
+        {
+          "classification": "safe_automated_command",
+          "id": "docs.guides.morning.brief.md.block-3",
+          "language": "console",
+          "sha256": "9b759901aa90892a80dac0180bac61cef1ed2c1c28e39a94d765971d521b1f1c",
+          "verification_id": "automated.installed-base-artifact"
+        },
+        {
+          "classification": "credentialed_manual_integration",
+          "id": "docs.guides.morning.brief.md.block-4",
+          "language": "console",
+          "sha256": "5d70c766e4874586f934b85f057179cd96adf6a6f57feae9c1c1e6a612bea0f2",
+          "verification_id": "manual.credentialed-integration"
+        },
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "docs.guides.morning.brief.md.block-5",
+          "language": "console",
+          "sha256": "48a1b18f708bf071fe88479bb13d0bf565a69ca7a309d588b071471554594de5",
+          "verification_id": "manual.release-cutover"
+        }
+      ],
+      "reader_action": "Generate and interpret a morning brief.",
+      "source_fingerprint": "sha256:54607c74c6a38ea27a721aa4377fd9968c6d3ffcc043c7f88abc478903894fa0",
+      "sources": [
+        "src/fieldkit/commands/brief/**/*.py",
+        "src/fieldkit/watch/morning_brief*.py"
+      ]
+    },
+    "docs/guides/pipeline-workflow.md": {
+      "content_type": "how-to",
+      "fenced_blocks": [
+        {
+          "classification": "credentialed_manual_integration",
+          "id": "docs.guides.pipeline.workflow.md.block-1",
+          "language": "",
+          "sha256": "50e533e7bd1e6eed3f4873f0115e27006316b861891223dfa45e2ee6bd6222c0",
+          "verification_id": "manual.credentialed-integration"
+        },
+        {
+          "classification": "credentialed_manual_integration",
+          "id": "docs.guides.pipeline.workflow.md.block-2",
+          "language": "bash",
+          "sha256": "ce893b5df9d0e4152141ac7402d36c2cc6267f326b9f94c266389f67ca705905",
+          "verification_id": "manual.credentialed-integration"
+        },
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "docs.guides.pipeline.workflow.md.block-3",
+          "language": "",
+          "sha256": "7fa7f730c679e598a80d20328918d6a995377fab065301812ddc43dfe2c83deb",
+          "verification_id": "manual.release-cutover"
+        },
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "docs.guides.pipeline.workflow.md.block-4",
+          "language": "",
+          "sha256": "9df9e41f50f2a1c11150eb9e1eab8be7af6e86524f95312f8e8e1ebe9a9ba6ce",
+          "verification_id": "manual.release-cutover"
+        },
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "docs.guides.pipeline.workflow.md.block-5",
+          "language": "",
+          "sha256": "de3d21bab48be5180dbfaf368ba0352b6995ebeb07f21b09785f7339be4d1c01",
+          "verification_id": "manual.release-cutover"
+        },
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "docs.guides.pipeline.workflow.md.block-6",
+          "language": "",
+          "sha256": "686217dada4360e863a63ddd30744f973a4c058c8261572a3df534e2923a77a4",
+          "verification_id": "manual.release-cutover"
+        },
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "docs.guides.pipeline.workflow.md.block-7",
+          "language": "",
+          "sha256": "0da042be94078fe7ea3c44489bc9d4da1d454451d1dae9bebbe8371db5818574",
+          "verification_id": "manual.release-cutover"
+        },
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "docs.guides.pipeline.workflow.md.block-8",
+          "language": "",
+          "sha256": "e02e7bba5bbde11298f25668c5e9576d75aa7d93ea1dc0fe9b8e10d15318020d",
+          "verification_id": "manual.release-cutover"
+        },
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "docs.guides.pipeline.workflow.md.block-9",
+          "language": "",
+          "sha256": "1eae78c86214c82b36707c16dca0fdfa8e7e83f5cfbe75a61d369fd5df793df6",
+          "verification_id": "manual.release-cutover"
+        },
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "docs.guides.pipeline.workflow.md.block-10",
+          "language": "yaml",
+          "sha256": "be560372b9af60a3cbef8e26dd9a2d5a12cc379a2053500e5fca615d56aea6cd",
+          "verification_id": "manual.release-cutover"
+        },
+        {
+          "classification": "credentialed_manual_integration",
+          "id": "docs.guides.pipeline.workflow.md.block-11",
+          "language": "",
+          "sha256": "53aa8498370f4bd4d2eea28010ab098adb0deb1feb2410288e49d8c448713db2",
+          "verification_id": "manual.credentialed-integration"
+        },
+        {
+          "classification": "credentialed_manual_integration",
+          "id": "docs.guides.pipeline.workflow.md.block-12",
+          "language": "",
+          "sha256": "65723de81223ea5b6a579b1a50197eac7ed40a5c342438076133152167a25509",
+          "verification_id": "manual.credentialed-integration"
+        },
+        {
+          "classification": "credentialed_manual_integration",
+          "id": "docs.guides.pipeline.workflow.md.block-13",
+          "language": "text",
+          "sha256": "37b46a0d6f53b80312c7bd10ee6505f6bd859835ec2b87a4bb59d3449bc9f169",
+          "verification_id": "manual.credentialed-integration"
+        },
+        {
+          "classification": "credentialed_manual_integration",
+          "id": "docs.guides.pipeline.workflow.md.block-14",
+          "language": "text",
+          "sha256": "f10ac8989a6a58919f46ab57f821d734352b36ad9038278d0cdfb8209aa552ac",
+          "verification_id": "manual.credentialed-integration"
+        },
+        {
+          "classification": "credentialed_manual_integration",
+          "id": "docs.guides.pipeline.workflow.md.block-15",
+          "language": "",
+          "sha256": "7603ff8e16a2d0318fc8982ba0a364f07e856379190a873a941d68f6486702c5",
+          "verification_id": "manual.credentialed-integration"
+        },
+        {
+          "classification": "credentialed_manual_integration",
+          "id": "docs.guides.pipeline.workflow.md.block-16",
+          "language": "",
+          "sha256": "5d1f5b0ebcc4ff910ac5443316d372bdfae5b0aebbd0306e02bcee6a2936700d",
+          "verification_id": "manual.credentialed-integration"
+        }
+      ],
+      "reader_action": "Run supported pipeline workflows.",
+      "source_fingerprint": "sha256:63ebc7bcd89b687be08c8823892cba11832e48f1495bb1d6dd7ad6e96c8db1d5",
+      "sources": [
+        "src/fieldkit/commands/pipeline/**/*.py",
+        "src/fieldkit/commands/datasync/**/*.py",
+        "src/fieldkit/commands/pursuit/**/*.py",
+        "src/fieldkit/commands/sf/**/*.py",
+        "src/fieldkit/pursuit/**/*.py",
+        "src/fieldkit/sf/**/*.py"
+      ],
+      "tables": [
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "docs.guides.pipeline.workflow.md.table-1",
+          "sha256": "03538ca4f46a37e3c8a9b16a6550617520bf4f09db0dc961671a05db70dd44a9",
+          "verification_id": "manual.release-cutover"
+        }
+      ]
+    },
+    "docs/guides/salesforce-auth.md": {
+      "content_type": "how-to",
+      "fenced_blocks": [
+        {
+          "classification": "credentialed_manual_integration",
+          "id": "docs.guides.salesforce.auth.md.block-1",
+          "language": "",
+          "sha256": "a9217b3e234a906e8f22f082d5f5f34d7d72b4c36ce737973afdd443a373788d",
+          "verification_id": "manual.credentialed-integration"
+        },
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "docs.guides.salesforce.auth.md.block-2",
+          "language": "",
+          "sha256": "5acb48c5dd157e256d8d3fbd764fc5b310adb83829d5d23ceeb11cb03add26a9",
+          "verification_id": "manual.release-cutover"
+        },
+        {
+          "classification": "credentialed_manual_integration",
+          "id": "docs.guides.salesforce.auth.md.block-3",
+          "language": "",
+          "sha256": "69fbb4a8e523ab750f60af4e1a8ea52e4c4bde6271a830bbd2a915267a9fe4fd",
+          "verification_id": "manual.credentialed-integration"
+        },
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "docs.guides.salesforce.auth.md.block-4",
+          "language": "",
+          "sha256": "ee99f5dec8f12ef16c53974119774b22628bcffbce9d875d44775e737b39d861",
+          "verification_id": "manual.release-cutover"
+        },
+        {
+          "classification": "credentialed_manual_integration",
+          "id": "docs.guides.salesforce.auth.md.block-8",
+          "language": "console",
+          "sha256": "001f8aacef3ee8b0f07d95e98244f5dfd3a260459d65ac8e7d4c00fb1090d6ca",
+          "verification_id": "manual.credentialed-integration"
+        },
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "docs.guides.salesforce.auth.md.block-5",
+          "language": "",
+          "sha256": "3488bca7e1ded135a61c61eaaf8e67830527105394b6b60a4662e7e6c2ce2026",
+          "verification_id": "manual.release-cutover"
+        },
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "docs.guides.salesforce.auth.md.block-6",
+          "language": "",
+          "sha256": "30466b6428d53a3e5eb566e74efa997557d60704a30562d904e132c9a7800159",
+          "verification_id": "manual.release-cutover"
+        },
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "docs.guides.salesforce.auth.md.block-7",
+          "language": "",
+          "sha256": "dcea69a07175dec14a4ace3d799e76680a53ad106aac9e59bacdfb8975948e38",
+          "verification_id": "manual.release-cutover"
+        }
+      ],
+      "reader_action": "Configure and verify Salesforce authentication.",
+      "source_fingerprint": "sha256:47ea2660b6278f28f8134e75ee4419a77e8ba1a6fbcb0a40494f746e4b21163f",
+      "sources": [
+        "src/fieldkit/commands/auth/sf.py",
+        "src/fieldkit/commands/sf/session_check.py",
+        "src/fieldkit/sf/**/*.py"
+      ]
+    },
+    "docs/guides/shadowbot-auth.md": {
+      "content_type": "how-to",
+      "fenced_blocks": [
+        {
+          "classification": "credentialed_manual_integration",
+          "id": "docs.guides.shadowbot.auth.md.block-1",
+          "language": "console",
+          "sha256": "ae8f861115b69ce35888ba989fc32d5607d9941a8b766c851d9ae44b0c37c4f8",
+          "verification_id": "manual.credentialed-integration"
+        },
+        {
+          "classification": "credentialed_manual_integration",
+          "id": "docs.guides.shadowbot.auth.md.block-2",
+          "language": "console",
+          "sha256": "29a29a56fcbd8ea4700cc5970f46a52750986558303e58138087a690279b328d",
+          "verification_id": "manual.credentialed-integration"
+        },
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "docs.guides.shadowbot.auth.md.block-3",
+          "language": "console",
+          "sha256": "78c2a9d40f9c2929a1431e4dab24f9d32fb7a6c562270879429a747621ac4916",
+          "verification_id": "manual.release-cutover"
+        },
+        {
+          "classification": "credentialed_manual_integration",
+          "id": "docs.guides.shadowbot.auth.md.block-4",
+          "language": "console",
+          "sha256": "d743853c815815f05eca18930e28d08124f7700d4d48bf0e52c1125ea214e286",
+          "verification_id": "manual.credentialed-integration"
+        }
+      ],
+      "reader_action": "Configure and verify ShadowBot authentication.",
+      "source_fingerprint": "sha256:541e240fc8a8b45e56f9b68dc2f8df8895ba94219944230a8a7006fea9a7dc59",
+      "sources": [
+        "src/fieldkit/commands/auth/shadowbot.py",
+        "src/fieldkit/shadowbot/**/*.py"
+      ]
+    },
+    "docs/guides/watchers.md": {
+      "content_type": "how-to",
+      "fenced_blocks": [
+        {
+          "classification": "safe_automated_command",
+          "id": "docs.guides.watchers.md.block-1",
+          "language": "console",
+          "sha256": "ebabf014235646dd4c4cdf2abbc85885a18d3f8bc1263a5880e34e3247fd5277",
+          "verification_id": "automated.installed-base-artifact"
+        },
+        {
+          "classification": "safe_automated_command",
+          "id": "docs.guides.watchers.md.block-2",
+          "language": "console",
+          "sha256": "5ed5e7259c8bd449074515ebf422bd9df5c5297318d5a65fbde66c0016d91a14",
+          "verification_id": "automated.installed-base-artifact"
+        },
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "docs.guides.watchers.md.block-3",
+          "language": "console",
+          "sha256": "b64aee2591a80558193c7901ed719eaeb8ed873fcdbca385dc208f8cbdc18312",
+          "verification_id": "manual.release-cutover"
+        },
+        {
+          "classification": "credentialed_manual_integration",
+          "id": "docs.guides.watchers.md.block-4",
+          "language": "console",
+          "sha256": "de15105caa5297de13e6b1ea7d8d6d56acc63096299e7f27f903ad3ce715d2e3",
+          "verification_id": "manual.credentialed-integration"
+        },
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "docs.guides.watchers.md.block-5",
+          "language": "console",
+          "sha256": "908ce14096e075dc758016e8c7ea9f78e2f3777301fe10ac7372c1fc5a54f3b1",
+          "verification_id": "manual.release-cutover"
+        },
+        {
+          "classification": "credentialed_manual_integration",
+          "id": "docs.guides.watchers.md.block-6",
+          "language": "console",
+          "sha256": "5e9e75303faa33dbeee33f977cf42e45c7634ec931246c40e324e07ae92d111f",
+          "verification_id": "manual.credentialed-integration"
+        }
+      ],
+      "reader_action": "Run and interpret watchers.",
+      "source_fingerprint": "sha256:3fbe320fb5448a20cc7f8e5e6a0a9faedd5dcc3740422b6e75f022dd87bec8f3",
+      "sources": [
+        "src/fieldkit/commands/watch/**/*.py",
+        "src/fieldkit/watch/**/*.py"
+      ]
+    },
+    "docs/index.md": {
+      "content_type": "overview",
+      "fenced_blocks": [],
+      "reader_action": "Choose the documentation path for a task.",
+      "source_fingerprint": "sha256:1f69c887745e1a4ae64b572ee8c326c2dfedbc709bd252ee786e486422e901fe",
+      "sources": [
+        "mkdocs.yml",
+        "pyproject.toml"
+      ]
+    },
+    "docs/integrations.md": {
+      "content_type": "concept",
+      "fenced_blocks": [
+        {
+          "classification": "credentialed_manual_integration",
+          "id": "docs.integrations.md.block-1",
+          "language": "console",
+          "sha256": "1956518cdfa0325cc1d7944d6eb3471a057b7e670f0cfef100061946821f7b05",
+          "verification_id": "manual.credentialed-integration"
+        },
+        {
+          "classification": "credentialed_manual_integration",
+          "id": "docs.integrations.md.block-2",
+          "language": "console",
+          "sha256": "ebd404ccf9adefbf13ac3b3870d30b3218fb56d93ce498d5e4ac68d29d6d55e6",
+          "verification_id": "manual.credentialed-integration"
+        }
+      ],
+      "reader_action": "Choose an optional integration profile.",
+      "source_fingerprint": "sha256:c99fbef45b6fad82ed6d13bccac7610444697a754ec288273b2dd6af43850248",
+      "sources": [
+        "pyproject.toml",
+        "src/fieldkit/config/optional_dependencies.py"
+      ],
+      "tables": [
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "docs.integrations.md.table-1",
+          "sha256": "afa31baba5d239aa996d197de8652b5290b41528cfd77e053d113732c1587b34",
+          "verification_id": "manual.release-cutover"
+        }
+      ]
+    },
+    "docs/patterns/README.md": {
+      "content_type": "how-to",
+      "fenced_blocks": [],
+      "reader_action": "Find the canonical implementation pattern before adding a repeated solution.",
+      "source_fingerprint": "sha256:ef25cc3a418b5f48f882ae3ea08472f60857f50364b84b8c85f1f56fc2da94ba",
+      "sources": [
+        "AGENTS.md",
+        "src/fieldkit/commands/sf/**/*.py",
+        "src/fieldkit/pursuit/**/*.py"
+      ]
+    },
+    "docs/privacy.md": {
+      "content_type": "concept",
+      "fenced_blocks": [],
+      "reader_action": "Understand local storage and external data flows.",
+      "source_fingerprint": "sha256:76b93cc52b07a4b047e38649e3ee7b0f56b2197455a38bbfcd830967fb950fc2",
+      "sources": [
+        "src/fieldkit/**/*.py"
+      ],
+      "tables": [
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "docs.privacy.md.table-1",
+          "sha256": "1b1b0fc12b51ad4290a289a514ab556d2bae64f05dd63e409841efc5cf5f9103",
+          "verification_id": "manual.release-cutover"
+        }
+      ]
+    },
+    "docs/reference/config-file.md": {
+      "content_type": "reference",
+      "fenced_blocks": [
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "docs.reference.config.file.md.block-1",
+          "language": "text",
+          "sha256": "6711ff07d3d121a6d9248610e5103e237090a66be6fe5051397ddfe5c23d95e6",
+          "verification_id": "manual.release-cutover"
+        },
+        {
+          "classification": "safe_automated_command",
+          "id": "docs.reference.config.file.md.block-2",
+          "language": "console",
+          "sha256": "4ea09c2c7963151d2f6121265964326b545ceae50066d45bd37fbac5efc0f602",
+          "verification_id": "automated.installed-base-artifact"
+        },
+        {
+          "classification": "structural_assertion",
+          "id": "docs.reference.config.file.md.block-3",
+          "language": "yaml",
+          "sha256": "be560372b9af60a3cbef8e26dd9a2d5a12cc379a2053500e5fca615d56aea6cd",
+          "verification_id": "automated.configuration-example-contract"
+        },
+        {
+          "classification": "structural_assertion",
+          "id": "docs.reference.config.file.md.block-4",
+          "language": "yaml",
+          "sha256": "e7a53b26d6cafd387e55235e69d68d422858e8617beb044e64296b2962bff98e",
+          "verification_id": "automated.configuration-example-contract"
+        },
+        {
+          "classification": "structural_assertion",
+          "id": "docs.reference.config.file.md.block-5",
+          "language": "yaml",
+          "sha256": "7f54e9c13edf9120ace36e8da027f59070711867462eb212143775ac76ca33e8",
+          "verification_id": "automated.configuration-example-contract"
+        },
+        {
+          "classification": "safe_automated_command",
+          "id": "docs.reference.config.file.md.block-6",
+          "language": "console",
+          "sha256": "b1fe4c23847b2a9186c64ca1ae7ad4922bb4d22a9bd91b64aa47c84f94b3b81a",
+          "verification_id": "automated.installed-base-artifact"
+        }
+      ],
+      "reader_action": "Configure fieldkit with YAML.",
+      "source_fingerprint": "sha256:dd6b9119e92c7d74139d0becc6cc767abff3440559d3102d5f2ac3ae9cbc2e19",
+      "sources": [
+        "src/fieldkit/config/__init__.py",
+        "src/fieldkit/config/**/*.py"
+      ],
+      "tables": [
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "docs.reference.config.file.md.table-1",
+          "sha256": "277ff906e94ec406da9a8c0b18cd8571c9252a20e8147e4af513fdb112a1f828",
+          "verification_id": "manual.release-cutover"
+        },
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "docs.reference.config.file.md.table-2",
+          "sha256": "6da1ee0bebc083caa2f5e942ffa67a8a31ae86069ab21832f19d77a475c08f3f",
+          "verification_id": "manual.release-cutover"
+        },
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "docs.reference.config.file.md.table-3",
+          "sha256": "e6fd0b6a8edc3c4d846e0fb3f1b63102ec9416a69c1150ebd5172111b914493a",
+          "verification_id": "manual.release-cutover"
+        }
+      ]
+    },
+    "docs/reference/environment-vars.md": {
+      "content_type": "reference",
+      "fenced_blocks": [
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "docs.reference.environment.vars.md.block-1",
+          "language": "console",
+          "sha256": "51e63cd7cdd4110ee379958ef48782f44f9c0aeb86b56d02ae016ff7bd2a3314",
+          "verification_id": "manual.release-cutover"
+        },
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "docs.reference.environment.vars.md.block-2",
+          "language": "console",
+          "sha256": "b7d3a82ace52b6d1ae973cd9dab5c2e99fe2478f7658dde7a844c4156fda5144",
+          "verification_id": "manual.release-cutover"
+        }
+      ],
+      "reader_action": "Configure supported environment overrides.",
+      "source_fingerprint": "sha256:dd6b9119e92c7d74139d0becc6cc767abff3440559d3102d5f2ac3ae9cbc2e19",
+      "sources": [
+        "src/fieldkit/config/_loader.py",
+        "src/fieldkit/config/**/*.py"
+      ],
+      "tables": [
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "docs.reference.environment.vars.md.table-1",
+          "sha256": "c91a0c06879fb3c7de4b20bc2a32c643281c8766f0465e597cb69410910113c5",
+          "verification_id": "manual.release-cutover"
+        },
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "docs.reference.environment.vars.md.table-2",
+          "sha256": "1575a2cb1291b46b7acdbb6ad27045c12ca8d6a6ddc90b6bfe8fddb3b8e15257",
+          "verification_id": "manual.release-cutover"
+        },
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "docs.reference.environment.vars.md.table-3",
+          "sha256": "0d33b875f2133c94a249343c5cce7161f0cc831026c58cfba14904a3913e7a64",
+          "verification_id": "manual.release-cutover"
+        },
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "docs.reference.environment.vars.md.table-4",
+          "sha256": "6df68e07a17347b513c1d360ffdf130598956183a369094d2029cc42380ef080",
+          "verification_id": "manual.release-cutover"
+        }
+      ]
+    },
+    "docs/reference/exit-codes.md": {
+      "content_type": "reference",
+      "fenced_blocks": [
+        {
+          "classification": "structural_assertion",
+          "id": "docs.reference.exit.codes.md.block-1",
+          "language": "",
+          "sha256": "1b3c44467555e0b92e11adaadc88ee2a22257e3f8fd69c543f398e7b5316ea75",
+          "verification_id": "automated.exit-code-contract"
+        },
+        {
+          "classification": "structural_assertion",
+          "id": "docs.reference.exit.codes.md.block-2",
+          "language": "",
+          "sha256": "dc1431c64fc7f0b55f886e81bddeaf788173495abdeaecad36c4dec740613682",
+          "verification_id": "automated.exit-code-contract"
+        }
+      ],
+      "reader_action": "Interpret process exit status.",
+      "source_fingerprint": "sha256:fcc4459aeefdab4097e04e53510ca99ca9e0dd3ca7cedf40283ef28039a6a6ce",
+      "sources": [
+        "src/fieldkit/cli_exit.py",
+        "src/fieldkit/__main__.py",
+        "src/fieldkit/commands/**/*.py"
+      ],
+      "tables": [
+        {
+          "classification": "structural_assertion",
+          "id": "docs.reference.exit.codes.md.table-1",
+          "sha256": "e5702dfd1aed86a64586342fb5de9c4caddbcdcdddb71988c43573f231318fec",
+          "verification_id": "automated.exit-code-contract"
+        },
+        {
+          "classification": "structural_assertion",
+          "id": "docs.reference.exit.codes.md.table-2",
+          "sha256": "6a55d00577e5a8c9afd20495992295900c932fd8723783c1bdbbf9485e044516",
+          "verification_id": "automated.exit-code-contract"
+        }
+      ]
+    },
+    "docs/reference/troubleshooting.md": {
+      "content_type": "reference",
+      "fenced_blocks": [
+        {
+          "classification": "safe_automated_command",
+          "id": "docs.reference.troubleshooting.md.block-1",
+          "language": "console",
+          "sha256": "de5f3eaadd178a4dc343cea9ecd7e8cdd7d2a94fc01d4ca34e81b58d50d41f16",
+          "verification_id": "automated.installed-base-artifact"
+        },
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "docs.reference.troubleshooting.md.block-2",
+          "language": "console",
+          "sha256": "fbc5a608cf484ec5fb7adde645b6c07a8779845be187d80c93d35e0fa7e7093c",
+          "verification_id": "manual.release-cutover"
+        },
+        {
+          "classification": "credentialed_manual_integration",
+          "id": "docs.reference.troubleshooting.md.block-3",
+          "language": "console",
+          "sha256": "6af47bcc7b3097238894ad56dfddfe1be770eb54a2c180174ce32e04821360c1",
+          "verification_id": "manual.credentialed-integration"
+        },
+        {
+          "classification": "credentialed_manual_integration",
+          "id": "docs.reference.troubleshooting.md.block-4",
+          "language": "console",
+          "sha256": "ebd404ccf9adefbf13ac3b3870d30b3218fb56d93ce498d5e4ac68d29d6d55e6",
+          "verification_id": "manual.credentialed-integration"
+        },
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "docs.reference.troubleshooting.md.block-5",
+          "language": "console",
+          "sha256": "b7ffbdf2228c235cfbb55eeca4654e5d3c6a07c20a13a453ba184db4f51f32a7",
+          "verification_id": "manual.release-cutover"
+        },
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "docs.reference.troubleshooting.md.block-6",
+          "language": "console",
+          "sha256": "bd76af344e70be9c360ccbf406f0be7b562787280be0f76581aef4e058882ff5",
+          "verification_id": "manual.release-cutover"
+        }
+      ],
+      "reader_action": "Diagnose common failures safely.",
+      "source_fingerprint": "sha256:ac279f50b910723d311de4fa328b892af7371ca6f93b0f7b7576c2ad43d1fc16",
+      "sources": [
+        "src/fieldkit/commands/doctor/**/*.py",
+        "src/fieldkit/config/**/*.py"
+      ],
+      "tables": [
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "docs.reference.troubleshooting.md.table-1",
+          "sha256": "69fe6c602f894ea52c8ff33f38b77b3332dee92f9a9c836b8897a4a5ca899e59",
+          "verification_id": "manual.release-cutover"
+        }
+      ]
+    },
+    "docs/releases.md": {
+      "content_type": "reference",
+      "fenced_blocks": [],
+      "reader_action": "Find releases that have actually been published.",
+      "source_fingerprint": "sha256:ee6f725f78518a1feec8f7168efa6cdbd2c03c51c6f940555cb2ed18367ffe50",
+      "sources": [
+        "pyproject.toml",
+        "CHANGELOG.md"
+      ]
+    },
+    "docs/user-guide.md": {
+      "content_type": "overview",
+      "fenced_blocks": [
+        {
+          "classification": "safe_automated_command",
+          "id": "docs.user.guide.md.block-1",
+          "language": "console",
+          "sha256": "50f7a4168b1ee62c0f37a981d8762b58f122357ecb1a858ff25dd7811900ab6f",
+          "verification_id": "automated.installed-base-artifact"
+        },
+        {
+          "classification": "credentialed_manual_integration",
+          "id": "docs.user.guide.md.block-2",
+          "language": "console",
+          "sha256": "fbf390db8fd83cdb208554046dce05d45e7b534e8a203cdd19ca71391bc85427",
+          "verification_id": "manual.credentialed-integration"
+        },
+        {
+          "classification": "credentialed_manual_integration",
+          "id": "docs.user.guide.md.block-3",
+          "language": "console",
+          "sha256": "c00ba8e025a2fc3fb4706702c687a2c5b00b7cadc15b2d8bdc8b390784febca8",
+          "verification_id": "manual.credentialed-integration"
+        }
+      ],
+      "reader_action": "Choose a supported fieldkit workflow.",
+      "source_fingerprint": "sha256:8a5c19efa2eff5ae63e7b02a5926381eba6e27e65a2d93759a4d40e57c1000e6",
+      "sources": [
+        "src/fieldkit/__main__.py",
+        "src/fieldkit/commands/**/*.py",
+        "src/fieldkit/config/**/*.py"
+      ]
+    }
+  },
+  "example_verifications": {
+    "automated.compatibility-policy": {
+      "classification": "structural_assertion",
+      "evidence": "uv run python scripts/check_compatibility_policy.py",
+      "mode": "automated"
+    },
+    "automated.configuration-example-contract": {
+      "classification": "structural_assertion",
+      "evidence": "uv run pytest tests/test_documentation_configuration_examples.py -q",
+      "mode": "automated"
+    },
+    "automated.documentation-contract": {
+      "classification": "structural_assertion",
+      "evidence": "uv run python scripts/check_documentation_contract.py",
+      "mode": "automated"
+    },
+    "automated.exit-code-contract": {
+      "classification": "structural_assertion",
+      "evidence": "uv run pytest tests/test_cli_exit.py -q",
+      "mode": "automated"
+    },
+    "automated.generated-dependency-map": {
+      "classification": "generated_reference",
+      "evidence": "dependency-map documentation generator",
+      "mode": "automated"
+    },
+    "automated.generated-reference": {
+      "classification": "generated_reference",
+      "evidence": "canonical documentation generator",
+      "mode": "automated"
+    },
+    "automated.installed-base-artifact": {
+      "classification": "safe_automated_command",
+      "evidence": "fixed installed-artifact documentation scenarios",
+      "mode": "automated"
+    },
+    "automated.release-workflow-policy": {
+      "classification": "safe_automated_command",
+      "evidence": "make release-workflow-policy-check",
+      "mode": "automated"
+    },
+    "automated.roadmap-contract": {
+      "classification": "structural_assertion",
+      "evidence": "uv run python scripts/check_roadmap_contract.py",
+      "mode": "automated"
+    },
+    "manual.credentialed-integration": {
+      "classification": "credentialed_manual_integration",
+      "evidence": "docs/release-readiness/rehearsal-evidence.schema.json",
+      "mode": "manual_evidence"
+    },
+    "manual.release-cutover": {
+      "classification": "exact_release_cutover_proof",
+      "evidence": "docs/release-readiness/rehearsal-evidence.schema.json",
+      "mode": "manual_evidence"
+    }
+  },
+  "roadmap": "ROADMAP.md",
+  "schema_version": 2,
+  "verification": {
+    "artifact_smoke": {
+      "evidence": "make artifact-check",
+      "paths": [
+        "README.md",
+        "docs/getting-started.md"
+      ]
+    },
+    "contributor_gate": {
+      "evidence": "QUALITY_BASE=upstream/main make pr-check",
+      "paths": [
+        "CONTRIBUTING.md"
+      ]
+    },
+    "generated_dependency_map": {
+      "evidence": "uv run python scripts/generate_dep_map.py --check",
+      "paths": [
+        "docs/dependency-map.md"
+      ]
+    },
+    "generated_reference": {
+      "evidence": "uv run python scripts/generate_cli_docs.py --check",
+      "paths": [
+        "docs/cli-reference.md"
+      ]
+    },
+    "live_cutover": {
+      "evidence": "ROADMAP.md",
+      "paths": [
+        "ROADMAP.md",
+        "RELEASING.md",
+        "SECURITY.md",
+        "docs/releases.md"
+      ]
+    },
+    "policy_validator": {
+      "evidence": "make quality",
+      "paths": [
+        ".github/PULL_REQUEST_TEMPLATE.md",
+        "AGENTS.md",
+        "GOVERNANCE.md",
+        "SUPPORT.md",
+        "docs/compatibility.md",
+        "docs/dependency-security.md",
+        "docs/reference/config-file.md",
+        "docs/reference/environment-vars.md",
+        "docs/reference/exit-codes.md"
+      ]
+    },
+    "source_contract": {
+      "evidence": "uv run python scripts/check_documentation_contract.py",
+      "paths": [
+        "docs/concepts.md",
+        "docs/adr/0001-local-first-roots.md",
+        "docs/adr/0002-optional-integrations.md",
+        "docs/adr/0003-thin-command-adapters.md",
+        "docs/adr/0004-safe-persistence.md",
+        "docs/adr/0005-verifiable-public-release.md",
+        "docs/design/local-first-cli.md",
+        "docs/guides/gmail.md",
+        "docs/guides/init.md",
+        "docs/guides/morning-brief.md",
+        "docs/guides/pipeline-workflow.md",
+        "docs/guides/salesforce-auth.md",
+        "docs/guides/shadowbot-auth.md",
+        "docs/guides/watchers.md",
+        "docs/index.md",
+        "docs/integrations.md",
+        "docs/privacy.md",
+        "docs/patterns/README.md",
+        "docs/reference/troubleshooting.md",
+        "docs/user-guide.md",
+        "THREAT_MODEL.md"
+      ]
+    }
+  }
+}

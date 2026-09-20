@@ -1,0 +1,120 @@
+{
+  "skill_name": "contract",
+  "static_checks": [
+    {
+      "id": "reads_contracts",
+      "type": "contains",
+      "pattern": "contracts.md",
+      "message": "Must read account contracts.md"
+    },
+    {
+      "id": "produces_report",
+      "type": "contains",
+      "pattern": "Output",
+      "message": "Must produce a structured output report"
+    },
+    {
+      "id": "pdf_skill",
+      "type": "contains",
+      "pattern": "pdf",
+      "message": "Must reference PDF extraction"
+    },
+    {
+      "id": "output_contracts_md",
+      "type": "contains",
+      "pattern": "contracts.md",
+      "message": "Must write to contracts.md"
+    },
+    {
+      "id": "cu_context",
+      "type": "contains_all",
+      "patterns": [
+        "CU",
+        "Consulting Unit"
+      ],
+      "message": "Must handle Consulting Unit redemption context"
+    },
+    {
+      "id": "generates_form",
+      "type": "contains",
+      "pattern": "form",
+      "message": "Must generate the redemption form"
+    },
+    {
+      "id": "rate_card",
+      "type": "contains",
+      "pattern": "rate",
+      "message": "Must reference rate card data"
+    },
+    {
+      "id": "margin",
+      "type": "contains",
+      "pattern": "margin",
+      "message": "Must include margin analysis"
+    },
+    {
+      "id": "approval_tier",
+      "type": "contains",
+      "pattern": "approval",
+      "message": "Must include approval tier information"
+    },
+    {
+      "id": "output_format",
+      "type": "contains",
+      "pattern": "Output",
+      "message": "Must define output format"
+    }
+  ],
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "check this SOW draft against the {{primary_account}} contract",
+      "expected_behavior": "Reads {{primary_account}} contracts.md and playbook, compares SOW against contract terms, flags issues",
+      "assertions": [
+        "Reads accounts/{{primary_account}}/contracts.md directly from disk",
+        "Reads relevant playbook (sow-language-guide.md or similar)",
+        "Produces a structured report flagging compliance issues"
+      ]
+    },
+    {
+      "id": 1,
+      "prompt": "extract the contract from {{primary_account}}'s artifacts folder",
+      "expected_behavior": "Finds PDF in artifacts folder, extracts key terms, writes to contracts.md",
+      "assertions": [
+        "Looks in accounts/{{primary_account}}/artifacts/ for PDF files",
+        "Extracts contract terms (dates, value, scope, T&Cs)",
+        "Writes output to accounts/{{primary_account}}/contracts.md"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "generate a CU redemption form for {{primary_account}} RHOAI services",
+      "expected_behavior": "Reads engagement details, generates the CU redemption form",
+      "assertions": [
+        "Reads the RHOAI services engagement details",
+        "Produces a completed CU Redemption Form"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "what's the rate for a Senior Architect for 3 months at {{primary_account}}?",
+      "expected_behavior": "Looks up Senior Architect T&M rate, calculates 3-month cost, shows margin and approval tier",
+      "assertions": [
+        "Returns the T&M rate for Senior Architect",
+        "Calculates total cost for 3 months",
+        "Shows margin % on the engagement",
+        "States whether approval is needed and at what tier"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "price this engagement: 2 Senior Architects and 1 PM for 6 weeks",
+      "expected_behavior": "Multi-role estimate with total cost, margin, and approval tier",
+      "assertions": [
+        "Prices all three roles separately",
+        "Shows total engagement cost",
+        "States which approval tier applies"
+      ]
+    }
+  ]
+}

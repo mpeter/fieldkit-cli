@@ -1,0 +1,153 @@
+{
+  "skill_name": "grill",
+  "static_checks": [
+    {
+      "id": "native_reader",
+      "type": "contains",
+      "pattern": "fieldkit sf meddpicc <opp_id> --json",
+      "message": "Must read the exact native ClosePlan JSON contract through the installed CLI"
+    },
+    {
+      "id": "exact_deal_selection",
+      "type": "contains",
+      "pattern": "--deal-id <closeplan_deal_id>",
+      "message": "Multiple ClosePlan deals require an operator-selected exact deal ID"
+    },
+    {
+      "id": "native_question_contract",
+      "type": "contains_all",
+      "patterns": [
+        "every exact native question",
+        "question_id",
+        "answer_choices",
+        "score_maximum",
+        "question_type",
+        "template_version",
+        "native_maximums_consistent",
+        "template_metadata_status"
+      ],
+      "message": "Must present each exact question with native mode, version, choices, maxima, and metadata status"
+    },
+    {
+      "id": "initial_writer_boundary",
+      "type": "contains_all",
+      "patterns": [
+        "question_type = Answers",
+        "weight: null",
+        "readable and read-only"
+      ],
+      "message": "Must preserve the Answers-only future writer boundary without inventing weight or mutating other modes"
+    },
+    {
+      "id": "read_states",
+      "type": "contains_all",
+      "patterns": [
+        "Native Qualification",
+        "read",
+        "pending",
+        "unavailable"
+      ],
+      "message": "Must distinguish successful native reads from pending and unavailable states"
+    },
+    {
+      "id": "guarded_writer",
+      "type": "contains_all",
+      "patterns": [
+        "fieldkit sf update-closeplan <opp_id>",
+        "--confirm <plan_id>",
+        "Never substitute `set-field`"
+      ],
+      "message": "Native mutation must use only the guarded preview and confirmation path"
+    },
+    {
+      "id": "external_signals",
+      "type": "contains",
+      "pattern": "Slack and Backstory are context, never confirmation",
+      "message": "External signals remain staged context rather than confirmation"
+    },
+    {
+      "id": "no_stage_advance",
+      "type": "contains",
+      "pattern": "Never advance stages yourself",
+      "message": "The skill must not advance stages"
+    },
+    {
+      "id": "no_frontmatter_writer",
+      "type": "not_contains",
+      "pattern": "fieldkit sf frontmatter",
+      "message": "Must not retain the legacy pursuit-frontmatter writer"
+    },
+    {
+      "id": "no_legacy_write_flag",
+      "type": "not_contains",
+      "pattern": "--meddpicc",
+      "message": "Must not retain the legacy score write flag"
+    },
+    {
+      "id": "no_local_total",
+      "type": "not_contains",
+      "pattern": "/24",
+      "message": "Must not calculate or present the legacy equal-weight total"
+    },
+    {
+      "id": "no_last_scored_write",
+      "type": "not_contains",
+      "pattern": "meddpicc_last_scored",
+      "message": "Must not retain the legacy adjudication timestamp write"
+    },
+    {
+      "id": "no_writer_monopoly",
+      "type": "not_contains",
+      "pattern": "only writer of MEDDPICC scores",
+      "message": "Must not claim an unimplemented writer monopoly"
+    }
+  ],
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "let's qualify the platform modernization deal — is it real?",
+      "expected_behavior": "Resolves one exact Opportunity, reads the live native ClosePlan JSON contract, requires an exact deal ID on ambiguity, presents every exact native question with package mode, numeric template version, choices, maxima, and consistency read-only, stages sourced evidence against question IDs, and reports read/pending/unavailable without inventing a pass, weight, or local total",
+      "assertions": [
+        "Resolves exactly one pursuit and Opportunity ID before reading Salesforce; multiple pursuit matches are presented for operator selection",
+        "Runs `fieldkit sf meddpicc <opp_id> --json` and, on an ambiguous result, lists all returned deals and requires one exact `--deal-id` before coaching",
+        "Presents every selected-deal question and unmapped question with exact question ID, current raw native values, package mode, numeric template version, answer choices, maxima, calculated-total consistency, and metadata status",
+        "Stages each evidence item against an exact question ID with who, when, medium, and source; Slack and Backstory remain labeled context rather than customer confirmation",
+        "Reports Native Qualification as read, pending, or unavailable with a reason; a successful read is not called a qualification pass and no local arithmetic is produced",
+        "Keeps the session read-only and never advances the pursuit stage"
+      ]
+    },
+    {
+      "id": 1,
+      "prompt": "save the MEDDPICC scores we just discussed",
+      "expected_behavior": "Stages evidence against exact native questions and offers only the guarded native preview command when the operator explicitly selects exact package choices",
+      "assertions": [
+        "Does not infer a score from the discussion, category, question wording, or historical local values",
+        "Offers fieldkit sf update-closeplan with exact opportunity, deal, question, and package-native score values for preview only",
+        "Requires review of the resulting plan and its separate --confirm plan ID before Salesforce mutation",
+        "Does not redirect to set-field, write answers, write rollups, change pursuit frontmatter, or claim success from a preview"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "grill opportunity 006000000000000AAA — Salesforce returned two ClosePlan deals",
+      "expected_behavior": "Reports qualification pending, displays every returned exact deal ID, asks the operator to select one, and reruns the native reader with that exact --deal-id before associating evidence with questions",
+      "assertions": [
+        "Does not select the first deal or match one by name, category, or question text",
+        "Lists all exact returned deal IDs and asks for one explicit selection",
+        "Uses the selected ID in `fieldkit sf meddpicc <opp_id> --deal-id <closeplan_deal_id> --json`",
+        "Does not coach or declare current qualification until the exact selected deal is read"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "review this deal, but Salesforce auth is expired and the local pursuit has old qualification values",
+      "expected_behavior": "Reports Native Qualification unavailable because the current native read failed, surfaces the auth action, and does not use historical local values as a current fallback",
+      "assertions": [
+        "Reports the actual authentication failure and required user action",
+        "Labels Native Qualification unavailable",
+        "Does not substitute old local values, zeros, a cached pass, or a health verdict",
+        "Performs no write while authentication is unavailable"
+      ]
+    }
+  ]
+}

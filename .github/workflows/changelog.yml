@@ -1,0 +1,50 @@
+name: Changelog
+
+# Require a changelog.d/ fragment on every PR that changes non-doc files.
+# See changelog.d/README.md for the convention and scripts/check_changelog_fragment.py
+# for the gate itself.
+#
+# This lives in its own workflow rather than inside ci.yml's fast-checks job for
+# two reasons:
+#
+#   1. The `skip-changelog` escape hatch needs the `labeled`/`unlabeled` activity
+#      types. Applying a label does not fire the default
+#      [opened, synchronize, reopened] set, and re-running an existing run replays
+#      the original event payload — so a label applied after the fact would never
+#      be seen. Putting those types on ci.yml instead would re-run the whole suite
+#      (~2-3 min x 5 jobs) on every label change, and auto-update-prs.yml toggles
+#      the `merge-conflict` label programmatically.
+#   2. A failure here should not be reported under the "Lint (ruff)" context, which
+#      says nothing about changelogs.
+#
+# NOTE: "Changelog fragment" is a required status check in branch protection. Do
+# not rename the job — a renamed context never reports, and the PR deadlocks on
+# "Expected — waiting for status to be reported".
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fragment:
+    name: Changelog fragment
+    runs-on: ubuntu-latest
+    steps:
+      # fetch-depth: 0 — the gate resolves merge-base against the PR base SHA.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+      # Pure git + stdlib: no uv sync, no dependency install.
+      - name: Check for changelog fragment
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.sha }}
+          SKIP_CHANGELOG: ${{ contains(github.event.pull_request.labels.*.name, 'skip-changelog') }}
+        run: python3 scripts/check_changelog_fragment.py

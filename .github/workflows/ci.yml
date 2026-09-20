@@ -1,0 +1,329 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+    # NOTE: intentionally NO paths-ignore. Branch protection requires the
+    # aggregate "Required checks" context. A skipped workflow never reports that
+    # context, so a doc-only PR would deadlock. The `changes` job keeps the child
+    # diagnostics visible while allowing ordinary prose-only changes to skip the
+    # expensive suite. Machine-readable policy under docs/release-readiness is
+    # code for this purpose and must run its validators.
+
+permissions:
+  contents: read
+
+# Cancel in-progress runs on the same PR when a new commit is pushed.
+# Saves minutes when CI is still running from a prior push.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  # Detect whether any file outside the doc-only globs changed. The globs mirror
+  # the former paths-ignore list. Output `code=true` means run the real checks.
+  changes:
+    name: Detect code changes
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+      - id: filter
+        name: Determine whether non-doc files changed
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          code=false
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            case "$f" in
+              docs/documentation-contract.json|docs/release-readiness/*.json) code=true ;;
+              docs/*|openspec/*|.opencode/*|.specify/*|*.md) ;;
+              *) code=true ;;
+            esac
+          done < <(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "Non-doc files changed: $code"
+
+  # Scan every commit message in the PR range for PII. Runs even on
+  # doc-only PRs — a real account slug in a commit message lands on main
+  # verbatim under rebase merges regardless of which files changed. This is the
+  # non-bypassable backstop to the local `pii-guard --commit-msg` hook.
+  commit-msg-pii:
+    name: Commit-message PII guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
+        with:
+          enable-cache: true
+          prune-cache: true
+      - name: Install dependencies
+        run: uv sync --locked --all-extras --dev
+      - name: Scan PR commit messages for PII
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: uv run python scripts/check_commit_msgs_pii.py
+
+  # fast-checks consolidates lint + typecheck + quality gates into one job.
+  # Each job pays ~5s of setup overhead (checkout + uv install); merging four
+  # sub-minute checks into one saves 3× that overhead per CI run.
+  fast-checks:
+    name: Lint (ruff)
+    needs: changes
+    runs-on: ubuntu-latest
+    env:
+      GITLEAKS_VERSION: "8.30.1"
+      GITLEAKS_LINUX_X64_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
+        with:
+          enable-cache: true
+          cache-python: true
+          prune-cache: true
+      - name: Verify relative Markdown links
+        run: uvx pre-commit==4.6.1 run markdown-link-check --all-files
+      - name: Install the pinned public-tree secret scanner
+        run: |
+          archive="$RUNNER_TEMP/gitleaks.tar.gz"
+          extraction="$RUNNER_TEMP/gitleaks-extract"
+          binary="$RUNNER_TEMP/gitleaks"
+          curl --fail --location --proto '=https' --tlsv1.2 --retry 3 --connect-timeout 10 --max-time 60 \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            --output "$archive"
+          echo "${GITLEAKS_LINUX_X64_SHA256}  $archive" | sha256sum --check
+          mkdir "$extraction"
+          tar --extract --file "$archive" --directory "$extraction" gitleaks
+          install -m 0755 "$extraction/gitleaks" "$binary"
+          "$binary" version
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Enforce full public-tree safety
+        run: make public-tree-safety
+      - name: Enforce public identity policy
+        run: python3 scripts/check_public_identity.py
+      - name: Install dependencies
+        run: uv sync --locked --all-extras --dev
+      - name: Enforce workflow security policy
+        if: needs.changes.outputs.code == 'true'
+        run: uv run python scripts/check_workflow_security.py
+      - name: Validate public documentation
+        run: make docs-site
+      - name: Enforce supply-chain policy
+        if: needs.changes.outputs.code == 'true'
+        run: uv run python scripts/check_supply_chain_policy.py policy
+      - name: Cache .mypy_cache
+        if: needs.changes.outputs.code == 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: .mypy_cache
+          key: mypy-${{ hashFiles('uv.lock') }}
+          restore-keys: mypy-
+      - name: Run ruff check
+        if: needs.changes.outputs.code == 'true'
+        run: uv run ruff check .
+      - name: Run ruff format check
+        if: needs.changes.outputs.code == 'true'
+        run: uv run ruff format --check .
+      - name: Run mypy
+        if: needs.changes.outputs.code == 'true'
+        run: uv run mypy src/fieldkit/ hooks/*.py --no-error-summary
+      - name: Module boundary check (tach)
+        if: needs.changes.outputs.code == 'true'
+        run: uv run tach check
+      - name: Dependency profile contract
+        if: needs.changes.outputs.code == 'true'
+        run: uv run python scripts/check_dependency_profiles.py
+      - name: Compatibility policy contract
+        if: needs.changes.outputs.code == 'true'
+        run: uv run python scripts/check_compatibility_policy.py
+      - name: Run audit standards check
+        if: needs.changes.outputs.code == 'true'
+        run: make audit-check
+      - name: Click parameter check
+        if: needs.changes.outputs.code == 'true'
+        run: uv run python scripts/check_click_params.py src/fieldkit/commands/
+      - name: CLI reference freshness
+        if: needs.changes.outputs.code == 'true'
+        run: uv run python scripts/generate_cli_docs.py --check
+      - name: Dependency map freshness
+        if: needs.changes.outputs.code == 'true'
+        run: uv run python scripts/generate_dep_map.py --check
+      - name: Skill integrity (dead refs + schema)
+        if: needs.changes.outputs.code == 'true'
+        run: uv run python scripts/check_skill_integrity.py
+      - name: Validate quality workflow contract
+        if: needs.changes.outputs.code == 'true'
+        run: uv run pytest tests/test_quality_contract.py -q -n 0
+
+  test:
+    name: Test (pytest)
+    needs: changes
+    runs-on: ubuntu-latest
+    env:
+      GITLEAKS_VERSION: "8.30.1"
+      GITLEAKS_LINUX_X64_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # Tach compares the explicit PR base and head revisions below.
+          fetch-depth: 0
+      - if: needs.changes.outputs.code == 'true'
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
+        with:
+          enable-cache: true
+          cache-python: true
+          prune-cache: true
+      - name: Install the pinned public-tree secret scanner
+        if: needs.changes.outputs.code == 'true'
+        run: |
+          archive="$RUNNER_TEMP/gitleaks.tar.gz"
+          extraction="$RUNNER_TEMP/gitleaks-extract"
+          binary="$RUNNER_TEMP/gitleaks"
+          curl --fail --location --proto '=https' --tlsv1.2 --retry 3 --connect-timeout 10 --max-time 60 \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            --output "$archive"
+          echo "${GITLEAKS_LINUX_X64_SHA256}  $archive" | sha256sum --check
+          mkdir "$extraction"
+          tar --extract --file "$archive" --directory "$extraction" gitleaks
+          install -m 0755 "$extraction/gitleaks" "$binary"
+          "$binary" version
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Install dependencies
+        if: needs.changes.outputs.code == 'true'
+        run: uv sync --locked --all-extras --dev
+      - name: Run pytest
+        if: needs.changes.outputs.code == 'true'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          mkdir -p reports
+          uv run pytest tests/ --tach --tach-base "$BASE_SHA" --tach-head "$HEAD_SHA" -q -n 0 \
+            --junitxml=reports/pytest.xml
+      - name: Summarize bounded pytest evidence
+        if: always() && needs.changes.outputs.code == 'true'
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: >-
+          uv run python scripts/ci_evidence.py junit
+          --input reports/pytest.xml
+          --output reports/pytest-summary.json
+          --step-summary "$GITHUB_STEP_SUMMARY"
+          --source-revision "$HEAD_SHA"
+          --scope tach-selected
+          --command 'uv run pytest tests/ --tach --tach-base BASE_SHA --tach-head HEAD_SHA -q -n 0'
+      - name: Upload bounded pytest evidence
+        if: always() && needs.changes.outputs.code == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: pytest-tach-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+          path: |
+            reports/pytest.xml
+            reports/pytest-summary.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Behavioral eval smoke test (NO_LLM=1)
+        if: needs.changes.outputs.code == 'true'
+        run: NO_LLM=1 uv run fieldkit skill eval --behavioral --all
+
+  skillsaw:
+    name: Skillsaw (skill lint)
+    needs: changes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - if: needs.changes.outputs.code == 'true'
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
+        with:
+          enable-cache: true
+          cache-python: true
+          prune-cache: true
+      - name: Install dependencies
+        if: needs.changes.outputs.code == 'true'
+        run: uv sync --locked --all-extras --dev
+      - name: Run skillsaw (warn gate + grade density ratchet)
+        if: needs.changes.outputs.code == 'true'
+        run: uv run python scripts/check_skillsaw.py
+
+  agentready:
+    name: AgentReady score gate
+    needs: changes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - if: needs.changes.outputs.code == 'true'
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
+        with:
+          enable-cache: true
+          cache-python: true
+          prune-cache: true
+      - name: Install dependencies
+        if: needs.changes.outputs.code == 'true'
+        run: uv sync --locked --all-extras --dev
+      - name: Run agentready assessment
+        if: needs.changes.outputs.code == 'true'
+        # Assess a clean HEAD worktree so the assessor's naive rglob does not
+        # count .venv (installed above) as source. See scripts/agentready_assess.py.
+        run: uv run python scripts/agentready_assess.py agentready==2.49.0
+      - name: Check score gate
+        if: needs.changes.outputs.code == 'true'
+        run: uv run python scripts/check_agentready.py
+      - name: Upload agentready report
+        if: always() && needs.changes.outputs.code == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: agentready-report-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+          path: .agentready/report-latest.html
+          if-no-files-found: error
+          retention-days: 30
+
+  required-checks:
+    name: Required checks
+    if: always()
+    needs: [changes, commit-msg-pii, fast-checks, test, skillsaw, agentready]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Evaluate every required child
+        env:
+          SOURCE_REVISION: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          CODE_CHANGED: ${{ needs.changes.outputs.code }}
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          COMMIT_MSG_RESULT: ${{ needs.commit-msg-pii.result }}
+          FAST_CHECKS_RESULT: ${{ needs.fast-checks.result }}
+          TEST_RESULT: ${{ needs.test.result }}
+          SKILLSAW_RESULT: ${{ needs.skillsaw.result }}
+          AGENTREADY_RESULT: ${{ needs.agentready.result }}
+        run: |
+          scope=docs-only
+          if [ "$CODE_CHANGED" = true ]; then scope=code; fi
+          mkdir -p reports
+          python3 scripts/ci_evidence.py required \
+            --output reports/required-checks.json \
+            --step-summary "$GITHUB_STEP_SUMMARY" \
+            --source-revision "$SOURCE_REVISION" \
+            --scope "$scope" \
+            --run-url "$RUN_URL" \
+            --child "Detect code changes=$CHANGES_RESULT" \
+            --child "Commit-message PII guard=$COMMIT_MSG_RESULT" \
+            --child "Lint (ruff)=$FAST_CHECKS_RESULT" \
+            --child "Test (pytest)=$TEST_RESULT" \
+            --child "Skillsaw (skill lint)=$SKILLSAW_RESULT" \
+            --child "AgentReady score gate=$AGENTREADY_RESULT"
+      - name: Upload required-check evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: required-checks-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+          path: reports/required-checks.json
+          if-no-files-found: error
+          retention-days: 14

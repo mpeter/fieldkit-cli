@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mpeter/fieldkit-cli/blob/main/docs/release-readiness/public-tree-manifest.schema.json",
+  "title": "fieldkit clean public tree manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "source_commit",
+    "source_tree",
+    "policy_path",
+    "policy_oid",
+    "policy_sha256",
+    "expected_repository",
+    "planned_tag",
+    "exported_tree",
+    "included",
+    "excluded"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "source_commit": {"$ref": "#/$defs/git_oid"},
+    "source_tree": {"$ref": "#/$defs/git_oid"},
+    "policy_path": {"const": "docs/release-readiness/public-tree-policy.json"},
+    "policy_oid": {"$ref": "#/$defs/git_oid"},
+    "policy_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "expected_repository": {"type": "string", "pattern": "^[a-z0-9-]+/fieldkit-cli$"},
+    "planned_tag": {"const": "v1.0.0"},
+    "exported_tree": {"$ref": "#/$defs/git_oid"},
+    "included": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/tree_entry"}
+    },
+    "excluded": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/tree_entry"}
+    }
+  },
+  "$defs": {
+    "git_oid": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "tree_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "mode", "oid", "category", "rule_id"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "mode": {"enum": ["100644", "100755", "120000"]},
+        "oid": {"$ref": "#/$defs/git_oid"},
+        "category": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "rule_id": {"type": "string", "pattern": "^[a-z0-9-]+$"}
+      }
+    }
+  }
+}

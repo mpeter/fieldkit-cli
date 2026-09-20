@@ -1,0 +1,41 @@
+{
+  "skill_name": "task-management",
+  "static_checks": [
+    {
+      "id": "tasks_md",
+      "type": "contains",
+      "pattern": "TASKS.md",
+      "message": "Must manage via TASKS.md"
+    },
+    {
+      "id": "sections",
+      "type": "contains_all",
+      "patterns": [
+        "Active",
+        "Waiting On"
+      ],
+      "message": "Must maintain Active and Waiting On sections"
+    },
+    {
+      "id": "account_tagging",
+      "type": "contains_all",
+      "patterns": [
+        "account name",
+        "slug"
+      ],
+      "message": "Must instruct tagging tasks with the account name and slug (workspace-agnostic)"
+    }
+  ],
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "add a task to follow up with Chandra at <account-slug> next week",
+      "expected_behavior": "Adds a dated follow-up task to the TASKS.md Active section under <account-slug>",
+      "assertions": [
+        "Writes the new task to TASKS.md",
+        "Places it in the Active section under the <account-slug> account",
+        "Includes a target date (next week)"
+      ]
+    }
+  ]
+}

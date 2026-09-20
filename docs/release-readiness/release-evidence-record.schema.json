@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mpeter/fieldkit-cli/blob/main/docs/release-readiness/release-evidence-record.schema.json",
+  "title": "fieldkit typed same-candidate release evidence record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "kind", "status", "candidate", "proof"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {
+      "enum": [
+        "github-release-environment",
+        "pypi-trusted-publisher",
+        "package-name-reservation",
+        "repository-controls",
+        "testpypi-rehearsal",
+        "public-contributor-journeys",
+        "public-user-journeys",
+        "documentation-rehearsals",
+        "frontier-final-review",
+        "cutover-approval"
+      ]
+    },
+    "status": {"const": "pass"},
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "source_sha", "exported_tree", "planned_tag", "artifacts"],
+      "properties": {
+        "repository": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"},
+        "source_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "exported_tree": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "planned_tag": {"type": "string", "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$"},
+        "artifacts": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "sha256"],
+            "properties": {
+              "name": {"type": "string", "minLength": 1},
+              "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+            }
+          }
+        }
+      }
+    },
+    "proof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_uri", "captured_at", "payload", "payload_sha256"],
+      "properties": {
+        "source_uri": {"type": "string", "pattern": "^https://"},
+        "captured_at": {"type": "string", "format": "date-time"},
+        "payload": {"type": "object"},
+        "payload_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    }
+  }
+}

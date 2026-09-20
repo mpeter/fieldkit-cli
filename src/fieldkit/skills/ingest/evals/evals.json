@@ -1,0 +1,142 @@
+{
+  "skill_name": "ingest",
+  "static_checks": [
+    {
+      "id": "no_plaud",
+      "type": "not_contains",
+      "pattern": "plaud-ingest",
+      "message": "plaud-ingest was removed \u2014 must not reference it"
+    },
+    {
+      "id": "pipeline_id",
+      "type": "contains",
+      "pattern": "transcript-ingest",
+      "message": "Must reference transcript-ingest as primary pipeline ID"
+    },
+    {
+      "id": "standard_flow",
+      "type": "contains_all",
+      "patterns": [
+        "fieldkit ingest status",
+        "fieldkit ingest discover",
+        "fieldkit ingest run",
+        "fieldkit ingest backfill"
+      ],
+      "message": "Must document all four ingest commands"
+    },
+    {
+      "id": "dry_run",
+      "type": "contains",
+      "pattern": "--dry-run",
+      "message": "Must show --dry-run option"
+    },
+    {
+      "id": "commands_exist",
+      "type": "commands_exist",
+      "commands": [
+        "fieldkit gmail sync",
+        "fieldkit gmail account-tags",
+        "fieldkit sync",
+        "fieldkit gmail enrich-pursuits"
+      ]
+    },
+    {
+      "id": "no_uv_run",
+      "type": "not_contains",
+      "pattern": "`uv run python",
+      "message": "Must not invoke 'uv run python' as a command (backtick-prefixed)"
+    },
+    {
+      "id": "no_hardcoded_db",
+      "type": "not_contains",
+      "pattern": "data/gmail.db",
+      "message": "Must not hardcode data/gmail.db path"
+    },
+    {
+      "id": "modes_defined",
+      "type": "contains_all",
+      "patterns": [
+        "full",
+        "core",
+        "refresh-only"
+      ],
+      "message": "Must define all three modes"
+    },
+    {
+      "id": "error_handling",
+      "type": "contains",
+      "pattern": "exits non-zero",
+      "message": "Must document non-zero exit handling"
+    }
+  ],
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "ingest transcripts",
+      "expected_behavior": "Runs the standard flow: status \u2192 discover \u2192 run for transcript-ingest pipeline",
+      "assertions": [
+        "Runs 'fieldkit ingest status' first",
+        "Runs 'fieldkit ingest discover --pipeline transcript-ingest'",
+        "Runs 'fieldkit ingest run --pipeline transcript-ingest'"
+      ]
+    },
+    {
+      "id": 1,
+      "prompt": "what ingest pipelines are registered",
+      "expected_behavior": "Runs fieldkit ingest status",
+      "assertions": [
+        "Runs 'fieldkit ingest status' and shows the output"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "find meeting notes without provenance stamps",
+      "expected_behavior": "Runs fieldkit ingest backfill",
+      "assertions": [
+        "Runs 'fieldkit ingest backfill'",
+        "Notes that backfill is read-only and never modifies files"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "refresh gmail",
+      "expected_behavior": "Runs core mode (sync \u2192 account-tags \u2192 enrich-pursuits) without asking which mode",
+      "assertions": [
+        "Invokes 'fieldkit gmail sync'",
+        "Invokes 'fieldkit gmail account-tags'",
+        "Invokes 'fieldkit gmail enrich-pursuits'",
+        "Does NOT run 'fieldkit sync' (core mode skips it)",
+        "Uses 'fieldkit' not 'uv run python -m fieldkit'"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "gmail-refresh full",
+      "expected_behavior": "Runs all 5 pipeline stages including people and enrich-pursuits",
+      "assertions": [
+        "Invokes 'fieldkit sync'",
+        "Invokes 'fieldkit gmail enrich-pursuits'",
+        "Runs all 5 stages: sync, account-tags, people, enrich-pursuits"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "skip sync and just retag emails",
+      "expected_behavior": "Uses refresh-only mode \u2014 only runs account-tags and enrich-pursuits",
+      "assertions": [
+        "Does NOT invoke 'fieldkit gmail sync'",
+        "Invokes 'fieldkit gmail account-tags'",
+        "Invokes 'fieldkit gmail enrich-pursuits'"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "gmail-refresh but gmail sync fails with an API error",
+      "expected_behavior": "Stops after sync failure, reports the error, does not continue to account-tags",
+      "assertions": [
+        "Reports the sync error and stops the pipeline",
+        "Does not proceed to account-tags after sync failure"
+      ]
+    }
+  ]
+}

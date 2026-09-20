@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mpeter/fieldkit-cli/blob/main/docs/release-readiness/release-bundle-provenance.schema.json",
+  "title": "fieldkit local release bundle provenance",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "candidate_report_sha256",
+    "source_commit",
+    "source_tree",
+    "exported_tree",
+    "export_policy_sha256",
+    "expected_repository",
+    "planned_tag",
+    "artifacts",
+    "runtime_sbom",
+    "runtime_requirements",
+    "release_build_requirements",
+    "runtime_wheelhouse",
+    "checksum_manifest"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "candidate_report_sha256": {"$ref": "#/$defs/sha256"},
+    "source_commit": {"$ref": "#/$defs/git_oid"},
+    "source_tree": {"$ref": "#/$defs/git_oid"},
+    "exported_tree": {"$ref": "#/$defs/git_oid"},
+    "export_policy_sha256": {"$ref": "#/$defs/sha256"},
+    "expected_repository": {"type": "string", "pattern": "^[a-z0-9-]+/fieldkit-cli$"},
+    "planned_tag": {"const": "v1.0.0"},
+    "artifacts": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {"$ref": "#/$defs/artifact"}
+    },
+    "runtime_sbom": {"$ref": "#/$defs/runtime_sbom"},
+    "runtime_requirements": {"$ref": "#/$defs/runtime_requirements"},
+    "release_build_requirements": {"$ref": "#/$defs/release_build_requirements"},
+    "runtime_wheelhouse": {"$ref": "#/$defs/runtime_wheelhouse"},
+    "checksum_manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "format_version"],
+      "properties": {
+        "name": {"const": "SHA256SUMS"},
+        "format_version": {"const": 1}
+      }
+    },
+    "runtime_requirements": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "sha256"],
+      "properties": {
+        "name": {"const": "runtime-requirements.txt"},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "runtime_wheelhouse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "sha256"],
+      "properties": {
+        "name": {"const": "runtime-wheelhouse.zip"},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  },
+  "$defs": {
+    "filename": {"type": "string", "pattern": "^[^/\\\\\\u0000\\r\\n]+$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "git_oid": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "kind", "sha256"],
+      "properties": {
+        "name": {"$ref": "#/$defs/filename"},
+        "kind": {"enum": ["wheel", "sdist"]},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "runtime_sbom": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "sha256", "scope"],
+      "properties": {
+        "name": {"const": "locked-graph.cdx.json"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "scope": {"const": "runtime-all-extras"}
+      }
+    }
+    ,
+    "release_build_requirements": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "sha256"],
+      "properties": {
+        "name": {"const": "release-build-requirements.txt"},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}

@@ -1,0 +1,6 @@
+# AgentReady configuration for fieldkit
+# https://github.com/ambient-code/agentready
+
+excluded_attributes:
+  # fieldkit is a CLI tool with no HTTP API surface.
+  - openapi_specs

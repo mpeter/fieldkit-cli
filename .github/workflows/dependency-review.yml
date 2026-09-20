@@ -1,0 +1,50 @@
+name: Dependency review
+
+on:
+  pull_request:
+    paths:
+      - "pyproject.toml"
+      - "uv.lock"
+      - "docs/release-readiness/dependency-security-policy.json"
+      - "scripts/check_supply_chain_policy.py"
+      - "scripts/_supply_chain_policy.py"
+      - ".github/workflows/dependency-review.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  dependency-review:
+    if: github.event.repository.visibility == 'public'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - id: review
+        continue-on-error: true
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294  # v5.0.0
+        with:
+          fail-on-severity: low
+          fail-on-scopes: runtime, development, unknown
+          license-check: false
+          comment-summary-in-pr: never
+          show-patched-versions: true
+      - name: Fail on unreviewed unknown license metadata
+        env:
+          DEPENDENCY_CHANGES: ${{ steps.review.outputs.dependency-changes }}
+          UPSTREAM_OUTCOME: ${{ steps.review.outcome }}
+        run: >-
+          python3 scripts/check_supply_chain_policy.py dependency-review
+          --changes-env DEPENDENCY_CHANGES
+          --upstream-outcome "$UPSTREAM_OUTCOME"
+          --output reports/dependency-review-policy.json
+      - name: Upload dependency review policy evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: dependency-review-${{ github.run_id }}-${{ github.event.pull_request.head.sha }}
+          path: reports/dependency-review-policy.json
+          if-no-files-found: error
+          retention-days: 30

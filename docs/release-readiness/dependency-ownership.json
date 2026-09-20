@@ -1,0 +1,304 @@
+{
+  "schema_version": 1,
+  "captured_on": "2026-09-10",
+  "source_revision": "3b47cac6a7463f32be347358e31567ad4d7c62b6",
+  "last_reconciled_revision": "67ca0e1942992e28ca0ca02229e151665db90e30",
+  "profiles": {
+    "base": {
+      "requirements": [
+        "click",
+        "httpx",
+        "jsonschema",
+        "pydantic",
+        "python-dotenv",
+        "pyyaml",
+        "questionary",
+        "rich",
+        "ruamel-yaml",
+        "tenacity"
+      ],
+      "import_roots": [
+        "click",
+        "dotenv",
+        "httpx",
+        "jsonschema",
+        "pydantic",
+        "questionary",
+        "rich",
+        "ruamel",
+        "tenacity",
+        "yaml"
+      ]
+    },
+    "google": {
+      "requirements": [
+        "google-api-python-client",
+        "google-auth",
+        "google-auth-httplib2",
+        "google-auth-oauthlib"
+      ],
+      "import_roots": [
+        "google.auth",
+        "google.oauth2",
+        "google_auth_httplib2",
+        "google_auth_oauthlib",
+        "googleapiclient"
+      ]
+    },
+    "llm": {
+      "requirements": [
+        "google-cloud-aiplatform",
+        "litellm",
+        "openai"
+      ],
+      "import_roots": [
+        "agentplatform",
+        "litellm",
+        "openai",
+        "vertexai"
+      ]
+    },
+    "web": {
+      "requirements": [
+        "fastapi",
+        "uvicorn"
+      ],
+      "import_roots": [
+        "fastapi",
+        "uvicorn"
+      ]
+    },
+    "chrome-auth": {
+      "requirements": [
+        "cryptography",
+        "secretstorage"
+      ],
+      "import_roots": [
+        "cryptography",
+        "secretstorage"
+      ]
+    },
+    "all": {
+      "composes": [
+        "chrome-auth",
+        "google",
+        "llm",
+        "web"
+      ],
+      "requirements": [
+        "cryptography",
+        "fastapi",
+        "google-api-python-client",
+        "google-auth",
+        "google-auth-httplib2",
+        "google-auth-oauthlib",
+        "google-cloud-aiplatform",
+        "litellm",
+        "openai",
+        "secretstorage",
+        "uvicorn"
+      ]
+    }
+  },
+  "command_groups": {
+    "auth": {
+      "entry_profile": "base",
+      "optional_profiles": [
+        "chrome-auth",
+        "google"
+      ],
+      "boundary_note": "Salesforce auth remains base; Google and browser credential helpers need leaf-level boundaries."
+    },
+    "autonomy": {
+      "entry_profile": "base",
+      "optional_profiles": [],
+      "boundary_note": "Reads existing local health, driver, admission, and spend evidence without an optional integration."
+    },
+    "brief": {
+      "entry_profile": "base",
+      "optional_profiles": [
+        "llm"
+      ],
+      "boundary_note": "The documented no-LLM fallback remains a base capability."
+    },
+    "commands": {
+      "entry_profile": "base",
+      "optional_profiles": []
+    },
+    "companion": {
+      "entry_profile": "base",
+      "optional_profiles": []
+    },
+    "completion": {
+      "entry_profile": "base",
+      "optional_profiles": []
+    },
+    "contact": {
+      "entry_profile": "base",
+      "optional_profiles": []
+    },
+    "doctor": {
+      "entry_profile": "base",
+      "optional_profiles": [
+        "chrome-auth",
+        "google"
+      ],
+      "boundary_note": "General diagnostics must report absent disabled integrations without importing their SDKs."
+    },
+    "driver": {
+      "entry_profile": "llm",
+      "optional_profiles": []
+    },
+    "gmail": {
+      "entry_profile": "base",
+      "optional_profiles": [
+        "google"
+      ],
+      "boundary_note": "Local cache query and analysis remain base; sync and OAuth paths require Google."
+    },
+    "golive": {
+      "entry_profile": "base",
+      "optional_profiles": []
+    },
+    "gtask": {
+      "entry_profile": "base",
+      "optional_profiles": [],
+      "external_runtime_tools": [
+        "gws"
+      ],
+      "boundary_note": "This adapter shells out to gws and does not import a Google Python SDK."
+    },
+    "health": {
+      "entry_profile": "base",
+      "optional_profiles": []
+    },
+    "ingest": {
+      "entry_profile": "base",
+      "optional_profiles": [
+        "google",
+        "llm"
+      ],
+      "boundary_note": "Local provenance/database operations remain base; Docs and model-backed paths are leaf capabilities."
+    },
+    "init": {
+      "entry_profile": "base",
+      "optional_profiles": []
+    },
+    "issue": {
+      "entry_profile": "base",
+      "optional_profiles": []
+    },
+    "meeting": {
+      "entry_profile": "google",
+      "optional_profiles": []
+    },
+    "pipeline": {
+      "entry_profile": "base",
+      "optional_profiles": [
+        "llm"
+      ]
+    },
+    "pursuit": {
+      "entry_profile": "base",
+      "optional_profiles": []
+    },
+    "sf": {
+      "entry_profile": "base",
+      "optional_profiles": []
+    },
+    "shadowbot": {
+      "entry_profile": "base",
+      "optional_profiles": [
+        "chrome-auth"
+      ],
+      "boundary_note": "HTTP and explicit-token paths remain base; browser credential extraction requires chrome-auth."
+    },
+    "skill": {
+      "entry_profile": "base",
+      "optional_profiles": [
+        "llm"
+      ]
+    },
+    "sync": {
+      "entry_profile": "base",
+      "optional_profiles": [
+        "google"
+      ]
+    },
+    "version": {
+      "entry_profile": "base",
+      "optional_profiles": []
+    },
+    "watch": {
+      "entry_profile": "base",
+      "optional_profiles": [
+        "llm"
+      ]
+    },
+    "web": {
+      "entry_profile": "web",
+      "optional_profiles": [
+        "llm"
+      ],
+      "boundary_note": "Serving requires web; chat/model features remain separately optional."
+    }
+  },
+  "metadata_reconciliation": {
+    "move_from_base_to_google": [
+      "google-api-python-client",
+      "google-auth-httplib2",
+      "google-auth-oauthlib"
+    ],
+    "move_from_base_to_llm": [
+      "google-cloud-aiplatform",
+      "litellm"
+    ],
+    "move_from_base_to_web": [
+      "fastapi",
+      "uvicorn"
+    ],
+    "already_optional_chrome_auth": [
+      "cryptography",
+      "secretstorage"
+    ],
+    "add_as_explicit_google_dependency": [
+      "google-auth"
+    ],
+    "add_as_explicit_base_dependency": [
+      "jsonschema"
+    ],
+    "add_as_explicit_llm_dependency": [
+      "openai"
+    ]
+  },
+  "uncertain_or_dynamic_edges": [
+    {
+      "edge": "importlib command tables",
+      "disposition": "The top-level and several nested Click groups import module paths from dictionaries; validators must parse declared tables or exercise command resolution rather than relying only on static import statements."
+    },
+    {
+      "edge": "google namespace packages",
+      "disposition": "google-auth and google-cloud-aiplatform share the google namespace; ownership is assigned to the narrow imported subpackages, not to the ambiguous root alone."
+    },
+    {
+      "edge": "jsonschema direct import",
+      "disposition": "Salesforce frontmatter validation imports jsonschema directly even though it currently arrives transitively; make it an explicit base requirement and do not silently skip schema validation."
+    },
+    {
+      "edge": "openai direct imports",
+      "disposition": "fieldkit imports openai directly in LLM code even though it currently arrives transitively through LiteLLM; make it an explicit llm requirement."
+    },
+    {
+      "edge": "google-auth direct imports",
+      "disposition": "fieldkit imports google.auth and google.oauth2 directly even though google-auth currently arrives transitively; make it an explicit google requirement."
+    },
+    {
+      "edge": "ruamel namespace metadata",
+      "disposition": "The installed ruamel-yaml distribution does not report a top-level package through packages_distributions(); source imports establish the ruamel root ownership."
+    },
+    {
+      "edge": "optional imports inside functions",
+      "disposition": "LiteLLM, OpenAI, Google, SecretStorage, cryptography, and Uvicorn include function-local imports; the validator must scan all AST scopes."
+    }
+  ]
+}

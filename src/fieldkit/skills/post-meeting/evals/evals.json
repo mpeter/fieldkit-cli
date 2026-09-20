@@ -1,0 +1,132 @@
+{
+  "skill_name": "post-meeting",
+  "static_checks": [
+    {
+      "id": "ingest_step",
+      "type": "contains_all",
+      "patterns": [
+        "fieldkit ingest discover",
+        "fieldkit ingest run"
+      ],
+      "message": "Must reference both ingest discover and ingest run commands"
+    },
+    {
+      "id": "draft_only",
+      "type": "contains",
+      "pattern": "draft",
+      "message": "Must create Gmail draft — not send"
+    },
+    {
+      "id": "no_send",
+      "type": "not_contains",
+      "pattern": "send the email",
+      "message": "Must never send email — create draft only"
+    },
+    {
+      "id": "native_evidence_staging",
+      "type": "contains",
+      "pattern": "exact native",
+      "message": "Must stage evidence against exact native ClosePlan question IDs"
+    },
+    {
+      "id": "sf_next_steps",
+      "type": "contains",
+      "pattern": "set-next-steps",
+      "message": "Must offer to write SF Next Steps via fieldkit sf set-next-steps"
+    },
+    {
+      "id": "task_creation",
+      "type": "contains",
+      "pattern": "TASKS.md",
+      "message": "Must create tasks in TASKS.md from commitments"
+    },
+    {
+      "id": "meeting_note",
+      "type": "contains",
+      "pattern": "meetings/",
+      "message": "Must save structured meeting note to accounts/<account>/meetings/"
+    },
+    {
+      "id": "flags_documented",
+      "type": "contains_all",
+      "patterns": [
+        "--skip-email",
+        "--skip-meddpicc",
+        "--quick",
+        "--from-notes"
+      ],
+      "message": "All four flags must be documented"
+    },
+    {
+      "id": "confirm_before_write",
+      "type": "contains",
+      "pattern": "yes / edit / skip",
+      "message": "Must confirm with user before writing changes"
+    },
+    {
+      "id": "qualification_review_offer",
+      "type": "contains",
+      "pattern": "/grill",
+      "message": "Must offer a read-only native qualification review when evidence changed"
+    },
+    {
+      "id": "no_legacy_writer",
+      "type": "not_contains",
+      "pattern": "fieldkit sf frontmatter",
+      "message": "Must not retain the former local score writer"
+    },
+    {
+      "id": "no_local_total",
+      "type": "not_contains",
+      "pattern": "/24",
+      "message": "Must not claim a local qualification total"
+    }
+  ],
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "/post-meeting {{primary_account}}",
+      "expected_behavior": "Resolves the meeting, ingests and extracts facts, creates a Gmail draft, stages evidence against exact native ClosePlan question IDs in read-only mode, creates TASKS.md entries, and saves the meeting note",
+      "assertions": [
+        "Resolves most recent {{primary_account}} meeting context",
+        "Runs ingest to find today's transcript",
+        "Extracts attendees, topics, their_commits, and our_commits",
+        "Creates a Gmail draft via gws gmail users drafts create — does not send under any circumstances",
+        "Fetches the native ClosePlan contract when linked, stages evidence against exact question IDs, and hands off to /grill without writing qualification state",
+        "Creates task entries from commitments in TASKS.md",
+        "Saves meeting note to accounts/{{primary_account}}/meetings/"
+      ]
+    },
+    {
+      "id": 1,
+      "prompt": "/post-meeting {{primary_account}} {{primary_pursuit}} --quick",
+      "expected_behavior": "Quick mode: extract facts and tasks only — no email draft or native qualification review",
+      "assertions": [
+        "Extracts facts from {{primary_account}} {{primary_pursuit}} meeting context",
+        "Creates task entries from our_commits and next_steps",
+        "Skips email draft step (--quick implies no email)",
+        "Skips native qualification evidence staging (--quick)"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "/post-meeting {{primary_account}} --skip-email",
+      "expected_behavior": "Skips email draft, still stages native qualification evidence read-only, creates tasks, and saves the meeting note",
+      "assertions": [
+        "Skips email draft step (--skip-email flag)",
+        "Still stages evidence against exact native ClosePlan question IDs for /grill without writing",
+        "Still creates TASKS.md entries from commitments",
+        "Still saves structured meeting note to accounts/{{primary_account}}/meetings/"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "please send the follow-up email to the customer contact after the meeting",
+      "expected_behavior": "Creates Gmail draft only — does NOT send autonomously",
+      "assertions": [
+        "Creates a Gmail draft via gws gmail users drafts create addressed to the relevant contact",
+        "Does not send the email — user must review and send manually from Gmail"
+      ]
+    }
+  ]
+}

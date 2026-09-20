@@ -1,0 +1,39 @@
+{
+  "skill_name": "pickup",
+  "static_checks": [
+    {
+      "id": "lists_handoffs_dir",
+      "type": "contains",
+      "pattern": ".planning/handoffs/",
+      "message": "Must look for handoff files under .planning/handoffs/"
+    },
+    {
+      "id": "confirms_before_resuming",
+      "type": "contains",
+      "pattern": "Confirm before proceeding",
+      "message": "Must get operator confirmation before acting on a handoff's next step"
+    }
+  ],
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "/pickup 2026-07-20-fix-issue-42.md",
+      "expected_behavior": "Reads the named handoff file, presents a summary (intent, current work, pending tasks, next step), flags anything that looks stale, and asks for confirmation before proceeding",
+      "assertions": [
+        "Reads the specified handoff file in full before summarizing",
+        "Presents the handoff summary to the operator",
+        "Asks for confirmation before executing the next step",
+        "Does not treat the handoff's next step as pre-authorized"
+      ]
+    },
+    {
+      "id": 1,
+      "prompt": "/pickup",
+      "expected_behavior": "Lists available handoffs from .planning/handoffs/ and asks the operator which one to resume",
+      "assertions": [
+        "Lists files in .planning/handoffs/ when no file is specified",
+        "Asks the operator to select one rather than guessing"
+      ]
+    }
+  ]
+}

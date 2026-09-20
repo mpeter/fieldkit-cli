@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mpeter/fieldkit-cli/blob/main/docs/release-readiness/release-promotion-evidence.schema.json",
+  "title": "fieldkit release promotion evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "kind", "status", "source_repository", "source_ref", "source_revision", "run_id", "run_attempt", "outcomes", "boundary_actions", "candidate"],
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"const": "success"}}, "required": ["status"]},
+      "then": {
+        "properties": {
+          "candidate": {"type": "object"},
+          "outcomes": {
+            "properties": {
+              "build": {"const": "success"}, "validate": {"const": "success"},
+              "attest": {"const": "success"}, "publish_pypi": {"const": "success"},
+              "consumer_pypi": {"const": "success"}, "github_release": {"const": "success"}
+            }
+          }
+        }
+      }
+    }
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"const": "release-promotion"},
+    "status": {"enum": ["success", "failed"]},
+    "source_repository": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"},
+    "source_ref": {"type": "string", "pattern": "^refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "source_revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "run_id": {"type": "integer", "minimum": 1},
+    "run_attempt": {"type": "integer", "minimum": 1},
+    "outcomes": {"$ref": "#/$defs/boundaries"},
+    "boundary_actions": {"$ref": "#/$defs/actionBoundaries"},
+    "candidate": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["repository", "planned_tag", "source_commit", "artifacts"],
+          "properties": {
+            "repository": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"},
+            "planned_tag": {"type": "string", "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$"},
+            "source_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+            "artifacts": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "sha256", "kind"],
+                "properties": {
+                  "name": {"type": "string", "pattern": "^[^/\\\\\\u0000\\r\\n]+$"},
+                  "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                  "kind": {"type": "string"}
+                }
+              },
+              "allOf": [
+                {"contains": {"properties": {"kind": {"const": "wheel"}}, "required": ["kind"]}},
+                {"contains": {"properties": {"kind": {"const": "sdist"}}, "required": ["kind"]}}
+              ]
+            }
+          }
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "boundaries": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["build", "validate", "attest", "publish_pypi", "consumer_pypi", "github_release"],
+      "properties": {
+        "build": {"enum": ["success", "failure", "cancelled", "skipped", "missing"]},
+        "validate": {"enum": ["success", "failure", "cancelled", "skipped", "missing"]},
+        "attest": {"enum": ["success", "failure", "cancelled", "skipped", "missing"]},
+        "publish_pypi": {"enum": ["success", "failure", "cancelled", "skipped", "missing"]},
+        "consumer_pypi": {"enum": ["success", "failure", "cancelled", "skipped", "missing"]},
+        "github_release": {"enum": ["success", "failure", "cancelled", "skipped", "missing"]}
+      }
+    },
+    "actionBoundaries": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["build", "validate", "attest", "publish_pypi", "consumer_pypi", "github_release"],
+      "properties": {
+        "build": {"const": "scripts/check_public_candidate.py"},
+        "validate": {"const": "scripts/release_bundle.py"},
+        "attest": {"const": "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6"},
+        "publish_pypi": {"const": "pypa/gh-action-pypi-publish@ec4db0b4ddc65acdf4bff5fa45ac92d78b56bdf0"},
+        "consumer_pypi": {"const": "scripts/check_release_consumer.py"},
+        "github_release": {"const": "gh release create"}
+      }
+    }
+  }
+}
