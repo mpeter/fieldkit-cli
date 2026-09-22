@@ -39,6 +39,11 @@ from fieldkit.shadowbot.auth import ShadowbotAuthError
 pytestmark = pytest.mark.unit
 
 
+def test_exit_code_constants_form_the_documented_taxonomy() -> None:
+    """The public exit-code contract remains a dense 0 through 3 taxonomy."""
+    assert (EXIT_SUCCESS, EXIT_PARTIAL, EXIT_AUTH, EXIT_DATA) == (0, 1, 2, 3)
+
+
 # ── TestCliMain (flattened) ─────────────────────────────────────────────────
 
 
