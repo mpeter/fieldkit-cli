@@ -40,6 +40,7 @@ _PUBLIC_PAGES = frozenset(
         "adr/0003-thin-command-adapters/index.html",
         "adr/0004-safe-persistence/index.html",
         "adr/0005-verifiable-public-release/index.html",
+        "adr/0006-opt-in-openshell-workers/index.html",
         "cli-reference/index.html",
         "compatibility/index.html",
         "concepts/index.html",

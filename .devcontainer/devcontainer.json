@@ -1,16 +1,18 @@
 {
-  "_comment": "ANTHROPIC_API_KEY=gateway is a sentinel value indicating the uf gateway proxy handles authentication. When the gateway is not running, OpenCode uses its own configured provider.",
-  "containerEnv": {
-    "ANTHROPIC_API_KEY": "gateway",
-    "ANTHROPIC_BASE_URL": "http://host.containers.internal:53147"
+  "name": "fieldkit contributor workspace",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
   },
-  "forwardPorts": [
-    4096
-  ],
-  "image": "quay.io/unbound-force/opencode-dev:latest",
-  "postStartCommand": "nohup opencode serve --port 4096 > /tmp/opencode-server.log 2>&1 &",
-  "remoteUser": "dev",
+  "containerUser": "sandbox",
+  "remoteUser": "sandbox",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/sandbox/workspace,type=bind,relabel=shared",
+  "workspaceFolder": "/sandbox/workspace",
+  "containerEnv": {
+    "UV_NO_SYNC": "1"
+  },
+  "shutdownAction": "stopContainer",
   "runArgs": [
-    "--userns=keep-id"
+    "--userns=keep-id:uid=1001,gid=1001"
   ]
 }

@@ -4,10 +4,53 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Provide reviewable pull-request evidence.",
-      "source_fingerprint": "sha256:dcdd4fb6ecd21f44c8855bfb620cc6f0535acab0a13333d8ad7d35c9a70bfed6",
+      "source_fingerprint": "sha256:f70d7cd1ff2e31eb49ff33773743def2973428e4840d276144682b0c785e9e4f",
       "sources": [
         "CONTRIBUTING.md",
         ".github/workflows/ci.yml"
+      ]
+    },
+    ".openshell/README.md": {
+      "content_type": "how-to",
+      "fenced_blocks": [
+        {
+          "classification": "credentialed_manual_integration",
+          "id": "openshell.readme.block-1",
+          "language": "console",
+          "sha256": "fbe47b0b3e23ece335fe25bf99213d23b85927053d5def6cf35f03a212991714",
+          "verification_id": "manual.credentialed-integration"
+        },
+        {
+          "classification": "credentialed_manual_integration",
+          "id": "openshell.readme.block-2",
+          "language": "console",
+          "sha256": "138ee13fe43d88177b7fc6487ede874e7409c7fe29e65338389b462fb5b3ad9d",
+          "verification_id": "manual.credentialed-integration"
+        },
+        {
+          "classification": "credentialed_manual_integration",
+          "id": "openshell.readme.block-3",
+          "language": "console",
+          "sha256": "0135ff5ad68514222b186fbf894272cfbb9931a50eb7de0e8e08aaa6dbd7afb6",
+          "verification_id": "manual.credentialed-integration"
+        },
+        {
+          "classification": "credentialed_manual_integration",
+          "id": "openshell.readme.block-4",
+          "language": "console",
+          "sha256": "bf9f05329b2b03cc690062b106ed0e71de1af978c355158feb26feea892ddd60",
+          "verification_id": "manual.credentialed-integration"
+        }
+      ],
+      "reader_action": "Prepare the local runtime and run an opt-in coding worker with reviewed inputs.",
+      "source_fingerprint": "sha256:489ff01e5e3ebf7eb113d2be63a42b084bb15feb98c0dda9f72e591f423874ee",
+      "sources": [
+        ".devcontainer/Dockerfile",
+        ".devcontainer/codex_with_provider.py",
+        ".openshell/*.yaml",
+        ".openshell/workspace.json",
+        "scripts/openshell_workspace.py",
+        "scripts/openshell_codex.py"
       ]
     },
     "AGENTS.md": {
@@ -300,6 +343,19 @@
       "sources": [
         "scripts/export_public_tree.py",
         "scripts/check_public_tree_safety.py"
+      ]
+    },
+    "docs/adr/0006-opt-in-openshell-workers.md": {
+      "content_type": "policy",
+      "fenced_blocks": [],
+      "reader_action": "Choose the shared image and project-owned runtime boundary for an opt-in agent worker.",
+      "source_fingerprint": "sha256:d9b6113f0421e8323ae5755eb6795823fcf49d31d0faa3a61a92d022c1d0954f",
+      "sources": [
+        ".devcontainer/Dockerfile",
+        ".openshell/*.yaml",
+        ".openshell/workspace.json",
+        "scripts/openshell_workspace.py",
+        "scripts/openshell_codex.py"
       ]
     },
     "docs/cli-reference.md": {
@@ -1913,7 +1969,7 @@
       "content_type": "overview",
       "fenced_blocks": [],
       "reader_action": "Choose the documentation path for a task.",
-      "source_fingerprint": "sha256:9cf5fea3c375cf6d69242c963164b2d0d2c5668886ce666775d508e9bf8bb151",
+      "source_fingerprint": "sha256:555591fdad60eab44cafdf7250894a9d118fbbea5c4344f3069e7aef739afdd2",
       "sources": [
         "mkdocs.yml",
         "pyproject.toml"
@@ -2380,7 +2436,9 @@
         "docs/patterns/README.md",
         "docs/reference/troubleshooting.md",
         "docs/user-guide.md",
-        "THREAT_MODEL.md"
+        "THREAT_MODEL.md",
+        "docs/adr/0006-opt-in-openshell-workers.md",
+        ".openshell/README.md"
       ]
     }
   }

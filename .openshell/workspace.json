@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "workspace": "fieldkit-cli",
+  "image": "localhost/fieldkit-workbench:0.1",
+  "policy": ".openshell/policy.yaml",
+  "snapshot": "git-head",
+  "inputs": [],
+  "environment": {},
+  "provider_required": false,
+  "result_path": "/sandbox/workspace"
+}

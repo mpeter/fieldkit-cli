@@ -34,6 +34,10 @@ make bootstrap
 install fieldkit globally, read fieldkit credentials, or require a separate workspace. Run commands
 from the checkout with `uv run fieldkit` so you test the branch you are editing.
 
+For optional isolated agent work, see the [OpenShell worker guide](.openshell/README.md).
+Its shared image also supplies the devcontainer environment; OpenShell runtime
+policies and credentials are configured separately.
+
 ## Make a change
 
 Keep each pull request focused on one problem. Preserve the architecture documented in the repository:
