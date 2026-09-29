@@ -307,7 +307,7 @@ def execute(
     with tempfile.TemporaryDirectory(prefix="fieldkit-openshell-") as staging:
         baseline = Path(staging) / "input"
         receipt["head"] = snapshot(project, manifest, inputs, baseline)
-        output.mkdir(parents=True, exist_ok=False)
+        output.mkdir(parents=True, mode=0o700, exist_ok=False)
         shutil.copytree(baseline, output / "input")
         create = [
             *prefix,

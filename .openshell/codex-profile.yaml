@@ -1,5 +1,5 @@
 id: fieldkit-codex
-display_name: Fieldkit Codex worker
+display_name: fieldkit-cli Codex worker
 description: Host subscription access token for a bounded coding worker
 category: inference
 inference_capable: true

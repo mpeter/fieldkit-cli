@@ -17,7 +17,7 @@
           "classification": "credentialed_manual_integration",
           "id": "openshell.readme.block-1",
           "language": "console",
-          "sha256": "fbe47b0b3e23ece335fe25bf99213d23b85927053d5def6cf35f03a212991714",
+          "sha256": "122fa2c8d62d54a687b558a893824ee3a944de15e16064c14c518a1aa21454f2",
           "verification_id": "manual.credentialed-integration"
         },
         {
@@ -43,7 +43,7 @@
         }
       ],
       "reader_action": "Prepare the local runtime and run an opt-in coding worker with reviewed inputs.",
-      "source_fingerprint": "sha256:489ff01e5e3ebf7eb113d2be63a42b084bb15feb98c0dda9f72e591f423874ee",
+      "source_fingerprint": "sha256:0fb2afd73b3dd7c54715b9a1ee3ad4417b1cdcff7753398c36d91451d803129b",
       "sources": [
         ".devcontainer/Dockerfile",
         ".devcontainer/codex_with_provider.py",
@@ -349,7 +349,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Choose the shared image and project-owned runtime boundary for an opt-in agent worker.",
-      "source_fingerprint": "sha256:d9b6113f0421e8323ae5755eb6795823fcf49d31d0faa3a61a92d022c1d0954f",
+      "source_fingerprint": "sha256:39c73b0e43319638e14bd5b7ac434db2439d9fd86082212a03fd63bf852e4963",
       "sources": [
         ".devcontainer/Dockerfile",
         ".openshell/*.yaml",

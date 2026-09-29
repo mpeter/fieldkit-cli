@@ -193,6 +193,7 @@ def test_receipt_and_cleanup_on_command_failure(
     receipt = json.loads((output / "receipt.json").read_text(encoding="utf-8"))
     assert receipt["command_exit"] == command_exit
     assert receipt["cleanup_verified"] is True
+    assert (project / "run").stat().st_mode & 0o777 == 0o700
     assert receipt["result_downloaded"] is True
     assert "MODEL" not in receipt
     assert (output / "input/source.py").read_text(encoding="utf-8") == "baseline\n"
