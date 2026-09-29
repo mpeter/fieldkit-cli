@@ -17,7 +17,7 @@
           "classification": "credentialed_manual_integration",
           "id": "openshell.readme.block-1",
           "language": "console",
-          "sha256": "122fa2c8d62d54a687b558a893824ee3a944de15e16064c14c518a1aa21454f2",
+          "sha256": "e835d6dcb501e59ef80f608051c635279dd07694b2973c6af363b750bce259e4",
           "verification_id": "manual.credentialed-integration"
         },
         {
@@ -33,24 +33,15 @@
           "language": "console",
           "sha256": "0135ff5ad68514222b186fbf894272cfbb9931a50eb7de0e8e08aaa6dbd7afb6",
           "verification_id": "manual.credentialed-integration"
-        },
-        {
-          "classification": "credentialed_manual_integration",
-          "id": "openshell.readme.block-4",
-          "language": "console",
-          "sha256": "bf9f05329b2b03cc690062b106ed0e71de1af978c355158feb26feea892ddd60",
-          "verification_id": "manual.credentialed-integration"
         }
       ],
-      "reader_action": "Prepare the local runtime and run an opt-in coding worker with reviewed inputs.",
-      "source_fingerprint": "sha256:0fb2afd73b3dd7c54715b9a1ee3ad4417b1cdcff7753398c36d91451d803129b",
+      "reader_action": "Prepare the local runtime and run an explicit bounded task with reviewed inputs.",
+      "source_fingerprint": "sha256:3665609552971a2328419accf31806a3a450342905dd30ee70ea611b919f8358",
       "sources": [
         ".devcontainer/Dockerfile",
-        ".devcontainer/codex_with_provider.py",
         ".openshell/*.yaml",
         ".openshell/workspace.json",
-        "scripts/openshell_workspace.py",
-        "scripts/openshell_codex.py"
+        "scripts/openshell_workspace.py"
       ]
     },
     "AGENTS.md": {
@@ -348,14 +339,13 @@
     "docs/adr/0006-opt-in-openshell-workers.md": {
       "content_type": "policy",
       "fenced_blocks": [],
-      "reader_action": "Choose the shared image and project-owned runtime boundary for an opt-in agent worker.",
-      "source_fingerprint": "sha256:39c73b0e43319638e14bd5b7ac434db2439d9fd86082212a03fd63bf852e4963",
+      "reader_action": "Choose the shared tools image and project-owned runtime boundary for an explicit bounded task.",
+      "source_fingerprint": "sha256:3665609552971a2328419accf31806a3a450342905dd30ee70ea611b919f8358",
       "sources": [
         ".devcontainer/Dockerfile",
         ".openshell/*.yaml",
         ".openshell/workspace.json",
-        "scripts/openshell_workspace.py",
-        "scripts/openshell_codex.py"
+        "scripts/openshell_workspace.py"
       ]
     },
     "docs/cli-reference.md": {

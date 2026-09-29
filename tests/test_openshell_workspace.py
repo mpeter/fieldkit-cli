@@ -14,6 +14,7 @@ pytestmark = pytest.mark.unit
 
 @pytest.fixture
 def project(tmp_path: Path) -> Path:
+    """Create a fictional project with no host configuration or credentials."""
     (tmp_path / "policy.yaml").write_text("version: 1\n", encoding="utf-8")
     (tmp_path / "source.py").write_text("baseline\n", encoding="utf-8")
     (tmp_path / "manifest.json").write_text(
@@ -40,11 +41,13 @@ def project(tmp_path: Path) -> Path:
     ["../outside", "/outside", ".git/config", ".env", "creds/credentials.json", "private.pem", ".codex/auth.json"],
 )
 def test_rejects_unsafe_inputs(project: Path, name: str) -> None:
+    """Traversal and recognized credential paths fail before file selection."""
     with pytest.raises(ValueError, match=r"relative|noncredential"):
         workspace.local_path(project, name)
 
 
 def test_rejects_symlink(project: Path) -> None:
+    """Even links pointing inside the project are refused as task inputs."""
     (project / "link.py").symlink_to(project / "source.py")
     with pytest.raises(ValueError, match="symlink"):
         workspace.local_path(project, "link.py")
@@ -62,6 +65,7 @@ def test_rejects_symlink(project: Path) -> None:
     ],
 )
 def test_manifest_validation(project: Path, change: dict[str, object]) -> None:
+    """Unknown fields and malformed security declarations fail closed."""
     path = project / "manifest.json"
     data = json.loads(path.read_text(encoding="utf-8"))
     data.update(change)
@@ -71,6 +75,7 @@ def test_manifest_validation(project: Path, change: dict[str, object]) -> None:
 
 
 def test_selected_snapshot_copies_only_explicit_files(project: Path, tmp_path: Path) -> None:
+    """Unselected local files stay outside an operational snapshot."""
     (project / "unselected.py").write_text("private", encoding="utf-8")
     manifest = workspace.load_manifest(project, "manifest.json")
     destination = tmp_path / "baseline"
@@ -80,6 +85,7 @@ def test_selected_snapshot_copies_only_explicit_files(project: Path, tmp_path: P
 
 
 def test_git_snapshot_ignores_dirty_and_untracked(project: Path) -> None:
+    """Coding snapshots use committed contents regardless of local drift."""
     for args in (
         ["init"],
         ["add", "source.py"],
@@ -97,6 +103,7 @@ def test_git_snapshot_ignores_dirty_and_untracked(project: Path) -> None:
 
 
 def test_git_snapshot_excludes_native_auth_store(project: Path) -> None:
+    """Credential stores are excluded even if accidentally tracked by Git."""
     (project / ".codex").mkdir()
     (project / ".codex/auth.json").write_text('{"refresh_token":"fictional"}', encoding="utf-8")
     for args in (
@@ -114,6 +121,7 @@ def test_git_snapshot_excludes_native_auth_store(project: Path) -> None:
 
 @pytest.mark.parametrize("signum", [signal.SIGINT, signal.SIGTERM])
 def test_cleanup_defers_cancellation(signum: int) -> None:
+    """Ordinary signals wait until deletion and receipt persistence complete."""
     steps: list[str] = []
     previous = signal.getsignal(signum)
     with pytest.raises(KeyboardInterrupt), workspace.defer_cancellation():
@@ -126,11 +134,14 @@ def test_cleanup_defers_cancellation(signum: int) -> None:
 
 @pytest.mark.parametrize("metadata", [{"API_KEY": "fictional"}, {"CLAUDE_CODE_SKIP_VERTEX_AUTH": "token"}])
 def test_environment_cannot_carry_credentials(metadata: dict[str, str]) -> None:
+    """Execution metadata cannot be used as a bearer transport."""
     with pytest.raises(ValueError, match="nonsecret"):
         workspace.validate_environment(metadata)
 
 
 def test_dry_run_does_not_run_subprocess_or_write(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Planning a run creates neither control processes nor artifacts."""
+
     def forbidden(*args: object, **kwargs: object) -> None:
         pytest.fail("dry-run attempted subprocess")
 
@@ -148,6 +159,7 @@ def test_dry_run_does_not_run_subprocess_or_write(project: Path, monkeypatch: py
 def test_provider_failure_prevents_create_and_upload(
     project: Path, monkeypatch: pytest.MonkeyPatch, provider: str | None
 ) -> None:
+    """Missing or wrong-type providers fail before provisioning a worker."""
     calls: list[list[str]] = []
 
     def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
@@ -170,6 +182,7 @@ def test_provider_failure_prevents_create_and_upload(
 def test_receipt_and_cleanup_on_command_failure(
     project: Path, monkeypatch: pytest.MonkeyPatch, command_exit: int
 ) -> None:
+    """Failed task exits still collect output and record verified cleanup."""
     calls: list[list[str]] = []
 
     def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
@@ -202,6 +215,7 @@ def test_receipt_and_cleanup_on_command_failure(
 
 
 def test_create_failure_still_deletes(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed create call can leave a resource that must be deleted."""
     calls: list[list[str]] = []
 
     def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
@@ -225,6 +239,8 @@ def test_create_failure_still_deletes(project: Path, monkeypatch: pytest.MonkeyP
 def test_cleanup_failure_keeps_receipt_truthful(
     project: Path, monkeypatch: pytest.MonkeyPatch, cancelled: bool
 ) -> None:
+    """Deletion failures remain failures even when cancellation also arrives."""
+
     def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
         if "delete" in args:
             if cancelled:
@@ -243,6 +259,7 @@ def test_cleanup_failure_keeps_receipt_truthful(
 
 
 def test_git_snapshot_rejects_committed_symlink(project: Path) -> None:
+    """Tracked links cannot introduce paths outside the source snapshot."""
     (project / "link.py").symlink_to("source.py")
     for args in (
         ["init"],
@@ -258,14 +275,16 @@ def test_git_snapshot_rejects_committed_symlink(project: Path) -> None:
 
 
 def test_vertex_mode_is_nonsecret(project: Path) -> None:
+    """A project routing identifier may be passed as nonsecret metadata."""
     path = project / "manifest.json"
     data = json.loads(path.read_text(encoding="utf-8"))
-    data["environment"] = {"CLAUDE_CODE_USE_VERTEX": "1", "CLAUDE_CODE_SKIP_VERTEX_AUTH": "1"}
+    data["environment"] = {"FIELDKIT_VERTEX_PROJECT_ID": "example-project"}
     path.write_text(json.dumps(data), encoding="utf-8")
     assert workspace.load_manifest(project, "manifest.json").environment == data["environment"]
 
 
 def test_selected_input_preserves_executable_mode(project: Path) -> None:
+    """Selected task scripts retain their executable permission bits."""
     source = project / "source.py"
     source.chmod(0o755)
     manifest = workspace.load_manifest(project, "manifest.json")
@@ -274,6 +293,7 @@ def test_selected_input_preserves_executable_mode(project: Path) -> None:
 
 
 def test_download_link_is_not_published(tmp_path: Path) -> None:
+    """Untrusted download links cannot expose host files through results."""
     outside = tmp_path / "private.txt"
     outside.write_text("private", encoding="utf-8")
     download = tmp_path / "quarantine"
@@ -287,6 +307,8 @@ def test_download_link_is_not_published(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("stage", ["create", "build", "download"])
 def test_control_failure_identifies_stage(project: Path, monkeypatch: pytest.MonkeyPatch, stage: str) -> None:
+    """Control errors retain their failed stage and captured diagnostics."""
+
     def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
         if stage in args:
             raise subprocess.CalledProcessError(3, args, b"", b"policy rejected\n")
@@ -305,6 +327,7 @@ def test_control_failure_identifies_stage(project: Path, monkeypatch: pytest.Mon
 
 
 def test_interruption_still_cleans_sandbox(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An interrupted task still removes its sandbox and writes a receipt."""
     calls: list[list[str]] = []
 
     def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:

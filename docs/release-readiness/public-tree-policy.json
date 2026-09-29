@@ -52,8 +52,7 @@
         ".gaze/**",
         "hooks/**",
         ".openshell/policy.yaml",
-        ".openshell/workspace.json",
-        ".openshell/codex-profile.yaml"
+        ".openshell/workspace.json"
       ],
       "rationale": "Contributor environment, frozen quality baseline, and versioned repository safeguards."
     },

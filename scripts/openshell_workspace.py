@@ -36,6 +36,8 @@ SECRET_VALUE = re.compile(r"-----BEGIN|(?:sk-|ghp_|github_pat_|AIza)[A-Za-z0-9_-
 
 @dataclass(frozen=True)
 class Manifest:
+    """Project-owned image, input selection, and runtime security boundary."""
+
     workspace: str
     image: str
     policy: str
@@ -48,6 +50,7 @@ class Manifest:
 
 
 def relative_path(value: str) -> PurePosixPath:
+    """Reject absolute paths and traversal before interpreting a project path."""
     path = PurePosixPath(value)
     if not value or path.is_absolute() or ".." in path.parts or "\\" in value or path == PurePosixPath("."):
         raise ValueError("paths must be nonempty relative paths without traversal")
@@ -55,6 +58,7 @@ def relative_path(value: str) -> PurePosixPath:
 
 
 def sensitive(path: PurePosixPath) -> bool:
+    """Recognize credential stores that must never join an input snapshot."""
     return any(
         part.lower()
         in {
@@ -80,6 +84,7 @@ def sensitive(path: PurePosixPath) -> bool:
 
 
 def local_path(project: Path, value: str, *, input_file: bool = True) -> Path:
+    """Resolve a project file without following links or accepting credentials."""
     relative = relative_path(value)
     target = project.joinpath(*relative.parts)
     if not target.resolve().is_relative_to(project):
@@ -92,10 +97,11 @@ def local_path(project: Path, value: str, *, input_file: bool = True) -> Path:
 
 
 def validate_environment(environment: dict[str, str]) -> None:
+    """Accept execution metadata while refusing secret names and token values."""
     for key, value in environment.items():
         if (
             not ENV_NAME.fullmatch(key)
-            or (SECRET_NAME.search(key) and not (key == "CLAUDE_CODE_SKIP_VERTEX_AUTH" and value == "1"))
+            or SECRET_NAME.search(key)
             or SECRET_VALUE.search(value)
             or "\n" in value
             or "\x00" in value
@@ -123,6 +129,7 @@ def defer_cancellation() -> Iterator[None]:
 
 
 def load_manifest(project: Path, name: str) -> Manifest:
+    """Parse a versioned manifest and validate paths before creating resources."""
     raw: object = json.loads(local_path(project, name).read_text(encoding="utf-8"))
     fields = {
         "schema_version",
@@ -196,6 +203,7 @@ def run(
     checked: bool = True,
     env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
+    """Run a bounded control operation and preserve captured failure output."""
     result = subprocess.run(
         args, cwd=cwd, env=env, capture_output=True, check=False, timeout=timeout, stdin=subprocess.DEVNULL
     )
@@ -205,6 +213,7 @@ def run(
 
 
 def snapshot(project: Path, manifest: Manifest, inputs: tuple[str, ...], destination: Path) -> str | None:
+    """Copy committed source or selected files, returning the source revision."""
     destination.mkdir()
     head = None
     if manifest.snapshot == "git-head":
@@ -239,6 +248,7 @@ def snapshot(project: Path, manifest: Manifest, inputs: tuple[str, ...], destina
 
 
 def publish_results(download: Path, destination: Path) -> None:
+    """Publish quarantined output only after rejecting links and special files."""
     for path in (download, *download.rglob("*")):
         mode = path.lstat()
         if not (stat.S_ISDIR(mode.st_mode) or stat.S_ISREG(mode.st_mode)):
@@ -249,10 +259,12 @@ def publish_results(download: Path, destination: Path) -> None:
 
 
 def cancel_workspace(signum: int, frame: object) -> None:
+    """Turn ordinary termination into an interruption that runs cleanup."""
     raise KeyboardInterrupt
 
 
 def remove_worker_image(image: str) -> None:
+    """Remove only this run's image, failing if its absence cannot be verified."""
     presence = run(["podman", "image", "exists", image], timeout=CONTROL_TIMEOUT, checked=False)
     if presence.returncode == 1:
         return
@@ -270,6 +282,7 @@ def execute(
     command: list[str],
     timeout: int,
 ) -> int:
+    """Run a snapshot, collect untrusted output, and record verified cleanup."""
     prefix = ["openshell", "--workspace", manifest.workspace]
     run([*prefix, "status"], timeout=CONTROL_TIMEOUT)
     run([*prefix, "workspace", "get", manifest.workspace], timeout=CONTROL_TIMEOUT)
@@ -447,6 +460,7 @@ def execute(
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Validate worker arguments or print a side-effect-free execution preview."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project", type=Path, default=Path.cwd())
     parser.add_argument("--manifest", default=".openshell/workspace.json")
