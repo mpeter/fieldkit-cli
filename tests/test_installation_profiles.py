@@ -5,13 +5,61 @@ import os
 import subprocess
 import sys
 import tempfile
+import tomllib
+from importlib.machinery import ModuleSpec
 from pathlib import Path
 
 import pytest
 
+from fieldkit.config import optional_dependencies
+from fieldkit.errors import MissingOptionalDependencyError
+
 pytestmark = pytest.mark.unit
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+@pytest.mark.parametrize("profile", ["llm", "all"])
+def test_declared_llm_profiles_require_only_implemented_dependencies(
+    profile: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    implemented_roots = {
+        "litellm": "litellm",
+        "openai": "openai",
+        "vertexai": "google-cloud-aiplatform",
+    }
+    project = tomllib.loads((_REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    dependencies = project["project"]["optional-dependencies"][profile]
+    for distribution in implemented_roots.values():
+        assert any(dependency.startswith(f"{distribution}>=") for dependency in dependencies)
+    probed: list[str] = []
+
+    def installed_spec(name: str) -> ModuleSpec | None:
+        probed.append(name)
+        return ModuleSpec(name, loader=None) if name in implemented_roots else None
+
+    monkeypatch.setattr("fieldkit.config.optional_dependencies.importlib.util.find_spec", installed_spec)
+    result = optional_dependencies.require_optional_profile(
+        "skill eval", profile, optional_dependencies.LLM_IMPORT_ROOTS
+    )
+
+    assert result is None
+    assert probed == list(implemented_roots)
+
+
+@pytest.mark.parametrize("missing_root", ["litellm", "openai", "vertexai"])
+def test_llm_profile_rejects_missing_implemented_dependency(missing_root: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "fieldkit.config.optional_dependencies.importlib.util.find_spec",
+        lambda name: None if name == missing_root else ModuleSpec(name, loader=None),
+    )
+
+    with pytest.raises(MissingOptionalDependencyError, match=missing_root) as error:
+        optional_dependencies.require_optional_profile("skill eval", "llm", optional_dependencies.LLM_IMPORT_ROOTS)
+
+    assert error.value.missing_import_roots == (missing_root,)
+
+
 _PROFILE_RUNNER = r"""
 import contextlib
 import importlib.abc
@@ -25,7 +73,7 @@ profile = sys.argv[1]
 argv = sys.argv[2:]
 profile_roots = {
     "google": ("google.auth", "google.oauth2", "google_auth_httplib2", "google_auth_oauthlib", "googleapiclient"),
-    "llm": ("agentplatform", "litellm", "openai", "vertexai"),
+    "llm": ("litellm", "openai", "vertexai"),
     "web": ("fastapi", "uvicorn"),
     "chrome-auth": ("cryptography", "secretstorage"),
 }
@@ -60,25 +108,60 @@ if argv == ["__chrome__"]:
         raise SystemExit(handle_cli_exception(exc)) from None
     raise SystemExit(0)
 if argv == ["__ingest_transcript__"]:
-    from fieldkit.cli_exit import handle_cli_exception
-    from fieldkit.commands.ingest.run import _run_processing_loop
+    import fieldkit.config as config
+    import fieldkit.config._loader as config_loader
+    from fieldkit.commands.ingest.registry import PIPELINES
+    from fieldkit.gmail.publication import GMAIL_QUERY_READY_KEY, apply_gmail_page, initialize_gmail_publication
+    from fieldkit.ingest.db import init_db
 
-    try:
-        _run_processing_loop([object()], conn=object(), pipeline_version="1.0.0", interactive=False)
-    except Exception as exc:
-        raise SystemExit(handle_cli_exception(exc)) from None
-    raise SystemExit(0)
+    workspace = Path.cwd() / "workspace"
+    workspace.mkdir()
+    config_path = config.CONFIG_PATH
+    config_path.parent.mkdir(parents=True)
+    db_path = Path(os.environ["FIELDKIT_DATA_DIR"]) / "pipeline.db"
+    config_path.write_text(f"fieldkit_home: {workspace}\npipeline_db: {db_path}\n", encoding="utf-8")
+    config.CONFIG_PATH = config_path
+    config_loader.CONFIG_PATH = config_path
+    config.clear_config_caches()
+    gmail_path = Path(os.environ["FIELDKIT_DATA_DIR"]) / "gmail.db"
+    gmail_path.parent.mkdir(parents=True)
+    initialize_gmail_publication(gmail_path)
+
+    def mark_query_ready(connection):
+        connection.execute(
+            "INSERT OR REPLACE INTO sync_state(key, value) VALUES (?, 'true')",
+            (GMAIL_QUERY_READY_KEY,),
+        )
+
+    apply_gmail_page(gmail_path, mark_query_ready)
+    with contextlib.closing(init_db(db_path, pipelines=PIPELINES)) as conn:
+        conn.executemany(
+            "INSERT INTO sources (source_id, pipeline_id, file_path, status) VALUES (?, ?, ?, ?)",
+            [(f"profile-probe-{index}", "transcript-ingest", "synthetic", "pending") for index in range(6)],
+        )
+        conn.commit()
+    result = main(["ingest", "run", "--pipeline", "transcript-ingest"])
+    with contextlib.closing(init_db(db_path, pipelines=PIPELINES)) as conn:
+        assert [row[0] for row in conn.execute("SELECT status FROM sources")] == ["pending"] * 6
+        assert conn.execute("SELECT count(*) FROM checkpoints").fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM artifacts").fetchone()[0] == 0
+    assert not list(workspace.rglob("*"))
+    raise SystemExit(result)
 if argv[0] == "__llm_command__":
     import fieldkit.config as config
     import fieldkit.config._loader as config_loader
 
     root = Path(argv[1])
     command = argv[2]
+    mode = argv[3]
     config_path = root / "config" / "config.yaml"
     workspace = root / "workspace"
     workspace.mkdir(parents=True)
     config_path.parent.mkdir(parents=True)
-    config_path.write_text(f"fieldkit_home: {workspace}\n", encoding="utf-8")
+    config_text = f"fieldkit_home: {workspace}\n"
+    if mode != "unconfigured":
+        config_text += "llm_model: vertex_ai/example-model\n"
+    config_path.write_text(config_text, encoding="utf-8")
     config.CONFIG_PATH = config_path
     config_loader.CONFIG_PATH = config_path
     config.clear_config_caches()
@@ -86,6 +169,14 @@ if argv[0] == "__llm_command__":
         "brief": ["brief", "generate", "--pipeline-only"],
         "pipeline": ["pipeline", "--data-root", str(workspace)],
     }[command]
+    if mode == "no-llm":
+        command_argv.append("--no-llm")
+
+    def reject_network(event, args):
+        if event in {"socket.connect", "socket.getaddrinfo"}:
+            raise RuntimeError("isolated report attempted network access")
+
+    sys.addaudithook(reject_network)
     raise SystemExit(main(command_argv))
 if argv == ["__all__"]:
     for command in sorted(_COMMANDS):
@@ -180,7 +271,7 @@ def _run_profile(profile: str, *args: str, disable_llm: bool = True) -> subproce
         "PYTHONPATH": str(_REPO_ROOT / "src"),
     }
     if disable_llm:
-        environment["NO_LLM"] = "1"
+        environment["FIELDKIT_NO_LLM"] = "1"
     with tempfile.TemporaryDirectory(prefix="fieldkit-profile-") as run_dir:
         environment["HOME"] = str(Path(run_dir) / "home")
         environment["FIELDKIT_DATA_DIR"] = str(Path(run_dir) / "data")
@@ -201,7 +292,11 @@ def _run_profile(profile: str, *args: str, disable_llm: bool = True) -> subproce
         ("base", ("--help",)),
         ("base", ("auth", "--help")),
         ("base", ("doctor", "--help")),
+        ("base", ("driver", "--help")),
+        ("base", ("driver", "list", "--help")),
         ("base", ("gmail", "--help")),
+        ("base", ("meeting", "--help")),
+        ("base", ("meeting", "list", "--help")),
         ("base", ("ingest", "--help")),
         ("base", ("ingest", "status", "--help")),
         ("base", ("ingest", "status", "--json")),
@@ -224,7 +319,9 @@ def test_profile_success_surface(profile: str, command: tuple[str, ...]) -> None
         (("auth", "google", "--help"), "google"),
         (("gmail", "sync", "--help"), "google"),
         (("__ingest_transcript__",), "google"),
-        (("meeting", "--help"), "google"),
+        (("meeting", "link", "--help"), "google"),
+        (("meeting", "note", "--help"), "google"),
+        (("meeting", "open", "--help"), "google"),
         (("web", "--help"), "web"),
         (("__chrome__",), "chrome-auth"),
     ],
@@ -253,12 +350,26 @@ def test_base_profile_reports_actionable_missing_llm_for_live_eval_modes(mode: s
 
 @pytest.mark.parametrize("command", ["brief", "pipeline"])
 def test_base_profile_reports_actionable_missing_llm_for_llm_consumers(tmp_path: Path, command: str) -> None:
-    result = _run_profile("base", "__llm_command__", str(tmp_path), command, disable_llm=False)
+    result = _run_profile("base", "__llm_command__", str(tmp_path), command, "configured", disable_llm=False)
 
     assert result.returncode == 3
     assert "requires the 'llm' optional profile" in result.stderr
     assert "pip install 'fieldkit-cli[llm]'" in result.stderr
     assert "uv tool install 'fieldkit-cli[llm]'" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert not list((tmp_path / "workspace").rglob("*.md"))
+
+
+@pytest.mark.parametrize("command", ["brief", "pipeline"])
+@pytest.mark.parametrize("mode", ["unconfigured", "disabled", "no-llm"])
+def test_base_profile_renders_reports_without_llm(tmp_path: Path, command: str, mode: str) -> None:
+    result = _run_profile("base", "__llm_command__", str(tmp_path), command, mode, disable_llm=mode == "disabled")
+
+    assert result.returncode == 0, result.stderr
+    reports = list((tmp_path / "workspace" / "briefs").glob("*.md"))
+    assert len(reports) == 1
+    assert reports[0].read_text(encoding="utf-8").strip()
+    assert "requires the 'llm' optional profile" not in result.stderr
     assert "Traceback" not in result.stderr
 
 
@@ -300,6 +411,7 @@ def test_base_profile_version_features_preserve_auth_and_gmail_subcommands() -> 
         "backstory-gap",
         "decay",
         "enrich-pursuits",
+        "import-cache",
         "query",
         "sync",
     }

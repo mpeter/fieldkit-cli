@@ -5,8 +5,9 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Final, Literal
 
-from fieldkit.sf.client import SFAPIError, SFDataAccessError, SFDirectClient, SFNotFoundError
+from fieldkit.sf.client import SFDirectClient
 from fieldkit.sf.closeplan_evidence import resolve_record_identity, ui_api_field_issues
+from fieldkit.sf.errors import SFAPIError, SFDataAccessError, SFNotFoundError
 from fieldkit.sf.types import ClosePlanAnswerChoice, ClosePlanTemplate, ClosePlanTemplateQuestion, UIAPIRecordCollection
 
 _TEMPLATE_FIELDS: Final = (

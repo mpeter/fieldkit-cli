@@ -11,15 +11,11 @@ from fieldkit.enrich.web_enrich import extract_contacts_needing_enrichment, main
 @pytest.fixture(autouse=True)
 def patch_enrich_dir(monkeypatch, tmp_path):
     """Redirect enrich_dir() to tmp_path for all tests in this module."""
-    real_fn = _io_mod._enrich_dir
-    real_fn.cache_clear()
-    monkeypatch.setattr(_io_mod, "_enrich_dir", lambda: tmp_path)
+    monkeypatch.setattr(_io_mod, "enrich_dir", lambda: tmp_path)
     # web_enrich imports enrich_dir directly from _io; patch that reference too.
     import fieldkit.enrich.web_enrich as web_mod
 
     monkeypatch.setattr(web_mod, "enrich_dir", lambda: tmp_path)
-    yield
-    real_fn.cache_clear()
 
 
 @pytest.mark.unit

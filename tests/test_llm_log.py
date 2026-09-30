@@ -2,7 +2,7 @@
 
 All five behaviours from the T03 plan:
   1. init_db() creates the llm_calls table in a temp directory.
-  2. With NO_LLM=1, importing lib.llm still initialises the DB (side-effect).
+  2. With FIELDKIT_NO_LLM=1, importing lib.llm still initialises the DB (side-effect).
   3. set_skill_context() sets context vars; values appear in a logged row.
   4. _success_callback writes a row with all correct field names and values.
   5. Prompt text is NOT stored — only a 64-char SHA-256 hex hash.
@@ -258,7 +258,7 @@ def test_init_db_idempotent(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 2. NO_LLM=1 — importing lib.llm_log must NOT touch the filesystem
+# 2. FIELDKIT_NO_LLM=1 — importing lib.llm_log must NOT touch the filesystem
 # ---------------------------------------------------------------------------
 
 
@@ -266,27 +266,27 @@ def test_init_db_idempotent(tmp_path: Path) -> None:
 
 
 def test_no_llm_side_effect_no_db_created_under_no_llm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """With NO_LLM=1, reloading lib.llm_log does NOT create the DB file."""
+    """With FIELDKIT_NO_LLM=1, reloading lib.llm_log does NOT create the DB file."""
     import importlib
 
     db = tmp_path / "no_llm_should_not_exist.db"
     monkeypatch.setenv("FIELDKIT_LLM_LOG", str(db))
-    monkeypatch.setenv("NO_LLM", "1")
+    monkeypatch.setenv("FIELDKIT_NO_LLM", "1")
 
     importlib.reload(llm_log)
 
-    assert not db.exists(), f"DB file was created despite NO_LLM=1: {db}"
+    assert not db.exists(), f"DB file was created despite FIELDKIT_NO_LLM=1: {db}"
 
 
 def test_no_llm_side_effect_no_filesystem_touch_with_nonexistent_home(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """With NO_LLM=1 and a nonexistent HOME, reloading lib.llm_log creates no files."""
+    """With FIELDKIT_NO_LLM=1 and a nonexistent HOME, reloading lib.llm_log creates no files."""
     import importlib
 
     fake_home = "/nonexistent_path_xyz_no_exist"
     db_under_fake_home = fake_home + "/.fieldkit/llm_calls.db"
-    monkeypatch.setenv("NO_LLM", "1")
+    monkeypatch.setenv("FIELDKIT_NO_LLM", "1")
     monkeypatch.setenv("HOME", fake_home)
     monkeypatch.setenv("FIELDKIT_LLM_LOG", db_under_fake_home)
 
@@ -295,16 +295,16 @@ def test_no_llm_side_effect_no_filesystem_touch_with_nonexistent_home(
 
     from pathlib import Path as _Path
 
-    assert not _Path(db_under_fake_home).exists(), "DB created despite NO_LLM=1 + nonexistent HOME"
+    assert not _Path(db_under_fake_home).exists(), "DB created despite FIELDKIT_NO_LLM=1 + nonexistent HOME"
 
 
 def test_no_llm_side_effect_no_llm_callbacks_not_registered_in_litellm(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Under NO_LLM=1, litellm callback registration is skipped via llm_disabled()."""
+    """Under FIELDKIT_NO_LLM=1, litellm callback registration is skipped via llm_disabled()."""
     import inspect
 
     src = inspect.getsource(llm_log)
     # historic regression: callback registration is now gated by llm_disabled() from fieldkit.config,
-    # not by a direct os.environ.get("NO_LLM") check. Verify the guard is present.
+    # not by a direct os.environ.get("FIELDKIT_NO_LLM") check. Verify the guard is present.
     assert "llm_disabled()" in src, (
         "llm_log must gate litellm callback registration on llm_disabled() (historic regression: FIELDKIT_NO_LLM must be respected)"
     )
@@ -786,8 +786,8 @@ def test_failure_callback_swallows_litellm_registration_error_and_warns(
 
     db_path = tmp_path / "reg_fail.db"
     monkeypatch.setenv("FIELDKIT_LLM_LOG", str(db_path))
-    # Ensure NO_LLM is not set so the registration block executes
-    monkeypatch.delenv("NO_LLM", raising=False)
+    # Ensure FIELDKIT_NO_LLM is not set so the registration block executes
+    monkeypatch.delenv("FIELDKIT_NO_LLM", raising=False)
 
     # Build a fake litellm module whose success_callback raises on access
     fake_litellm = types.ModuleType("litellm")
@@ -841,7 +841,7 @@ def test_success_callback_ensure_initialized_called_from_synthesize(
     db_path = tmp_path / "callback-registration.db"
     monkeypatch.setenv("FIELDKIT_LLM_LOG", str(db_path))
     monkeypatch.delenv("FIELDKIT_NO_LLM", raising=False)
-    monkeypatch.delenv("NO_LLM", raising=False)
+    monkeypatch.delenv("FIELDKIT_NO_LLM", raising=False)
 
     # Build a minimal fake litellm that records callback registration
     fake_litellm = types.ModuleType("litellm")
@@ -906,7 +906,7 @@ def test_success_callback_fieldkit_no_llm_stubs_transcribe(monkeypatch: pytest.M
     from unittest.mock import patch
 
     monkeypatch.setenv("FIELDKIT_NO_LLM", "1")
-    monkeypatch.delenv("NO_LLM", raising=False)
+    monkeypatch.delenv("FIELDKIT_NO_LLM", raising=False)
 
     with patch("fieldkit.llm._transcribe.llm_disabled", return_value=True):
         from fieldkit.llm._transcribe import _NO_LLM_STUB, transcribe

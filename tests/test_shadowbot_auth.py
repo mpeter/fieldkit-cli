@@ -10,7 +10,7 @@ import sqlite3
 import sys
 import time
 from collections.abc import Generator
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -18,7 +18,8 @@ import httpx
 import pytest
 
 import fieldkit.shadowbot.auth as auth_mod
-from fieldkit.errors import MissingOptionalDependencyError
+from fieldkit.cli_exit import handle_cli_exception
+from fieldkit.errors import FieldkitError, MissingOptionalDependencyError
 from fieldkit.shadowbot.auth import (
     ShadowbotAuthError,
     TokenCache,
@@ -617,7 +618,7 @@ def test_decrypt_chrome_cookies_success(monkeypatch: pytest.MonkeyPatch, tmp_pat
     assert result == expected_cookies
 
 
-def _patch_chrome_crypto_imports(mock_ss: MagicMock, chrome_password: bytes) -> Generator[None, None, None]:
+def _patch_chrome_crypto_imports(mock_ss: MagicMock, chrome_password: bytes) -> AbstractContextManager[None]:
     """Context manager that patches secretstorage inside _decrypt_chrome_cookies.
 
     We patch at the function-body import level by replacing sys.modules entries
@@ -997,6 +998,32 @@ def test_get_token_cache_hit(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.unit
+def test_get_token_rejects_unsaved_refresh(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A rotated token is not usable success until its persistence succeeds."""
+    _patch_state_dir(monkeypatch, tmp_path)
+    token_file = _make_token_file(tmp_path, {"refresh_token": "fictional-old-refresh"})
+    original = token_file.read_bytes()
+    with (
+        patch.object(auth_mod, "_refresh_access_token", return_value=("fictional-access", "fictional-new-refresh")),
+        patch.object(auth_mod, "_save_token_file", side_effect=OSError("fictional-sensitive-path")),
+        patch.object(auth_mod, "acquire_from_chrome") as chrome,
+        pytest.raises(FieldkitError, match="Could not save refreshed") as error,
+    ):
+        get_token()
+
+    exit_code = handle_cli_exception(error.value)
+    assert exit_code == 3
+    assert auth_mod._cache is None
+    assert token_file.read_bytes() == original
+    chrome.assert_not_called()
+    output = capsys.readouterr()
+    assert "Check token storage permissions and available disk space" in output.err
+    assert "fictional-" not in output.err
+
+
+@pytest.mark.unit
 def test_get_token_refresh_from_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """get_token() refreshes from disk, returns new access_token, and sets valid cache."""
     _patch_state_dir(monkeypatch, tmp_path)
@@ -1236,18 +1263,11 @@ def _patch_get_state_dir_deps(
     config_yaml: str,
     config_exists: bool = True,
 ) -> None:
-    """Patch CONFIG_PATH and get_fieldkit_home in the auth module's namespace.
-
-    auth.py imports CONFIG_PATH and get_fieldkit_home at module level via
-    ``from fieldkit.config import CONFIG_PATH, get_fieldkit_home``. Python binds these
-    names in the fieldkit.commands.shadowbot.auth namespace at import time, so patches
-    must target that namespace directly — patching fieldkit.config.* has no effect
-    on the already-bound module-level names.
-    """
-    mock_cp = MagicMock()
-    mock_cp.exists.return_value = config_exists
-    mock_cp.read_text.return_value = config_yaml
-    monkeypatch.setattr("fieldkit.shadowbot.auth.CONFIG_PATH", mock_cp)
+    """Exercise the bounded config reader with an isolated real config path."""
+    config_path = tmp_path / "shadowbot-config.yaml"
+    if config_exists:
+        config_path.write_text(config_yaml, encoding="utf-8")
+    monkeypatch.setattr(auth_mod, "CONFIG_PATH", config_path)
     monkeypatch.setattr("fieldkit.shadowbot.auth.get_fieldkit_home", lambda: tmp_path)
     monkeypatch.setattr("fieldkit.shadowbot.auth.get_fieldkit_data", lambda: tmp_path / "data")
 

@@ -2,155 +2,101 @@
   "skill_name": "pipeline",
   "static_checks": [
     {
-      "id": "scans_pursuits",
+      "id": "health_command",
       "type": "contains",
-      "pattern": "pursuits",
-      "message": "Must scan pursuit files"
+      "pattern": "fieldkit pursuit health --json",
+      "message": "Must use the shipped read-only health command"
     },
     {
-      "id": "staleness_check",
+      "id": "forecast_command",
       "type": "contains",
-      "pattern": "stale",
-      "message": "Must check for stale SF data"
+      "pattern": "fieldkit pursuit forecast --json",
+      "message": "Must use the shipped read-only forecast command"
     },
     {
-      "id": "produces_table",
+      "id": "projects_command",
       "type": "contains",
-      "pattern": "table",
-      "message": "Must produce a risk table"
+      "pattern": "fieldkit pursuit projects --json",
+      "message": "Must use the shipped read-only project command"
     },
     {
-      "id": "fieldkit_pursuit_health_cmd",
+      "id": "no_freshness_overclaim",
       "type": "contains",
-      "pattern": "fieldkit pursuit health",
-      "message": "Must use fieldkit pursuit health command"
+      "pattern": "do not establish that local frontmatter is current",
+      "message": "Must distinguish local snapshots from live Salesforce state"
     },
     {
-      "id": "native_qualification_unavailable",
+      "id": "qualification_unavailable",
       "type": "contains",
-      "pattern": "Native Qualification",
-      "message": "Local health scan must expose native qualification as unavailable"
+      "pattern": "qualification as unavailable",
+      "message": "Must not use historical local scores as current qualification"
     },
     {
-      "id": "no_legacy_score_risk",
-      "type": "not_contains",
-      "pattern": "MEDDPICC score <",
-      "message": "Historical local scores must not drive pipeline risk"
-    },
-    {
-      "id": "reads_pursuits",
-      "type": "contains",
-      "pattern": "pursuit",
-      "message": "Must enumerate pursuit files"
-    },
-    {
-      "id": "weighted_pipeline",
-      "type": "contains",
-      "pattern": "weighted",
-      "message": "Must produce weighted pipeline calculation"
-    },
-    {
-      "id": "scenario_analysis",
-      "type": "contains",
-      "pattern": "scenario",
-      "message": "Must include scenario analysis"
-    },
-    {
-      "id": "fieldkit_pursuit_forecast_cmd",
-      "type": "contains",
-      "pattern": "fieldkit pursuit forecast",
-      "message": "Must use fieldkit pursuit forecast command"
-    },
-    {
-      "id": "reads_projects",
-      "type": "contains",
-      "pattern": "projects",
-      "message": "Must enumerate project files"
-    },
-    {
-      "id": "contract_dates",
+      "id": "forecast_amount_policy",
       "type": "contains_all",
       "patterns": [
-        "contract end date",
-        "expir"
+        "sf_consulting_acv",
+        "fixed_price",
+        "sf_acv",
+        "sf_arr"
       ],
-      "message": "Must check contract end dates and flag expiring"
-    },
-    {
-      "id": "fieldkit_pursuit_projects_cmd",
-      "type": "contains",
-      "pattern": "fieldkit pursuit projects",
-      "message": "Must use fieldkit pursuit projects command"
+      "message": "Must explain the implemented amount selection policy"
     }
   ],
   "evals": [
     {
       "id": 0,
-      "prompt": "pipeline health check",
-      "expected_behavior": "Scans all pursuit files and returns a prioritized risk table based on timeline and Salesforce linkage, with native qualification unavailable because the local command does not fetch ClosePlan",
+      "prompt": "Show the local pipeline health for Acme Corp.",
+      "expected_behavior": "Runs the account-scoped local health report and labels its evidence limits",
       "assertions": [
-        "Scans all active pursuit files across accounts",
-        "Returns a prioritized risk table sorted by risk tier (HIGH/MEDIUM/LOW)",
-        "Flags pursuits with stale data or missing SF fields",
-        "Reports Native Qualification unavailable and does not use legacy local scores or arithmetic gate gaps"
+        "Uses `fieldkit pursuit health --account acme-corp --json`",
+        "Explains HIGH and MEDIUM using only implemented close-date and Salesforce-linkage rules",
+        "Reports qualification unavailable",
+        "Does not claim the report refreshed Salesforce or detected stale sf_last_pulled data"
       ]
     },
     {
       "id": 1,
-      "prompt": "generate a pipeline forecast",
-      "expected_behavior": "Runs fieldkit pursuit forecast, weights deals by stage probability, shows commit/best-case/pipeline scenarios",
+      "prompt": "Calculate the local portfolio forecast with a 5000000 quota.",
+      "expected_behavior": "Calculates the deterministic local forecast and preserves the implemented scenario definitions",
       "assertions": [
-        "Runs fieldkit pursuit forecast to process all active pursuit files",
-        "Applies probability weights based on deal stage",
-        "Shows commit, best-case, and pipeline scenarios"
+        "Uses `fieldkit pursuit forecast --quota 5000000 --json`",
+        "Reports Closed Won, Commit, Weighted, and Best Case separately",
+        "Explains that Best Case excludes closed-won while Commit and Weighted include it",
+        "Reports skipped unknown stages and zero selected amounts"
       ]
     },
     {
       "id": 2,
-      "prompt": "forecast with a $5M quota target",
-      "expected_behavior": "Runs forecast with --quota flag, shows gap-to-quota for both commit and weighted scenarios",
+      "prompt": "What is the weighted number for Acme Corp, and is it current in Salesforce?",
+      "expected_behavior": "Scopes the forecast and refuses to equate local frontmatter with live Salesforce state",
       "assertions": [
-        "Runs fieldkit pursuit forecast --quota 5000000 (or equivalent) to incorporate quota target",
-        "Shows gap-to-quota for both commit and weighted pipeline scenarios",
-        "Shows commit, best-case, and pipeline scenarios alongside the quota gap"
+        "Uses `fieldkit pursuit forecast --account acme-corp --json`",
+        "Attributes the total to local pursuit frontmatter",
+        "States that current Salesforce status is unavailable without a separately authorized refresh",
+        "Does not run a Salesforce write automatically"
       ]
     },
     {
       "id": 3,
-      "prompt": "what's my weighted number for {{primary_account}}",
-      "expected_behavior": "Runs forecast scoped to {{primary_account}}, shows weighted pipeline total for that account only",
+      "prompt": "Which Acme Corp delivery projects are expiring?",
+      "expected_behavior": "Runs the account-scoped project report and explains the recorded contract-date tiers",
       "assertions": [
-        "Runs fieldkit pursuit forecast --account {{primary_account}} (or equivalent) to scope to one account",
-        "Shows weighted pipeline number for {{primary_account}} pursuits only",
-        "Does not include other accounts' pursuits in the scoped forecast"
+        "Uses `fieldkit pursuit projects --account acme-corp --json`",
+        "Labels UNKNOWN when sf_contract_end is absent or invalid",
+        "Treats the result as local-file evidence rather than a live contract assertion",
+        "Does not modify project files"
       ]
     },
     {
       "id": 4,
-      "prompt": "engagement health",
-      "expected_behavior": "Enumerates all project files, checks contract dates, flags expiring engagements, reports CU status",
+      "prompt": "Fail CI if the portfolio has anything needing attention.",
+      "expected_behavior": "Explains the exact strict policies rather than promising a broader gate",
       "assertions": [
-        "Lists all project files across all accounts",
-        "Ranks output: ZOMBIE first, then EXPIRING, SOON, ACTIVE (zombie evaluated before expired — zombie is operationally urgent)",
-        "Flags ZOMBIE projects (past contract end date AND still marked In Progress in Salesforce)"
-      ]
-    },
-    {
-      "id": 5,
-      "prompt": "what's expiring soon across my accounts?",
-      "expected_behavior": "Recognizes as engagement-health trigger, shows projects by contract end date tier",
-      "assertions": [
-        "Presents projects ranked by tier (ZOMBIE then EXPIRING then SOON then ACTIVE)",
-        "Uses project frontmatter (contract_end, sf_stage) to classify each project into health tiers"
-      ]
-    },
-    {
-      "id": 6,
-      "prompt": "engagement health for {{primary_account}}",
-      "expected_behavior": "Scopes to {{primary_account}} only, shows project health tiers for that account",
-      "assertions": [
-        "Scopes to {{primary_account}} only, not all accounts",
-        "Shows ZOMBIE, EXPIRING, SOON, and ACTIVE tiers for {{primary_account}} projects only"
+        "Explains that health --strict fails only for HIGH pursuits",
+        "Explains that projects --strict fails for ZOMBIE or UNKNOWN projects",
+        "States that MEDIUM, EXPIRING, and SOON do not fail their respective strict commands",
+        "Does not claim one command enforces every attention category"
       ]
     }
   ]

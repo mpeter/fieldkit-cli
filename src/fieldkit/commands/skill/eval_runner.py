@@ -331,7 +331,7 @@ def _render_judgement(judgement: SkillJudgement) -> None:
 
     Displays the skill name as a section header, then a row per assertion
     showing the verdict icon and reason. Stub verdicts are rendered with a
-    distinct icon to make NO_LLM=1 runs visually identifiable.
+    distinct icon to make FIELDKIT_NO_LLM=1 runs visually identifiable.
 
     Args:
         judgement: The SkillJudgement returned by judge_skill().
@@ -341,7 +341,7 @@ def _render_judgement(judgement: SkillJudgement) -> None:
     click.echo(f"{'─' * 60}")
 
     if judgement.stub:
-        click.echo("  ⊘  Stub mode (NO_LLM=1) — all verdicts are 'stub'")
+        click.echo("  ⊘  Stub mode (FIELDKIT_NO_LLM=1) — all verdicts are 'stub'")
 
     for case in judgement.cases:
         click.echo(f"\n  Case {case.case_id}:")
@@ -614,7 +614,7 @@ def _print_behavioral_section(
     stub_count = sum(1 for judgement in behavioral_judgements if judgement.stub)
     live_count = len(behavioral_judgements) - stub_count
     if behavioral_judgements and stub_count == len(behavioral_judgements):
-        click.echo(f"  Behavioral (stub): {stub_count} skills (NO_LLM=1 — no API calls)")
+        click.echo(f"  Behavioral (stub): {stub_count} skills (FIELDKIT_NO_LLM=1 — no API calls)")
     else:
         click.echo(f"  Behavioral (live): {live_count} skills judged  |  Stub: {stub_count}")
         if not_covered_count > 0:

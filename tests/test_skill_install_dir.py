@@ -13,6 +13,34 @@ from fieldkit.skill.template import install_skill_dir
 pytestmark = pytest.mark.unit
 
 
+@pytest.mark.parametrize(
+    ("skill", "entry", "relative_reference"),
+    [
+        ("contact", "ops/contact-lookup.md", "../../tool-routing/references/slack-search-protocol.md"),
+        ("pursuit-advance", "SKILL.md", "../tool-routing/references/slack-search-protocol.md"),
+    ],
+)
+def test_installed_slack_callers_resolve_shared_protocol(
+    tmp_path: Path, skill: str, entry: str, relative_reference: str
+) -> None:
+    source = Path(__file__).parents[1] / "src/fieldkit/skills"
+    target = tmp_path / "skills"
+    result = install_skill_dir(source / skill, target / skill, {}, quiet=True)
+    assert result.errors == 0
+    caller = target / skill / entry
+    text = caller.read_text(encoding="utf-8")
+    assert f"]({relative_reference})" in text
+    reference = (caller.parent / relative_reference).resolve()
+    assert reference.is_relative_to(target)
+    assert not reference.exists()
+    assert "missing prerequisite" in text
+
+    dependency = install_skill_dir(source / "tool-routing", target / "tool-routing", {}, quiet=True)
+    assert dependency.errors == 0
+    assert reference.is_file()
+    assert reference.read_bytes() == (source / "tool-routing/references/slack-search-protocol.md").read_bytes()
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

@@ -1,8 +1,7 @@
-"""Reliability tests for historic regression, historic regression, and implementation change.
+"""Brief reliability: degraded synthesis, workspace output, and stale-prose collection.
 
-historic regression: LLM failure must exit 1 and include a [DEGRADED] marker in the brief.
-historic regression: --no-llm must save to data_root/briefs/; exits 2 when config is absent.
-implementation change: collect_stale_prose() must resolve the script via fieldkit/, not lib/.
+LLM failures retain their category and include a [DEGRADED] marker in the saved brief.
+Generation saves to data_root/briefs/ and exits 3 when configuration is absent.
 
 Exit-code contract: _run() raises typed exceptions; cli_main() at the entry
 point maps them to exit codes.  Tests that assert on exit codes wrap _run()
@@ -16,11 +15,17 @@ from unittest.mock import patch
 
 import pytest
 
-import fieldkit.commands.brief.main as _brief_mod
+import fieldkit.brief.pipeline_only as _brief_mod
 from fieldkit.cli_exit import cli_main
-from fieldkit.commands.brief.main import _run
+from fieldkit.commands.brief.cli import _run_pipeline_only as _run
 from fieldkit.config import ConfigError
 from fieldkit.errors import LLMError
+
+
+@pytest.fixture(autouse=True)
+def configured_report_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(_brief_mod, "get_llm_model", lambda: "vertex_ai/test-model")
+    monkeypatch.setattr(_brief_mod, "llm_disabled", lambda: False)
 
 
 def _enter_collector_patches(stack: contextlib.ExitStack, data_root: Path) -> None:
@@ -44,38 +49,29 @@ def _enter_collector_patches(stack: contextlib.ExitStack, data_root: Path) -> No
     stack.enter_context(patch.object(_brief_mod, "_render_degraded_section", return_value=""))
 
 
-# ── historic regression: LLM failure exits 1 with DEGRADED marker ────────────────────────
+# ── Provider failures retain their category and mark the persisted report ───────
 
 
 @pytest.mark.unit
-def test_llm_failure_exits_1(tmp_path: Path) -> None:
-    """_run(no_llm=False) must cause exit code 1 when synthesize() raises LLMError.
-
-    _run() raises LLMError(category="rate-limit"); cli_main() maps it to
-    EXIT_PARTIAL (1).  The test wraps _run() in cli_main() to exercise the
-    full exception→exit-code mapping path.
-
-    Spec ref: brief-reliability/spec.md — Scenario: LLM synthesis raises LLMError.
-    """
+def test_general_llm_failure_exits_3(tmp_path: Path) -> None:
+    """A general provider failure remains an invalid request/configuration failure."""
     data_root = tmp_path / "data"
     (data_root / "accounts").mkdir(parents=True)
 
     with contextlib.ExitStack() as stack:
         stack.enter_context(patch.object(_brief_mod, "get_fieldkit_home", return_value=data_root))
-        stack.enter_context(patch.object(_brief_mod, "get_fieldkit_root", return_value=tmp_path))
         _enter_collector_patches(stack, data_root)
         stack.enter_context(patch.object(_brief_mod, "synthesize", side_effect=LLMError("test failure")))
         with pytest.raises(SystemExit) as exc_info, cli_main():
             _run(no_llm=False, account=None)
 
-    assert exc_info.value.code == 1, f"Expected exit code 1, got {exc_info.value.code}"
+    assert exc_info.value.code == 3, f"Expected exit code 3, got {exc_info.value.code}"
 
 
 @pytest.mark.unit
 def test_llm_failure_brief_contains_degraded_marker(tmp_path: Path) -> None:
     """Brief written on LLM failure must contain the [DEGRADED] marker.
 
-    Spec ref: brief-reliability/spec.md — Scenario: LLM synthesis raises LLMError.
     The brief must be saved to disk AND contain [DEGRADED] before the exception
     propagates through cli_main().
     """
@@ -84,7 +80,6 @@ def test_llm_failure_brief_contains_degraded_marker(tmp_path: Path) -> None:
 
     with contextlib.ExitStack() as stack:
         stack.enter_context(patch.object(_brief_mod, "get_fieldkit_home", return_value=data_root))
-        stack.enter_context(patch.object(_brief_mod, "get_fieldkit_root", return_value=tmp_path))
         _enter_collector_patches(stack, data_root)
         stack.enter_context(patch.object(_brief_mod, "synthesize", side_effect=LLMError("test failure")))
         with pytest.raises(SystemExit) as exc_info, cli_main():
@@ -102,16 +97,12 @@ def test_llm_failure_brief_contains_degraded_marker(tmp_path: Path) -> None:
 
 @pytest.mark.unit
 def test_llm_success_exits_0(tmp_path: Path) -> None:
-    """Successful LLM synthesis must exit 0 with no DEGRADED marker.
-
-    Spec ref: brief-reliability/spec.md — Scenario: Successful LLM synthesis exits 0.
-    """
+    """Successful LLM synthesis must exit 0 with no DEGRADED marker."""
     data_root = tmp_path / "data"
     (data_root / "accounts").mkdir(parents=True)
 
     with contextlib.ExitStack() as stack:
         stack.enter_context(patch.object(_brief_mod, "get_fieldkit_home", return_value=data_root))
-        stack.enter_context(patch.object(_brief_mod, "get_fieldkit_root", return_value=tmp_path))
         _enter_collector_patches(stack, data_root)
         stack.enter_context(patch.object(_brief_mod, "synthesize", return_value="## Morning Brief\n\nAll good."))
         # Must not raise on success — no cli_main() wrapper needed
@@ -130,16 +121,12 @@ def test_llm_success_exits_0(tmp_path: Path) -> None:
 
 @pytest.mark.unit
 def test_no_llm_saves_to_data_root(tmp_path: Path) -> None:
-    """--no-llm must save the brief to data_root/briefs/morning-brief-{today}.md.
-
-    Spec ref: brief-reliability/spec.md — Scenario: --no-llm saves to data_root/briefs/.
-    """
+    """--no-llm must save the brief to data_root/briefs/morning-brief-{today}.md."""
     data_root = tmp_path / "data"
     (data_root / "accounts").mkdir(parents=True)
 
     with contextlib.ExitStack() as stack:
         stack.enter_context(patch.object(_brief_mod, "get_fieldkit_home", return_value=data_root))
-        stack.enter_context(patch.object(_brief_mod, "get_fieldkit_root", return_value=tmp_path))
         _enter_collector_patches(stack, data_root)
         _run(no_llm=True, account=None)
 
@@ -158,7 +145,6 @@ def test_no_llm_dry_run_does_not_create_a_brief_directory(tmp_path: Path) -> Non
 
     with contextlib.ExitStack() as stack:
         stack.enter_context(patch.object(_brief_mod, "get_fieldkit_home", return_value=data_root))
-        stack.enter_context(patch.object(_brief_mod, "get_fieldkit_root", return_value=tmp_path))
         _enter_collector_patches(stack, data_root)
         _run(no_llm=True, account=None, dry_run=True)
 
@@ -177,7 +163,6 @@ def test_no_llm_config_error_exits_3(tmp_path: Path) -> None:
     """
     with (
         patch.object(_brief_mod, "get_fieldkit_home", side_effect=ConfigError("no config")),
-        patch.object(_brief_mod, "get_fieldkit_root", return_value=tmp_path),
         pytest.raises(SystemExit) as exc_info,
         cli_main(),
     ):
@@ -190,35 +175,12 @@ def test_no_llm_config_error_exits_3(tmp_path: Path) -> None:
     assert not written, f"Expected no brief files written, found: {written}"
 
 
-# ── implementation change: collect_stale_prose resolves via fieldkit/ path ─────────────────────
+# ── Stale-prose collection ───────────────────────────────────────────────────
 
 
 @pytest.mark.unit
-def test_collect_stale_prose_finds_script_via_aeos_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """collect_stale_prose must find the script at fieldkit/pursuit/stale.py.
-
-    Monkeypatches __file__ so the path derivation resolves to
-    tmp_path/fieldkit/pursuit/stale.py.  The stub script prints
-    "No stale prose contradictions found." and the function must return
-    "None detected.".
-
-    Spec ref: brief-reliability/spec.md — Scenario: Script found via fieldkit/ path.
-    """
-    # Fake package layout:
-    #   tmp_path/fieldkit/morning_brief/main.py  <- monkeypatched __file__
-    #   tmp_path/fieldkit/pursuit/stale.py           <- stub script
-    fake_module_file = tmp_path / "fieldkit" / "morning_brief" / "main.py"
-    fake_module_file.parent.mkdir(parents=True, exist_ok=True)
-    fake_module_file.touch()
-
-    fake_script = tmp_path / "fieldkit" / "pursuit" / "stale.py"
-    fake_script.parent.mkdir(parents=True, exist_ok=True)
-    fake_script.write_text(
-        'import sys\nprint("No stale prose contradictions found.")\nsys.exit(0)\n',
-        encoding="utf-8",
-    )
-
-    # Minimal data_root with one pursuit so iterate_pursuits returns a path
+def test_collect_stale_prose_reports_no_findings(tmp_path: Path) -> None:
+    """A real workspace pursuit without stale prose yields the empty-state message."""
     data_root = tmp_path / "data"
     pursuit_dir = data_root / "accounts" / "acme-corp" / "pursuits"
     pursuit_dir.mkdir(parents=True)
@@ -227,13 +189,9 @@ def test_collect_stale_prose_finds_script_via_aeos_path(tmp_path: Path, monkeypa
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(_brief_mod, "__file__", str(fake_module_file))
-
     result = _brief_mod.collect_stale_prose(data_root)
 
-    assert result == "None detected.", (
-        f"Expected 'None detected.' when script prints the standard no-issues message, got: {result!r}"
-    )
+    assert result == "None detected."
 
 
 # ── implementation change: derived-doc caste marker on stored briefs ──────────────────────
@@ -244,22 +202,20 @@ def test_collect_stale_prose_finds_script_via_aeos_path(tmp_path: Path, monkeypa
 def test_brief_file_carries_summary_caste_marker(tmp_path: Path, llm_fails: bool) -> None:
     """Every stored brief starts with the caste: summary provenance marker.
 
-    Spec ref: doc-provenance/spec.md — Scenario: Morning brief is stamped on
-    every write path. On the degraded path the [DEGRADED] banner must remain
-    the first body element after the frontmatter (historic regression contract preserved).
+    On the degraded path the [DEGRADED] banner must remain
+    the first body element after the frontmatter.
     """
     data_root = tmp_path / "data"
     (data_root / "accounts").mkdir(parents=True)
 
     with contextlib.ExitStack() as stack:
         stack.enter_context(patch.object(_brief_mod, "get_fieldkit_home", return_value=data_root))
-        stack.enter_context(patch.object(_brief_mod, "get_fieldkit_root", return_value=tmp_path))
         _enter_collector_patches(stack, data_root)
         if llm_fails:
             stack.enter_context(patch.object(_brief_mod, "synthesize", side_effect=LLMError("test failure")))
             with pytest.raises(SystemExit) as exc_info, cli_main():
                 _run(no_llm=False, account=None)
-            assert exc_info.value.code == 1
+            assert exc_info.value.code == 3
         else:
             _run(no_llm=True, account=None)
 

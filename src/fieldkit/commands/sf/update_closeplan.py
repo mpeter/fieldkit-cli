@@ -11,6 +11,7 @@ from fieldkit.cli_exit import EXIT_DATA, EXIT_PARTIAL, cli_main
 from fieldkit.cli_registry import declare_write
 from fieldkit.commands.sf._util import stdin_is_interactive
 from fieldkit.config import get_sf_rest_base_url, get_sf_session_id
+from fieldkit.sf import errors as sf_errors
 from fieldkit.sf.closeplan_writer import (
     ClosePlanPlanError,
     ClosePlanScorePreview,
@@ -193,7 +194,7 @@ def cli(
 
             sid = get_sf_session_id()
             if not sid:
-                raise _sf.SFAuthError("No Salesforce session. Run: fieldkit auth sf")
+                raise sf_errors.SFAuthError("No Salesforce session. Run: fieldkit auth sf")
             base_url = get_sf_rest_base_url()
             with _sf.SFDirectClient(session_id=sid, base_url=base_url) as client:
                 if preview_arguments is not None:

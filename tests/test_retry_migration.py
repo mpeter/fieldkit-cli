@@ -25,7 +25,7 @@ def _make_httpx_status_error(status_code: int) -> httpx.HTTPStatusError:
 
 
 def test_is_sf_transient_true_for_retry_statuses() -> None:
-    from fieldkit.sf.client import _is_sf_transient
+    from fieldkit.sf._transport import _is_sf_transient
 
     for code in (429, 500, 502, 503, 504):
         exc = _make_httpx_status_error(code)
@@ -33,14 +33,14 @@ def test_is_sf_transient_true_for_retry_statuses() -> None:
 
 
 def test_is_sf_transient_false_for_401() -> None:
-    from fieldkit.sf.client import _is_sf_transient
+    from fieldkit.sf._transport import _is_sf_transient
 
     exc = _make_httpx_status_error(401)
     assert not _is_sf_transient(exc)
 
 
 def test_is_sf_transient_false_for_non_http_error() -> None:
-    from fieldkit.sf.client import _is_sf_transient
+    from fieldkit.sf._transport import _is_sf_transient
 
     assert not _is_sf_transient(ValueError("not an http error"))
     assert not _is_sf_transient(RuntimeError("connection refused"))
@@ -176,7 +176,7 @@ def test_all_domain_predicates_agree_on_transient(code: int) -> None:
     """
     from fieldkit.gmail.retry import _is_gmail_transient
     from fieldkit.ingest.docs import _is_transient_http_error
-    from fieldkit.sf.client import _is_sf_transient
+    from fieldkit.sf._transport import _is_sf_transient
 
     verdicts = {
         "sf": _is_sf_transient(_make_httpx_status_error(code)),
@@ -191,7 +191,7 @@ def test_all_domain_predicates_agree_on_transient(code: int) -> None:
 def test_all_domain_predicates_agree_on_permanent(code: int) -> None:
     from fieldkit.gmail.retry import _is_gmail_transient
     from fieldkit.ingest.docs import _is_transient_http_error
-    from fieldkit.sf.client import _is_sf_transient
+    from fieldkit.sf._transport import _is_sf_transient
 
     verdicts = {
         "sf": _is_sf_transient(_make_httpx_status_error(code)),

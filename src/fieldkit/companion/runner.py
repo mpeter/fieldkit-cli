@@ -6,13 +6,13 @@ commands directly — everything goes through here so the journal is a
 complete record of what the sidecar did.
 """
 
-import shutil
+import shlex
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from fieldkit.companion.gate import is_allowed
+from fieldkit.companion.gate import ValidatedActPolicy, is_allowed, matches_configured_authority
 from fieldkit.companion.journal import append_journal
 from fieldkit.config import TIMEOUT_COMPANION_ACTION
 
@@ -32,18 +32,11 @@ class ActionResult:
     stderr: str
 
 
-def _fieldkit_argv() -> list[str]:
-    binary = shutil.which("fieldkit")
-    if binary is not None:
-        return [binary]
-    return [sys.executable, "-m", "fieldkit"]
-
-
 def run_action(
     argv: list[str],
     *,
     tier: str,
-    allowlist: list[str],
+    policy: ValidatedActPolicy,
     data_path: Path,
     item_id: str = "",
     journal: bool = True,
@@ -53,7 +46,7 @@ def run_action(
     Args:
         argv: fieldkit command tokens (no program name).
         tier: The configured companion tier.
-        allowlist: The configured act-tier allowlist.
+        policy: Canonically validated act-tier command permissions.
         data_path: Data root for the journal.
         item_id: The attention item this action addresses (may be empty
             for ad-hoc actions; still journaled).
@@ -66,15 +59,23 @@ def run_action(
         ActionResult. Denied actions never spawn a subprocess and are
         journaled with ``EXIT_DENIED`` so the audit trail shows refusals too.
     """
-    action = " ".join(argv)
-    if not is_allowed(argv, tier, allowlist):
+    action = shlex.join(argv)
+    if not matches_configured_authority(tier, policy):
+        return ActionResult(
+            argv=argv,
+            exit_code=EXIT_DENIED,
+            denied=True,
+            stdout="",
+            stderr="invalid companion action authority",
+        )
+    if not is_allowed(argv, tier, policy):
         if journal:
             append_journal(data_path, item_id=item_id, action=action, exit_code=EXIT_DENIED)
         return ActionResult(argv=argv, exit_code=EXIT_DENIED, denied=True, stdout="", stderr="")
 
     try:
         completed = subprocess.run(
-            [*_fieldkit_argv(), *argv],
+            [sys.executable, "-I", "-m", "fieldkit", *argv],
             capture_output=True,
             text=True,
             timeout=TIMEOUT_COMPANION_ACTION,

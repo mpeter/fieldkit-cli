@@ -7,19 +7,46 @@ This module contains only the Click command.
 Usage:
     fieldkit watch run slack-threads
     fieldkit watch run slack-threads --threshold-hours 24
-    fieldkit watch run slack-threads --account globalpay
+    fieldkit watch run slack-threads --account acme-corp
     fieldkit watch run slack-threads --limit 50
     fieldkit watch run slack-threads --dry-run
 
 Exit codes:
-    0  All accounts checked (or auth error handled gracefully).
-    1  Fatal configuration or filesystem error (not auth).
+    0  All selected accounts checked successfully.
+    1  Provider or persistence failure; retry may help.
+    2  Slack authentication requires user action.
+    3  Invalid or missing configuration/account selection.
 """
+
+import json
 
 import click
 
 from fieldkit.cli_registry import declare_write
-from fieldkit.watch.slack_threads import _DEFAULT_SEARCH_LIMIT, _DEFAULT_THRESHOLD_HOURS, _run_slack_threads
+from fieldkit.watch.slack_threads import (
+    _DEFAULT_SEARCH_LIMIT,
+    _DEFAULT_THRESHOLD_HOURS,
+    SlackRunOutcome,
+    _run_slack_threads,
+)
+
+
+def _render_json(outcome: SlackRunOutcome) -> str:
+    """Render the public, sanitized watcher outcome document."""
+    return json.dumps(
+        {
+            "watcher": "slack-threads",
+            "outcome": outcome.run.outcome,
+            "records_checked": outcome.records_checked,
+            "alerts_generated": outcome.alerts_generated,
+            "failures": outcome.failures,
+            "auth_error": outcome.auth_error,
+            "provider_error": outcome.provider_error,
+            "elapsed_seconds": outcome.elapsed_seconds,
+            "dry_run": outcome.dry_run,
+        },
+        indent=2,
+    )
 
 
 @declare_write("workspace")
@@ -73,17 +100,13 @@ def cli(
     as_json: bool,
 ) -> None:
     """Slack thread age watcher — detects unanswered account-related threads."""
-    raise SystemExit(
-        _run_slack_threads(
-            threshold_hours=threshold_hours,
-            account=account,
-            limit=limit,
-            limit_per_account=limit_per_account,
-            dry_run=dry_run,
-            as_json=as_json,
-        )
+    outcome = _run_slack_threads(
+        threshold_hours=threshold_hours,
+        account=account,
+        limit=limit,
+        limit_per_account=limit_per_account,
+        dry_run=dry_run,
     )
-
-
-if __name__ == "__main__":
-    raise SystemExit(cli())
+    if as_json:
+        click.echo(_render_json(outcome))
+    raise SystemExit(outcome.run.exit_code)

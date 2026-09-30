@@ -1,4 +1,4 @@
-"""Shared Google OAuth refresh and token-persistence behavior."""
+"""Shared Google API transport, OAuth refresh, and private token persistence."""
 
 import os
 import tempfile
@@ -6,6 +6,20 @@ from pathlib import Path
 from typing import Any
 
 from fieldkit.errors import GmailAuthError, GoogleCredentialRefreshRetryableError
+
+GOOGLE_HTTP_TIMEOUT_SECONDS = 30
+"""Socket-operation timeout, not a total deadline across retries or response reads."""
+
+
+def build_google_service(api: str, version: str, credentials: Any) -> Any:
+    """Build an optional Google API client with the shared bounded transport."""
+    from google_auth_httplib2 import AuthorizedHttp
+    from googleapiclient.discovery import build
+    from googleapiclient.http import build_http
+
+    http = build_http()
+    http.timeout = GOOGLE_HTTP_TIMEOUT_SECONDS
+    return build(api, version, http=AuthorizedHttp(credentials, http=http))
 
 
 def write_google_token(token_path: Path, payload: str) -> None:

@@ -14,21 +14,27 @@ from dataclasses import dataclass
 
 import httpx
 
-from fieldkit.sf.client import (
-    _API_VERSION,
-    SFAPIError,
-    SFDirectClient,
-    _parse_json_response,
-    _quote_keyword,
-)
+from fieldkit.sf import _responses
+from fieldkit.sf.client import API_VERSION, SFDirectClient, _quote_keyword
+from fieldkit.sf.errors import SFAPIError
 
 logger = logging.getLogger(__name__)
 
 # Salesforce record ID shape (15- or 18-char alphanumeric). Territory2Id values
 # are interpolated into a SOSL WHERE clause; validating the shape turns a
 # hand-edited accounts.yaml typo into a clear skip rather than a confusing SF error.
-_SF_ID_RE = re.compile(r"^[A-Za-z0-9]{15,18}$")
+_SF_ID_RE = re.compile(r"^(?:[A-Za-z0-9]{15}|[A-Za-z0-9]{18})$")
 _GSG_ID_RE = re.compile(r"^GSG[0-9]+$")
+
+
+def is_territory_id(value: str) -> bool:
+    """Return whether an identifier has the supported Salesforce record shape."""
+    return _SF_ID_RE.fullmatch(value) is not None
+
+
+def is_gsg_id(value: str) -> bool:
+    """Return whether a configured GSG identity can scope a Salesforce query."""
+    return _GSG_ID_RE.fullmatch(value) is not None
 
 
 @dataclass(frozen=True)
@@ -51,7 +57,7 @@ def _fetch_territory_developer_name(client: SFDirectClient, territory_id: str) -
     Raises:
         SFAuthError: on HTTP 401 (a dead session should stop the whole walk).
     """
-    url = f"{client._base_url}/services/data/{_API_VERSION}/sobjects/Territory2/{territory_id}"
+    url = f"{client._base_url}/services/data/{API_VERSION}/sobjects/Territory2/{territory_id}"
     try:
         resp = client._request_with_retry(
             "GET", url, headers=client._auth_headers(), params={"fields": "DeveloperName"}
@@ -63,7 +69,7 @@ def _fetch_territory_developer_name(client: SFDirectClient, territory_id: str) -
         logger.debug("_fetch_territory_developer_name: HTTP %s for %s", resp.status_code, territory_id)
         return None
     try:
-        data = _parse_json_response(resp, "Territory2 fetch")
+        data = _responses._parse_json_response(resp, "Territory2 fetch")
     except SFAPIError:
         return None
     dev_name = data.get("DeveloperName")
@@ -74,7 +80,7 @@ def _account_gsg_filter(slug: str, gsg_id: str | None) -> str:
     """Return the SOSL account-identity filter for a validated GSG ID."""
     if not gsg_id:
         return ""
-    if _GSG_ID_RE.fullmatch(gsg_id):
+    if is_gsg_id(gsg_id):
         return f" WHERE Account.GU_Proxy_ID__c = '{gsg_id}'"
     logger.warning(
         "resolve_territory_ids: ignoring malformed sf_gsg_id for %s",
@@ -168,7 +174,7 @@ def fetch_closed_won_by_territory(client: SFDirectClient, account_names: list[st
         SFAuthError: on HTTP 401.
         SFAPIError: on other Salesforce API errors or a capped, incomplete result.
     """
-    valid_ids = [t for t in territory_ids if _SF_ID_RE.match(t)]
+    valid_ids = [t for t in territory_ids if is_territory_id(t)]
     for bad in sorted(set(territory_ids) - set(valid_ids)):
         logger.warning(
             "fetch_closed_won_by_territory: skipping malformed Territory2Id %r (not a Salesforce record ID)",

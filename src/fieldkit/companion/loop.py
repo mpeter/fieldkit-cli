@@ -35,6 +35,7 @@ Ordering & failure discipline (proctor C1/C2):
 """
 
 import logging
+import shlex
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -42,12 +43,20 @@ from typing import Any
 
 from fieldkit.companion.decide import ProposedAction, propose_for
 from fieldkit.companion.feed import AttentionItem, get_feed
-from fieldkit.companion.gate import TIER_ORDER, Tier, is_allowed
+from fieldkit.companion.gate import (
+    NO_ACT_POLICY,
+    TIER_ORDER,
+    Tier,
+    ValidatedActPolicy,
+    is_allowed,
+    matches_configured_authority,
+)
 from fieldkit.companion.journal import append_journal
 from fieldkit.companion.llm_decide import DecisionResult
 from fieldkit.companion.outbox import proposal_item_ids, write_proposal
 from fieldkit.companion.runner import EXIT_DENIED, ActionResult, run_action
 from fieldkit.companion.suppress import add_cooldown, retired_item_ids
+from fieldkit.errors import FieldkitError
 
 log = logging.getLogger(__name__)
 
@@ -188,7 +197,11 @@ class _PassState:
 
 def _enrichment_command(baseline: ProposedAction) -> tuple[str, ...] | None:
     command = baseline.enrichment_argv
-    if command is None and baseline.command_argv is not None and is_allowed(list(baseline.command_argv), "read", []):
+    if (
+        command is None
+        and baseline.command_argv is not None
+        and is_allowed(list(baseline.command_argv), "read", NO_ACT_POLICY)
+    ):
         return baseline.command_argv
     return command
 
@@ -201,7 +214,7 @@ def _run_enrichment(
     result = state.enrich_cache.get(command)
     if result is None:
         result = run_action(
-            list(command), tier="read", allowlist=[], data_path=data_path, item_id=item_id, journal=False
+            list(command), tier="read", policy=NO_ACT_POLICY, data_path=data_path, item_id=item_id, journal=False
         )
         if result.denied or _enrichment_succeeded(command, result):
             state.enrich_cache[command] = result
@@ -233,7 +246,7 @@ def _finish_read(
     state.triaged += 1
     if command is None or result is None:
         return
-    append_journal(data_path, item_id=item.item_id, action=" ".join(command), exit_code=result.exit_code)
+    append_journal(data_path, item_id=item.item_id, action=shlex.join(command), exit_code=result.exit_code)
     if _enrichment_succeeded(command, result):
         add_cooldown(data_path, item.item_id, reason=f"read:{item.source}")
 
@@ -245,7 +258,7 @@ def _execute_candidate(
     candidate: tuple[str, ...],
     enrichment_command: tuple[str, ...] | None,
     enrichment_result: ActionResult | None,
-    allowlist: list[str],
+    policy: ValidatedActPolicy,
     decision: DecisionResult,
 ) -> None:
     reused = candidate == enrichment_command and enrichment_result is not None
@@ -253,7 +266,7 @@ def _execute_candidate(
         append_journal(
             data_path,
             item_id=item.item_id,
-            action=" ".join(enrichment_command),
+            action=shlex.join(enrichment_command),
             exit_code=enrichment_result.exit_code,
             decision_provenance=decision.provenance,
             fallback_category=decision.fallback,
@@ -262,7 +275,7 @@ def _execute_candidate(
         enrichment_result
         if reused
         else run_action(
-            list(candidate), tier="act", allowlist=allowlist, data_path=data_path, item_id=item.item_id, journal=False
+            list(candidate), tier="act", policy=policy, data_path=data_path, item_id=item.item_id, journal=False
         )
     )
     assert result is not None
@@ -273,12 +286,12 @@ def _execute_candidate(
             state.auth_failures += 1
         elif result.exit_code != 0:
             state.enrich_failures += 1
-        elif not is_allowed(list(candidate), "read", []):
+        elif not is_allowed(list(candidate), "read", NO_ACT_POLICY):
             state.acted += 1
     append_journal(
         data_path,
         item_id=item.item_id,
-        action=" ".join(candidate),
+        action=shlex.join(candidate),
         exit_code=EXIT_DENIED if result.denied else result.exit_code,
         decision_provenance=decision.provenance,
         fallback_category=decision.fallback,
@@ -290,7 +303,7 @@ def _process_item(
     item: AttentionItem,
     *,
     effective: Tier,
-    allowlist: list[str],
+    policy: ValidatedActPolicy,
     data_path: Path,
     dry_run: bool,
     decision_fn: Callable[[AttentionItem, ProposedAction, str | None], DecisionResult] | None,
@@ -331,14 +344,12 @@ def _process_item(
     state.proposed += 1
     candidate = decision.action.command_argv
     if effective == "act" and candidate is not None:
-        _execute_candidate(
-            state, data_path, item, candidate, enrichment_command, enrichment_result, allowlist, decision
-        )
+        _execute_candidate(state, data_path, item, candidate, enrichment_command, enrichment_result, policy, decision)
     elif enrichment_command is not None and enrichment_result is not None:
         append_journal(
             data_path,
             item_id=item.item_id,
-            action=" ".join(enrichment_command),
+            action=shlex.join(enrichment_command),
             exit_code=enrichment_result.exit_code,
             decision_provenance=decision.provenance,
             fallback_category=decision.fallback,
@@ -350,7 +361,7 @@ def run_once(
     data_path: Path,
     *,
     tier: Tier,
-    allowlist: list[str],
+    policy: ValidatedActPolicy,
     dry_run: bool = False,
     decision_fn: Callable[[AttentionItem, ProposedAction, str | None], DecisionResult] | None = None,
 ) -> LoopResult:
@@ -361,7 +372,7 @@ def run_once(
         data_path: fieldkit data root (outbox, journal).
         tier: ``read`` / ``propose`` / ``act``. An unknown value fails closed to
             ``read`` (matching the gate's fail-closed contract).
-        allowlist: the act-tier exact-argv allowlist (consulted only at ``act``).
+        policy: canonically validated act-tier exact-argv permissions.
         dry_run: when True, compute what each item would produce but write no
             outbox file, run no command, and append no journal record.
 
@@ -372,6 +383,8 @@ def run_once(
         FeedParseError: when an upstream feed input is structurally unparseable
             (exit 3 at the CLI).
     """
+    if not matches_configured_authority(tier, policy):
+        raise FieldkitError("invalid companion action authority")
     effective: Tier = tier if tier in TIER_ORDER else "read"
     items = get_feed(
         home,
@@ -394,7 +407,7 @@ def run_once(
             state,
             item,
             effective=effective,
-            allowlist=allowlist,
+            policy=policy,
             data_path=data_path,
             dry_run=dry_run,
             decision_fn=decision_fn,

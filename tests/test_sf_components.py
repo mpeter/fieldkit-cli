@@ -11,7 +11,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from fieldkit.sf.client import SFAPIError, SFAuthError
 from fieldkit.sf.components import (
     OPP_QUOTES_RELATED_LIST,
     QUOTE_LINES_RELATED_LIST,
@@ -22,6 +21,7 @@ from fieldkit.sf.components import (
     opp_contract_type,
     sort_component_lines,
 )
+from fieldkit.sf.errors import SFAPIError, SFAuthError
 
 pytestmark = pytest.mark.unit
 
@@ -156,12 +156,14 @@ def test_opp_contract_type_missing_family_field_is_standard() -> None:
     assert result == "standard"
 
 
-def test_opp_contract_type_non_auth_error_degrades_to_standard() -> None:
+def test_opp_contract_type_non_auth_error_degrades_to_standard(caplog: pytest.LogCaptureFixture) -> None:
     """A non-auth SFAPIError during the walk degrades to standard (D4), not a crash."""
     client = MagicMock()
-    client.fetch_related_list_records.side_effect = SFAPIError("boom")
-    result = opp_contract_type(client, _OPP_ID)
+    client.fetch_related_list_records.side_effect = SFAPIError("private-response-sentinel")
+    result = opp_contract_type(client, "private-opportunity-sentinel")
     assert result == "standard"
+    assert "treating as standard" in caplog.text
+    assert "private-" not in caplog.text
 
 
 def test_opp_contract_type_auth_error_propagates() -> None:

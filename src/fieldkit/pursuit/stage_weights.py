@@ -2,7 +2,7 @@
 
 Single source of truth for stage weights used by both:
   - fieldkit.commands.pursuit.forecast (pursuit forecast command)
-  - fieldkit.commands.pipeline.quota (pipeline quota command)
+  - fieldkit.pipeline.quota (local pursuit quota collection)
 
 historic regression: Previously these two commands maintained independent weight tables
 with different values, causing them to report different weighted pipeline

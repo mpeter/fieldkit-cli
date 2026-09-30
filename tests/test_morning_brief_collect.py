@@ -19,8 +19,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-import fieldkit.commands.brief.collect as collect_mod
-from fieldkit.commands.brief.collect import (
+import fieldkit.brief.collect as collect_mod
+from fieldkit.brief.collect import (
     _champion_signal_block,
     collect_decay_signals,
     collect_pipeline_pulse,
@@ -556,7 +556,7 @@ def test_collect_pipeline_pulse_logs_debug_on_bad_close_date(
         encoding="utf-8",
     )
 
-    with caplog.at_level(logging.DEBUG, logger="fieldkit.commands.brief.collect"):
+    with caplog.at_level(logging.DEBUG, logger="fieldkit.brief.collect"):
         result = collect_pipeline_pulse(data_root)
 
     # No exception raised — function returns a string

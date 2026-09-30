@@ -15,20 +15,25 @@ across all account pursuit directories. If no match, prints UNTRACKED.
 
 import json
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import click
 
 from fieldkit.cli_exit import EXIT_AUTH, EXIT_DATA, EXIT_PARTIAL
+from fieldkit.cli_registry import declare_write
 from fieldkit.config import (
-    get_accounts_config,
-    get_fieldkit_home,
+    ConfigError,
     get_sf_rest_base_url,
     get_sf_session_id,
 )
-from fieldkit.sf.client import SFAuthError, SFDirectClient
+from fieldkit.errors import SalesforceSyncPartialError
+from fieldkit.sf import errors as sf_errors
+from fieldkit.sf.client import SFDirectClient
 from fieldkit.sf.components import ContractType, opp_contract_type
-from fieldkit.sf.opportunities import is_opportunity_number, resolve_opportunity_reference
+from fieldkit.sf.errors import SFAPIError, SFAuthError
+from fieldkit.sf.opportunities import is_opportunity_id, is_opportunity_number, resolve_opportunity_reference
+from fieldkit.sf.sync import find_pursuit, sync_opportunity
 from fieldkit.sf.types import DealSplitRecord, OpportunitySObject
 
 LOG_PREFIX = "[sf-opportunity]"
@@ -82,27 +87,23 @@ def _fmt_currency(val: float | None) -> str:
 
 
 def _fetch_deal_splits(opp_id: str) -> list[DealSplitRecord]:
-    """Fetch deal splits for an opportunity, returning [] on any error."""
-    import logging
+    """Fetch required deal splits for an opportunity.
 
+    Authentication and provider failures propagate so callers cannot publish or
+    write an incomplete opportunity as a successful refresh.
+    """
     import fieldkit.sf.client as _sf_direct
 
     sid = get_sf_session_id()
     if not sid:
-        return []
+        raise SFAuthError("Salesforce authentication is not configured; run 'fieldkit auth sf'")
 
     base_url = get_sf_rest_base_url()
     if not base_url:
-        return []
+        raise SFAuthError("Salesforce base URL is not configured; run 'fieldkit auth sf'")
 
     with _sf_direct.SFDirectClient(session_id=sid, base_url=base_url) as client:
-        try:
-            return client.fetch_deal_splits(opp_id)
-        except _sf_direct.SFAuthError:
-            return []
-        except _sf_direct.SFAPIError as exc:
-            logging.getLogger(__name__).warning("%s Deal splits unavailable: %s", LOG_PREFIX, exc)
-            return []
+        return client.fetch_deal_splits(opp_id)
 
 
 def _fetch_contract_type(opp_id: str) -> ContractType:
@@ -141,48 +142,25 @@ def _fetch_opportunity(opp_id: str) -> OpportunitySObject:
         _log("ERROR: No Salesforce base URL configured.")
         raise SystemExit(EXIT_AUTH)
 
-    _log(f"Fetching opportunity {opp_id} from Salesforce...")
+    _log("Fetching Salesforce opportunity...")
     with _sf_direct.SFDirectClient(session_id=sid, base_url=base_url) as client:
         try:
             return client.fetch_record(opp_id, fields=_OPP_FIELDS)
-        except _sf_direct.SFAuthError:
+        except sf_errors.SFAuthError:
             _log("ERROR: Auth failure. Run: fieldkit auth sf")
             raise
-        except _sf_direct.SFNotFoundError:
-            _log(f"ERROR: Opportunity {opp_id} not found in Salesforce.")
+        except sf_errors.SFNotFoundError:
+            _log("ERROR: Salesforce opportunity was not found.")
             raise SystemExit(EXIT_DATA) from None
-        except _sf_direct.SFAPIError as exc:
-            _log(f"ERROR: {exc}")
+        except sf_errors.SFAPIError:
+            _log("ERROR: Salesforce opportunity read failed. Retry may help.")
             raise SystemExit(EXIT_PARTIAL) from None
 
 
 def _resolve_pursuit_file(opp_id: str) -> str | None:
     """Search all account pursuit directories for a matching pursuit file."""
-    import contextlib
-    import io
-
-    from fieldkit.commands.sf.sync import do_match_pursuit
-
-    try:
-        data_root = get_fieldkit_home()
-    except Exception:  # noqa: BLE001
-        return None
-
-    accounts_cfg = get_accounts_config().get("accounts", {})
-    for _acct_name, info in accounts_cfg.items():
-        if not isinstance(info, dict):
-            continue
-        pursuit_dir = info.get("pursuit_dir")
-        if not pursuit_dir:
-            continue
-        full_dir = str(data_root / pursuit_dir)
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            do_match_pursuit(full_dir, opp_id)
-        result = buf.getvalue().strip()
-        if result:
-            return result
-    return None
+    match = find_pursuit(opp_id)
+    return str(match) if match is not None else None
 
 
 def _resolve_numeric_opportunity(opp_number: str) -> str | None:
@@ -327,40 +305,36 @@ def run_opportunity(opp_id: str, pursuit_file: str | None, *, write: bool = True
     """
     import logging
 
-    from fieldkit.commands.sf.sync import PLACEHOLDER_VALUES, _validate_opp_id
-
-    if opp_id.strip().lower() in PLACEHOLDER_VALUES:
-        logging.warning(
-            "sf_opportunity_id %r is a placeholder — skipping sync",
-            opp_id,
-        )
-        return 0
-
-    if not _validate_opp_id(opp_id):
-        logging.warning(
-            "sf_opportunity_id %r is not a valid Salesforce ID (expected 15 or 18 alphanumeric chars) — skipping sync",
-            opp_id,
-        )
+    if not is_opportunity_id(opp_id):
+        logging.warning("sf_opportunity_id is invalid (expected a Salesforce opportunity ID) — skipping sync")
         return 3
 
     rec = _fetch_opportunity(opp_id)
-    splits = _fetch_deal_splits(opp_id)
+    try:
+        splits = _fetch_deal_splits(opp_id)
+    except SFAPIError:
+        _log("ERROR: Deal splits unavailable. Retry may help; no local data was written.")
+        return EXIT_PARTIAL
 
     # Resolve pursuit file if not given
     if not pursuit_file:
-        pursuit_file = _resolve_pursuit_file(opp_id)
+        try:
+            pursuit_file = _resolve_pursuit_file(opp_id)
+        except ConfigError:
+            _log("ERROR: Local account configuration is invalid; no local data was written.")
+            return EXIT_DATA
+        except (OSError, SalesforceSyncPartialError):
+            _log("ERROR: Local pursuit lookup failed. Retry may help; no local data was written.")
+            return EXIT_PARTIAL
 
     _print_summary(rec, pursuit_file, splits=splits)
-
-    if not write:
-        return 0
 
     if not pursuit_file:
         # historic regression: exit 3 (data error) with a clear user-facing message so the
         # operator knows the opportunity is untracked and can take action.
         # Previously returned 0 (success), which silently swallowed the miss.
         click.echo(
-            f"ERROR: {opp_id} is not tracked — no matching pursuit file found. "
+            "ERROR: Opportunity is not tracked — no matching pursuit file found. "
             "Create a pursuit file and link it with the sf_opportunity_id frontmatter key.",
             err=True,
         )
@@ -372,20 +346,26 @@ def run_opportunity(opp_id: str, pursuit_file: str | None, *, write: bool = True
     payload["deal_splits"] = [
         {"offering": s.get("offering_group", ""), "pct": s.get("services_pct", 0.0)} for s in splits
     ]
-    from fieldkit.commands.sf.sync import do_write_opp
-
-    do_write_opp(opp_id, pursuit_file, json.dumps(payload))
-    _log(f"✓ Written: {pursuit_file}")
+    sync_opportunity(opp_id, Path(pursuit_file), payload, dry_run=not write)
+    _log("✓ Pursuit frontmatter written." if write else "DRY RUN: local Salesforce update validated.")
     return 0
 
 
+@declare_write("workspace")
 @click.command(
     name="opportunity",
     context_settings={"help_option_names": ["-h", "--help"], "max_content_width": 100},
 )
 @click.argument("opp_id")
 @click.argument("pursuit_file", required=False, default=None)
-@click.option("--no-write", is_flag=True, default=False, help="Print summary without updating frontmatter.")
+@click.option(
+    "--no-write",
+    "--dry-run",
+    "no_write",
+    is_flag=True,
+    default=False,
+    help="Print summary without updating cache or frontmatter.",
+)
 @click.option(
     "--json",
     "as_json",
@@ -408,26 +388,35 @@ def cli(opp_id: str, pursuit_file: str | None, no_write: bool, as_json: bool) ->
     """
     # Resolve opportunity number (all-digits, 5-12 chars) to 18-char record Id.
     if is_opportunity_number(opp_id.strip()):
-        _log(f"Resolving opportunity number {opp_id!r} to Salesforce record Id...")
+        _log("Resolving opportunity number to a Salesforce record...")
         resolved = _resolve_numeric_opportunity(opp_id.strip())
         if not resolved:
             _log(
-                f"ERROR: Could not resolve opportunity number {opp_id!r} to a Salesforce record. "
+                "ERROR: Could not resolve the opportunity number to a Salesforce record. "
                 "Verify the number is correct and that OpportunityNumber__c is available in the configured organization."
             )
             raise SystemExit(EXIT_DATA)
-        _log(f"Resolved {opp_id!r} → {resolved}")
+        _log("Opportunity number resolved.")
         opp_id = resolved
 
     if as_json:
         # cell-28b9dae2e9395288: machine-readable output.
-        from fieldkit.commands.sf.sync import PLACEHOLDER_VALUES, _validate_opp_id
-
-        if opp_id.strip().lower() in PLACEHOLDER_VALUES or not _validate_opp_id(opp_id):
-            _log(f"ERROR: Invalid or placeholder opportunity ID: {opp_id!r}")
+        if not is_opportunity_id(opp_id):
+            _log("ERROR: Invalid or placeholder opportunity ID.")
             raise SystemExit(EXIT_DATA)
         rec = _fetch_opportunity(opp_id)
-        splits = _fetch_deal_splits(opp_id)
+        try:
+            splits = _fetch_deal_splits(opp_id)
+        except SFAPIError:
+            click.echo(
+                json.dumps(
+                    {
+                        "status": "partial",
+                        "error": "Salesforce deal splits unavailable; retry may help.",
+                    }
+                )
+            )
+            raise SystemExit(EXIT_PARTIAL) from None
         contract_type = _fetch_contract_type(opp_id)
         payload = _build_write_payload(rec, contract_type)
         payload["deal_splits"] = [

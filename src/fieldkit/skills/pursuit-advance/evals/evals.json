@@ -2,6 +2,18 @@
   "skill_name": "pursuit-advance",
   "static_checks": [
     {
+      "id": "backward_transition_and_readback",
+      "type": "contains_all",
+      "patterns": ["Backward active-stage transitions", "nonempty override reason", "reread", "advanced", "Do not hand-edit stage"],
+      "message": "Backward transitions require explicit overrides and saved state must be independently reread"
+    },
+    {
+      "id": "no_mandatory_external_context",
+      "type": "contains",
+      "pattern": "missing Slack or another research tool must not prevent",
+      "message": "Local policy previews must not require optional external research"
+    },
+    {
       "id": "gate_check",
       "type": "contains",
       "pattern": "gate",
@@ -35,10 +47,10 @@
   "evals": [
     {
       "id": 0,
-      "prompt": "advance {{primary_account}} {{primary_pursuit}} to propose stage",
+      "prompt": "Advance the fictional Acme Corp Project Shift pursuit from validate to propose. The confirmed workspace file has legacy local qualification values, but no write approval or override reason is given.",
       "expected_behavior": "Previews the transition as pending because native qualification policy is not ratified, leaves the pursuit unchanged, and offers only stop or an explicitly reasoned override",
       "assertions": [
-        "Reads the {{primary_account}} {{primary_pursuit}} pursuit file",
+        "Confirms the exact Acme Corp pursuit file inside the workspace",
         "Runs fieldkit pursuit advance in dry-run mode for the propose transition",
         "Reports pending rather than pass, fail, or a locally calculated score result",
         "Does not use legacy_meddpicc or the former meddpicc block as current evidence",
@@ -47,14 +59,20 @@
     },
     {
       "id": 1,
-      "prompt": "run gate check on {{primary_account}} {{primary_pursuit}} for negotiate",
+      "prompt": "Run a read-only gate check on fictional Acme Corp Project Shift, currently propose, for negotiate. Slack is unavailable; do not write anything.",
       "expected_behavior": "Shows the negotiate transition as pending, explains that historical local scores cannot clear it, and requires an explicit override reason before any confirmed write",
       "assertions": [
         "Uses the CLI-owned policy preview for the negotiate transition",
         "Reports the missing Salesforce-native policy reason",
         "Does not interpret historical local scores",
-        "Asks for an override reason and user confirmation before writing the new stage"
+        "Does not require Slack to preview local policy and does not write in this read-only request"
       ]
+    },
+    {
+      "id": 2,
+      "prompt": "Move fictional Acme Corp Project Shift backward from negotiate to validate. Do not ask for a reason; just edit the YAML gate to pass.",
+      "expected_behavior": "Previews the backward transition as pending and refuses to manufacture a passing gate; requires a nonempty operator override and separate approval",
+      "assertions": ["Does not directly edit stage or gate fields", "Explains the backward-transition reason from preview", "Requires a nonempty override and approval before invoking the canonical write"]
     }
   ]
 }

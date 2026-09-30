@@ -2,8 +2,8 @@
 
 import functools
 import json
-import logging
 import sys
+from importlib import resources
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +11,8 @@ from fieldkit.commands.skill._install_execution import _apply_install_plan, _ech
 from fieldkit.commands.skill._output import InstallItemOutcome, json_enabled
 from fieldkit.commands.skill._output import human_echo as _echo
 from fieldkit.commands.skill._target_resolution import prepare_install_targets, validate_global_install_request
-from fieldkit.config import CONFIG_PATH
+from fieldkit.config import CONFIG_PATH, ConfigError
+from fieldkit.config._paths import get_configured_fieldkit_root
 from fieldkit.pursuit.io import extract_frontmatter_text
 
 # ---------------------------------------------------------------------------
@@ -26,9 +27,6 @@ try:
 except ImportError:
     HAS_QUESTIONARY = False
 
-logger = logging.getLogger(__name__)
-
-
 # ---------------------------------------------------------------------------
 # Skill directory resolution
 # ---------------------------------------------------------------------------
@@ -36,15 +34,12 @@ logger = logging.getLogger(__name__)
 
 @functools.cache
 def _skills_dir() -> Path:
-    """Return the skills/ directory, resolved in priority order.
+    """Locate skills using explicit overrides before bundled package resources.
 
-    Resolution order:
-    1. FIELDKIT_SKILLS_DIR env var (explicit override)
-    2. fieldkit_root key in the active fieldkit config → <root>/skills/
-       (works when fieldkit is installed via `uv tool install` and skills/ lives
-       in the development repo alongside the source, not in site-packages)
-    3. Package-relative path: fieldkit-tools/skills/
-       (works during development when running `uv run fieldkit`)
+    FIELDKIT_SKILLS_DIR wins. An explicit, validated fieldkit_root is searched
+    for .agents/skills first, then skills. Otherwise discovery uses the
+    fieldkit.skills package through importlib.resources. Missing or invalid
+    package resources are a configuration error rather than a guessed path.
     """
     import os
 
@@ -55,49 +50,23 @@ def _skills_dir() -> Path:
 
     # 2. Config-based resolution via fieldkit_root
     #    A configured checkout may expose skills through .agents/skills or skills/.
-    config_path = CONFIG_PATH
-    if config_path.exists():
-        try:
-            import yaml
+    root = get_configured_fieldkit_root()
+    if root is not None:
+        for subpath in (".agents/skills", "skills"):
+            candidate = root / subpath
+            if candidate.is_dir():
+                return candidate
 
-            data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-            if isinstance(data, dict) and "fieldkit_root" in data:
-                root = Path(str(data["fieldkit_root"])).expanduser().resolve()
-                # Prefer the agent-visible skills directory when it is available.
-                for subpath in (".agents/skills", "skills"):
-                    candidate = root / subpath
-                    if candidate.is_dir():
-                        return candidate
-        except Exception:  # noqa: BLE001
-            logger.debug("skill._runner: failed to resolve skills dir from config fieldkit_root", exc_info=True)
-            pass  # Fall through to package-relative path
-
-    # 3. importlib.resources fallback for installed builds (skills/ packaged inside fieldkit/)
+    # 3. Bundled resources for installed builds (skills/ packaged inside fieldkit/)
     try:
-        import importlib.resources
-
-        ref = importlib.resources.files("fieldkit.skills")
+        ref = resources.files("fieldkit.skills")
         candidate = Path(str(ref))
-        if candidate.is_dir():
-            return candidate
-    except (ModuleNotFoundError, TypeError):
-        logger.debug(
-            "skill._runner: importlib.resources lookup failed; falling back to package-relative path", exc_info=True
-        )
-
-    # 4. Package-relative fallback (dev: fieldkit/skill/_runner.py → fieldkit/skills/)
-    #    Note: fieldkit/skills/ is now the sole canonical source for bundled skills.
-    #    The old bare skills/ directory at the repo root no longer exists; this
-    #    candidate will simply not be found, causing resolution to fall through to
-    #    step 3 (importlib.resources) or the env-var / config-based paths above.
-    import importlib.resources
-
-    try:
-        return Path(str(importlib.resources.files("fieldkit.skills")))
-    except Exception:  # noqa: BLE001
-        # Last resort: skill/ -> commands/ -> fieldkit/ -> src/ -> repo root -> skills/
-        here = Path(__file__).resolve()
-        return here.parent.parent.parent.parent.parent / "skills"
+        available = candidate.is_dir()
+    except (ModuleNotFoundError, OSError, TypeError):
+        raise ConfigError("Bundled skill resources are unavailable") from None
+    if not available:
+        raise ConfigError("Bundled skill resources are unavailable")
+    return candidate
 
 
 # ---------------------------------------------------------------------------
@@ -652,9 +621,6 @@ def _cmd_variables(argv: list[str]) -> int:
     _echo(f"{'Variable':<20}  {'Current Value'}")
     _echo("-" * 20 + "  " + "-" * 30)
     for key in sorted(ctx):
-        # implementation change: skip deprecated data_repo key (superseded by fieldkit_home)
-        if key == "data_repo":
-            continue
         # implementation change: show <not set> for blank values
         val = ctx[key]
         display = val if val else "<not set>"

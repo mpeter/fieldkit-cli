@@ -14,6 +14,7 @@ Covers:
 """
 
 import datetime
+import json
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
@@ -25,6 +26,8 @@ import pytest
 from fieldkit.pursuit.enums import Stage
 from fieldkit.pursuit.models import PursuitFrontmatter
 from fieldkit.watch import close_date_countdown as cdc
+from fieldkit.watch.status import WatcherRunResult
+from fieldkit.watch.status import write_run_status as _real_write_run_status
 
 pytestmark = pytest.mark.unit
 
@@ -218,7 +221,7 @@ def _make_run_patches(
             side_effect=lambda p: (fm_map[p], "", datetime.datetime(2026, 6, 6)),
         ),
         patch.object(cdc, "extract_champion_name", return_value="Jane Doe"),
-        patch.object(cdc, "write_run_status", return_value=None),
+        patch.object(cdc, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(cdc, "_load_state", return_value=state or {}),
         patch.object(cdc, "_save_state", return_value=None),
     ]
@@ -235,7 +238,9 @@ _KWARGS_run_countdown: dict[str, Any] = {
 }
 
 
-def _run_run_countdown(pursuits: list[Path], fm_map: dict[Path, Any], tmp_path: Path, **kwargs: Any) -> int:
+def _run_run_countdown(
+    pursuits: list[Path], fm_map: dict[Path, Any], tmp_path: Path, **kwargs: Any
+) -> WatcherRunResult:
     patchers = _make_run_patches(pursuits, fm_map, tmp_path / "watchers", **kwargs)
     # Enter all context managers
     mocks = [p.__enter__() for p in patchers]  # noqa: F841
@@ -258,7 +263,7 @@ def test_run_countdown_skip_closed_pursuit(tmp_path: Path) -> None:
         patch.object(cdc, "iterate_pursuits", return_value=iter([path])),
         patch.object(cdc, "load_pursuit", return_value=(fm, "", datetime.datetime(2026, 6, 6))),
         patch.object(cdc, "extract_champion_name", return_value="Jane"),
-        patch.object(cdc, "write_run_status"),
+        patch.object(cdc, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(cdc, "_load_state", return_value={}),
         patch.object(cdc, "_save_state"),
         patch.object(cdc, "append_countdown_alert") as mock_alert,
@@ -279,7 +284,7 @@ def test_run_countdown_skip_missing_close_date(tmp_path: Path) -> None:
         patch.object(cdc, "iterate_pursuits", return_value=iter([path])),
         patch.object(cdc, "load_pursuit", return_value=(fm, "", datetime.datetime(2026, 6, 6))),
         patch.object(cdc, "extract_champion_name", return_value="Jane"),
-        patch.object(cdc, "write_run_status"),
+        patch.object(cdc, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(cdc, "_load_state", return_value={}),
         patch.object(cdc, "_save_state"),
         patch.object(cdc, "append_countdown_alert") as mock_alert,
@@ -303,7 +308,7 @@ def test_run_countdown_date_coercion_string(tmp_path: Path) -> None:
         patch.object(cdc, "iterate_pursuits", return_value=iter([path])),
         patch.object(cdc, "load_pursuit", return_value=(fm, "", datetime.datetime(2026, 6, 6))),
         patch.object(cdc, "extract_champion_name", return_value="Jane"),
-        patch.object(cdc, "write_run_status"),
+        patch.object(cdc, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(cdc, "_load_state", return_value={}),
         patch.object(cdc, "_save_state"),
         patch.object(cdc, "append_countdown_alert") as mock_alert,
@@ -329,7 +334,7 @@ def test_run_countdown_date_coercion_date_object(tmp_path: Path) -> None:
         patch.object(cdc, "iterate_pursuits", return_value=iter([path])),
         patch.object(cdc, "load_pursuit", return_value=(fm, "", datetime.datetime(2026, 6, 6))),
         patch.object(cdc, "extract_champion_name", return_value="Jane"),
-        patch.object(cdc, "write_run_status"),
+        patch.object(cdc, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(cdc, "_load_state", return_value={}),
         patch.object(cdc, "_save_state"),
         patch.object(cdc, "append_countdown_alert") as mock_alert,
@@ -359,7 +364,7 @@ def test_run_countdown_meddpicc_gap_detection(tmp_path: Path) -> None:
         patch.object(cdc, "iterate_pursuits", return_value=iter([path])),
         patch.object(cdc, "load_pursuit", return_value=(fm, "", datetime.datetime(2026, 6, 6))),
         patch.object(cdc, "extract_champion_name", return_value="Jane"),
-        patch.object(cdc, "write_run_status"),
+        patch.object(cdc, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(cdc, "_load_state", return_value={}),
         patch.object(cdc, "_save_state"),
         patch.object(cdc, "append_countdown_alert") as mock_alert,
@@ -388,7 +393,7 @@ def test_run_countdown_suppression_same_tier(tmp_path: Path) -> None:
         patch.object(cdc, "iterate_pursuits", return_value=iter([path])),
         patch.object(cdc, "load_pursuit", return_value=(fm, "", datetime.datetime(2026, 6, 6))),
         patch.object(cdc, "extract_champion_name", return_value="Jane"),
-        patch.object(cdc, "write_run_status"),
+        patch.object(cdc, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(cdc, "_load_state", return_value=prior_state),
         patch.object(cdc, "_save_state"),
         patch.object(cdc, "append_countdown_alert") as mock_alert,
@@ -414,7 +419,7 @@ def test_run_countdown_suppression_tier_change(tmp_path: Path) -> None:
         patch.object(cdc, "iterate_pursuits", return_value=iter([path])),
         patch.object(cdc, "load_pursuit", return_value=(fm, "", datetime.datetime(2026, 6, 6))),
         patch.object(cdc, "extract_champion_name", return_value="Jane"),
-        patch.object(cdc, "write_run_status"),
+        patch.object(cdc, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(cdc, "_load_state", return_value=prior_state),
         patch.object(cdc, "_save_state"),
         patch.object(cdc, "append_countdown_alert") as mock_alert,
@@ -439,7 +444,7 @@ def test_run_countdown_dry_run_no_writes(tmp_path: Path) -> None:
         patch.object(cdc, "iterate_pursuits", return_value=iter([path])),
         patch.object(cdc, "load_pursuit", return_value=(fm, "", datetime.datetime(2026, 6, 6))),
         patch.object(cdc, "extract_champion_name", return_value="Jane"),
-        patch.object(cdc, "write_run_status"),
+        patch.object(cdc, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(cdc, "_load_state", return_value={}),
         patch.object(cdc, "_save_state"),
         patch.object(cdc, "append_countdown_alert") as mock_alert,
@@ -471,7 +476,7 @@ def test_run_countdown_overdue_alert(tmp_path: Path) -> None:
         patch.object(cdc, "iterate_pursuits", return_value=iter([path])),
         patch.object(cdc, "load_pursuit", return_value=(fm, "", datetime.datetime(2026, 6, 6))),
         patch.object(cdc, "extract_champion_name", return_value="Jane"),
-        patch.object(cdc, "write_run_status"),
+        patch.object(cdc, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(cdc, "_load_state", return_value={}),
         patch.object(cdc, "_save_state"),
         patch.object(cdc, "append_countdown_alert") as mock_alert,
@@ -499,7 +504,7 @@ def test_run_countdown_meddpicc_none_fields_flagged_as_gaps(tmp_path: Path) -> N
         patch.object(cdc, "iterate_pursuits", return_value=iter([path])),
         patch.object(cdc, "load_pursuit", return_value=(fm, "", datetime.datetime(2026, 6, 6))),
         patch.object(cdc, "extract_champion_name", return_value="Jane"),
-        patch.object(cdc, "write_run_status"),
+        patch.object(cdc, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(cdc, "_load_state", return_value={}),
         patch.object(cdc, "_save_state"),
         patch.object(cdc, "append_countdown_alert") as mock_alert,
@@ -540,7 +545,7 @@ def test_run_countdown_red_tier_reports_unconfirmed_buyer_and_missing_paper_proc
         patch.object(cdc, "iterate_pursuits", return_value=iter([path])),
         patch.object(cdc, "load_pursuit", return_value=(fm, "", datetime.datetime(2026, 6, 6))),
         patch.object(cdc, "extract_champion_name", return_value="Example Stakeholder"),
-        patch.object(cdc, "write_run_status"),
+        patch.object(cdc, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(cdc, "_load_state", return_value={}),
         patch.object(cdc, "_save_state"),
         patch.object(cdc, "append_countdown_alert") as mock_alert,
@@ -575,7 +580,7 @@ def test_run_countdown_next_steps_body_fallback(tmp_path: Path) -> None:
         patch.object(cdc, "iterate_pursuits", return_value=iter([path])),
         patch.object(cdc, "load_pursuit", return_value=(fm, body, datetime.datetime(2026, 6, 6))),
         patch.object(cdc, "extract_champion_name", return_value="Jane"),
-        patch.object(cdc, "write_run_status"),
+        patch.object(cdc, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(cdc, "_load_state", return_value={}),
         patch.object(cdc, "_save_state"),
         patch.object(cdc, "append_countdown_alert") as mock_alert,
@@ -604,7 +609,7 @@ def test_run_countdown_next_steps_body_fallback_truncated(tmp_path: Path) -> Non
         patch.object(cdc, "iterate_pursuits", return_value=iter([path])),
         patch.object(cdc, "load_pursuit", return_value=(fm, body, datetime.datetime(2026, 6, 6))),
         patch.object(cdc, "extract_champion_name", return_value="Jane"),
-        patch.object(cdc, "write_run_status"),
+        patch.object(cdc, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(cdc, "_load_state", return_value={}),
         patch.object(cdc, "_save_state"),
         patch.object(cdc, "append_countdown_alert") as mock_alert,
@@ -631,7 +636,7 @@ def test_run_countdown_none_close_date_logs_debug_not_warning(tmp_path: Path, ca
         patch.object(cdc, "iterate_pursuits", return_value=iter([path])),
         patch.object(cdc, "load_pursuit", return_value=(fm, "", datetime.datetime(2026, 6, 6))),
         patch.object(cdc, "extract_champion_name", return_value="Jane"),
-        patch.object(cdc, "write_run_status"),
+        patch.object(cdc, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(cdc, "_load_state", return_value={}),
         patch.object(cdc, "_save_state"),
         patch.object(cdc, "watcher_logging", return_value=nullcontext()),
@@ -667,7 +672,7 @@ def test_run_countdown_empty_string_close_date_logs_debug_not_warning(
         patch.object(cdc, "iterate_pursuits", return_value=iter([path])),
         patch.object(cdc, "load_pursuit", return_value=(fm, "", datetime.datetime(2026, 6, 6))),
         patch.object(cdc, "extract_champion_name", return_value="Jane"),
-        patch.object(cdc, "write_run_status"),
+        patch.object(cdc, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(cdc, "_load_state", return_value={}),
         patch.object(cdc, "_save_state"),
         patch.object(cdc, "watcher_logging", return_value=nullcontext()),
@@ -729,14 +734,14 @@ def test_duplicate_path_alerts_only_once(tmp_path: Path) -> None:
             side_effect=lambda p: (fm_map[p], "", datetime.datetime(2026, 6, 6)),
         ),
         patch.object(cdc, "extract_champion_name", return_value="Jane Doe"),
-        patch.object(cdc, "write_run_status", return_value=None),
+        patch.object(cdc, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(cdc, "_load_state", return_value={}),
         patch.object(cdc, "_save_state", side_effect=lambda state, **_: saved_states.append(state)),
         patch.object(cdc, "append_countdown_alert") as mock_alert,
     ):
         rc = cdc._run_countdown(**_KWARGS_bug175_within_run_dedup)
 
-    assert rc == 0
+    assert rc.exit_code == 0
     # Only one alert should have been written despite two path occurrences
     assert mock_alert.call_count == 1, (
         f"Expected 1 alert call, got {mock_alert.call_count} — "
@@ -796,14 +801,14 @@ def test_stale_key_not_in_saved_state(tmp_path: Path) -> None:
             side_effect=lambda p: (fm, "", datetime.datetime(2026, 6, 6)),
         ),
         patch.object(cdc, "extract_champion_name", return_value="Jane Doe"),
-        patch.object(cdc, "write_run_status", return_value=None),
+        patch.object(cdc, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(cdc, "_load_state", return_value=stale_state),
         patch.object(cdc, "_save_state", side_effect=lambda state, **_: saved_states.append(state)),
         patch.object(cdc, "append_countdown_alert"),
     ):
         rc = cdc._run_countdown(**_KWARGS_bug187_state_pruning)
 
-    assert rc == 0
+    assert rc.exit_code == 0
     assert saved_states, "State should have been saved"
     final_state = saved_states[-1]
     assert "acme/deleted-deal" not in final_state, (
@@ -843,14 +848,14 @@ def test_live_key_preserved_in_saved_state(tmp_path: Path) -> None:
             side_effect=lambda p: (fm, "", datetime.datetime(2026, 6, 6)),
         ),
         patch.object(cdc, "extract_champion_name", return_value="Jane Doe"),
-        patch.object(cdc, "write_run_status", return_value=None),
+        patch.object(cdc, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(cdc, "_load_state", return_value=prior_state),
         patch.object(cdc, "_save_state", side_effect=lambda state, **_: saved_states.append(state)),
         patch.object(cdc, "append_countdown_alert"),
     ):
         rc = cdc._run_countdown(**_KWARGS_bug187_state_pruning)
 
-    assert rc == 0
+    assert rc.exit_code == 0
     assert saved_states, "State should have been saved"
     final_state = saved_states[-1]
     assert "acme/existing-deal" in final_state, "Live pursuit key must be preserved in state"
@@ -892,14 +897,14 @@ def test_no_extra_write_when_nothing_pruned(tmp_path: Path) -> None:
             side_effect=lambda p: (fm, "", datetime.datetime(2026, 6, 6)),
         ),
         patch.object(cdc, "extract_champion_name", return_value="Jane Doe"),
-        patch.object(cdc, "write_run_status", return_value=None),
+        patch.object(cdc, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(cdc, "_load_state", return_value=prior_state),
         patch.object(cdc, "_save_state", side_effect=lambda state, **_: saved_states.append(state)),
         patch.object(cdc, "append_countdown_alert"),
     ):
         rc = cdc._run_countdown(**_KWARGS_bug187_state_pruning)
 
-    assert rc == 0
+    assert rc.exit_code == 0
     assert len(saved_states) == 1, (
         f"historic regression: _save_state must be called exactly once when nothing is pruned; got {len(saved_states)} call(s)"
     )
@@ -952,14 +957,14 @@ def test_datetime_object_no_warning_logged(tmp_path: Path, caplog: pytest.LogCap
             side_effect=lambda p: (fm, "", datetime.datetime(2026, 6, 6)),
         ),
         patch.object(cdc, "extract_champion_name", return_value="Jane Doe"),
-        patch.object(cdc, "write_run_status", return_value=None),
+        patch.object(cdc, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(cdc, "_load_state", return_value={}),
         patch.object(cdc, "_save_state", return_value=None),
         patch.object(cdc, "append_countdown_alert") as mock_alert,
     ):
         rc = cdc._run_countdown(**_KWARGS_bug189_datetime_coercion)
 
-    assert rc == 0
+    assert rc.exit_code == 0
     # No WARNING about unparseable sf_close_date
     warning_msgs = [r.message for r in caplog.records if r.levelno >= logging.WARNING and "sf_close_date" in r.message]
     assert not warning_msgs, (
@@ -991,14 +996,14 @@ def test_datetime_object_parsed_as_correct_date(tmp_path: Path) -> None:
             side_effect=lambda p: (fm, "", datetime.datetime(2026, 6, 6)),
         ),
         patch.object(cdc, "extract_champion_name", return_value="Jane Doe"),
-        patch.object(cdc, "write_run_status", return_value=None),
+        patch.object(cdc, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(cdc, "_load_state", return_value={}),
         patch.object(cdc, "_save_state", return_value=None),
         patch.object(cdc, "append_countdown_alert") as mock_alert,
     ):
         rc = cdc._run_countdown(**_KWARGS_bug189_datetime_coercion)
 
-    assert rc == 0
+    assert rc.exit_code == 0
     mock_alert.assert_called_once()
     result = mock_alert.call_args[0][0]
     # close_date in result should be the ISO date string (not datetime string)
@@ -1185,7 +1190,7 @@ def _make_patches_branch_coverage(
             side_effect=lambda p: (fm_map[p], "", datetime.datetime(2026, 6, 6)),
         ),
         patch.object(cdc, "extract_champion_name", return_value="Jane Doe"),
-        patch.object(cdc, "write_run_status", return_value=None),
+        patch.object(cdc, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(cdc, "_load_state", return_value=state or {}),
         patch.object(cdc, "_save_state", return_value=None),
     ]
@@ -1225,7 +1230,7 @@ def test_suppresses_when_same_tier_in_state(tmp_path: Path) -> None:
         for p in reversed(patchers):
             p.__exit__(None, None, None)
 
-    assert rc == 0
+    assert rc.exit_code == 0
     mock_alert.assert_not_called(), "Alert must be suppressed when same tier is already in state"
 
 
@@ -1262,7 +1267,7 @@ def test_escalates_tier_when_closer(tmp_path: Path) -> None:
         for p in reversed(patchers):
             p.__exit__(None, None, None)
 
-    assert rc == 0
+    assert rc.exit_code == 0
     mock_alert.assert_called_once(), "Alert must fire when tier escalates from yellow to red"
     result = mock_alert.call_args[0][0]
     assert result["tier"] == "red"
@@ -1292,7 +1297,7 @@ def test_skips_non_matching_account_filter(tmp_path: Path) -> None:
         for p in reversed(patchers):
             p.__exit__(None, None, None)
 
-    assert rc == 0
+    assert rc.exit_code == 0
     mock_alert.assert_not_called(), "Pursuit from non-matching account must be skipped"
 
 
@@ -1315,7 +1320,7 @@ def test_handles_missing_close_date(tmp_path: Path) -> None:
         for p in reversed(patchers):
             p.__exit__(None, None, None)
 
-    assert rc == 0
+    assert rc.exit_code == 0
     mock_alert.assert_not_called(), "Pursuit with no sf_close_date must be skipped without error"
 
 
@@ -1341,7 +1346,7 @@ def test_handles_closed_stage(tmp_path: Path) -> None:
         for p in reversed(patchers):
             p.__exit__(None, None, None)
 
-    assert rc == 0
+    assert rc.exit_code == 0
     mock_alert.assert_not_called(), "Closed-won pursuit must be skipped regardless of close date"
 
 
@@ -1376,7 +1381,7 @@ def _base_patches_run_countdown_inner_branches(
             side_effect=lambda p: (fm_map[p], "", datetime.datetime(2026, 6, 6)),
         ),
         patch.object(cdc, "extract_champion_name", return_value="Jane Doe"),
-        patch.object(cdc, "write_run_status", return_value=None),
+        patch.object(cdc, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(cdc, "_load_state", return_value={}),
         patch.object(cdc, "_save_state", return_value=None),
     ]
@@ -1391,7 +1396,7 @@ def test_empty_accounts_returns_exit_1(tmp_path: Path) -> None:
         patch.object(cdc, "_alerts_file", return_value=tmp_path / "watchers" / "alerts.md"),
         patch.object(cdc, "_state_file", return_value=tmp_path / "watchers" / "state.json"),
         patch.object(cdc, "iterate_pursuits", return_value=iter([])),
-        patch.object(cdc, "write_run_status", return_value=None),
+        patch.object(cdc, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(cdc, "_load_state", return_value={}),
         patch.object(cdc, "_save_state", return_value=None),
     ):
@@ -1402,7 +1407,7 @@ def test_empty_accounts_returns_exit_1(tmp_path: Path) -> None:
             account_filter=None,
             dry_run=False,
         )
-    assert rc == 1
+    assert rc.exit_code == 1
 
 
 def test_unknown_account_filter_returns_exit_1(tmp_path: Path) -> None:
@@ -1414,7 +1419,7 @@ def test_unknown_account_filter_returns_exit_1(tmp_path: Path) -> None:
         patch.object(cdc, "_alerts_file", return_value=tmp_path / "watchers" / "alerts.md"),
         patch.object(cdc, "_state_file", return_value=tmp_path / "watchers" / "state.json"),
         patch.object(cdc, "iterate_pursuits", return_value=iter([])),
-        patch.object(cdc, "write_run_status", return_value=None),
+        patch.object(cdc, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(cdc, "_load_state", return_value={}),
         patch.object(cdc, "_save_state", return_value=None),
     ):
@@ -1425,7 +1430,7 @@ def test_unknown_account_filter_returns_exit_1(tmp_path: Path) -> None:
             account_filter="nonexistent-account",
             dry_run=False,
         )
-    assert rc == 1
+    assert rc.exit_code == 1
 
 
 def test_path_without_pursuits_segment_is_skipped(tmp_path: Path) -> None:
@@ -1453,7 +1458,7 @@ def test_path_without_pursuits_segment_is_skipped(tmp_path: Path) -> None:
         for p in reversed(patchers):
             p.__exit__(None, None, None)
 
-    assert rc == 1
+    assert rc.exit_code == 1
     mock_alert.assert_not_called()
 
 
@@ -1470,7 +1475,7 @@ def test_load_pursuit_exception_is_skipped(tmp_path: Path) -> None:
         patch.object(cdc, "iterate_pursuits", return_value=iter([path])),
         patch.object(cdc, "load_pursuit", side_effect=OSError("disk error")),
         patch.object(cdc, "extract_champion_name", return_value="Jane"),
-        patch.object(cdc, "write_run_status", return_value=None),
+        patch.object(cdc, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(cdc, "_load_state", return_value={}),
         patch.object(cdc, "_save_state", return_value=None),
         patch.object(cdc, "append_countdown_alert") as mock_alert,
@@ -1482,7 +1487,7 @@ def test_load_pursuit_exception_is_skipped(tmp_path: Path) -> None:
             account_filter=None,
             dry_run=False,
         )
-    assert rc == 1
+    assert rc.exit_code == 1
     mock_alert.assert_not_called()
 
 
@@ -1507,8 +1512,57 @@ def test_unparseable_close_date_is_skipped(tmp_path: Path) -> None:
         for p in reversed(patchers):
             p.__exit__(None, None, None)
 
-    assert rc == 1
+    assert rc.exit_code == 1
     mock_alert.assert_not_called()
+
+
+def test_mixed_valid_and_invalid_pursuits_persist_partial_and_exit_nonzero(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A usable result must not hide a malformed pursuit in a completed pass."""
+    from fieldkit.__main__ import main
+
+    home = tmp_path / "fieldkit-home"
+    pursuits = home / "accounts" / "acme" / "pursuits"
+    watchers = tmp_path / "fieldkit-data" / "watchers"
+    pursuits.mkdir(parents=True)
+    close_date = (datetime.datetime.now(tz=datetime.UTC).date() + datetime.timedelta(days=5)).isoformat()
+    (pursuits / "valid.md").write_text(
+        f"---\nstage: discover\nsf_close_date: {close_date}\n---\n\n# Valid pursuit\n",
+        encoding="utf-8",
+    )
+    (pursuits / "invalid.md").write_text(
+        "---\nstage: discover\nsf_close_date: not-a-date\n---\n\n# Invalid pursuit\n",
+        encoding="utf-8",
+    )
+
+    cdc._alerts_file.cache_clear()
+    cdc._state_file.cache_clear()
+    try:
+        with (
+            patch.object(cdc, "get_accounts_config", return_value={"accounts": {"acme": {}}}),
+            patch.object(cdc, "get_fieldkit_home", return_value=home),
+            patch.object(cdc, "get_watchers_dir", return_value=watchers),
+            patch.object(cdc, "write_run_status", _real_write_run_status),
+            patch("fieldkit.watch.status.get_fieldkit_home", return_value=home),
+        ):
+            exit_code = main(["watch", "run", "close-date-countdown", "--json"])
+    finally:
+        cdc._alerts_file.cache_clear()
+        cdc._state_file.cache_clear()
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    payload = json.loads(captured.out)
+    assert payload["outcome"] == "partial"
+    assert payload["records_checked"] == 1
+    assert payload["failures"] == 1
+
+    status = json.loads((home / "watchers" / "watcher-run-status.json").read_text(encoding="utf-8"))
+    persisted = status["close-date-countdown"]
+    assert persisted["outcome"] == "partial"
+    assert persisted["records_checked"] == 1
+    assert persisted["failures"] == 1
 
 
 def test_out_of_range_tier_is_skipped(tmp_path: Path) -> None:
@@ -1549,7 +1603,7 @@ def test_out_of_range_tier_is_skipped(tmp_path: Path) -> None:
         for p in reversed(patchers):
             p.__exit__(None, None, None)
 
-    assert rc == 0
+    assert rc.exit_code == 0
     mock_alert.assert_not_called()
 
 
@@ -1580,7 +1634,7 @@ def test_enh134_next_steps_section_heading_fallback(tmp_path: Path) -> None:
             side_effect=lambda p: (fm_map[p], body, datetime.datetime(2026, 6, 6)),
         ),
         patch.object(cdc, "extract_champion_name", return_value="Jane Doe"),
-        patch.object(cdc, "write_run_status", return_value=None),
+        patch.object(cdc, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(cdc, "_load_state", return_value={}),
         patch.object(cdc, "_save_state", return_value=None),
         patch("fieldkit.watch.close_date_countdown.date", new=date_proxy),
@@ -1594,7 +1648,7 @@ def test_enh134_next_steps_section_heading_fallback(tmp_path: Path) -> None:
             dry_run=False,
         )
 
-    assert rc == 0
+    assert rc.exit_code == 0
     mock_alert.assert_called_once()
     result = mock_alert.call_args[0][0]
     assert result["next_steps"] == "Schedule architecture review with CTO"
@@ -1625,7 +1679,7 @@ def test_enh134_next_steps_section_stops_at_next_heading(tmp_path: Path) -> None
             side_effect=lambda p: (fm_map[p], body, datetime.datetime(2026, 6, 6)),
         ),
         patch.object(cdc, "extract_champion_name", return_value="Jane Doe"),
-        patch.object(cdc, "write_run_status", return_value=None),
+        patch.object(cdc, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(cdc, "_load_state", return_value={}),
         patch.object(cdc, "_save_state", return_value=None),
         patch("fieldkit.watch.close_date_countdown.date", new=date_proxy),
@@ -1639,7 +1693,7 @@ def test_enh134_next_steps_section_stops_at_next_heading(tmp_path: Path) -> None
             dry_run=False,
         )
 
-    assert rc == 0
+    assert rc.exit_code == 0
     mock_alert.assert_called_once()
     # No content under Next Steps before next heading → falls back to "(none)"
     result = mock_alert.call_args[0][0]
@@ -1763,7 +1817,7 @@ def test_state_write_failure_is_fatal(tmp_path: Path) -> None:
             side_effect=lambda p: (fm_map[p], "", datetime.datetime(2026, 6, 6)),
         ),
         patch.object(cdc, "extract_champion_name", return_value="Jane Doe"),
-        patch.object(cdc, "write_run_status", return_value=None),
+        patch.object(cdc, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(cdc, "_load_state", return_value={}),
         patch.object(cdc, "_save_state", side_effect=OSError("disk full")),
         patch("fieldkit.watch.close_date_countdown.date", new=date_proxy),
@@ -1771,7 +1825,7 @@ def test_state_write_failure_is_fatal(tmp_path: Path) -> None:
     ):
         rc = cdc._run_countdown_inner(**{**_KWARGS_BASE_run_countdown_inner_edge_branches, "account_filter": None})
 
-    assert rc == 1
+    assert rc.exit_code == 1
 
 
 def test_rel_path_value_error_uses_absolute(tmp_path: Path) -> None:
@@ -1801,7 +1855,7 @@ def test_rel_path_value_error_uses_absolute(tmp_path: Path) -> None:
             side_effect=lambda p: (fm_map[p], "", datetime.datetime(2026, 6, 6)),
         ),
         patch.object(cdc, "extract_champion_name", return_value="Jane Doe"),
-        patch.object(cdc, "write_run_status", return_value=None),
+        patch.object(cdc, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(cdc, "_load_state", return_value={}),
         patch.object(cdc, "_save_state", return_value=None),
         patch("fieldkit.watch.close_date_countdown.date", new=date_proxy),
@@ -1809,7 +1863,7 @@ def test_rel_path_value_error_uses_absolute(tmp_path: Path) -> None:
     ):
         rc = cdc._run_countdown_inner(**{**_KWARGS_BASE_run_countdown_inner_edge_branches, "account_filter": None})
 
-    assert rc == 0
+    assert rc.exit_code == 0
     mock_alert.assert_called_once()
     result = mock_alert.call_args[0][0]
     # rel_path should be the absolute path string (not relative)

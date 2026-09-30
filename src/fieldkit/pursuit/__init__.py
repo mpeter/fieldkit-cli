@@ -66,9 +66,6 @@ from fieldkit.pursuit.utils import (
 from fieldkit.pursuit.utils import (
     iterate_pursuits as iterate_pursuits,
 )
-from fieldkit.pursuit.utils import (
-    read_accounts_config as read_accounts_config,
-)
 
 __all__ = [
     "ALL_STAGES",
@@ -89,7 +86,6 @@ __all__ = [
     "iterate_pursuits",
     "load_pursuit",
     "parse_frontmatter",
-    "read_accounts_config",
     "render_raw_key_value",
     "split_frontmatter_raw",
     "write_frontmatter",

@@ -54,12 +54,42 @@ def _write_coverage(path: Path, *, percent: float = 92.5) -> None:
     )
 
 
-def test_junit_evidence_records_scope_revision_counts_and_bounded_failures(tmp_path: Path) -> None:
+@pytest.mark.parametrize("scope", ["tach-selected", "full-repository"])
+def test_junit_evidence_records_scope_revision_counts_and_bounded_failures(tmp_path: Path, scope: str) -> None:
     """A failed test run is attributable without copying failure payloads into the report."""
     junit = tmp_path / "pytest.xml"
     output = tmp_path / "pytest-summary.json"
     summary = tmp_path / "step-summary.md"
     _write_junit(junit, failures=1)
+    selection = tmp_path / "selection.json"
+    selection_tail = (
+        ["-p", "no:tach", "-n", "4"]
+        if scope == "full-repository"
+        else ["--tach", "--tach-base", "b" * 40, "-n", "0", "--tach-head", "a" * 40]
+    )
+    selection.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "source_revision": "a" * 40,
+                "test_scope": scope,
+                "argv": [
+                    "python",
+                    "-m",
+                    "pytest",
+                    "tests/",
+                    "-q",
+                    "-o",
+                    "addopts=",
+                    "--strict-markers",
+                    "--strict-config",
+                    *selection_tail,
+                    f"--junitxml={junit}",
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
 
     result = ci_evidence.main(
         [
@@ -73,7 +103,9 @@ def test_junit_evidence_records_scope_revision_counts_and_bounded_failures(tmp_p
             "--source-revision",
             "a" * 40,
             "--scope",
-            "tach-selected",
+            scope,
+            "--selection-report",
+            str(selection),
             "--command",
             "uv run pytest tests/ --tach",
         ]
@@ -83,13 +115,77 @@ def test_junit_evidence_records_scope_revision_counts_and_bounded_failures(tmp_p
     assert result == 1
     assert report["status"] == "fail"
     assert report["source_revision"] == "a" * 40
-    assert report["scope"] == "tach-selected"
+    assert report["scope"] == scope
     assert report["command"] == "uv run pytest tests/ --tach"
     assert report["tool"]["name"] == "pytest"
     assert report["counts"] == {"errors": 0, "failures": 1, "skipped": 1, "tests": 3}
     assert report["failures"] == ["tests.test_demo::test_failure"]
     assert "private output" not in output.read_text(encoding="utf-8")
     assert "private output" not in summary.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "fault",
+    ["boolean-version", "duplicate-scope", "duplicate-argv", "revision", "filtered", "zero-tests", "all-skipped"],
+)
+def test_full_evidence_rejects_unsupported_claims(tmp_path: Path, fault: str) -> None:
+    """Malformed, mixed-revision, narrowed and empty runs cannot claim full-suite success."""
+    junit = tmp_path / "pytest.xml"
+    output = tmp_path / "summary.json"
+    selection = tmp_path / "selection.json"
+    _write_junit(junit, tests=0 if fault == "zero-tests" else 3, skipped=3 if fault == "all-skipped" else 0)
+    command = [
+        "python",
+        "-m",
+        "pytest",
+        "tests/",
+        "-q",
+        "-o",
+        "addopts=",
+        "--strict-markers",
+        "--strict-config",
+        "-p",
+        "no:tach",
+        "-n",
+        "4",
+        f"--junitxml={junit}",
+    ]
+    if fault == "filtered":
+        command.extend(["-k", "one_test"])
+    document = json.dumps(
+        {
+            "schema_version": True if fault == "boolean-version" else 1,
+            "source_revision": ("b" if fault == "revision" else "a") * 40,
+            "test_scope": "full-repository",
+            "argv": command,
+        }
+    )
+    if fault == "duplicate-scope":
+        document = document[:-1] + ', "test_scope": "full-repository"}'
+    if fault == "duplicate-argv":
+        document = document[:-1] + ', "argv": ' + json.dumps(command) + "}"
+    selection.write_text(document, encoding="utf-8")
+
+    result = ci_evidence.main(
+        [
+            "junit",
+            "--input",
+            str(junit),
+            "--output",
+            str(output),
+            "--source-revision",
+            "a" * 40,
+            "--scope",
+            "full-repository",
+            "--selection-report",
+            str(selection),
+            "--command",
+            "pytest",
+        ]
+    )
+
+    assert result == 2
+    assert not output.exists()
 
 
 def test_junit_evidence_rejects_missing_input(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

@@ -37,6 +37,7 @@ def print_sync_summary(
     *,
     as_json: bool = False,
     quiet: bool = False,
+    dry_run: bool = False,
 ) -> None:
     """Print the human summary and emit its JSON representation."""
     if not quiet:
@@ -44,18 +45,23 @@ def print_sync_summary(
         summary_table = Table(show_header=False, box=None, pad_edge=False)
         summary_table.add_column("Label", min_width=40)
         summary_table.add_column("Count", justify="right", min_width=4)
-        summary_table.add_row("Synced (pursuit file matched + written)", str(total_updated))
+        update_label = (
+            "Would sync (pursuit file matched; no write)" if dry_run else "Synced (pursuit file matched + written)"
+        )
+        summary_table.add_row(update_label, str(total_updated))
         summary_table.add_row("Untracked (no local pursuit file found)", str(total_untracked))
-        summary_table.add_row("Errors (write failures)", str(total_errors))
-        summary_table.add_row("Total opportunities seen", str(total_updated + total_untracked + total_errors))
+        summary_table.add_row("Errors (search, scan, or write failures)", str(total_errors))
+        summary_table.add_row("Total counted outcomes", str(total_updated + total_untracked + total_errors))
         console.print(summary_table)
 
-    result_json = json.dumps(
-        {
-            "status": "ok" if total_errors == 0 else "partial",
-            "updated": total_updated,
-            "untracked": total_untracked,
-            "errors": total_errors,
-        }
-    )
+    result: dict[str, object] = {
+        "status": "ok" if total_errors == 0 else "partial",
+        "updated": 0 if dry_run else total_updated,
+    }
+    if dry_run:
+        result["would_update"] = total_updated
+    result.update({"untracked": total_untracked, "errors": total_errors})
+    if dry_run:
+        result["dry_run"] = True
+    result_json = json.dumps(result)
     click.echo(result_json, err=not as_json)

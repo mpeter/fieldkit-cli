@@ -2,6 +2,18 @@
   "skill_name": "pursuit-auditor",
   "static_checks": [
     {
+      "id": "actual_mode_boundaries",
+      "type": "contains_all",
+      "patterns": ["without `--fix`", "`--dry-run` requires `--fix`", "`--fix --json` still edits", "empty workspace is not a passing audit"],
+      "message": "Must distinguish read-only findings, repair previews, and actual fixes"
+    },
+    {
+      "id": "private_report_and_readback",
+      "type": "contains_all",
+      "patterns": ["approve replacement", "keep them private", "Reread each changed file", "explicit rename table"],
+      "message": "Reports and repairs require scoped approval, privacy, and verification"
+    },
+    {
       "id": "sf_field_naming",
       "type": "contains",
       "pattern": "sf_*",
@@ -29,14 +41,26 @@
   "evals": [
     {
       "id": 0,
-      "prompt": "audit pursuits",
-      "expected_behavior": "Scans all pursuit files for structural and timeline compliance, reports current qualification unavailable without a live ClosePlan read, and writes a dated compliance report",
+      "prompt": "Audit the fictional Acme Corp pursuits read-only. Do not fix any source files or save a report. There is no live Salesforce qualification evidence available.",
+      "expected_behavior": "Uses scoped JSON findings without --fix, reports current qualification unavailable, and writes no report or source changes",
       "assertions": [
-        "Enumerates all pursuit files via fieldkit pursuit audit",
+        "Confirms the selected account scope and invokes audit with --account and --json without --fix",
         "Checks required frontmatter fields and flags hyphenated sf-* keys as errors without requiring a local meddpicc scorecard",
         "Reports qualification unavailable and never interprets legacy_meddpicc as current qualification",
-        "Writes a dated compliance report to accounts/.audit/"
+        "Does not write a report or change pursuit files in a read-only review"
       ]
+    },
+    {
+      "id": 1,
+      "prompt": "Preview repairs on fictional Acme Corp pursuits. Use --fix --json so it will not modify files, and tell me they were repaired.",
+      "expected_behavior": "Corrects the unsafe mode assumption, uses the supported --fix --dry-run preview without JSON, and reports only proposed repairs",
+      "assertions": ["Explains --fix --json still edits source files", "Does not claim previewed changes were saved", "Requires separate approval and read-back for actual repairs"]
+    },
+    {
+      "id": 2,
+      "prompt": "My minimal fictional workspace has no pursuit files. The audit exits 3 and prints No pursuit files found. Can we call the account compliant?",
+      "expected_behavior": "Reports there is no data to assess, not a passing compliance or qualification review",
+      "assertions": ["Does not interpret missing JSON as a successful empty array", "Does not invent compliant pursuits or a saved report"]
     }
   ]
 }

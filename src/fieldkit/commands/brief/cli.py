@@ -1,9 +1,8 @@
 """fieldkit brief CLI group.
 
 Defines the Click group and subcommands for the morning brief command.
-Business logic lives in main.py (_run, the pipeline-only path) and
-generate.py (_run_generate, the merged alerts+calendar+pipeline path);
-data collection in collect.py; rendering in render.py.
+Pipeline-only generation lives in fieldkit.brief.pipeline_only; the merged
+alerts and calendar path lives in generate.py.
 """
 
 import json
@@ -11,19 +10,55 @@ from pathlib import Path
 
 import click
 
+from fieldkit.brief.pipeline_only import PipelineOnlyResult, generate_pipeline_only
 from fieldkit.cli_exit import EXIT_DATA, EXIT_PARTIAL, cli_main
 from fieldkit.cli_registry import declare_write
 from fieldkit.commands.brief.generate import _run_generate
-from fieldkit.commands.brief.main import (
-    DESCRIPTION,
-    FLAGS,
-    USAGE,
-    _run,
-)
 from fieldkit.config import ConfigError, get_fieldkit_home
+from fieldkit.errors import AuthError
+from fieldkit.util.saved_reports import open_saved_report, read_saved_report
 
 # ── Feature introspection metadata (consumed by fieldkit version --features) ──
+DESCRIPTION = "Generate today's pipeline-only brief — pursuit alerts, champion signals, decay, and priorities"
+USAGE = "fieldkit brief generate --pipeline-only [--no-llm] [--account ACCOUNT] [--verbose]"
+FLAGS = {
+    "--no-llm": "Skip LLM synthesis; write collector output directly",
+    "--account": "Limit brief to a single account slug",
+    "--verbose / -v": "Print per-collector timing to stderr",
+}
 __all__ = ["DESCRIPTION", "FLAGS", "USAGE", "cli"]
+
+
+def _emit_pipeline_only_result(result: PipelineOnlyResult, *, as_json: bool, verbose: bool) -> None:
+    click.echo(f"[morning_brief] Collecting data for {result.path.stem.removeprefix('morning-brief-')} ...", err=True)
+    if verbose:
+        for collector, seconds in result.timings:
+            click.echo(f"[brief] {collector}... done ({seconds:.2f}s)", err=True)
+    if as_json:
+        click.echo(
+            json.dumps(
+                {
+                    "account": result.account,
+                    "degraded": result.degraded,
+                    "dry_run": result.dry_run,
+                    "path": None if result.dry_run else str(result.path),
+                    "written": not result.dry_run,
+                },
+                sort_keys=True,
+            )
+        )
+    else:
+        notice = "" if result.dry_run else f"\n\nBrief saved: {result.path}"
+        click.echo(result.text + notice)
+
+
+def _run_pipeline_only(
+    *, no_llm: bool, account: str | None, verbose: bool = False, as_json: bool = False, dry_run: bool = False
+) -> None:
+    result = generate_pipeline_only(no_llm=no_llm, account=account, dry_run=dry_run)
+    _emit_pipeline_only_result(result, as_json=as_json, verbose=verbose)
+    if result.provider_failure is not None:
+        raise result.provider_failure
 
 
 @click.group(
@@ -105,43 +140,58 @@ def cmd_generate(
 
     if pipeline_only:
         with cli_main():
-            _run(no_llm=no_llm, account=account, verbose=verbose, as_json=as_json, dry_run=dry_run)
+            _run_pipeline_only(no_llm=no_llm, account=account, verbose=verbose, as_json=as_json, dry_run=dry_run)
         return
 
     import logging
 
+    from fieldkit.config import ConfigError
+    from fieldkit.watch.integration_plan import build_integration_plan
     from fieldkit.watch.preflight import preflight_check
 
     if verbose:
         logging.getLogger().setLevel(logging.DEBUG)
 
-    # implementation note: fast-fail before starting the heavy operation.
-    # Dry-run skips MCP and LLM checks (not required for a dry run).
-    failures = preflight_check(["sf", "gmail", "mcp", "llm"], dry_run=dry_run)
-    if failures:
-        for msg in failures:
-            click.echo(f"Pre-flight check failed: {msg}", err=True)
-        raise SystemExit(EXIT_PARTIAL)
-
     try:
-        raise SystemExit(
-            _run_generate(date_str=date_str, dry_run=dry_run, verbose=verbose, account=account, as_json=as_json)
+        plan = build_integration_plan(
+            google_when_configured=False,
+            sf_requested=False,
+            backstory_when_configured=False,
+            draft_queue_when_configured=False,
+            calendar_when_configured=True,
+            slack_requested=False,
+            llm_when_configured=True,
         )
-    except RuntimeError as exc:
-        # implementation note: 0-byte brief guard raises RuntimeError; map to EXIT_DATA (3) so
-        # the watcher reports a data error rather than an unhandled Python traceback.
-        click.echo(f"Fatal: {exc}", err=True)
+    except ConfigError as exc:
+        click.echo(f"Config error: {exc}", err=True)
         raise SystemExit(EXIT_DATA) from None
 
+    failures = [] if dry_run else preflight_check(list(plan.preflight_services), dry_run=False)
+    if failures:
+        raise AuthError("Selected brief integration requires authentication or user setup")
 
-def _emit_open_result(latest: Path, age_seconds: float, *, as_json: bool) -> None:
+    with cli_main():
+        raise SystemExit(
+            _run_generate(
+                date_str=date_str,
+                dry_run=dry_run,
+                verbose=verbose,
+                account=account,
+                as_json=as_json,
+                no_llm=not plan.llm,
+                calendar_enabled=plan.calendar,
+            ).exit_code
+        )
+
+
+def _emit_open_result(latest: Path, age_seconds: float, *, as_json: bool, opened: bool) -> None:
     if as_json:
         click.echo(
             json.dumps(
                 {
                     "path": str(latest),
                     "uri": latest.as_uri(),
-                    "opened": True,
+                    "opened": opened,
                     "stale": age_seconds > 86400,
                     "age_hours": int(age_seconds // 3600),
                 },
@@ -149,19 +199,18 @@ def _emit_open_result(latest: Path, age_seconds: float, *, as_json: bool) -> Non
             )
         )
     else:
-        click.echo(f"Opening: {latest}")
+        click.echo(f"{'Opened' if opened else 'Selected'}: {latest}")
 
 
 @cli.command("open")
 @click.option("--json", "as_json", is_flag=True, default=False, help="Emit the selected brief as JSON.")
-def cmd_open(as_json: bool) -> None:
+@click.option("--no-open", is_flag=True, help="Select the report without launching a viewer.")
+def cmd_open(as_json: bool, no_open: bool) -> None:
     """Open the most recent saved morning brief in the system default viewer.
 
     Looks for the most recent brief file in the briefs/ directory under the
     configured data root. Use 'fieldkit brief generate' to generate a new one.
     """
-    import webbrowser
-
     try:
         data_root = get_fieldkit_home()
     except ConfigError as exc:
@@ -180,7 +229,12 @@ def cmd_open(as_json: bool) -> None:
     latest = briefs[0]
 
     # historic regression: warn when the most recent brief is stale (>24h old)
-    age_seconds = time.time() - latest.stat().st_mtime
+    try:
+        snapshot = read_saved_report(latest, Path(data_root))
+    except (ValueError, OSError):
+        click.echo("Saved brief is missing, unsafe, invalid, or empty; generate it again.", err=True)
+        raise SystemExit(EXIT_DATA) from None
+    age_seconds = time.time() - snapshot.info.st_mtime
     if age_seconds > 86400:
         age_hours = int(age_seconds // 3600)
         age_label = f"{age_hours // 24} day(s)" if age_hours >= 48 else f"{age_hours} hour(s)"
@@ -189,5 +243,8 @@ def cmd_open(as_json: bool) -> None:
             err=True,
         )
 
-    _emit_open_result(latest, age_seconds, as_json=as_json)
-    webbrowser.open(latest.as_uri())
+    opened = open_saved_report(latest, no_open=no_open)
+    _emit_open_result(latest, age_seconds, as_json=as_json, opened=opened)
+    if not no_open and not opened:
+        click.echo("The system viewer did not accept the report; open it manually.", err=True)
+        raise SystemExit(EXIT_PARTIAL)

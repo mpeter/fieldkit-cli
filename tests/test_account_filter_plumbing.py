@@ -7,7 +7,6 @@ All tests are @pytest.mark.unit with tmp_path DB fixtures; no live I/O.
 
 import sqlite3
 from pathlib import Path
-from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -18,41 +17,6 @@ pytestmark = pytest.mark.unit
 # ---------------------------------------------------------------------------
 # Shared fixtures and helpers
 # ---------------------------------------------------------------------------
-
-_GMAIL_SCHEMA = """
-CREATE TABLE IF NOT EXISTS threads (
-    thread_id     TEXT PRIMARY KEY,
-    subject       TEXT,
-    snippet       TEXT,
-    message_count INTEGER DEFAULT 0,
-    updated_at    TEXT
-);
-CREATE TABLE IF NOT EXISTS messages (
-    message_id  TEXT PRIMARY KEY,
-    thread_id   TEXT NOT NULL,
-    from_addr   TEXT,
-    to_addr     TEXT,
-    cc_addr     TEXT,
-    subject     TEXT,
-    date_str    TEXT,
-    date_epoch  INTEGER,
-    labels      TEXT DEFAULT '[]',
-    body_plain  TEXT DEFAULT '',
-    body_html   TEXT DEFAULT '',
-    size_bytes  INTEGER DEFAULT 0,
-    snippet     TEXT,
-    synced_at   TEXT NOT NULL DEFAULT (datetime('now'))
-);
-CREATE TABLE IF NOT EXISTS labels (
-    label_id    TEXT PRIMARY KEY,
-    label_name  TEXT
-);
-CREATE TABLE IF NOT EXISTS thread_accounts (
-    thread_id   TEXT,
-    account     TEXT,
-    PRIMARY KEY (thread_id, account)
-);
-"""
 
 _PIPELINE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS pipelines (
@@ -89,8 +53,10 @@ def _make_gmail_db(path: Path) -> None:
     """Create a gmail.db with Gemini notes for two accounts: acme and globalpay."""
     import time
 
-    conn = sqlite3.connect(str(path))
-    conn.executescript(_GMAIL_SCHEMA)
+    from fieldkit.gmail.publication import GMAIL_QUERY_READY_KEY, apply_gmail_page, initialize_gmail_publication
+    from fieldkit.sqlite_publication import SQLiteMutationConnection
+
+    initialize_gmail_publication(path)
     now = int(time.time())
     msgs = [
         # acme-account messages (to_addr contains acme.example.com domain)
@@ -116,67 +82,85 @@ def _make_gmail_db(path: Path) -> None:
             "https://docs.google.com/document/d/GLOBAL_DOC_001/edit",
         ),
     ]
-    for msg_id, thread_id, from_addr, to_addr, cc_addr, subject, epoch, doc_url in msgs:
-        doc_url.split("/d/")[1].split("/")[0]
-        conn.execute(
+
+    def seed(conn: SQLiteMutationConnection) -> None:
+        conn.executemany(
             "INSERT OR IGNORE INTO threads (thread_id, subject) VALUES (?, ?)",
-            (thread_id, subject),
+            [(msg[1], msg[5]) for msg in msgs],
         )
-        conn.execute(
+        conn.executemany(
             """
             INSERT OR IGNORE INTO messages
                 (message_id, thread_id, from_addr, to_addr, cc_addr, subject, body_html, body_plain, date_epoch)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (
-                msg_id,
-                thread_id,
-                from_addr,
-                to_addr,
-                cc_addr,
-                subject,
-                f'<p>View notes: <a href="{doc_url}">Open</a></p>',
-                f"View notes: {doc_url}",
-                epoch,
-            ),
+            [
+                (
+                    msg_id,
+                    thread_id,
+                    from_addr,
+                    to_addr,
+                    cc_addr,
+                    subject,
+                    f'<p>View notes: <a href="{doc_url}">Open</a></p>',
+                    f"View notes: {doc_url}",
+                    epoch,
+                )
+                for msg_id, thread_id, from_addr, to_addr, cc_addr, subject, epoch, doc_url in msgs
+            ],
         )
-    conn.commit()
-    conn.close()
+        conn.execute(
+            "INSERT OR REPLACE INTO sync_state(key, value) VALUES (?, 'true')",
+            (GMAIL_QUERY_READY_KEY,),
+        )
+
+    apply_gmail_page(path, seed)
 
 
 def _make_gmail_db_with_labels(path: Path) -> None:
     """Create a gmail.db with ref/* labels for two accounts."""
-    conn = sqlite3.connect(str(path))
-    conn.executescript(_GMAIL_SCHEMA)
-    conn.executemany(
-        "INSERT OR IGNORE INTO labels (label_id, label_name) VALUES (?, ?)",
-        [
-            ("L_ACME", "ref/acme"),
-            ("L_GLOBAL", "ref/globalpay"),
-        ],
-    )
-    conn.executemany(
-        """
-        INSERT OR IGNORE INTO messages
-            (message_id, thread_id, from_addr, labels, body_plain, date_epoch)
-        VALUES (?, ?, ?, ?, ?, 1700000000)
-        """,
-        [
-            ("msg_acme_1", "thread_acme_1", "sender@acme.example.com", '["L_ACME"]', "acme email"),
-            ("msg_acme_2", "thread_acme_2", "sender2@acme.example.com", '["L_ACME"]', "acme email 2"),
-            ("msg_global_1", "thread_global_1", "sender@globalpay.example.com", '["L_GLOBAL"]', "global email"),
-        ],
-    )
-    conn.executemany(
-        "INSERT OR IGNORE INTO threads (thread_id, subject) VALUES (?, ?)",
-        [
-            ("thread_acme_1", "Acme Thread 1"),
-            ("thread_acme_2", "Acme Thread 2"),
-            ("thread_global_1", "GlobalPay Thread 1"),
-        ],
-    )
-    conn.commit()
-    conn.close()
+    from fieldkit.gmail.publication import GMAIL_QUERY_READY_KEY, apply_gmail_page, initialize_gmail_publication
+    from fieldkit.sqlite_publication import SQLiteMutationConnection
+
+    initialize_gmail_publication(path)
+
+    def seed(connection: SQLiteMutationConnection) -> None:
+        connection.executemany(
+            "INSERT OR IGNORE INTO labels (label_id, label_name) VALUES (?, ?)",
+            [("L_ACME", "ref/acme"), ("L_GLOBAL", "ref/globalpay")],
+        )
+        connection.executemany(
+            "INSERT OR IGNORE INTO threads (thread_id, subject) VALUES (?, ?)",
+            [
+                ("thread_acme_1", "Acme Thread 1"),
+                ("thread_acme_2", "Acme Thread 2"),
+                ("thread_global_1", "GlobalPay Thread 1"),
+            ],
+        )
+        connection.executemany(
+            """
+            INSERT OR IGNORE INTO messages
+                (message_id, thread_id, from_addr, labels, body_plain, date_epoch)
+            VALUES (?, ?, ?, ?, ?, 1700000000)
+            """,
+            [
+                ("msg_acme_1", "thread_acme_1", "sender@acme.example.com", '["L_ACME"]', "acme email"),
+                ("msg_acme_2", "thread_acme_2", "sender2@acme.example.com", '["L_ACME"]', "acme email 2"),
+                (
+                    "msg_global_1",
+                    "thread_global_1",
+                    "sender@globalpay.example.com",
+                    '["L_GLOBAL"]',
+                    "global email",
+                ),
+            ],
+        )
+        connection.execute(
+            "INSERT OR REPLACE INTO sync_state(key, value) VALUES (?, 'true')",
+            (GMAIL_QUERY_READY_KEY,),
+        )
+
+    apply_gmail_page(path, seed)
 
 
 def _make_pipeline_db(path: Path) -> None:
@@ -236,7 +220,6 @@ def test_enh424_discover_dryrun_account_filter_excludes_other_account(tmp_path: 
         patch("fieldkit.gmail.discover.get_gmail_db_path", return_value=gmail_db),
         patch("fieldkit.config.get_account_names", return_value=["acme", "globalpay"]),
         patch("fieldkit.ingest.router.get_accounts_config", return_value=accounts_cfg),
-        patch("fieldkit.ingest.router.get_internal_domains", return_value=[]),
     ):
         from fieldkit.commands.ingest.discover import cli as discover_cli
 
@@ -326,7 +309,7 @@ def test_enh429_quota_account_filter_excludes_other_account_pursuit(tmp_path: Pa
     _make_pursuit_md(acme_dir / "acme-deal.md", stage="propose", acv=200000.0)
     _make_pursuit_md(global_dir / "global-deal.md", stage="propose", acv=999999.0)
 
-    quota_cfg = {"target": 1_000_000, "period": "FY2026"}
+    quota_cfg = {"target": 1_000_000, "period": "2026-H2"}
 
     with (
         patch("fieldkit.config.get_account_names", return_value=["acme", "globalpay"]),
@@ -357,7 +340,7 @@ def test_enh429_quota_unfiltered_includes_all_accounts(tmp_path: Path) -> None:
     _make_pursuit_md(acme_dir / "acme-deal.md", stage="propose", acv=200000.0)
     _make_pursuit_md(global_dir / "global-deal.md", stage="propose", acv=300000.0)
 
-    quota_cfg = {"target": 1_000_000, "period": "FY2026"}
+    quota_cfg = {"target": 1_000_000, "period": "2026-H2"}
 
     with (
         patch("fieldkit.commands.pipeline.cli.get_pipeline_quota", return_value=quota_cfg),
@@ -391,7 +374,7 @@ def test_enh467_morning_brief_unknown_account_exits_3() -> None:
 
 def test_enh467_morning_brief_account_filter_limits_pursuit_rows(tmp_path: Path) -> None:
     """collect_all_pursuit_data with account_filter only returns that account's pursuits."""
-    from fieldkit.commands.pipeline.collect import collect_all_pursuit_data
+    from fieldkit.pipeline.collect import collect_all_pursuit_data
 
     # Create pursuits for two accounts
     acme_dir = tmp_path / "accounts" / "acme" / "pursuits"
@@ -399,7 +382,7 @@ def test_enh467_morning_brief_account_filter_limits_pursuit_rows(tmp_path: Path)
     _make_pursuit_md(acme_dir / "acme-deal.md", stage="propose", acv=200000.0)
     _make_pursuit_md(global_dir / "global-deal.md", stage="propose", acv=300000.0)
 
-    with patch("fieldkit.commands.pipeline.collect.get_gmail_db_path") as mock_path:
+    with patch("fieldkit.pipeline.collect.get_gmail_db_path") as mock_path:
         mock_path.return_value = tmp_path / "nonexistent_gmail.db"
         rows, _signals, _blindspots = collect_all_pursuit_data(tmp_path, account_filter="acme")
 
@@ -410,17 +393,17 @@ def test_enh467_morning_brief_account_filter_limits_pursuit_rows(tmp_path: Path)
 
 
 def test_pipeline_account_filter_limits_blindspot_data_to_selected_account(tmp_path: Path) -> None:
-    from fieldkit.commands.pipeline.collect import collect_all_pursuit_data
+    from fieldkit.pipeline.collect import collect_all_pursuit_data
 
     accounts_config = {
         "accounts": {
-            "acme": {"blindspot_threshold": 2},
-            "globalpay": {"blindspot_threshold": 1},
+            "acme": {"pursuit_coverage_threshold": 2},
+            "globalpay": {"pursuit_coverage_threshold": 1},
         }
     }
     with (
-        patch("fieldkit.commands.pipeline.collect.get_gmail_db_path", return_value=tmp_path / "missing.db"),
-        patch("fieldkit.commands.pipeline.collect.read_accounts_config", return_value=accounts_config),
+        patch("fieldkit.pipeline.collect.get_gmail_db_path", return_value=tmp_path / "missing.db"),
+        patch("fieldkit.pipeline.collect.get_accounts_config", return_value=accounts_config),
     ):
         result = collect_all_pursuit_data(tmp_path, account_filter="acme")
 
@@ -429,14 +412,14 @@ def test_pipeline_account_filter_limits_blindspot_data_to_selected_account(tmp_p
 
 def test_enh467_morning_brief_unfiltered_collects_all_accounts(tmp_path: Path) -> None:
     """collect_all_pursuit_data without filter returns pursuits from all accounts."""
-    from fieldkit.commands.pipeline.collect import collect_all_pursuit_data
+    from fieldkit.pipeline.collect import collect_all_pursuit_data
 
     acme_dir = tmp_path / "accounts" / "acme" / "pursuits"
     global_dir = tmp_path / "accounts" / "globalpay" / "pursuits"
     _make_pursuit_md(acme_dir / "acme-deal.md", stage="propose", acv=200000.0)
     _make_pursuit_md(global_dir / "global-deal.md", stage="propose", acv=300000.0)
 
-    with patch("fieldkit.commands.pipeline.collect.get_gmail_db_path") as mock_path:
+    with patch("fieldkit.pipeline.collect.get_gmail_db_path") as mock_path:
         mock_path.return_value = tmp_path / "nonexistent_gmail.db"
         rows, _signals, _blindspots = collect_all_pursuit_data(tmp_path)
 
@@ -462,8 +445,8 @@ def test_enh475_draft_queue_unknown_account_exits_3() -> None:
     assert "no-such-account" in result.output
 
 
-def test_enh475_draft_queue_account_filter_excludes_other_account_draft(tmp_path: Path) -> None:
-    """draft-queue --account acme excludes drafts addressed to globalpay recipients."""
+def test_enh475_draft_queue_account_filter_reports_without_overwriting_global_snapshot(tmp_path: Path) -> None:
+    """A scoped check must not replace the canonical all-account alert snapshot."""
     from fieldkit.commands.watch import draft_queue as dq
 
     # Two draft messages: one to acme, one to globalpay
@@ -482,32 +465,32 @@ def test_enh475_draft_queue_account_filter_excludes_other_account_draft(tmp_path
         }
     }
 
-    written_alerts: list[Any] = []
-
-    def _fake_write_alerts(drafts: list[Any], *, dry_run: bool) -> None:
-        written_alerts.extend(drafts)
+    write_alerts = MagicMock()
+    write_status = MagicMock(return_value="written")
 
     with (
         patch(
             "fieldkit.watch.draft_queue.get_user_email_from_env",
             return_value="user@internal.example.com",  # pii-guard: ignore
         ),
-        patch("fieldkit.watch.morning_brief_mcp.MCPSession") as mock_mcp,
+        patch("fieldkit.watch.draft_queue.get_mcp_endpoint", return_value="https://gateway.example.com/drafts"),
+        patch("fieldkit.watch.mcp.MCPSession") as mock_mcp,
         patch("fieldkit.watch.draft_queue.parse_drafts", return_value=[draft_acme, draft_global]),
-        patch("fieldkit.watch.draft_queue.write_alerts", side_effect=_fake_write_alerts),
-        patch("fieldkit.watch.draft_queue.write_run_status"),
+        patch("fieldkit.watch.draft_queue.write_alerts", write_alerts),
+        patch("fieldkit.watch.draft_queue.write_run_status", write_status),
         patch("fieldkit.ingest.router.get_accounts_config", return_value=accounts_cfg),
-        patch("fieldkit.ingest.router.get_internal_domains", return_value=[]),
+        patch("fieldkit.config.get_account_names", return_value=["acme", "globalpay"]),
     ):
         mock_session = MagicMock()
         mock_mcp.return_value = mock_session
         mock_session.call_tool.return_value = []
 
-        rc = dq._run_draft_queue(dry_run=False, account="acme")
+        result = CliRunner().invoke(dq.cli, ["--account", "acme"])
 
-    assert rc == 0
-    assert len(written_alerts) == 1, f"Expected 1 draft (acme only), got {len(written_alerts)}: {written_alerts}"
-    assert written_alerts[0]["to"] == "alice@acme.example.com"  # pii-guard: ignore
+    assert result.exit_code == 0, result.output
+    write_alerts.assert_not_called()
+    assert write_status.call_args.kwargs["records_checked"] == 1
+    assert write_status.call_args.kwargs["alerts_generated"] == 0
 
 
 def test_enh475_draft_queue_unfiltered_includes_all_drafts(tmp_path: Path) -> None:
@@ -522,29 +505,28 @@ def test_enh475_draft_queue_unfiltered_includes_all_drafts(tmp_path: Path) -> No
         "age": "2d",
     }
 
-    written_alerts: list[Any] = []
-
-    def _fake_write_alerts(drafts: list[Any], *, dry_run: bool) -> None:
-        written_alerts.extend(drafts)
+    write_alerts = MagicMock()
+    write_status = MagicMock(return_value="written")
 
     with (
         patch(
             "fieldkit.watch.draft_queue.get_user_email_from_env",
             return_value="user@internal.example.com",  # pii-guard: ignore
         ),
-        patch("fieldkit.watch.morning_brief_mcp.MCPSession") as mock_mcp,
+        patch("fieldkit.watch.draft_queue.get_mcp_endpoint", return_value="https://gateway.example.com/drafts"),
+        patch("fieldkit.watch.mcp.MCPSession") as mock_mcp,
         patch("fieldkit.watch.draft_queue.parse_drafts", return_value=[draft_acme, draft_global]),
-        patch("fieldkit.watch.draft_queue.write_alerts", side_effect=_fake_write_alerts),
-        patch("fieldkit.watch.draft_queue.write_run_status"),
+        patch("fieldkit.watch.draft_queue.write_alerts", write_alerts),
+        patch("fieldkit.watch.draft_queue.write_run_status", write_status),
     ):
         mock_session = MagicMock()
         mock_mcp.return_value = mock_session
         mock_session.call_tool.return_value = []
 
-        rc = dq._run_draft_queue(dry_run=False, account=None)
+        result = CliRunner().invoke(dq.cli, [])
 
-    assert rc == 0
-    assert len(written_alerts) == 2, f"Expected 2 drafts (all accounts), got {len(written_alerts)}"
+    assert result.exit_code == 0, result.output
+    write_alerts.assert_called_once_with([draft_acme, draft_global], dry_run=False)
 
 
 # ---------------------------------------------------------------------------
@@ -569,13 +551,13 @@ def test_enh414_account_tags_filter_processes_only_target_label(tmp_path: Path) 
     gmail_db = tmp_path / "gmail.db"
     _make_gmail_db_with_labels(gmail_db)
 
-    from fieldkit.commands.gmail.account_tags import build_account_tags
+    from fieldkit.gmail.account_tags import update_account_tags
+    from fieldkit.gmail.publication import open_gmail_publication
 
-    build_account_tags(str(gmail_db), account_filter="acme")
+    update_account_tags(gmail_db, account_filter="acme")
 
-    conn = sqlite3.connect(str(gmail_db))
-    rows = conn.execute("SELECT thread_id, account FROM thread_accounts ORDER BY thread_id").fetchall()
-    conn.close()
+    with open_gmail_publication(gmail_db) as connection:
+        rows = connection.execute("SELECT thread_id, account FROM thread_accounts ORDER BY thread_id").fetchall()
 
     accounts_in_db = {r[1] for r in rows}
     thread_ids_in_db = {r[0] for r in rows}
@@ -592,13 +574,13 @@ def test_enh414_account_tags_unfiltered_processes_all_labels(tmp_path: Path) -> 
     gmail_db = tmp_path / "gmail.db"
     _make_gmail_db_with_labels(gmail_db)
 
-    from fieldkit.commands.gmail.account_tags import build_account_tags
+    from fieldkit.gmail.account_tags import update_account_tags
+    from fieldkit.gmail.publication import open_gmail_publication
 
-    build_account_tags(str(gmail_db), account_filter=None)
+    update_account_tags(gmail_db, account_filter=None)
 
-    conn = sqlite3.connect(str(gmail_db))
-    rows = conn.execute("SELECT thread_id, account FROM thread_accounts ORDER BY thread_id").fetchall()
-    conn.close()
+    with open_gmail_publication(gmail_db) as connection:
+        rows = connection.execute("SELECT thread_id, account FROM thread_accounts ORDER BY thread_id").fetchall()
 
     accounts_in_db = {r[1] for r in rows}
     assert "acme" in accounts_in_db
@@ -618,6 +600,9 @@ def test_enh414_datasync_propagates_account_to_gmail_tags() -> None:
         account = "acme"
         quick = False
         sf = False
+        google = True
+        backstory = False
+        slack = False
 
     steps = datasync_cli._build_steps(FakeCfg())  # type: ignore[attr-defined]
 
@@ -636,6 +621,9 @@ def test_enh414_datasync_no_account_omits_flag_from_gmail_tags() -> None:
         account = None
         quick = False
         sf = False
+        google = True
+        backstory = False
+        slack = False
 
     steps = datasync_cli._build_steps(FakeCfg())  # type: ignore[attr-defined]
 
@@ -675,35 +663,31 @@ def test_enh475_draft_queue_rfc5322_displayname_to_header_matches(tmp_path: Path
         }
     }
 
-    written_alerts: list[Any] = []
-
-    def _fake_write_alerts(drafts: list[Any], *, dry_run: bool) -> None:
-        written_alerts.extend(drafts)
+    write_alerts = MagicMock()
+    write_status = MagicMock(return_value="written")
 
     with (
         patch(
             "fieldkit.watch.draft_queue.get_user_email_from_env",
             return_value="user@internal.example.com",  # pii-guard: ignore
         ),
-        patch("fieldkit.watch.morning_brief_mcp.MCPSession") as mock_mcp,
+        patch("fieldkit.watch.draft_queue.get_mcp_endpoint", return_value="https://gateway.example.com/drafts"),
+        patch("fieldkit.watch.mcp.MCPSession") as mock_mcp,
         patch("fieldkit.watch.draft_queue.parse_drafts", return_value=[draft_displayname, draft_other]),
-        patch("fieldkit.watch.draft_queue.write_alerts", side_effect=_fake_write_alerts),
-        patch("fieldkit.watch.draft_queue.write_run_status"),
+        patch("fieldkit.watch.draft_queue.write_alerts", write_alerts),
+        patch("fieldkit.watch.draft_queue.write_run_status", write_status),
         patch("fieldkit.ingest.router.get_accounts_config", return_value=accounts_cfg),
-        patch("fieldkit.ingest.router.get_internal_domains", return_value=[]),
+        patch("fieldkit.config.get_account_names", return_value=["acme", "globalpay"]),
     ):
         mock_session = MagicMock()
         mock_mcp.return_value = mock_session
         mock_session.call_tool.return_value = []
 
-        rc = dq._run_draft_queue(dry_run=False, account="acme")
+        result = CliRunner().invoke(dq.cli, ["--account", "acme"])
 
-    assert rc == 0
-    assert len(written_alerts) == 1, (
-        f"RFC 5322 display-name To: header must match 'acme' account. "
-        f"Got {len(written_alerts)} drafts (expected 1): {written_alerts}"
-    )
-    assert "alice@acme.example.com" in written_alerts[0]["to"]  # pii-guard: ignore
+    assert result.exit_code == 0, result.output
+    write_alerts.assert_not_called()
+    assert write_status.call_args.kwargs["records_checked"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -745,7 +729,14 @@ def test_every_flag_datasync_passes_is_accepted_by_its_subcommand() -> None:
 
     import fieldkit.commands.datasync.cli as datasync_cli
 
-    cfg = datasync_cli.RunConfig(quick=False, sf=True, account="acme")
+    cfg = datasync_cli.RunConfig(
+        quick=False,
+        sf=True,
+        google=True,
+        backstory=True,
+        slack=True,
+        account="acme",
+    )
     offenders: list[str] = []
 
     for label, argv in datasync_cli._build_steps(cfg):
@@ -771,7 +762,7 @@ def test_gmail_sync_step_is_not_account_scoped() -> None:
     """
     import fieldkit.commands.datasync.cli as datasync_cli
 
-    steps = dict(datasync_cli._build_steps(datasync_cli.RunConfig(account="acme")))
+    steps = dict(datasync_cli._build_steps(datasync_cli.RunConfig(account="acme", google=True)))
     assert "--account" not in steps["gmail sync"]
 
 
@@ -779,7 +770,9 @@ def test_analysis_steps_are_account_scoped() -> None:
     """The steps that can be scoped still are — the fix must not disable filtering."""
     import fieldkit.commands.datasync.cli as datasync_cli
 
-    steps = dict(datasync_cli._build_steps(datasync_cli.RunConfig(account="acme")))
+    steps = dict(
+        datasync_cli._build_steps(datasync_cli.RunConfig(account="acme", google=True, backstory=True, slack=True))
+    )
     for label in ("account-tags", "enrich-pursuits", "backstory-health", "pursuit-stalls", "slack-threads"):
         assert "--account" in steps[label], f"{label} lost its account scoping"
         assert "acme" in steps[label]
@@ -892,35 +885,38 @@ def test_ingest_backfill_unknown_account_exits_3() -> None:
 
 
 def _make_gmail_db_with_thread_accounts(path: Path) -> None:
-    conn = sqlite3.connect(str(path))
-    conn.executescript(_GMAIL_SCHEMA)
-    # query_domain.connect() migrates indexes on open, which touches `people`;
-    # the shared _GMAIL_SCHEMA above predates that and omits it.
-    conn.executescript(
-        "CREATE TABLE IF NOT EXISTS people ( email TEXT PRIMARY KEY, display_name TEXT, last_seen_epoch INTEGER);"
-    )
-    conn.executemany(
-        "INSERT OR IGNORE INTO threads (thread_id, subject, message_count) VALUES (?, ?, ?)",
-        [
-            ("t_acme", "Quarterly review with Acme", 1),
-            ("t_global", "Quarterly review with GlobalPay", 1),
-            ("t_untagged", "Quarterly review unfiled", 1),
-        ],
-    )
-    conn.executemany(
-        "INSERT OR IGNORE INTO messages (message_id, thread_id, date_str, date_epoch) VALUES (?, ?, ?, ?)",
-        [
-            ("m_acme", "t_acme", "2026-01-01", 1767225600),
-            ("m_global", "t_global", "2026-01-02", 1767312000),
-            ("m_untagged", "t_untagged", "2026-01-03", 1767398400),
-        ],
-    )
-    conn.executemany(
-        "INSERT OR IGNORE INTO thread_accounts (thread_id, account) VALUES (?, ?)",
-        [("t_acme", "acme"), ("t_global", "globalpay")],
-    )
-    conn.commit()
-    conn.close()
+    from fieldkit.gmail.publication import GMAIL_QUERY_READY_KEY, apply_gmail_page, initialize_gmail_publication
+    from fieldkit.sqlite_publication import SQLiteMutationConnection
+
+    initialize_gmail_publication(path)
+
+    def seed(connection: SQLiteMutationConnection) -> None:
+        connection.executemany(
+            "INSERT OR IGNORE INTO threads (thread_id, subject, message_count) VALUES (?, ?, ?)",
+            [
+                ("t_acme", "Quarterly review with Acme", 1),
+                ("t_global", "Quarterly review with GlobalPay", 1),
+                ("t_untagged", "Quarterly review unfiled", 1),
+            ],
+        )
+        connection.executemany(
+            "INSERT OR IGNORE INTO messages (message_id, thread_id, date_str, date_epoch) VALUES (?, ?, ?, ?)",
+            [
+                ("m_acme", "t_acme", "2026-01-01", 1767225600),
+                ("m_global", "t_global", "2026-01-02", 1767312000),
+                ("m_untagged", "t_untagged", "2026-01-03", 1767398400),
+            ],
+        )
+        connection.executemany(
+            "INSERT OR IGNORE INTO thread_accounts (thread_id, account) VALUES (?, ?)",
+            [("t_acme", "acme"), ("t_global", "globalpay")],
+        )
+        connection.execute(
+            "INSERT OR REPLACE INTO sync_state(key, value) VALUES (?, 'true')",
+            (GMAIL_QUERY_READY_KEY,),
+        )
+
+    apply_gmail_page(path, seed)
 
 
 def test_gmail_query_threads_account_filter_excludes_other_account(tmp_path: Path) -> None:

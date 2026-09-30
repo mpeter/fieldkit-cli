@@ -112,9 +112,5 @@ def cli(
             account_filter=account,
             dry_run=dry_run,
             as_json=as_json,
-        )
+        ).exit_code
     )
-
-
-if __name__ == "__main__":
-    raise SystemExit(cli())

@@ -4,16 +4,23 @@
 import json
 import logging
 import sqlite3
-import time
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Final, Literal, cast
 
 from googleapiclient.errors import HttpError
 
-from fieldkit.errors import GmailSyncRestartRequiredError
-from fieldkit.gmail.batch import BatchFetchResult, SyncSummary
-from fieldkit.gmail.retry import _api_call_with_retry, warn_recoverable_sync_error
+from fieldkit.errors import GmailAuthError, GmailSyncPartialError, GmailSyncRestartRequiredError, SQLiteSnapshotError
+from fieldkit.gmail.batch import SyncSummary
+from fieldkit.gmail.publication import (
+    GMAIL_QUERY_READY_KEY,
+    apply_gmail_page,
+    initialize_gmail_publication,
+    open_gmail_publication,
+    publication_root_for,
+)
+from fieldkit.gmail.retry import _api_call_with_retry
 from fieldkit.gmail.sync_store import (
     BATCH_SIZE,
     fetch_messages_batch,
@@ -26,6 +33,7 @@ from fieldkit.gmail.sync_store import (
 from fieldkit.gmail.sync_store import (
     sync_set as _sync_set,
 )
+from fieldkit.sqlite_publication import SQLiteMutationConnection
 
 EXCLUDED_LABELS = {
     "SPAM",
@@ -38,114 +46,11 @@ EXCLUDED_LABELS = {
 
 
 log = logging.getLogger("gmail-sync")
-
-
-def get_sync_checkpoint(conn: sqlite3.Connection, key: str) -> str | None:
-    """Return a persisted synchronization checkpoint for CLI result rendering."""
-    return _sync_get(conn, key)
-
-
-# ---------------------------------------------------------------------------
-# DB
-# ---------------------------------------------------------------------------
-
-
-def db_init(db_path: Path) -> sqlite3.Connection:
-    """Initialize the Gmail cache database with schema and WAL mode."""
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA journal_mode=WAL;")
-    conn.execute("PRAGMA foreign_keys=ON;")
-    schema_path = Path(__file__).resolve().parent / "schema.sql"
-    conn.executescript(schema_path.read_text(encoding="utf-8"))
-    conn.commit()
-    return conn
-
-
-# ---------------------------------------------------------------------------
-# Label sync
-# ---------------------------------------------------------------------------
-
-
-def sync_labels(service: Any, conn: sqlite3.Connection) -> None:
-    """Fetch all Gmail labels and upsert into the labels table."""
-    try:
-        result = _api_call_with_retry(
-            lambda: service.users().labels().list(userId="me").execute(),
-            context="labels.list",
-        )
-    except Exception as exc:  # noqa: BLE001
-        warn_recoverable_sync_error(exc, "labels.list() failed — skipping label sync: %s")
-        return
-
-    labels = result.get("labels", [])
-    with conn:
-        conn.executemany(
-            """
-            INSERT OR REPLACE INTO labels(label_id, label_name, synced_at)
-            VALUES (?, ?, datetime('now'))
-            """,
-            [(lbl["id"], lbl["name"]) for lbl in labels],
-        )
-    log.info("Synced %d labels", len(labels))
-
-
-# ---------------------------------------------------------------------------
-# Incremental sync
-# ---------------------------------------------------------------------------
-
-
-def _fetch_added_outcomes(service: Any, message_ids: list[str]) -> list[BatchFetchResult]:
-    outcomes: list[BatchFetchResult] = []
-    for i in range(0, len(message_ids), BATCH_SIZE):
-        outcome = fetch_messages_batch(service, message_ids[i : i + BATCH_SIZE])
-        outcomes.append(outcome)
-        if outcome.unresolved:
-            break
-    return outcomes
-
-
-def _process_added_messages(
-    service: Any,
-    conn: sqlite3.Connection,
-    history_records: list[dict[str, Any]],
-    changed_thread_ids: set[str],
-) -> SyncSummary:
-    """Fetch and insert newly added messages, stopping at the first unresolved chunk."""
-    to_fetch: list[str] = []
-    for record in history_records:
-        for entry in record.get("messagesAdded", []):
-            msg_stub = entry.get("message", {})
-            label_ids = msg_stub.get("labelIds", [])
-            if label_ids and all(lbl in EXCLUDED_LABELS for lbl in label_ids):
-                continue
-            to_fetch.append(msg_stub["id"])
-
-    if not to_fetch:
-        return SyncSummary()
-
-    # Chunk into BATCH_SIZE groups — Gmail API limits batch requests to 100 items.
-    summary = SyncSummary()
-    for outcome in _fetch_added_outcomes(service, to_fetch):
-        batch: list[dict[str, Any]] = []
-        for msg in outcome.messages:
-            labels = json.loads(msg["labels"])
-            if labels and all(lbl in EXCLUDED_LABELS for lbl in labels):
-                continue
-            batch.append(msg)
-            changed_thread_ids.add(msg["thread_id"])
-
-        if batch:
-            insert_batch(conn, batch)
-            log.info("Added %d messages this page", len(batch))
-        summary = summary.plus(
-            SyncSummary(added=len(batch), not_found=outcome.not_found, unresolved=outcome.unresolved)
-        )
-    return summary
+_SQLConnection = sqlite3.Connection | SQLiteMutationConnection
 
 
 def _process_deleted_messages(
-    conn: sqlite3.Connection,
+    conn: _SQLConnection,
     history_records: list[dict[str, Any]],
     changed_thread_ids: set[str],
 ) -> int:
@@ -181,7 +86,7 @@ def _collect_label_events(
 
 
 def _fetch_label_state(
-    conn: sqlite3.Connection,
+    conn: _SQLConnection,
     msg_ids: list[str],
 ) -> tuple[dict[str, list[str]], dict[str, str]]:
     """Bulk-fetch label state and thread_id for the given message IDs."""
@@ -216,7 +121,7 @@ def _apply_label_events(
 
 
 def _process_label_changes(
-    conn: sqlite3.Connection,
+    conn: _SQLConnection,
     history_records: list[dict[str, Any]],
     changed_thread_ids: set[str],
 ) -> int:
@@ -247,55 +152,7 @@ def _process_label_changes(
     return len(updates)
 
 
-def _persist_incremental_checkpoint(
-    conn: sqlite3.Connection,
-    *,
-    latest_history_id: str | None,
-    start_history_id: str,
-    summary: SyncSummary,
-) -> None:
-    if summary.unresolved:
-        return
-    if latest_history_id:
-        _sync_set(conn, "last_history_id", latest_history_id)
-        conn.commit()
-        log.info("Updated last_history_id to %s", latest_history_id)
-        return
-    log.warning(
-        "historyId was absent from all history.list responses "
-        "(start_history_id=%s) — last_history_id not updated. "
-        "Next run will retry; may trigger full resync via HTTP 404.",
-        start_history_id,
-    )
-
-
-def _require_incremental_checkpoint(conn: sqlite3.Connection) -> str:
-    history_id = _sync_get(conn, "last_history_id")
-    if not history_id:
-        raise RuntimeError("incremental_sync called without last_history_id")
-    return history_id
-
-
-def _reset_incremental_checkpoint(conn: sqlite3.Connection) -> None:
-    _sync_set(conn, "last_history_id", None)
-    _sync_set(conn, "initial_sync_complete", None)
-    conn.commit()
-
-
-def _process_incremental_page(
-    service: Any,
-    conn: sqlite3.Connection,
-    history_records: list[dict[str, Any]],
-    changed_thread_ids: set[str],
-) -> tuple[SyncSummary, int, int]:
-    summary = _process_added_messages(service, conn, history_records, changed_thread_ids)
-    deleted = _process_deleted_messages(conn, history_records, changed_thread_ids)
-    label_changes = _process_label_changes(conn, history_records, changed_thread_ids)
-    conn.commit()
-    return summary, deleted, label_changes
-
-
-def _touch_changed_threads(conn: sqlite3.Connection, changed_thread_ids: set[str]) -> None:
+def _touch_changed_threads(conn: _SQLConnection, changed_thread_ids: set[str]) -> None:
     if not changed_thread_ids:
         return
     now = datetime.now(UTC).isoformat()
@@ -303,14 +160,11 @@ def _touch_changed_threads(conn: sqlite3.Connection, changed_thread_ids: set[str
         "UPDATE threads SET updated_at=? WHERE thread_id=?",
         [(now, thread_id) for thread_id in changed_thread_ids],
     )
-    conn.commit()
 
 
 def _list_incremental_history(
     service: Any,
     kwargs: dict[str, Any],
-    *,
-    start_history_id: str,
 ) -> dict[str, Any] | None:
     try:
         result = _api_call_with_retry(
@@ -323,83 +177,8 @@ def _list_incremental_history(
     except HttpError as exc:
         if exc.resp.status != 404:
             raise
-        log.warning(
-            "historyId %s expired (HTTP 404) — clearing state for full resync",
-            start_history_id,
-            exc_info=True,
-        )
+        log.warning("Gmail history checkpoint expired; a reconciled full refresh is required.")
         return None
-
-
-def incremental_sync(service: Any, conn: sqlite3.Connection) -> SyncSummary:
-    """Sync only new/changed/deleted messages since last_history_id."""
-    start_history_id = _require_incremental_checkpoint(conn)
-
-    log.info("Incremental sync starting from historyId %s", start_history_id)
-
-    summary = SyncSummary()
-    deleted = 0
-    label_changes = 0
-    page_token: str | None = None
-    latest_history_id: str | None = None
-    changed_thread_ids: set[str] = set()
-
-    while True:
-        kwargs: dict[str, Any] = {
-            "userId": "me",
-            "startHistoryId": start_history_id,
-            "historyTypes": ["messageAdded", "messageDeleted", "labelAdded", "labelRemoved"],
-            "maxResults": 500,
-        }
-        if page_token:
-            kwargs["pageToken"] = page_token
-
-        result = _list_incremental_history(service, kwargs, start_history_id=start_history_id)
-        if result is None:
-            _reset_incremental_checkpoint(conn)
-            return summary
-
-        latest_history_id = result.get("historyId") or latest_history_id
-
-        history_records = result.get("history", [])
-        log.info(
-            "Processing %d history records (page_token=%s)",
-            len(history_records),
-            page_token or "start",
-        )
-
-        added_result, page_deleted, page_label_changes = _process_incremental_page(
-            service,
-            conn,
-            history_records,
-            changed_thread_ids,
-        )
-        summary = summary.plus(added_result)
-        deleted += page_deleted
-        label_changes += page_label_changes
-
-        if added_result.unresolved:
-            break
-
-        page_token = result.get("nextPageToken")
-        if not page_token:
-            break
-
-    _touch_changed_threads(conn, changed_thread_ids)
-
-    _persist_incremental_checkpoint(
-        conn,
-        latest_history_id=latest_history_id,
-        start_history_id=start_history_id,
-        summary=summary,
-    )
-    log.info(
-        "Incremental sync complete: %d added, %d deleted, %d label updates",
-        summary.added,
-        deleted,
-        label_changes,
-    )
-    return summary
 
 
 # ---------------------------------------------------------------------------
@@ -407,14 +186,15 @@ def incremental_sync(service: Any, conn: sqlite3.Connection) -> SyncSummary:
 # ---------------------------------------------------------------------------
 
 ScanOutcome = Literal["exhausted", "paused"]
+SyncCheckpointKey = Literal["last_page_token", "since_page_token", "last_history_id", "full_replay_page_token"]
 
-_FULL_PAGE_TOKEN_KEY = "last_page_token"
+_FULL_PAGE_TOKEN_KEY: Final = "last_page_token"
 _FULL_COUNT_KEY = "messages_synced"
 _FULL_SCAN_EXHAUSTED_KEY = "full_scan_exhausted"
 _FORCED_MARKER_KEY = "full_sync_requested"
 _FORCED_HISTORY_KEY = "full_sync_start_history_id"
 _SINCE_EPOCH_KEY = "since_epoch"
-_SINCE_PAGE_TOKEN_KEY = "since_page_token"
+_SINCE_PAGE_TOKEN_KEY: Final = "since_page_token"
 _SINCE_COUNT_KEY = "since_messages_synced"
 _SINCE_EXHAUSTED_TOKEN = "__fieldkit_exhausted__"
 
@@ -428,218 +208,253 @@ def _filter_excluded_labels(messages: list[dict[str, Any]]) -> list[dict[str, An
     ]
 
 
-def _process_page_chunk(
-    service: Any,
-    conn: sqlite3.Connection,
-    stubs: list[dict[str, Any]],
-    *,
-    total_synced: int,
-    start_time: float,
-    page_num: int,
-) -> tuple[int, SyncSummary]:
-    """Fetch and insert one BATCH_SIZE chunk from *stubs*.
-
-    Returns the updated all-run count and this page's outcome summary.
-    """
-    summary = SyncSummary()
-    for i in range(0, len(stubs), BATCH_SIZE):
-        chunk = stubs[i : i + BATCH_SIZE]
-        outcome = fetch_messages_batch(service, [s["id"] for s in chunk])
-        to_insert = _filter_excluded_labels(outcome.messages)
-
-        if to_insert:
-            insert_batch(conn, to_insert)
-        total_synced += len(chunk)
-        elapsed = time.monotonic() - start_time
-        rate = total_synced / elapsed if elapsed > 0 else 0
-        log.info("Processed %d messages total (%.1f msg/s) — page %d", total_synced, rate, page_num)
-
-        summary = summary.plus(
-            SyncSummary(added=len(to_insert), not_found=outcome.not_found, unresolved=outcome.unresolved)
-        )
-        if outcome.unresolved:
-            break
-
-    return total_synced, summary
-
-
 def _capture_history_id(service: Any) -> str:
     profile = _api_call_with_retry(
         lambda: service.users().getProfile(userId="me").execute(),
         context="users.getProfile",
     )
+    if not isinstance(profile, dict):
+        raise GmailSyncPartialError("Gmail profile synchronization returned invalid data")
     history_id = profile.get("historyId")
-    if not history_id:
-        raise RuntimeError("users.getProfile returned no historyId")
-    return str(history_id)
+    if not isinstance(history_id, str) or not history_id:
+        raise GmailSyncPartialError("Gmail profile synchronization returned invalid data")
+    return history_id
 
 
-def _prepare_forced_full_sync(service: Any, conn: sqlite3.Connection) -> None:
-    """Start a forced operation once; subsequent flagged calls resume it."""
-    if _sync_get(conn, _FORCED_MARKER_KEY) == "true":
-        return
-    history_id = _capture_history_id(service)
-    with conn:
-        _sync_set(conn, _FULL_PAGE_TOKEN_KEY, "")
-        _sync_set(conn, _FULL_COUNT_KEY, "0")
-        _sync_set(conn, _FULL_SCAN_EXHAUSTED_KEY, None)
-        _sync_set(conn, "initial_sync_complete", None)
-        _sync_set(conn, "last_history_id", None)
-        _sync_set(conn, _FORCED_HISTORY_KEY, history_id)
-        _sync_set(conn, _FORCED_MARKER_KEY, "true")
-        _sync_set(conn, "sync_started_at", datetime.now(UTC).isoformat())
+# ---------------------------------------------------------------------------
+# Managed published sync
+# ---------------------------------------------------------------------------
+
+_INCREMENTAL_PAGE_TOKEN_KEY = "incremental_page_token"
+_INCREMENTAL_LATEST_HISTORY_KEY = "incremental_latest_history_id"
+_REPLAY_PAGE_TOKEN_KEY: Final = "full_replay_page_token"
+_REPLAY_LATEST_HISTORY_KEY = "full_replay_latest_history_id"
 
 
-def _restart_expired_forced_sync(service: Any, conn: sqlite3.Connection) -> None:
-    history_id = _capture_history_id(service)
-    with conn:
-        _sync_set(conn, _FULL_PAGE_TOKEN_KEY, "")
-        _sync_set(conn, _FULL_COUNT_KEY, "0")
-        _sync_set(conn, _FULL_SCAN_EXHAUSTED_KEY, None)
-        _sync_set(conn, "initial_sync_complete", None)
-        _sync_set(conn, "last_history_id", None)
-        _sync_set(conn, _FORCED_HISTORY_KEY, history_id)
-        _sync_set(conn, _FORCED_MARKER_KEY, "true")
-    raise GmailSyncRestartRequiredError(
-        "Gmail changed too far back to finish the refresh; retry to restart the full scan."
+@dataclass(frozen=True)
+class PublishedSyncResult:
+    """Selected sync mode, counts, and the persisted retry boundary."""
+
+    mode: Literal["full", "incremental", "since"]
+    summary: SyncSummary
+    checkpoint_key: SyncCheckpointKey | None = None
+    checkpoint: str | None = None
+
+
+@dataclass(frozen=True)
+class _FetchedMessagePage:
+    messages: list[dict[str, Any]]
+    summary: SyncSummary
+
+
+def _read_published_state(db_path: Path, *keys: str) -> dict[str, str | None]:
+    with open_gmail_publication(db_path) as connection:
+        return {key: _sync_get(connection, key) for key in keys}
+
+
+def get_published_sync_checkpoint(db_path: Path, key: str) -> str | None:
+    """Read one checkpoint from the exact ready Gmail generation."""
+    return _read_published_state(db_path, key)[key]
+
+
+def _managed_cache_exists(db_path: Path) -> bool:
+    publication_root = publication_root_for(db_path)
+    if publication_root.exists() or publication_root.is_symlink():
+        with open_gmail_publication(db_path):
+            return True
+    if db_path.exists() or db_path.is_symlink():
+        raise SQLiteSnapshotError("Gmail cache requires explicit import", reason="unverified")
+    return False
+
+
+def _fetch_complete_message_page(service: Any, stubs: list[dict[str, Any]]) -> _FetchedMessagePage:
+    messages: list[dict[str, Any]] = []
+    not_found = 0
+    for index in range(0, len(stubs), BATCH_SIZE):
+        chunk = stubs[index : index + BATCH_SIZE]
+        outcome = fetch_messages_batch(service, [str(stub["id"]) for stub in chunk])
+        not_found += outcome.not_found
+        if outcome.unresolved:
+            return _FetchedMessagePage(
+                messages=[],
+                summary=SyncSummary(not_found=not_found, unresolved=outcome.unresolved),
+            )
+        messages.extend(_filter_excluded_labels(outcome.messages))
+    return _FetchedMessagePage(
+        messages=messages,
+        summary=SyncSummary(added=len(messages), not_found=not_found),
     )
 
 
-def _replay_forced_history(
+def _fetch_labels(service: Any) -> list[tuple[str, str]]:
+    try:
+        result = _api_call_with_retry(
+            lambda: service.users().labels().list(userId="me").execute(),
+            context="labels.list",
+        )
+    except GmailAuthError:
+        raise
+    except Exception as exc:
+        log.warning("Gmail label synchronization failed; no label changes were published.")
+        raise GmailSyncPartialError("Gmail label synchronization failed; no label changes were published") from exc
+    if not isinstance(result, dict) or not isinstance(result.get("labels", []), list):
+        raise GmailSyncPartialError("Gmail label synchronization returned invalid data")
+    labels: list[tuple[str, str]] = []
+    for raw in result.get("labels", []):
+        if not isinstance(raw, dict) or not isinstance(raw.get("id"), str) or not isinstance(raw.get("name"), str):
+            raise GmailSyncPartialError("Gmail label synchronization returned invalid data")
+        labels.append((raw["id"], raw["name"]))
+    return labels
+
+
+def _publish_labels(db_path: Path, labels: list[tuple[str, str]]) -> None:
+    def mutation(connection: SQLiteMutationConnection) -> None:
+        connection.executemany(
+            """
+            INSERT OR REPLACE INTO labels(label_id, label_name, synced_at)
+            VALUES (?, ?, datetime('now'))
+            """,
+            labels,
+        )
+
+    apply_gmail_page(db_path, mutation)
+
+
+def _apply_history_page(
+    connection: SQLiteMutationConnection,
+    history_records: list[dict[str, Any]],
+    messages: list[dict[str, Any]],
+) -> tuple[int, int]:
+    changed_thread_ids = {str(message["thread_id"]) for message in messages}
+    insert_batch(connection, messages)
+    deleted = _process_deleted_messages(connection, history_records, changed_thread_ids)
+    label_changes = _process_label_changes(connection, history_records, changed_thread_ids)
+    _touch_changed_threads(connection, changed_thread_ids)
+    return deleted, label_changes
+
+
+def _history_page(
     service: Any,
-    conn: sqlite3.Connection,
+    *,
     start_history_id: str,
+    page_token: str | None,
+) -> dict[str, Any] | None:
+    kwargs: dict[str, Any] = {
+        "userId": "me",
+        "startHistoryId": start_history_id,
+        "historyTypes": ["messageAdded", "messageDeleted", "labelAdded", "labelRemoved"],
+        "maxResults": 500,
+    }
+    if page_token:
+        kwargs["pageToken"] = page_token
+    return _list_incremental_history(service, kwargs)
+
+
+def _validated_history_records(value: object) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        raise GmailSyncPartialError("Gmail history synchronization returned invalid data")
+    records: list[dict[str, Any]] = []
+    for raw_record in value:
+        if not isinstance(raw_record, dict):
+            raise GmailSyncPartialError("Gmail history synchronization returned invalid data")
+        record = cast(dict[str, Any], raw_record)
+        for event_type in ("messagesAdded", "messagesDeleted", "labelsAdded", "labelsRemoved"):
+            entries = record.get(event_type, [])
+            if not isinstance(entries, list):
+                raise GmailSyncPartialError("Gmail history synchronization returned invalid data")
+            for entry in entries:
+                if not isinstance(entry, dict) or not isinstance(entry.get("message"), dict):
+                    raise GmailSyncPartialError("Gmail history synchronization returned invalid data")
+                message = entry["message"]
+                if not isinstance(message.get("id"), str):
+                    raise GmailSyncPartialError("Gmail history synchronization returned invalid data")
+                labels = message.get("labelIds", []) if event_type == "messagesAdded" else entry.get("labelIds", [])
+                if not isinstance(labels, list) or any(not isinstance(label, str) for label in labels):
+                    raise GmailSyncPartialError("Gmail history synchronization returned invalid data")
+        records.append(record)
+    return records
+
+
+def _sync_history_pages(
+    service: Any,
+    db_path: Path,
+    *,
+    start_history_id: str,
+    page_token_key: str,
+    latest_history_key: str,
+    publish_global_checkpoint: bool,
 ) -> tuple[SyncSummary, str | None, bool]:
-    """Replay scan-window history, returning summary, latest ID, and expiry."""
+    state = _read_published_state(db_path, page_token_key, latest_history_key)
+    page_token = state[page_token_key]
+    latest_history_id = state[latest_history_key]
     summary = SyncSummary()
-    latest_history_id: str | None = None
-    page_token: str | None = None
-    changed_thread_ids: set[str] = set()
     while True:
-        kwargs: dict[str, Any] = {
-            "userId": "me",
-            "startHistoryId": start_history_id,
-            "historyTypes": ["messageAdded", "messageDeleted", "labelAdded", "labelRemoved"],
-            "maxResults": 500,
-        }
-        if page_token:
-            kwargs["pageToken"] = page_token
-        result = _list_incremental_history(service, kwargs, start_history_id=start_history_id)
+        result = _history_page(service, start_history_id=start_history_id, page_token=page_token)
         if result is None:
             return summary, None, True
-        latest_history_id = result.get("historyId") or latest_history_id
-        page_summary, _, _ = _process_incremental_page(service, conn, result.get("history", []), changed_thread_ids)
-        summary = summary.plus(page_summary)
-        if page_summary.unresolved:
-            _touch_changed_threads(conn, changed_thread_ids)
+        history_records = _validated_history_records(result.get("history", []))
+        message_ids: list[str] = []
+        for record in history_records:
+            for entry in record.get("messagesAdded", []):
+                message = entry["message"]
+                message_id = message.get("id")
+                labels = message.get("labelIds", [])
+                if labels and all(label in EXCLUDED_LABELS for label in labels):
+                    continue
+                message_ids.append(cast(str, message_id))
+        fetched = _fetch_complete_message_page(service, [{"id": message_id} for message_id in message_ids])
+        summary = summary.plus(fetched.summary)
+        if fetched.summary.unresolved:
             return summary, None, False
-        page_token = result.get("nextPageToken")
-        if not page_token:
-            break
-    _touch_changed_threads(conn, changed_thread_ids)
-    return summary, latest_history_id or start_history_id, False
+        next_token = result.get("nextPageToken")
+        current_history = result.get("historyId") or latest_history_id or start_history_id
+        if next_token is not None and not isinstance(next_token, str):
+            raise GmailSyncPartialError("Gmail history synchronization returned invalid data")
+        if not isinstance(current_history, str):
+            raise GmailSyncPartialError("Gmail history synchronization returned invalid data")
+
+        def mutation(
+            connection: SQLiteMutationConnection,
+            records: list[dict[str, Any]] = history_records,
+            page_messages: list[dict[str, Any]] = fetched.messages,
+            saved_token: str | None = next_token,
+            saved_history: str = current_history,
+        ) -> None:
+            _apply_history_page(connection, records, page_messages)
+            _sync_set(connection, page_token_key, saved_token)
+            _sync_set(connection, latest_history_key, saved_history)
+            _sync_set(connection, GMAIL_QUERY_READY_KEY, "true")
+            if saved_token is None and publish_global_checkpoint:
+                _sync_set(connection, "last_history_id", saved_history)
+                _sync_set(connection, page_token_key, None)
+                _sync_set(connection, latest_history_key, None)
+
+        apply_gmail_page(db_path, mutation)
+        latest_history_id = current_history
+        if next_token is None:
+            return summary, current_history, False
+        page_token = next_token
 
 
-def _reconcile_and_publish_full_sync(
+def _publish_scan_start(db_path: Path, history_id: str, *, forced: bool) -> None:
+    def mutation(connection: SQLiteMutationConnection) -> None:
+        _sync_set(connection, _FULL_PAGE_TOKEN_KEY, "")
+        _sync_set(connection, _FULL_COUNT_KEY, "0")
+        _sync_set(connection, _FULL_SCAN_EXHAUSTED_KEY, None)
+        _sync_set(connection, "initial_sync_complete", None)
+        _sync_set(connection, "last_history_id", None)
+        _sync_set(connection, _FORCED_HISTORY_KEY, history_id)
+        _sync_set(connection, _FORCED_MARKER_KEY, "true" if forced else "initial")
+        _sync_set(connection, _REPLAY_PAGE_TOKEN_KEY, None)
+        _sync_set(connection, _REPLAY_LATEST_HISTORY_KEY, None)
+        _sync_set(connection, "sync_started_at", datetime.now(UTC).isoformat())
+
+    apply_gmail_page(db_path, mutation)
+
+
+def _scan_published_messages(
     service: Any,
-    conn: sqlite3.Connection,
-    total_synced: int,
-) -> SyncSummary:
-    replay_summary = SyncSummary()
-    captured_history_id = _sync_get(conn, _FORCED_HISTORY_KEY)
-    if captured_history_id:
-        replay_summary, latest_history_id, expired = _replay_forced_history(service, conn, captured_history_id)
-        if expired:
-            _restart_expired_forced_sync(service, conn)
-        if latest_history_id is None:
-            return replay_summary
-    else:
-        latest_history_id = _capture_history_id(service)
-
-    with conn:
-        _sync_set(conn, "last_history_id", latest_history_id)
-        _sync_set(conn, "initial_sync_complete", "true")
-        _sync_set(conn, _FULL_PAGE_TOKEN_KEY, None)
-        _sync_set(conn, _FULL_COUNT_KEY, None)
-        _sync_set(conn, _FULL_SCAN_EXHAUSTED_KEY, None)
-        _sync_set(conn, _FORCED_MARKER_KEY, None)
-        _sync_set(conn, _FORCED_HISTORY_KEY, None)
-    log.info("Sync complete. Total messages processed: %d", total_synced)
-    return replay_summary
-
-
-def _finalize_full_sync(service: Any, conn: sqlite3.Connection, total_synced: int) -> SyncSummary:
-    """Reconcile the scan window, then publish completion atomically."""
-    return _reconcile_and_publish_full_sync(service, conn, total_synced)
-
-
-def _process_full_page(
-    service: Any,
-    conn: sqlite3.Connection,
-    stubs: list[dict[str, Any]],
-    *,
-    next_token: str | None,
-    page_token_key: str,
-    count_key: str,
-    exhausted_key: str | None,
-    exhausted_page_token: str | None,
-    total_synced: int,
-    start_time: float,
-    page_num: int,
-) -> tuple[int, SyncSummary]:
-    updated_total, summary = _process_page_chunk(
-        service,
-        conn,
-        stubs,
-        total_synced=total_synced,
-        start_time=start_time,
-        page_num=page_num,
-    )
-    if not summary.unresolved:
-        with conn:
-            saved_token = next_token or exhausted_page_token or ""
-            _sync_set(conn, page_token_key, saved_token)
-            _sync_set(conn, count_key, str(updated_total))
-            if exhausted_key and not next_token:
-                _sync_set(conn, exhausted_key, "true")
-    return updated_total, summary
-
-
-def _start_message_scan(
-    conn: sqlite3.Connection,
-    *,
-    resume_token: str | None,
-    total_synced: int,
-    started_at_key: str | None,
-) -> None:
-    if resume_token:
-        log.info("Resuming from checkpoint (messages synced so far: %d)", total_synced)
-        return
-    log.info("Starting full sync…")
-    if started_at_key:
-        _sync_set(conn, started_at_key, datetime.now(UTC).isoformat())
-        conn.commit()
-
-
-def _checkpoint_scan_exhaustion(
-    conn: sqlite3.Connection,
-    *,
-    page_token_key: str,
-    exhausted_key: str | None,
-    exhausted_page_token: str | None,
-) -> None:
-    if not exhausted_key and not exhausted_page_token:
-        return
-    with conn:
-        if exhausted_key:
-            _sync_set(conn, exhausted_key, "true")
-        if exhausted_page_token:
-            _sync_set(conn, page_token_key, exhausted_page_token)
-
-
-def _scan_messages(
-    service: Any,
-    conn: sqlite3.Connection,
+    db_path: Path,
     *,
     query: str | None,
     page_token_key: str,
@@ -647,28 +462,12 @@ def _scan_messages(
     max_messages: int,
     exhausted_key: str | None = None,
     exhausted_page_token: str | None = None,
-    started_at_key: str | None = "sync_started_at",
 ) -> tuple[ScanOutcome, SyncSummary]:
-    """Scan complete API pages and checkpoint only after each page is processed."""
-    resume_token = _sync_get(conn, page_token_key)
-    total_synced = int(_sync_get(conn, count_key) or "0")
-
-    _start_message_scan(
-        conn,
-        resume_token=resume_token,
-        total_synced=total_synced,
-        started_at_key=started_at_key,
-    )
-
-    page_token: str | None = resume_token
-    page_num = 0
-    start_time = time.monotonic()
+    state = _read_published_state(db_path, page_token_key, count_key)
+    page_token = state[page_token_key]
+    total_synced = int(state[count_key] or "0")
     summary = SyncSummary()
-
     while True:
-        page_num += 1
-        log.info("Fetching page %d (token: %s)…", page_num, page_token or "start")
-
         remaining = max_messages - total_synced if max_messages else 500
         if max_messages and remaining <= 0:
             return "paused", summary
@@ -678,51 +477,99 @@ def _scan_messages(
             query=query,
             max_results=min(500, remaining),
         )
-
         if not stubs:
-            log.info("No messages on page %d — done.", page_num)
-            _checkpoint_scan_exhaustion(
-                conn,
-                page_token_key=page_token_key,
-                exhausted_key=exhausted_key,
-                exhausted_page_token=exhausted_page_token,
-            )
+
+            def exhausted(connection: SQLiteMutationConnection) -> None:
+                _sync_set(connection, GMAIL_QUERY_READY_KEY, "true")
+                if exhausted_key:
+                    _sync_set(connection, exhausted_key, "true")
+                if exhausted_page_token:
+                    _sync_set(connection, page_token_key, exhausted_page_token)
+
+            if exhausted_key or exhausted_page_token:
+                apply_gmail_page(db_path, exhausted)
             return "exhausted", summary
-
-        total_synced, page_summary = _process_full_page(
-            service,
-            conn,
-            stubs,
-            next_token=next_token,
-            page_token_key=page_token_key,
-            count_key=count_key,
-            exhausted_key=exhausted_key,
-            exhausted_page_token=exhausted_page_token,
-            total_synced=total_synced,
-            start_time=start_time,
-            page_num=page_num,
-        )
-        summary = summary.plus(page_summary)
-        if page_summary.unresolved:
+        fetched = _fetch_complete_message_page(service, stubs)
+        summary = summary.plus(fetched.summary)
+        if fetched.summary.unresolved:
             return "paused", summary
+        updated_total = total_synced + len(stubs)
 
-        if not next_token:
+        def mutation(
+            connection: SQLiteMutationConnection,
+            page_messages: list[dict[str, Any]] = fetched.messages,
+            saved_token: str | None = next_token,
+            saved_total: int = updated_total,
+        ) -> None:
+            insert_batch(connection, page_messages)
+            _sync_set(connection, GMAIL_QUERY_READY_KEY, "true")
+            _sync_set(connection, page_token_key, saved_token or exhausted_page_token or "")
+            _sync_set(connection, count_key, str(saved_total))
+            if exhausted_key and saved_token is None:
+                _sync_set(connection, exhausted_key, "true")
+
+        apply_gmail_page(db_path, mutation)
+        total_synced = updated_total
+        if next_token is None:
             return "exhausted", summary
         if max_messages and total_synced >= max_messages:
-            log.info("Reached --max-messages %d at a page boundary, stopping.", max_messages)
             return "paused", summary
-
         page_token = next_token
 
 
-def _full_sync(service: Any, conn: sqlite3.Connection, max_messages: int) -> SyncSummary:
-    """Execute the full (initial or resumed) sync loop."""
+def _finalize_published_full_sync(service: Any, db_path: Path) -> SyncSummary:
+    state = _read_published_state(db_path, _FORCED_HISTORY_KEY, _FULL_COUNT_KEY)
+    start_history_id = state[_FORCED_HISTORY_KEY]
+    if not start_history_id:
+        raise GmailSyncPartialError("Gmail full synchronization has no reconciliation checkpoint")
+    summary, latest_history_id, expired = _sync_history_pages(
+        service,
+        db_path,
+        start_history_id=start_history_id,
+        page_token_key=_REPLAY_PAGE_TOKEN_KEY,
+        latest_history_key=_REPLAY_LATEST_HISTORY_KEY,
+        publish_global_checkpoint=False,
+    )
+    if expired:
+        new_history_id = _capture_history_id(service)
+        _publish_scan_start(db_path, new_history_id, forced=True)
+        raise GmailSyncRestartRequiredError(
+            "Gmail changed too far back to finish the refresh; retry to restart the full scan."
+        )
+    if latest_history_id is None:
+        return summary
+
+    def mutation(connection: SQLiteMutationConnection) -> None:
+        _sync_set(connection, "last_history_id", latest_history_id)
+        _sync_set(connection, "initial_sync_complete", "true")
+        for key in (
+            _FULL_PAGE_TOKEN_KEY,
+            _FULL_COUNT_KEY,
+            _FULL_SCAN_EXHAUSTED_KEY,
+            _FORCED_MARKER_KEY,
+            _FORCED_HISTORY_KEY,
+            _REPLAY_PAGE_TOKEN_KEY,
+            _REPLAY_LATEST_HISTORY_KEY,
+        ):
+            _sync_set(connection, key, None)
+
+    apply_gmail_page(db_path, mutation)
+    return summary
+
+
+def _run_published_full_sync(service: Any, db_path: Path, max_messages: int, *, forced: bool) -> SyncSummary:
+    state = _read_published_state(db_path, _FORCED_MARKER_KEY, _FULL_SCAN_EXHAUSTED_KEY)
+    if forced and state[_FORCED_MARKER_KEY] not in {"true", "initial"}:
+        _publish_scan_start(db_path, _capture_history_id(service), forced=True)
+        state = {_FORCED_MARKER_KEY: "true", _FULL_SCAN_EXHAUSTED_KEY: None}
+    elif not state[_FORCED_MARKER_KEY]:
+        _publish_scan_start(db_path, _capture_history_id(service), forced=False)
+        state = {_FORCED_MARKER_KEY: "initial", _FULL_SCAN_EXHAUSTED_KEY: None}
     summary = SyncSummary()
-    scan_exhausted = _sync_get(conn, _FULL_SCAN_EXHAUSTED_KEY) == "true"
-    if not scan_exhausted:
-        outcome, summary = _scan_messages(
+    if state[_FULL_SCAN_EXHAUSTED_KEY] != "true":
+        outcome, summary = _scan_published_messages(
             service,
-            conn,
+            db_path,
             query=None,
             page_token_key=_FULL_PAGE_TOKEN_KEY,
             count_key=_FULL_COUNT_KEY,
@@ -731,62 +578,115 @@ def _full_sync(service: Any, conn: sqlite3.Connection, max_messages: int) -> Syn
         )
         if outcome == "paused":
             return summary
-    total_synced = int(_sync_get(conn, _FULL_COUNT_KEY) or "0")
-    summary = summary.plus(_finalize_full_sync(service, conn, total_synced))
-    return summary
+    return summary.plus(_finalize_published_full_sync(service, db_path))
 
 
-def _since_sync(
+def _run_published_since_sync(
     service: Any,
-    conn: sqlite3.Connection,
+    db_path: Path,
     since: datetime,
     max_messages: int,
 ) -> SyncSummary:
-    """Run a resumable date-bounded upsert without changing global sync continuity."""
     since_epoch = int(since.replace(tzinfo=UTC).timestamp())
-    stored_epoch = _sync_get(conn, _SINCE_EPOCH_KEY)
-    if stored_epoch != str(since_epoch):
-        with conn:
-            _sync_set(conn, _SINCE_EPOCH_KEY, str(since_epoch))
-            _sync_set(conn, _SINCE_PAGE_TOKEN_KEY, "")
-            _sync_set(conn, _SINCE_COUNT_KEY, "0")
+    state = _read_published_state(db_path, _SINCE_EPOCH_KEY, _SINCE_PAGE_TOKEN_KEY)
+    page_token: str | None
+    if state[_SINCE_EPOCH_KEY] != str(since_epoch):
 
-    if _sync_get(conn, _SINCE_PAGE_TOKEN_KEY) == _SINCE_EXHAUSTED_TOKEN:
+        def start(connection: SQLiteMutationConnection) -> None:
+            _sync_set(connection, _SINCE_EPOCH_KEY, str(since_epoch))
+            _sync_set(connection, _SINCE_PAGE_TOKEN_KEY, "")
+            _sync_set(connection, _SINCE_COUNT_KEY, "0")
+
+        apply_gmail_page(db_path, start)
+        page_token = ""
+    else:
+        page_token = state[_SINCE_PAGE_TOKEN_KEY]
+    if page_token == _SINCE_EXHAUSTED_TOKEN:
         outcome, summary = "exhausted", SyncSummary()
     else:
-        outcome, summary = _scan_messages(
+        outcome, summary = _scan_published_messages(
             service,
-            conn,
+            db_path,
             query=f"after:{since_epoch - 1}",
             page_token_key=_SINCE_PAGE_TOKEN_KEY,
             count_key=_SINCE_COUNT_KEY,
             max_messages=max_messages,
             exhausted_page_token=_SINCE_EXHAUSTED_TOKEN,
-            started_at_key=None,
         )
     if outcome == "exhausted":
-        with conn:
-            _sync_set(conn, _SINCE_EPOCH_KEY, None)
-            _sync_set(conn, _SINCE_PAGE_TOKEN_KEY, None)
-            _sync_set(conn, _SINCE_COUNT_KEY, None)
+
+        def finish(connection: SQLiteMutationConnection) -> None:
+            _sync_set(connection, _SINCE_EPOCH_KEY, None)
+            _sync_set(connection, _SINCE_PAGE_TOKEN_KEY, None)
+            _sync_set(connection, _SINCE_COUNT_KEY, None)
+
+        apply_gmail_page(db_path, finish)
     return summary
 
 
-def _run_sync(
+def _run_published_incremental_sync(service: Any, db_path: Path, history_id: str) -> SyncSummary:
+    summary, _latest_history_id, expired = _sync_history_pages(
+        service,
+        db_path,
+        start_history_id=history_id,
+        page_token_key=_INCREMENTAL_PAGE_TOKEN_KEY,
+        latest_history_key=_INCREMENTAL_LATEST_HISTORY_KEY,
+        publish_global_checkpoint=True,
+    )
+    if expired:
+
+        def reset(connection: SQLiteMutationConnection) -> None:
+            _sync_set(connection, "last_history_id", None)
+            _sync_set(connection, "initial_sync_complete", None)
+            _sync_set(connection, _INCREMENTAL_PAGE_TOKEN_KEY, None)
+            _sync_set(connection, _INCREMENTAL_LATEST_HISTORY_KEY, None)
+
+        apply_gmail_page(db_path, reset)
+        raise GmailSyncRestartRequiredError("Gmail history expired; retry to start a reconciled full refresh")
+    return summary
+
+
+def run_published_sync(
     *,
     service_factory: Any,
-    conn: sqlite3.Connection,
+    db_path: Path,
     full: bool,
     since: datetime | None,
     max_messages: int,
-) -> SyncSummary:
+) -> PublishedSyncResult:
+    """Fetch outside publication locks and publish each complete provider page."""
     service = service_factory()
     log.info("Authenticated.")
+    managed_cache_exists = _managed_cache_exists(db_path)
+    labels = _fetch_labels(service)
+    initial_history_id = None
+    if not managed_cache_exists and since is None:
+        initial_history_id = _capture_history_id(service)
+    if not managed_cache_exists:
+        initialize_gmail_publication(db_path)
+        if initial_history_id is not None:
+            _publish_scan_start(db_path, initial_history_id, forced=full)
+    _publish_labels(db_path, labels)
     if since is not None:
-        return _since_sync(service, conn, since, max_messages)
-    if full:
-        _prepare_forced_full_sync(service, conn)
-    sync_labels(service, conn)
-    if _sync_get(conn, "initial_sync_complete") == "true" and _sync_get(conn, "last_history_id"):
-        return incremental_sync(service, conn)
-    return _full_sync(service, conn, max_messages)
+        mode: Literal["full", "incremental", "since"] = "since"
+        summary = _run_published_since_sync(service, db_path, since, max_messages)
+        checkpoint_key: SyncCheckpointKey = _SINCE_PAGE_TOKEN_KEY
+    else:
+        state = _read_published_state(db_path, "initial_sync_complete", "last_history_id")
+        history_id = state["last_history_id"]
+        if not full and state["initial_sync_complete"] == "true" and history_id:
+            mode = "incremental"
+            summary = _run_published_incremental_sync(service, db_path, history_id)
+            checkpoint_key = "last_history_id"
+        else:
+            mode = "full"
+            summary = _run_published_full_sync(service, db_path, max_messages, forced=full)
+            checkpoint_key = _FULL_PAGE_TOKEN_KEY
+            if summary.unresolved and get_published_sync_checkpoint(db_path, _FULL_SCAN_EXHAUSTED_KEY) == "true":
+                checkpoint_key = _REPLAY_PAGE_TOKEN_KEY
+    return PublishedSyncResult(
+        mode=mode,
+        summary=summary,
+        checkpoint_key=checkpoint_key if summary.unresolved else None,
+        checkpoint=get_published_sync_checkpoint(db_path, checkpoint_key) if summary.unresolved else None,
+    )

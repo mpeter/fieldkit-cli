@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fieldkit-cli"
-version = "1.0.0"
+version = "1.0.1"
 description = "A programmable productivity CLI for account engineering workflows"
 readme = { file = "README.md", content-type = "text/markdown" }
 license = "Apache-2.0"
@@ -30,8 +30,9 @@ dependencies = [
     "click>=8.1,<9",
     "httpx>=0.25",
     "jsonschema>=4.23,<5",
+    "markdown-it-py>=4.2,<5",
     "pydantic>=2.0,<3",
-    "python-dotenv>=1.0.1",
+    "python-dotenv>=1.2.3",
     "pyyaml>=6.0.3",
     "questionary>=2.0",
     "rich>=13.0.0",
@@ -99,6 +100,7 @@ include = [
     "/README.md",
     "/pyproject.toml",
     "/src/fieldkit",
+    "/typings/google_auth_httplib2/__init__.pyi",
 ]
 exclude = ["src/fieldkit/**/AGENTS.md"]
 
@@ -124,6 +126,7 @@ venv = ".venv"
 python_version = "3.11"
 strict = true
 plugins = ["pydantic.mypy"]
+mypy_path = "typings"
 
 [[tool.mypy.overrides]]
 module = ["yaml", "yaml.*"]
@@ -267,7 +270,9 @@ release-build = [
     "hatchling==1.26.3",
 ]
 dev = [
+    "types-httplib2>=0.32.0.20260720",
     "gaze-py>=0.9.3",
+    "license-expression>=30.4.4,<31",
     "mkdocs>=1.6,<2",
     "mutmut>=3.6.0,<4.0.0",
     "mypy>=2.3.0",
@@ -278,6 +283,7 @@ dev = [
     "pytest-cov>=5.0",
     "pytest-xdist>=3.0",
     "ruff>=0.15",
+    "skillsaw==0.16.0",
     "tach>=0.35",
 ]
 

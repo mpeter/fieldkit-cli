@@ -16,6 +16,7 @@ import pytest
 from click.testing import CliRunner, Result
 
 from fieldkit.commands.driver.cli import cli as driver_cli
+from fieldkit.errors import AuthError, GitHubRequestError
 
 pytestmark = pytest.mark.unit
 
@@ -37,6 +38,7 @@ def _make_result(
         elapsed_seconds=elapsed_seconds,
         spend_note=spend_note,
         error=error,
+        candidates=(),
     )
 
 
@@ -191,3 +193,41 @@ def test_non_failed_outcome_exits_0_in_human_path(tmp_path: Path) -> None:
     result = _invoke(tmp_path, _make_result(outcome="ok"), [])
 
     assert result.exit_code == 0
+
+
+@pytest.mark.parametrize("as_json", [False, True], ids=["human", "json"])
+def test_queue_provider_failure_is_nonpassing_and_payload_free(tmp_path: Path, as_json: bool) -> None:
+    args = ["run", "--dry-run", *(["--json"] if as_json else [])]
+    with (
+        patch("fieldkit.commands.driver.cli._repo_root", return_value=tmp_path),
+        patch(
+            "fieldkit.driver.runner.run_driver",
+            side_effect=GitHubRequestError("GitHub issue queue is unavailable"),
+        ),
+    ):
+        result = CliRunner().invoke(driver_cli, args)
+
+    assert result.exit_code == 1
+    assert "fictional-secret" not in result.output
+    if as_json:
+        payload = __import__("json").loads(result.stdout)
+        assert payload["outcome"] == "failed"
+        assert payload["error"] == "GitHub driver scheduling lookup failed"
+    else:
+        assert "GitHub driver scheduling lookup failed" in result.stderr
+
+
+def test_queue_auth_failure_json_preserves_exit_two(tmp_path: Path) -> None:
+    with (
+        patch("fieldkit.commands.driver.cli._repo_root", return_value=tmp_path),
+        patch(
+            "fieldkit.driver.runner.run_driver",
+            side_effect=AuthError("GitHub issue queue authentication failed"),
+        ),
+    ):
+        result = CliRunner().invoke(driver_cli, ["run", "--dry-run", "--json"])
+
+    assert result.exit_code == 2
+    payload = __import__("json").loads(result.stdout)
+    assert payload["outcome"] == "failed"
+    assert payload["error"] == "GitHub authentication required for driver execution"

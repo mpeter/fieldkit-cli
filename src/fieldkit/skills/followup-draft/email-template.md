@@ -1,38 +1,48 @@
-# Follow-Up Email Template
+# Follow-up email template
 
-## Email Structure
+Use this structure after the source facts and recipients are confirmed. Include
+a section only when the source supports it. Remove the instructional labels and
+unused sections before presenting the draft.
 
-```
-Subject: [Meeting type] Follow-Up — [Topic] — [Date]
+## Subject
 
-[Name],
+[Meeting topic] — follow-up and next step
 
-[One-sentence thank you — max. Do not gush.]
+Use the real topic. Add a date only when it helps distinguish repeated meetings.
 
-[Brief recap of what was covered — 2–3 bullets. Their language, not ours.]
+## Body
 
-**Our Commitments:**
-- [action] by [date] — [owner]
-- [action] by [date] — [owner]
+[Recipient name],
 
-**[Company Name] / Your Team:**
-- [action] by [date] — [owner]
+[One sentence thanking them and naming the meeting or outcome.]
 
-**Open Items:**
-- [question or item pending resolution]
+[Two or three short bullets covering decisions or customer needs in the
+customer's language.]
 
-[One sentence on agreed next step — date, format, who's attending.]
+Our commitments:
+
+- [Action] — [owner], [date if stated]
+
+Your team's commitments:
+
+- [Action] — [owner], [date if stated]
+
+Open questions:
+
+- [Question and owner, when known]
+
+[One sentence confirming the agreed next interaction. Do not invent a deadline,
+meeting date, or owner.]
 
 [Sign-off]
-[Name]
-```
 
-## Tone Rules
+## Editing checks
 
-- Sound like a human, not a CRM system
-- No boilerplate openers: "Per our conversation", "As discussed", "Hope this finds you well"
-- No banned words (see CLAUDE.md)
-- If the meeting was with an exec, tighten everything by 30%
-- If the meeting was a workshop or technical deep dive, a bit more detail is fine
-- Never include more than 5 bullets in any section
-- Always end with one clear next step — date, not "soon"
+- Keep the subject specific and the body easy to scan.
+- Preserve the customer's wording when it is clear and appropriate.
+- Prefer concrete commitments over a general meeting recap.
+- Omit empty sections rather than writing "none" or speculative filler.
+- Keep internal concerns and source annotations outside the customer email.
+- Verify names, recipient addresses, owners, and dates against the source.
+- End with one supported next action, or say that the next action needs
+  confirmation.

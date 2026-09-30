@@ -1,5 +1,5 @@
 ---
-last_reviewed: 2026-09-10
+last_reviewed: 2026-09-27
 covers:
   - src/fieldkit/commands/doctor/
   - src/fieldkit/cli_exit.py
@@ -50,7 +50,7 @@ copy—is under test.
 ## Configuration is missing or invalid
 
 Run `fieldkit init --minimal <path>` for a credential-free trial or `fieldkit init`
-for interactive configuration. fieldkit reports the invalid key or path and exits
+for interactive configuration. fieldkit reports the configuration problem and exits
 `3`; do not repeatedly retry unchanged configuration.
 
 The [configuration reference](config-file.md) explains the workspace, runtime,
@@ -63,7 +63,9 @@ fieldkit doctor sf
 fieldkit sf session-check
 ```
 
-Exit `2` means the configured Salesforce session is absent or expired. Follow
+For `sf session-check`, exit `2` also covers connectivity failures and unexpected
+HTTP responses; inspect the accompanying message before replacing credentials.
+If it reports a missing or rejected session, follow
 [Connect Salesforce](../guides/salesforce-auth.md) using an organization and
 session you are authorized to access. Never attach the `sid` value to an issue.
 
@@ -78,6 +80,20 @@ Complete a first OAuth consent flow in an interactive terminal. An unattended
 job cannot repair missing user consent. If the local Gmail cache is damaged,
 preserve a backup before rebuilding it so unexpected data loss remains
 recoverable. See [Connect Gmail](../guides/gmail.md).
+
+## Transcript ingest cannot resume
+
+If the command reports `ingest_busy`, wait for the active run to finish and rerun
+`fieldkit ingest run --pipeline transcript-ingest`. Do not remove its lock file.
+Interrupted sources are recovered under that lock; saved decisions replay without
+another document fetch or classification pass.
+
+A required-write failure leaves the source incomplete. Check that its required
+pursuit files still exist and that note, pursuit, or task ownership comments have not been
+removed or copied. Restore missing files or original provenance from your backup
+before retrying. Do not delete checkpoints or ownership comments to force success:
+unmarked legacy output and conflicting ownership require explicit reconciliation.
+Preserve a backup and use the support path if the conflict is unclear.
 
 ## A watcher or brief is incomplete
 

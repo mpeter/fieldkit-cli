@@ -3,7 +3,7 @@ for the ingest pipeline.
 
 Public API
 ----------
-get_gmail_db_path()       — canonical path: <data-root>/data/gmail.db
+get_gmail_db_path()       — canonical path: <data-root>/gmail.db
 scan_gemini_candidates()  — scan gmail.db and return GmailCandidate objects
 GmailCandidate            — frozen dataclass for a discovered Gmail candidate
 """
@@ -17,6 +17,11 @@ from functools import cache
 from pathlib import Path
 
 from fieldkit.config import ConfigError, get_fieldkit_data
+from fieldkit.errors import GmailSyncPartialError
+from fieldkit.gmail.address_query import register_exact_address_matcher, singular_sender_address_filter
+from fieldkit.gmail.addresses import parse_address_header
+from fieldkit.gmail.exceptions import GmailSchemaError
+from fieldkit.gmail.query_support import MAX_QUERY_LIMIT, MAX_SCAN_ROWS, scan_row_budget, sqlite_query_budget
 
 logger = logging.getLogger(__name__)
 
@@ -29,12 +34,6 @@ _DOC_ID_RE = re.compile(r"https://docs\.google\.com/document/d/([A-Za-z0-9_-]+)"
 _SUBJECT_RE = re.compile(r'^Notes:\s+[\u201c"]([^\u201d"]+)[\u201d"]\s+(\w+ \d{1,2},\s+\d{4})$')
 
 _DATE_FORMATS = ["%B %d, %Y", "%b %d, %Y"]
-
-NOISE_REGEX = re.compile(
-    r"noreply|no-reply|notifications|donotreply|do-not-reply|bounce|mailer-daemon|postmaster|support|alerts|automated",
-    re.IGNORECASE,
-)
-
 
 # ── data model ────────────────────────────────────────────────────────────────────────
 
@@ -70,7 +69,7 @@ def get_gmail_db_path() -> Path:
             raise ValueError("Config key 'gmail_db' must not be empty or whitespace")
         resolved = Path(raw).expanduser().resolve()
         if resolved.suffix.lower() != ".db":
-            raise ConfigError(f"Config key 'gmail_db' must point to a .db file, got: {resolved}")
+            raise ConfigError("Config key 'gmail_db' must point to a .db file")
         return resolved
     return get_fieldkit_data() / "gmail.db"
 
@@ -114,8 +113,12 @@ def _extract_doc_url(body_html: str, body_plain: str) -> str | None:
 
 
 def _recipient_addresses(to_addr: str, cc_addr: str) -> tuple[str, ...]:
-    """Return the non-empty To and CC addresses from a Gmail row."""
-    return tuple(address.strip() for field in (to_addr, cc_addr) for address in field.split(",") if address.strip())
+    """Return normalized RFC mailbox addresses from the To and CC headers."""
+    return tuple(
+        mailbox
+        for value in (to_addr, cc_addr)
+        for _display_name, mailbox in parse_address_header(value, field="message recipient")
+    )
 
 
 def _parse_subject(subject: str) -> tuple[str, datetime | None]:
@@ -143,9 +146,16 @@ _DEFAULT_LIMIT = 1000
 
 def _validate_gmail_db_path(gmail_db_path: Path) -> None:
     if gmail_db_path.suffix.lower() != ".db":
-        raise ConfigError(f"gmail_db_path must point to a .db file, got: {gmail_db_path}")
-    if not gmail_db_path.exists():
-        raise ConfigError(f"gmail.db not found at {gmail_db_path}. Run 'fieldkit gmail sync' to populate it first.")
+        raise ConfigError("Gmail cache path must point to a .db file")
+
+
+def _scan_row_budget(effective_limit: int | None) -> int:
+    """Return an independent SQLite work budget for one discovery query."""
+    if effective_limit is None:
+        return MAX_SCAN_ROWS
+    if effective_limit == 0:
+        return 1
+    return scan_row_budget(min(effective_limit, MAX_QUERY_LIMIT))
 
 
 def _effective_scan_limit(limit: int | None, *, default_limit: int | None, require_positive_limit: bool) -> int | None:
@@ -159,18 +169,17 @@ def _effective_scan_limit(limit: int | None, *, default_limit: int | None, requi
 def _load_gemini_rows(
     gmail_db_path: Path, *, effective_limit: int | None, max_age_days: int | None
 ) -> list[sqlite3.Row]:
-    gmail_conn = sqlite3.connect(f"file:{gmail_db_path}?mode=ro", uri=True)
-    gmail_conn.row_factory = sqlite3.Row
+    from fieldkit.gmail.query_domain import connect
+
+    gmail_conn = connect(gmail_db_path)
     try:
-        if not table_exists(gmail_conn, "messages"):
-            raise ConfigError(
-                "gmail.db exists but has no 'messages' table. Run 'fieldkit gmail sync' to populate it, then retry."
-            )
         message_columns = {row["name"] for row in gmail_conn.execute("PRAGMA table_info(messages)")}
         to_addr_column = "to_addr" if "to_addr" in message_columns else "''"
         cc_addr_column = "cc_addr" if "cc_addr" in message_columns else "''"
-        conditions = ["from_addr LIKE '%gemini-notes@google.com%'"]
-        parameters: list[int] = []
+        register_exact_address_matcher(gmail_conn)
+        sender_filter, sender_parameters = singular_sender_address_filter("gemini-notes@google.com")
+        conditions = [sender_filter]
+        parameters: list[object] = list(sender_parameters)
         if max_age_days is not None:
             conditions.append("date_epoch >= ?")
             parameters.append(int((datetime.now(UTC) - timedelta(days=max_age_days)).timestamp()))
@@ -184,7 +193,15 @@ def _load_gemini_rows(
         if effective_limit is not None:
             query += " LIMIT ?"
             parameters.append(effective_limit)
-        return gmail_conn.execute(query, parameters).fetchall()
+        with sqlite_query_budget(gmail_conn, row_budget=_scan_row_budget(effective_limit)) as budget:
+            try:
+                return gmail_conn.execute(query, parameters).fetchall()
+            except sqlite3.OperationalError:
+                if budget.exhausted:
+                    raise GmailSyncPartialError("Gmail discovery exceeded its SQLite work bound") from None
+                raise GmailSchemaError("Gmail cache could not be queried safely") from None
+            except sqlite3.DatabaseError:
+                raise GmailSchemaError("Gmail cache could not be queried safely") from None
     finally:
         gmail_conn.close()
 
@@ -222,7 +239,9 @@ def scan_gemini_candidates(
 
     Raises:
         ConfigError: If ``gmail_db_path`` does not have a ``.db`` suffix (historic regression guard).
-        ConfigError: If ``gmail_db_path`` does not exist.
+        GmailDbNotFoundError: If no managed Gmail publication exists.
+        GmailSyncPartialError: If the publication is unready or the query exceeds its work bound.
+        GmailSchemaError: If the managed publication cannot be queried safely.
         ValueError: If ``limit`` is not an allowed integer for the requested scan policy.
     """
     _validate_gmail_db_path(gmail_db_path)

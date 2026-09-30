@@ -2,13 +2,14 @@
 
 Bare `fieldkit doctor` runs every supported integration check.
 `fieldkit doctor sf` (etc.) runs one service check. Exit 0 when enabled services
-are healthy, 2 when one needs authentication, and 3 for incomplete configuration.
+are healthy, 1 for retryable failures, 2 when one needs authentication,
+and 3 for invalid data or configuration.
 Absent optional integrations are informational.
 """
 
 import click
 
-from fieldkit.cli_exit import EXIT_AUTH, EXIT_DATA, EXIT_SUCCESS
+from fieldkit.cli_exit import EXIT_AUTH, EXIT_DATA, EXIT_PARTIAL, EXIT_SUCCESS
 from fieldkit.commands.doctor._result import DoctorResult
 from fieldkit.commands.doctor.gmail import check_gmail
 from fieldkit.commands.doctor.google import check_google
@@ -95,8 +96,14 @@ def _exit_code(results: list[DoctorResult], configuration_states: dict[str, Inte
     """Return the aggregate exit code with invalid configuration taking precedence."""
     if "invalid" in configuration_states.values():
         return EXIT_DATA
-    healthy = all(result.healthy or configuration_states[result.service] == "disabled" for result in results)
-    return EXIT_SUCCESS if healthy else EXIT_AUTH
+    failures = [
+        result for result in results if configuration_states[result.service] != "disabled" and not result.healthy
+    ]
+    if any(result.exit_code == EXIT_DATA for result in failures):
+        return EXIT_DATA
+    if any(result.exit_code == EXIT_AUTH for result in failures):
+        return EXIT_AUTH
+    return EXIT_PARTIAL if failures else EXIT_SUCCESS
 
 
 @click.group(
@@ -109,7 +116,8 @@ def _exit_code(results: list[DoctorResult], configuration_states: dict[str, Inte
 def cli(ctx: click.Context, as_json: bool) -> None:
     """Check the health of every configured service, or a single one.
 
-    Exits 0 when enabled services are healthy, 2 for auth, and 3 for invalid configuration.
+    Exits 0 when enabled services are healthy, 1 for retryable failures,
+    2 for auth, and 3 for invalid data or configuration.
     """
     if ctx.invoked_subcommand is not None:
         return

@@ -13,7 +13,18 @@ pytestmark = pytest.mark.unit
 
 
 def test_retry_status_json_outputs_local_entries() -> None:
-    entries = (RetryStatus("owner/repo#42", "exhausted", 3, 0, "failed", "2026-09-03T00:00:00Z"),)
+    entries = (
+        RetryStatus(
+            "owner/repo#42",
+            "exhausted",
+            3,
+            0,
+            "failed",
+            "agent-failed",
+            "a" * 40,
+            "2026-09-03T00:00:00Z",
+        ),
+    )
     with patch("fieldkit.driver.retry_state.retry_status", return_value=entries):
         result = CliRunner().invoke(cli, ["retry", "status", "--json"])
 

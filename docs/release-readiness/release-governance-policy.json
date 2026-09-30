@@ -8,6 +8,7 @@
   "roles": {
     "preparer": "release-maintainer",
     "approver": "release-owner",
+    "approver_login": "mpeter",
     "incident": "release-maintainer"
   },
   "support": {

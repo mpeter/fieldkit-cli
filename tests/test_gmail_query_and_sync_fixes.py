@@ -79,7 +79,7 @@ def test_cmd_champion_click_champion_lookup_by_display_name_returns_results() ->
     # Insert a person whose display_name is 'Jane Doe'
     conn.execute(
         "INSERT INTO people (email, display_name, message_count) VALUES (?, ?, ?)",
-        ("jane.doe@acme-corp.com", "Jane Doe", 10),
+        ("jane.doe@acme-corp.example.com", "Jane Doe", 10),
     )
     # Seed a thread initiated by Jane
     conn.execute(
@@ -88,11 +88,18 @@ def test_cmd_champion_click_champion_lookup_by_display_name_returns_results() ->
     )
     conn.execute(
         "INSERT INTO messages (thread_id, from_addr, to_addr, date_epoch, date_str, subject) VALUES (?, ?, ?, ?, ?, ?)",
-        ("t1", "jane.doe@acme-corp.com", "other@acme-corp.com", 1_746_000_000, "2025-05-01", "Project kickoff"),
+        (
+            "t1",
+            "jane.doe@acme-corp.example.com",
+            "other@acme-corp.example.com",
+            1_746_000_000,
+            "2025-05-01",
+            "Project kickoff",
+        ),
     )
     conn.commit()
 
-    from fieldkit.commands.gmail.query import query_champion_signals
+    from fieldkit.gmail.query_domain import query_champion_signals
 
     result = query_champion_signals(conn, "Jane Doe")
 
@@ -105,7 +112,7 @@ def test_cmd_champion_click_champion_lookup_no_match_returns_no_people_matched()
     """Champion lookup for unknown name returns 'No people matched' string."""
     conn = _make_conn()
 
-    from fieldkit.commands.gmail.query import query_champion_signals
+    from fieldkit.gmail.query_domain import query_champion_signals
 
     result = query_champion_signals(conn, "Nonexistent Person XYZ")
     assert "No people matched" in result, f"Expected 'No people matched', got: {result!r}"
@@ -130,7 +137,7 @@ def test_cmd_champion_click_champion_since_filters_old_messages() -> None:
     )
     conn.execute(
         "INSERT INTO messages (thread_id, from_addr, to_addr, date_epoch, date_str, subject) VALUES (?, ?, ?, ?, ?, ?)",
-        ("t-old", "alice@acme-corp.com", "other@acme-corp.com", 1_000_000, "2001-09-09", "Old thread"),
+        ("t-old", "alice@acme-corp.example.com", "other@acme-corp.example.com", 1_000_000, "2001-09-09", "Old thread"),
     )
     conn.execute(
         "INSERT INTO threads (thread_id, subject, updated_at, message_count) VALUES (?, ?, ?, ?)",
@@ -138,20 +145,27 @@ def test_cmd_champion_click_champion_since_filters_old_messages() -> None:
     )
     conn.execute(
         "INSERT INTO messages (thread_id, from_addr, to_addr, date_epoch, date_str, subject) VALUES (?, ?, ?, ?, ?, ?)",
-        ("t-new", "alice@acme-corp.com", "other@acme-corp.com", 1_750_000_000, "2025-06-01", "New thread"),
+        (
+            "t-new",
+            "alice@acme-corp.example.com",
+            "other@acme-corp.example.com",
+            1_750_000_000,
+            "2025-06-01",
+            "New thread",
+        ),
     )
     conn.commit()
 
-    from fieldkit.commands.gmail.query import _champion_thread_stats
+    from fieldkit.gmail.query_domain import _champion_thread_stats
 
     # Without since: should see both threads
-    _, total_all, sent_all, _ = _champion_thread_stats(conn, ["alice@acme-corp.com"])
+    _, total_all, sent_all, _ = _champion_thread_stats(conn, ["alice@acme-corp.example.com"])
     assert total_all == 2, f"Expected 2 total threads without since, got {total_all}"
     assert sent_all == 2, f"Expected 2 sent messages without since, got {sent_all}"
 
     # With since=1_700_000_000: only the recent thread qualifies
     cutoff = 1_700_000_000
-    _, total_filtered, sent_filtered, _ = _champion_thread_stats(conn, ["alice@acme-corp.com"], since=cutoff)
+    _, total_filtered, sent_filtered, _ = _champion_thread_stats(conn, ["alice@acme-corp.example.com"], since=cutoff)
     assert total_filtered == 1, f"Expected 1 thread after since filter, got {total_filtered}"
     assert sent_filtered == 1, f"Expected 1 sent message after since filter, got {sent_filtered}"
 
@@ -162,7 +176,7 @@ def test_cmd_champion_click_query_champion_signals_since_propagated() -> None:
 
     conn.execute(
         "INSERT INTO people (email, display_name, message_count) VALUES (?, ?, ?)",
-        ("bob@acme-corp.com", "Bob Smith", 5),
+        ("bob@acme-corp.example.com", "Bob Smith", 5),
     )
     # Only an old message — should be excluded by since filter
     conn.execute(
@@ -171,11 +185,18 @@ def test_cmd_champion_click_query_champion_signals_since_propagated() -> None:
     )
     conn.execute(
         "INSERT INTO messages (thread_id, from_addr, to_addr, date_epoch, date_str, subject) VALUES (?, ?, ?, ?, ?, ?)",
-        ("t-bob-old", "bob@acme-corp.com", "other@acme-corp.com", 1_000_000, "2001-01-01", "Old Bob thread"),
+        (
+            "t-bob-old",
+            "bob@acme-corp.example.com",
+            "other@acme-corp.example.com",
+            1_000_000,
+            "2001-01-01",
+            "Old Bob thread",
+        ),
     )
     conn.commit()
 
-    from fieldkit.commands.gmail.query import query_champion_signals
+    from fieldkit.gmail.query_domain import query_champion_signals
 
     # With a recent since cutoff, Bob's old message is excluded → counts are 0
     result = query_champion_signals(conn, "Bob Smith", since=1_700_000_000)
@@ -213,21 +234,21 @@ def test_system_address_filter_is_system_address_noreply() -> None:
     """noreply@ prefix is detected as a system address."""
     from fieldkit.commands.gmail.apply_intel import _is_system_address
 
-    assert _is_system_address("noreply@acme-corp.com") is True
+    assert _is_system_address("noreply@acme-corp.example.com") is True
 
 
 def test_system_address_filter_is_system_address_no_reply() -> None:
     """no-reply@ prefix is detected as a system address."""
     from fieldkit.commands.gmail.apply_intel import _is_system_address
 
-    assert _is_system_address("no-reply@acme-corp.com") is True
+    assert _is_system_address("no-reply@acme-corp.example.com") is True
 
 
 def test_system_address_filter_is_system_address_calendar_notification() -> None:
     """calendar-notification@ prefix is detected as a system address."""
     from fieldkit.commands.gmail.apply_intel import _is_system_address
 
-    assert _is_system_address("calendar-notification@acme-corp.com") is True
+    assert _is_system_address("calendar-notification@acme-corp.example.com") is True
 
 
 def test_system_address_filter_is_system_address_google_domain() -> None:
@@ -248,7 +269,7 @@ def test_system_address_filter_is_system_address_normal_contact() -> None:
     """A normal business email is not flagged as a system address."""
     from fieldkit.commands.gmail.apply_intel import _is_system_address
 
-    assert _is_system_address("jane.doe@acme-corp.com") is False
+    assert _is_system_address("jane.doe@acme-corp.example.com") is False
 
 
 def test_system_address_filter_render_blindspots_excludes_system_addresses() -> None:
@@ -258,10 +279,10 @@ def test_system_address_filter_render_blindspots_excludes_system_addresses() -> 
     now_epoch = 1_750_000_000
     # contacts: (email, name, threads, msgs, last_epoch)
     contacts = [
-        ("noreply@acme-corp.com", "", 5, 20, now_epoch - 86400),  # system — should be excluded
-        ("calendar-notification@acme-corp.com", "", 3, 15, now_epoch - 86400),  # system
-        ("jane.doe@acme-corp.com", "Jane Doe", 4, 10, now_epoch - 86400),  # real contact
-        ("mailer-daemon@acme-corp.com", "", 2, 8, now_epoch - 86400),  # system
+        ("noreply@acme-corp.example.com", "", 5, 20, now_epoch - 86400),  # system — should be excluded
+        ("calendar-notification@acme-corp.example.com", "", 3, 15, now_epoch - 86400),  # system
+        ("jane.doe@acme-corp.example.com", "Jane Doe", 4, 10, now_epoch - 86400),  # real contact
+        ("mailer-daemon@acme-corp.example.com", "", 2, 8, now_epoch - 86400),  # system
     ]
 
     lines = _render_blindspots(
@@ -275,12 +296,12 @@ def test_system_address_filter_render_blindspots_excludes_system_addresses() -> 
     output = "\n".join(lines)
 
     # System addresses must not appear
-    assert "noreply@acme-corp.com" not in output, "noreply@ must be filtered"
-    assert "calendar-notification@acme-corp.com" not in output, "calendar-notification@ must be filtered"
-    assert "mailer-daemon@acme-corp.com" not in output, "mailer-daemon@ must be filtered"
+    assert "noreply@acme-corp.example.com" not in output, "noreply@ must be filtered"
+    assert "calendar-notification@acme-corp.example.com" not in output, "calendar-notification@ must be filtered"
+    assert "mailer-daemon@acme-corp.example.com" not in output, "mailer-daemon@ must be filtered"
 
     # Real contact must appear
-    assert "jane.doe@acme-corp.com" in output, "Real contact must appear in blindspots"
+    assert "jane.doe@acme-corp.example.com" in output, "Real contact must appear in blindspots"
 
 
 # ---------------------------------------------------------------------------
@@ -305,7 +326,7 @@ def test_pursuit_affiliations_data_root_affiliations_called_with_data_root(tmp_p
         "## Key Stakeholders\n\n"
         "| Name | Title | Notes |\n"
         "| ---- | ----- | ----- |\n"
-        "| Alice Champion | VP Eng | champion@acme-corp.com |\n",
+        "| Alice Champion | VP Eng | champion@acme-corp.example.com |\n",
         encoding="utf-8",
     )
 
@@ -341,7 +362,7 @@ def test_pursuit_affiliations_data_root_contact_lookup_cli_passes_accounts_root(
         from click.testing import CliRunner
 
         runner = CliRunner()
-        runner.invoke(find_cmd.cli, ["test@acme-corp.com", "--affiliations"])
+        runner.invoke(find_cmd.cli, ["test@acme-corp.example.com", "--affiliations"])
 
     assert len(captured_accounts_root) == 1
     assert captured_accounts_root[0] == fake_accounts_root, (
@@ -383,7 +404,7 @@ def test_cmd_account_click_known_slug_processes_only_that_account(tmp_path: Path
         return None  # no pursuits found — avoids file write
 
     with (
-        patch.object(ep, "_get_accounts", return_value=["acme-corp", "globalpay"]),
+        patch.object(ep, "get_accounts_config", return_value={"accounts": {"acme-corp": {}, "globalpay": {}}}),
         patch.object(ep, "get_accounts_root", return_value=accounts_root),
         patch.object(ep, "build_account_report", side_effect=_fake_build),
     ):
@@ -397,7 +418,7 @@ def test_cmd_account_click_unknown_slug_warns_and_exits_cleanly(tmp_path: Path) 
     """--account with an unknown slug prints warning and returns non-zero."""
     from fieldkit.commands.gmail import enrich_pursuits as ep
 
-    with patch.object(ep, "_get_accounts", return_value=["acme-corp", "globalpay"]):
+    with patch.object(ep, "get_accounts_config", return_value={"accounts": {"acme-corp": {}, "globalpay": {}}}):
         result = ep._run_enrich(account_slug="no-such-account")
 
     assert result != 0, "Expected non-zero exit for unknown account slug"
@@ -408,13 +429,14 @@ def test_cmd_account_click_no_flag_processes_all_accounts(tmp_path: Path) -> Non
     from fieldkit.commands.gmail import enrich_pursuits as ep
 
     processed: list[str] = []
+    (tmp_path / "accounts").mkdir()
 
     def _fake_build(account: str) -> str | None:
         processed.append(account)
         return None
 
     with (
-        patch.object(ep, "_get_accounts", return_value=["acme-corp", "globalpay"]),
+        patch.object(ep, "get_accounts_config", return_value={"accounts": {"acme-corp": {}, "globalpay": {}}}),
         patch.object(ep, "get_accounts_root", return_value=tmp_path / "accounts"),
         patch.object(ep, "build_account_report", side_effect=_fake_build),
     ):
@@ -453,8 +475,8 @@ def _is_noise_fn(email: str) -> bool:
 
 
 def test_is_noise_noreply_plus_addressing() -> None:
-    """noreply+tag@acme-corp.com must still be detected after stripping plus suffix."""
-    assert _is_noise_fn("noreply+updates@acme-corp.com") is True
+    """noreply+tag@acme-corp.example.com must still be detected after stripping plus suffix."""
+    assert _is_noise_fn("noreply+updates@acme-corp.example.com") is True
 
 
 def test_is_noise_notifications_plus_addressing() -> None:
@@ -512,7 +534,7 @@ def test_is_noise_case_insensitive_domain() -> None:
 
 
 def _resolve_oauth_credentials_fn() -> tuple[str | None, str | None]:
-    from fieldkit.gmail.auth import resolve_oauth_credentials
+    from fieldkit.config import resolve_oauth_credentials
 
     return resolve_oauth_credentials()
 
@@ -530,8 +552,7 @@ def test_resolve_oauth_credentials_oauth_client_id_takes_precedence(monkeypatch:
     assert client_secret == "oauth-secret", "GOOGLE_OAUTH_CLIENT_SECRET must take priority"
 
 
-def test_resolve_oauth_credentials_falls_back_to_legacy_when_oauth_absent(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Falls back to GOOGLE_CLIENT_ID when GOOGLE_OAUTH_CLIENT_ID is not set."""
+def test_resolve_oauth_credentials_ignores_retired_names(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("GOOGLE_OAUTH_CLIENT_ID", raising=False)
     monkeypatch.delenv("GOOGLE_OAUTH_CLIENT_SECRET", raising=False)
     monkeypatch.setenv("GOOGLE_CLIENT_ID", "legacy-id")
@@ -539,8 +560,8 @@ def test_resolve_oauth_credentials_falls_back_to_legacy_when_oauth_absent(monkey
 
     client_id, client_secret = _resolve_oauth_credentials_fn()
 
-    assert client_id == "legacy-id"
-    assert client_secret == "legacy-secret"
+    assert client_id is None
+    assert client_secret is None
 
 
 def test_resolve_oauth_credentials_returns_none_when_no_credentials_set(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -556,8 +577,7 @@ def test_resolve_oauth_credentials_returns_none_when_no_credentials_set(monkeypa
     assert client_secret is None
 
 
-def test_resolve_oauth_credentials_oauth_id_only_legacy_secret(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Mixed env: GOOGLE_OAUTH_CLIENT_ID + GOOGLE_CLIENT_SECRET (partial migration)."""
+def test_resolve_oauth_credentials_does_not_mix_primary_and_retired_names(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_ID", "oauth-id")
     monkeypatch.delenv("GOOGLE_CLIENT_ID", raising=False)
     monkeypatch.delenv("GOOGLE_OAUTH_CLIENT_SECRET", raising=False)
@@ -566,11 +586,10 @@ def test_resolve_oauth_credentials_oauth_id_only_legacy_secret(monkeypatch: pyte
     client_id, client_secret = _resolve_oauth_credentials_fn()
 
     assert client_id == "oauth-id"
-    assert client_secret == "legacy-secret"
+    assert client_secret is None
 
 
-def test_resolve_oauth_credentials_oauth_id_empty_string_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Empty string GOOGLE_OAUTH_CLIENT_ID is falsy — falls back to legacy."""
+def test_resolve_oauth_credentials_empty_primary_does_not_fall_back(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_ID", "")
     monkeypatch.setenv("GOOGLE_CLIENT_ID", "legacy-id")
     monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_SECRET", "")
@@ -578,8 +597,8 @@ def test_resolve_oauth_credentials_oauth_id_empty_string_falls_back(monkeypatch:
 
     client_id, client_secret = _resolve_oauth_credentials_fn()
 
-    assert client_id == "legacy-id"
-    assert client_secret == "legacy-secret"
+    assert client_id is None
+    assert client_secret is None
 
 
 # ---------------------------------------------------------------------------
@@ -591,7 +610,7 @@ def test_resolve_oauth_credentials_oauth_id_empty_string_falls_back(monkeypatch:
 
 
 def _normalize_date_fn(raw: str) -> str:
-    from fieldkit.commands.gmail.query import _normalize_date
+    from fieldkit.gmail.query_domain import _normalize_date
 
     return _normalize_date(raw)
 

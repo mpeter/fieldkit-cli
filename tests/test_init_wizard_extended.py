@@ -5,7 +5,6 @@ Targets the 126 uncovered lines (49% → target ≥ 65%) by exercising:
   - _write_env: writes .env when oauth_id provided, skips when empty
   - _load_existing_config: returns {} when missing, parses existing
   - _load_existing_identity: handles YAML error, non-dict inner value
-  - _compute_fieldkit_root: fallback paths (no pyproject.toml, OSError)
   - _prompt: required field re-prompts on empty, EOFError/KeyboardInterrupt exits
   - _prompt_list: returns default when empty input
   - _prompt_path: expands ~ and resolves path
@@ -24,7 +23,6 @@ import yaml
 import fieldkit.commands.init.wizard as wizard
 import fieldkit.config as fieldkit_config
 from fieldkit.commands.init.wizard import (
-    _compute_fieldkit_root,
     _load_existing_config,
     _load_existing_identity,
     _prompt,
@@ -123,6 +121,18 @@ def test_write_env_temp_is_restricted_before_publication(tmp_path: Path, monkeyp
     assert observed_modes == [0o600]
 
 
+@pytest.mark.parametrize("secret", ["${FICTIONAL_TOKEN}", "two\\\\slashes", "a'b\"c", "line one\nline two"])
+def test_write_env_preserves_exact_dotenv_values(tmp_path: Path, secret: str) -> None:
+    from dotenv import dotenv_values
+
+    result = _write_env(tmp_path, oauth_id="fictional-client", oauth_secret=secret)
+
+    assert result is None
+    path = tmp_path / ".env"
+    assert dotenv_values(path, interpolate=False)["GOOGLE_OAUTH_CLIENT_SECRET"] == secret
+    assert "export " not in path.read_text(encoding="utf-8")
+
+
 def test_write_env_rejects_symlink_without_changing_target(tmp_path: Path) -> None:
     target = tmp_path / "target"
     original = "preserve me\n"
@@ -130,7 +140,7 @@ def test_write_env_rejects_symlink_without_changing_target(tmp_path: Path) -> No
     env_path = tmp_path / ".env"
     env_path.symlink_to(target)
 
-    with pytest.raises(fieldkit_config.ConfigError, match="symlinked credential file"):
+    with pytest.raises(fieldkit_config.ConfigError, match="not a regular file"):
         _write_env(tmp_path, oauth_id="my-client-id", oauth_secret="my-secret")
 
     assert env_path.is_symlink()
@@ -153,9 +163,7 @@ def test_write_env_skips_when_both_empty(tmp_path: Path) -> None:
 
 def test_load_existing_config_returns_empty_when_missing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """_load_existing_config returns {} when CONFIG_PATH does not exist."""
-    mock_path = MagicMock(spec=Path)
-    mock_path.exists.return_value = False
-    monkeypatch.setattr(fieldkit_config, "CONFIG_PATH", mock_path)
+    monkeypatch.setattr(fieldkit_config, "CONFIG_PATH", tmp_path / "missing.yaml")
 
     result = _load_existing_config()
     assert result == {}
@@ -175,14 +183,14 @@ def test_load_existing_config_parses_existing(monkeypatch: pytest.MonkeyPatch, t
     assert result.get("email") == "alice@example.com"  # pii-guard: ignore
 
 
-def test_load_existing_config_returns_empty_on_yaml_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """_load_existing_config returns {} when config.yaml contains invalid YAML."""
+def test_load_existing_config_rejects_yaml_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Invalid existing YAML must not become empty update state."""
     config_path = tmp_path / "config.yaml"
     config_path.write_text("key: [unclosed bracket\n", encoding="utf-8")
     monkeypatch.setattr(fieldkit_config, "CONFIG_PATH", config_path)
 
-    result = _load_existing_config()
-    assert result == {}
+    with pytest.raises(fieldkit_config.ConfigError, match="invalid YAML"):
+        _load_existing_config()
 
 
 # ---------------------------------------------------------------------------
@@ -190,73 +198,25 @@ def test_load_existing_config_returns_empty_on_yaml_error(monkeypatch: pytest.Mo
 # ---------------------------------------------------------------------------
 
 
-def test_load_existing_identity_returns_empty_on_yaml_error(tmp_path: Path) -> None:
-    """_load_existing_identity returns {} when identity.yaml has invalid YAML."""
+def test_load_existing_identity_rejects_yaml_error(tmp_path: Path) -> None:
+    """Invalid identity YAML requires repair before initialization writes."""
     identity_path = tmp_path / "config" / "identity.yaml"
     identity_path.parent.mkdir(parents=True, exist_ok=True)
     identity_path.write_text("identity: [unclosed\n", encoding="utf-8")
 
-    result = _load_existing_identity(tmp_path)
-    assert result == {}
+    with pytest.raises(fieldkit_config.ConfigError, match="invalid YAML"):
+        _load_existing_identity(tmp_path)
 
 
-def test_load_existing_identity_returns_empty_when_inner_not_dict(tmp_path: Path) -> None:
+def test_load_existing_identity_rejects_nonmapping_inner(tmp_path: Path) -> None:
     """_load_existing_identity returns {} when identity value is not a dict."""
     identity_path = tmp_path / "config" / "identity.yaml"
     identity_path.parent.mkdir(parents=True, exist_ok=True)
     # identity key maps to a list, not a dict
     identity_path.write_text(yaml.dump({"identity": ["item1", "item2"]}), encoding="utf-8")
 
-    result = _load_existing_identity(tmp_path)
-    assert result == {}
-
-
-# ---------------------------------------------------------------------------
-# _compute_fieldkit_root — fallback paths
-# ---------------------------------------------------------------------------
-
-
-def test_compute_fieldkit_root_fallback_no_pyproject_in_git_root(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """_compute_fieldkit_root falls back to parent.parent when git root has no pyproject.toml."""
-    # Git returns a path that has no pyproject.toml
-    git_root = tmp_path / "git-root-no-pyproject"
-    git_root.mkdir()
-    # But parent.parent of __file__ does have pyproject.toml
-    fake_file_parent = tmp_path / "pkg" / "setup"
-    fake_file_parent.mkdir(parents=True)
-    fake_pkg_root = tmp_path / "pkg"
-    (fake_pkg_root / "pyproject.toml").write_text("[project]\nname='fake'\n", encoding="utf-8")
-
-    mock_result = MagicMock()
-    mock_result.returncode = 0
-    mock_result.stdout = str(git_root) + "\n"
-
-    with (
-        patch("fieldkit.commands.init.wizard.subprocess.run", return_value=mock_result),
-        patch("fieldkit.commands.init.wizard.Path.__file__", str(fake_file_parent / "__init__.py"), create=True),
-    ):
-        # The function will try git root (no pyproject.toml) then fall back
-        # We can't easily mock Path(__file__) but we can verify it doesn't crash
-        try:
-            result = _compute_fieldkit_root()
-            assert isinstance(result, Path)
-        except SystemExit:
-            pass  # acceptable — last-resort path may not exist in test env
-
-
-def test_compute_fieldkit_root_handles_oserror(tmp_path: Path) -> None:
-    """_compute_fieldkit_root handles OSError from subprocess gracefully."""
-    # Create a fake pyproject.toml at parent.parent of wizard.py
-    # so the fallback path succeeds
-    with patch("fieldkit.commands.init.wizard.subprocess.run", side_effect=OSError("git not found")):
-        # Should not raise — OSError is caught
-        try:
-            result = _compute_fieldkit_root()
-            assert isinstance(result, Path)
-        except SystemExit:
-            pass  # acceptable if no pyproject.toml found in fallback
+    with pytest.raises(fieldkit_config.ConfigError, match="identity mapping"):
+        _load_existing_identity(tmp_path)
 
 
 # ---------------------------------------------------------------------------
@@ -344,7 +304,6 @@ def test_wizard_confirm_returns_none_on_eoferror(monkeypatch: pytest.MonkeyPatch
         salesforce_user_id="",
         account_names=[],
         data_dir=tmp_path / "data",
-        gcp_project="",
         oauth_id="",
     )
     assert result is None
@@ -363,7 +322,6 @@ def test_wizard_confirm_returns_none_on_keyboard_interrupt(monkeypatch: pytest.M
         salesforce_user_id="005abc",
         account_names=["Acme Corp"],
         data_dir=tmp_path / "data",
-        gcp_project="my-project",
         oauth_id="oauth-id",
     )
     assert result is None
@@ -379,7 +337,7 @@ def test_wizard_post_setup_handles_fieldkit_not_on_path(
 ) -> None:
     """_wizard_post_setup handles FileNotFoundError when fieldkit is not on PATH."""
     with patch("fieldkit.commands.init.wizard.subprocess.run", side_effect=FileNotFoundError("fieldkit not found")):
-        _wizard_post_setup(oauth_id="", gcp_project="")
+        _wizard_post_setup(oauth_id="")
 
     captured = capsys.readouterr()
     assert "Setup complete" in captured.out
@@ -396,28 +354,12 @@ def test_wizard_post_setup_handles_skill_install_failure(
     mock_result.stderr = "skill install error"
 
     with patch("fieldkit.commands.init.wizard.subprocess.run", return_value=mock_result):
-        _wizard_post_setup(oauth_id="my-oauth", gcp_project="my-project")
+        _wizard_post_setup(oauth_id="my-oauth")
 
     captured = capsys.readouterr()
     assert "Setup complete" in captured.out
     # Should print the warning about skill install failure
     assert "⚠" in captured.out or "failed" in captured.out.lower()
-
-
-def test_wizard_post_setup_with_gcp_project_prints_auth_hint(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """_wizard_post_setup prints gcloud auth hint when gcp_project is set."""
-    mock_result = MagicMock()
-    mock_result.returncode = 0
-    mock_result.stdout = ""
-    mock_result.stderr = ""
-
-    with patch("fieldkit.commands.init.wizard.subprocess.run", return_value=mock_result):
-        _wizard_post_setup(oauth_id="", gcp_project="my-gcp-project")
-
-    captured = capsys.readouterr()
-    assert "gcloud" in captured.out
 
 
 # ---------------------------------------------------------------------------
@@ -435,7 +377,7 @@ def test_wizard_write_artifacts_creates_all_files(tmp_path: Path, monkeypatch: p
 
     fake_root = tmp_path / "fake-repo"
     fake_root.mkdir()
-    monkeypatch.setattr(wizard, "_compute_fieldkit_root", lambda: fake_root)
+    monkeypatch.setattr(wizard, "discover_source_checkout", lambda _module: fake_root)
 
     _wizard_write_artifacts(
         name="Test User",
@@ -446,7 +388,6 @@ def test_wizard_write_artifacts_creates_all_files(tmp_path: Path, monkeypatch: p
         salesforce_user_id="005abc",
         account_names=["Acme Corp"],
         data_dir=data_dir,
-        gcp_project="my-project",
         oauth_id="",
         oauth_secret="",
     )

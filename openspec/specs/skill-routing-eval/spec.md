@@ -54,13 +54,13 @@ be delimited as untrusted data.
 
 ### Requirement: Routing evaluation supports deterministic plumbing checks
 
-Routing evaluation SHALL support the existing `NO_LLM=1` mode and JSON output. Stub
+Routing evaluation SHALL support the existing `FIELDKIT_NO_LLM=1` mode and JSON output. Stub
 results SHALL exercise fixture and corpus validation without making a model call and
 SHALL exit 0 when that validation succeeds.
 
 #### Scenario: Stub mode validates local inputs
 
-- **GIVEN** `NO_LLM=1` and valid fixtures and corpus
+- **GIVEN** `FIELDKIT_NO_LLM=1` and valid fixtures and corpus
 - **WHEN** `fieldkit skill eval --routing --json` runs
 - **THEN** no model call occurs
 - **AND** every result is visibly marked as a passing stub

@@ -84,7 +84,16 @@ def test_denied_admission_is_the_next_action_when_other_evidence_is_current(tmp_
     )
     _write_json(
         tmp_path / "driver" / "developer-admission.json",
-        {"decisions": [{"ts": "2026-09-15T01:00:00Z", "allowed": False, "reason_code": "daily-cap"}]},
+        {
+            "decisions": [
+                {
+                    "ts": "2026-09-15T01:00:00Z",
+                    "allowed": False,
+                    "reason_code": "daily-cap",
+                    "detail": "Daily cap reached",
+                }
+            ]
+        },
     )
 
     snapshot = build_status(tmp_path, now=datetime(2026, 9, 15, 12, tzinfo=UTC), spend_reader=lambda: 1.25)

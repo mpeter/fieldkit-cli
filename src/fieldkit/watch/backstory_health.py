@@ -3,9 +3,8 @@
 Moved from ``commands/watch/backstory_health.py`` (watch-domain-migration,
 implementation change slice 2.7). No Click imports — pure business logic.
 
-Checks account engagement health for all configured accounts via the
-Backstory API (fieldkit-sales mcpjungle group). Detects drops below a
-configurable threshold and appends dated alerts to
+Checks account engagement health for all configured accounts via an explicitly
+configured Backstory MCP endpoint. Detects drops below a configurable threshold and appends dated alerts to
 fieldkit-data/watchers/backstory-alerts.md.
 
 Health score is the mean engagement_level across all opportunities returned
@@ -16,31 +15,27 @@ State is persisted in fieldkit-data/watchers/backstory-health-state.json so
 each run can compute deltas against the previous run.
 """
 
-import contextlib
 import json
 import logging
+import math
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import cache
 from pathlib import Path
 from typing import Any
 
-from fieldkit.config import get_accounts_config, get_fieldkit_home, get_watchers_dir
-from fieldkit.config import get_mcp_gateway_base as _get_mcp_gateway_base
+from fieldkit.config import ConfigError, get_accounts_config, get_mcp_endpoint, get_watchers_dir
+from fieldkit.errors import AuthError
 from fieldkit.watch.dedup import alert_block_exists
 from fieldkit.watch.logging import watcher_logging
-from fieldkit.watch.morning_brief_mcp import MCPSession as MCPSession
+from fieldkit.watch.mcp import MCPSession as MCPSession
 from fieldkit.watch.state import merge_state
 from fieldkit.watch.state import state_write_failed as _state_write_failed
-from fieldkit.watch.status import WatcherOutcome, write_run_status
+from fieldkit.watch.status import WatcherOutcome, WatcherRunResult, write_run_status
 
 # ---------------------------------------------------------------------------
 # Repo layout
 # ---------------------------------------------------------------------------
-
-
-@cache
-def _accounts_config() -> Path:
-    return get_fieldkit_home() / "config" / "accounts.yaml"
 
 
 @cache
@@ -57,7 +52,6 @@ def _state_file() -> Path:
 # MCP gateway
 # ---------------------------------------------------------------------------
 
-_MCP_BASE = f"{_get_mcp_gateway_base()}/v0/groups/fieldkit-sales/mcp"
 _MCP_TIMEOUT = 30  # seconds per HTTP call
 _DEFAULT_THRESHOLD = 60  # engagement_level below this → alert
 
@@ -68,64 +62,42 @@ _DEFAULT_THRESHOLD = 60  # engagement_level below this → alert
 log = logging.getLogger(__name__)
 
 
+class _AlertPublicationError(OSError):
+    """A required alert failed, optionally following a failed lookup."""
+
+    def __init__(self, failures: int = 1) -> None:
+        super().__init__("Backstory alert publication failed")
+        self.failures = failures
+
+
+@dataclass(frozen=True)
+class _AccountScanResult:
+    accounts_attempted: int
+    accounts_checked: int
+    alerts_generated: int
+    api_failures: int
+    publication_failures: int
+    updated_state: dict[str, Any]
+
+
 # ---------------------------------------------------------------------------
 # Backstory helpers
 # ---------------------------------------------------------------------------
 
 
-def find_account_id(session: MCPSession, account_name: str) -> int | None:
-    """Return the peopleai_account_id for *account_name*, or None if not found."""
-    try:
-        result = session.call_tool("backstory__find_account", {"account_name": account_name})
-    except RuntimeError as exc:
-        log.warning("find_account failed for %r: %s", account_name, exc, exc_info=True)
-        return None
-
-    if isinstance(result, dict):
-        acc_id = result.get("peopleai_account_id")
-        if isinstance(acc_id, int):
-            return acc_id
-    log.warning("find_account(%r) returned unexpected structure: %r", account_name, str(result)[:200])
-    return None
-
-
-def get_engagement_score(session: MCPSession, account_id: int) -> float | None:
-    """Return mean engagement_level across all opportunities, or None on error.
-
-    Backstory's engagement_level (0-100) per opportunity is the only structured
-    numeric health metric available from the account-level API.  We average
-    across all opportunities to obtain a single account health score.
-    """
-    with contextlib.suppress(RuntimeError):
-        session.call_tool(
-            "backstory__find_account",
-            {"account_name": ""},  # re-fetch by ID isn't available; use find
-        )  # fallback handled below
-
-    # Re-fetch by name isn't reliable — call find_record_by_crm_id if an
-    # mdm_id is available, otherwise use the opportunities already in state.
-    # For now: call get_account_status (returns text) and extract risk count
-    # as a qualitative signal; primary score comes from find_account call in
-    # check_account() which already has the opportunity list.
-    return None  # sentinel; score computed inline in check_account()
-
-
-def compute_health_score(opportunities: list[dict[str, Any]]) -> float:
-    """Return mean engagement_level across opportunities (0-100).
-
-    Returns 0.0 if no opportunities are present.
-    """
+def compute_health_score(opportunities: list[dict[str, Any]]) -> float | None:
+    """Return a validated mean engagement level, or ``None`` when unavailable."""
     if not opportunities:
-        return 0.0
+        return None
     levels: list[float] = []
-    for o in opportunities:
-        raw = o.get("engagement_level")
-        if raw is None:
-            continue
-        with contextlib.suppress(TypeError, ValueError):
-            levels.append(float(raw))
-    if not levels:
-        return 0.0
+    for opportunity in opportunities:
+        raw = opportunity.get("engagement_level")
+        if isinstance(raw, bool) or not isinstance(raw, int | float):
+            return None
+        level = float(raw)
+        if not math.isfinite(level) or not 0 <= level <= 100:
+            return None
+        levels.append(level)
     return sum(levels) / len(levels)
 
 
@@ -137,8 +109,8 @@ def get_risk_count(session: MCPSession, account_id: int) -> int:
     """
     try:
         text = session.call_tool("backstory__get_account_status", {"peopleai_account_id": account_id})
-    except RuntimeError as exc:
-        log.warning("get_account_status(%d) failed: %s", account_id, exc, exc_info=True)
+    except RuntimeError:
+        log.warning("Backstory risk context request failed")
         return -1
 
     if not isinstance(text, str):
@@ -166,20 +138,6 @@ def get_risk_count(session: MCPSession, account_id: int) -> int:
 # ---------------------------------------------------------------------------
 
 
-def load_accounts_config() -> dict[str, Any]:
-    """Load accounts.yaml via lib.config (cached, single source of truth).
-
-    Raises RuntimeError on failure so callers inside try/finally blocks can
-    handle it without bypassing teardown (Constitution IV: no sys.exit in
-    library helpers).
-    """
-    try:
-        return get_accounts_config()
-    except Exception as exc:
-        log.error("Failed to load accounts.yaml: %s", exc, exc_info=True)
-        raise RuntimeError("accounts.yaml load failed") from exc
-
-
 def account_threshold(account_cfg: dict[str, Any], default: int) -> int:
     """Return health_score_threshold for an account, falling back to *default*."""
     val = account_cfg.get("health_score_threshold", default)
@@ -202,8 +160,8 @@ def load_state() -> dict[str, Any]:
         with _state_file().open(encoding="utf-8") as fh:
             data = json.load(fh)
         return data if isinstance(data, dict) else {}
-    except (OSError, json.JSONDecodeError) as exc:
-        log.warning("Could not read state file %s: %s", _state_file(), exc, exc_info=True)
+    except (OSError, json.JSONDecodeError):
+        log.warning("Backstory state could not be read; prior deltas are unavailable")
         return {}
 
 
@@ -225,8 +183,8 @@ def append_alert(
     threshold: int,
     risk_count: int,
     dry_run: bool,
-) -> None:
-    """Append a dated alert entry to backstory-alerts.md."""
+) -> bool:
+    """Append a dated alert entry and report whether it was published."""
     now_utc = datetime.now(UTC)
     ts = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
     date_label = now_utc.strftime("%Y-%m-%d")
@@ -249,8 +207,8 @@ def append_alert(
     alert_text = "\n".join(lines)
 
     if dry_run:
-        log.info("[DRY RUN] Would append alert:\n%s", alert_text)
-        return
+        log.info("[DRY RUN] Would append one Backstory health alert")
+        return False
 
     get_watchers_dir().mkdir(parents=True, exist_ok=True)
     if not _alerts_file().exists():
@@ -260,11 +218,12 @@ def append_alert(
 
     heading_prefix = f"{date_label} — {account_key} health alert"
     if alert_block_exists(_alerts_file(), heading_prefix):
-        return
+        return False
 
     with _alerts_file().open("a", encoding="utf-8") as fh:
         fh.write(alert_text)
-    log.info("Alert written for %s (score=%.1f, threshold=%d)", account_key, current_score, threshold)
+    log.info("Backstory health alert written")
+    return True
 
 
 def append_api_error(account_key: str, error_msg: str, dry_run: bool) -> None:
@@ -275,7 +234,7 @@ def append_api_error(account_key: str, error_msg: str, dry_run: bool) -> None:
     line = f"\n## {date_label} — {account_key} API error\n\n- **Error:** {error_msg}\n- **Timestamp:** {ts}\n"
 
     if dry_run:
-        log.info("[DRY RUN] Would append error: %s", line)
+        log.info("[DRY RUN] Would append one Backstory provider failure")
         return
 
     get_watchers_dir().mkdir(parents=True, exist_ok=True)
@@ -285,7 +244,16 @@ def append_api_error(account_key: str, error_msg: str, dry_run: bool) -> None:
         )
     with _alerts_file().open("a", encoding="utf-8") as fh:
         fh.write(line)
-    log.warning("API error logged for %s: %s", account_key, error_msg)
+    log.warning("Backstory provider failure recorded")
+
+
+def _publish_api_error(account_key: str, error_msg: str, dry_run: bool) -> None:
+    try:
+        append_api_error(account_key, error_msg, dry_run)
+    except (AuthError, ConfigError):
+        raise
+    except Exception:  # noqa: BLE001 -- publication failures must remain fatal
+        raise _AlertPublicationError(failures=2) from None
 
 
 # ---------------------------------------------------------------------------
@@ -314,38 +282,58 @@ def check_account(
     keywords: list[str] = account_cfg.get("keywords", [])
     search_name = keywords[0] if keywords else account_key
 
-    log.info("Checking account %r (search=%r, threshold=%d)", account_key, search_name, threshold)
+    log.info("Checking configured account (threshold=%d)", threshold)
 
     try:
         result = session.call_tool("backstory__find_account", {"account_name": search_name})
-    except RuntimeError as exc:
-        error_msg = f"backstory__find_account failed: {exc}"
-        log.warning(error_msg, exc_info=True)
-        append_api_error(account_key, error_msg, dry_run)
+    except (AuthError, ConfigError):
+        raise
+    except RuntimeError:
+        error_msg = "Backstory account lookup failed; retry later."
+        log.warning("Backstory account lookup failed")
+        _publish_api_error(account_key, error_msg, dry_run)
         return None
 
     if not isinstance(result, dict):
-        error_msg = f"backstory__find_account returned non-dict: {str(result)[:100]}"
-        log.warning(error_msg)
-        append_api_error(account_key, error_msg, dry_run)
+        error_msg = "Backstory account lookup returned invalid data."
+        log.warning("Backstory account lookup returned invalid data")
+        _publish_api_error(account_key, error_msg, dry_run)
         return None
 
-    account_id: int | None = result.get("peopleai_account_id")
-    if not isinstance(account_id, int):
-        error_msg = f"No peopleai_account_id in find_account response (search={search_name!r})"
-        log.warning(error_msg)
-        append_api_error(account_key, error_msg, dry_run)
+    account_id = result.get("peopleai_account_id")
+    if not isinstance(account_id, int) or isinstance(account_id, bool) or account_id <= 0:
+        error_msg = "Backstory account lookup omitted its required identifier."
+        log.warning("Backstory account lookup omitted its required identifier")
+        _publish_api_error(account_key, error_msg, dry_run)
         return None
 
-    opportunities: list[dict[str, Any]] = result.get("opportunities", [])
+    opportunities = result.get("opportunities")
+    if not isinstance(opportunities, list) or not all(isinstance(item, dict) for item in opportunities):
+        error_msg = "Backstory account lookup returned invalid opportunity data."
+        log.warning("Backstory account lookup returned invalid opportunity data")
+        _publish_api_error(account_key, error_msg, dry_run)
+        return None
 
     # ---- Step 2: compute health score ---------------------------------
     current_score = compute_health_score(opportunities)
-    log.info("  %s: score=%.1f (%d opportunities)", account_key, current_score, len(opportunities))
+    if current_score is None:
+        error_msg = "Backstory account lookup returned no usable engagement scores."
+        log.warning("Backstory account lookup returned no usable engagement scores")
+        _publish_api_error(account_key, error_msg, dry_run)
+        return None
+    log.info("Account score computed from %d opportunities", len(opportunities))
 
     # ---- Step 3: read previous state ----------------------------------
-    prev_entry: dict[str, Any] = state.get(account_key, {})
-    previous_score: float | None = prev_entry.get("health_score")
+    prev_entry = state.get(account_key, {})
+    raw_previous_score = prev_entry.get("health_score") if isinstance(prev_entry, dict) else None
+    previous_score = (
+        float(raw_previous_score)
+        if isinstance(raw_previous_score, int | float)
+        and not isinstance(raw_previous_score, bool)
+        and math.isfinite(raw_previous_score)
+        and 0 <= raw_previous_score <= 100
+        else None
+    )
 
     # ---- Step 4: check threshold & emit alert -------------------------
     if current_score < threshold:
@@ -357,25 +345,25 @@ def check_account(
         # well below 0.01 for scores stored as rounded integers (historic regression).
         score_unchanged = previous_score is not None and abs(current_score - previous_score) < 0.01
         if score_unchanged:
-            log.info(
-                "  %s: score %.1f unchanged from previous — suppressing re-alert",
-                account_key,
-                current_score,
-            )
+            log.info("Account score is unchanged; suppressing repeat alert")
             _alert_written = False
         else:
             risk_count = get_risk_count(session, account_id)
-            append_alert(
-                account_key=account_key,
-                current_score=current_score,
-                previous_score=previous_score,
-                threshold=threshold,
-                risk_count=risk_count,
-                dry_run=dry_run,
-            )
-            _alert_written = not dry_run  # historic regression: dry_run alerts don't count
+            try:
+                _alert_written = append_alert(
+                    account_key=account_key,
+                    current_score=current_score,
+                    previous_score=previous_score,
+                    threshold=threshold,
+                    risk_count=risk_count,
+                    dry_run=dry_run,
+                )
+            except (AuthError, ConfigError):
+                raise
+            except Exception:  # noqa: BLE001 -- publication failures must remain fatal
+                raise _AlertPublicationError() from None
     else:
-        log.info("  %s: score %.1f >= threshold %d — no alert", account_key, current_score, threshold)
+        log.info("Account score is at or above its configured threshold")
         _alert_written = False
 
     # ---- Step 5: return updated state entry ---------------------------
@@ -419,38 +407,39 @@ def log_run_summary(
 # ---------------------------------------------------------------------------
 
 
-def _load_and_filter_accounts(
-    account: str | None,
-) -> dict[str, Any] | None:
+def _load_and_filter_accounts(account: str | None) -> dict[str, Any] | None:
     """Load accounts config and optionally filter to a single account.
 
     Returns the accounts dict, or None on fatal error.
     """
     try:
-        config = load_accounts_config()
+        config = get_accounts_config(strict=True)
+    except (AuthError, ConfigError):
+        raise
     except RuntimeError:
         return None
     accounts: dict[str, Any] = config.get("accounts", {})
     if not isinstance(accounts, dict) or not accounts:
-        log.error("No accounts found in %s", _accounts_config())
-        return None
+        raise ConfigError("No accounts are configured for the Backstory watcher")
     if account:
         if account not in accounts:
-            log.error("Account %r not found in accounts.yaml", account)
-            return None
+            raise ConfigError("Requested Backstory account is not configured")
         return {account: accounts[account]}
     return accounts
 
 
-def _open_mcp_session() -> MCPSession | None:
+def _open_mcp_session(endpoint: str) -> MCPSession | None:
     """Initialize and return an MCP session, or None on failure."""
-    session = MCPSession(_MCP_BASE)
+    session = MCPSession(endpoint)
     try:
         session.initialize()
         return session
-    except RuntimeError as exc:
-        log.error("Cannot reach the configured sales MCP gateway: %s", exc, exc_info=True)
-        log.error("Verify the configured MCP gateway endpoint.", exc_info=True)
+    except (AuthError, ConfigError):
+        session.close()
+        raise
+    except RuntimeError:
+        session.close()
+        log.error("The configured Backstory MCP endpoint is unavailable; retry later")
         return None
 
 
@@ -461,26 +450,29 @@ def _check_all_accounts(
     state: dict[str, Any],
     threshold: int,
     dry_run: bool,
-) -> tuple[int, int, int, dict[str, Any]]:
+) -> _AccountScanResult:
     """Iterate over accounts and run health checks.
 
-    Returns (accounts_checked, alerts_generated, api_failures, updated_state).
+    Keep attempted lookups distinct from successfully processed accounts.
     """
     accounts_checked = 0
+    accounts_attempted = 0
+    publication_failures = 0
     alerts_generated = 0
     api_failures = 0
     updated_state: dict[str, Any] = dict(state)
 
     for account_key, account_cfg in accounts.items():
         if not isinstance(account_cfg, dict):
-            log.warning("Skipping %r — config is not a mapping", account_key)
+            log.warning("Skipping an account with invalid watcher configuration")
             continue
         # historic regression: skip internal accounts — they have no Backstory presence
         # Note: truthy check (not == True) per watch_subtleties memory
         if account_cfg.get("internal"):
-            log.debug("Skipping internal account %r", account_key)
+            log.debug("Skipping an internal account")
             continue
 
+        accounts_attempted += 1
         try:
             result = check_account(
                 session=session,
@@ -490,22 +482,31 @@ def _check_all_accounts(
                 default_threshold=threshold,
                 dry_run=dry_run,
             )
-        except Exception as exc:  # noqa: BLE001
-            log.warning("Unexpected error checking %r: %s", account_key, exc, exc_info=True)
+        except (AuthError, ConfigError):
+            raise
+        except _AlertPublicationError as exc:
+            log.warning("Required Backstory alert publication failed")
+            publication_failures += 1
+            api_failures += exc.failures - 1
+            continue
+        except Exception:  # noqa: BLE001 -- one account failure yields a partial watcher run
+            log.warning("Unexpected Backstory account check failure")
             api_failures += 1
             continue
 
-        accounts_checked += 1
         if result is None:
             api_failures += 1
         else:
+            accounts_checked += 1
             # historic regression: use _alerted flag (set by check_account) to count only
             # alerts that were actually written — not suppressed or dry-run alerts.
             if result.get("_alerted"):
                 alerts_generated += 1
             updated_state[account_key] = {k: v for k, v in result.items() if not k.startswith("_")}
 
-    return accounts_checked, alerts_generated, api_failures, updated_state
+    return _AccountScanResult(
+        accounts_attempted, accounts_checked, alerts_generated, api_failures, publication_failures, updated_state
+    )
 
 
 def _run_backstory_health(
@@ -514,8 +515,8 @@ def _run_backstory_health(
     account: str | None,
     dry_run: bool,
     as_json: bool = False,
-) -> int:
-    """Core logic; returns POSIX exit code.
+) -> WatcherRunResult:
+    """Core logic; returns this invocation's completion and persistence facts.
 
     ``as_json`` emits the run-status document on stdout in place of the
     ``[DRY-RUN]`` summary line; the exit code is unaffected.
@@ -523,37 +524,102 @@ def _run_backstory_health(
     import time
 
     start = time.monotonic()
-    with watcher_logging("backstory-health"):
+
+    def fail_before_scan() -> WatcherRunResult:
+        elapsed = time.monotonic() - start
+        status_write = write_run_status(
+            watcher="backstory-health",
+            outcome="fatal",
+            records_checked=0,
+            alerts_generated=0,
+            failures=1,
+            elapsed_seconds=elapsed,
+            dry_run=False,
+        )
+        if as_json:
+            print(
+                json.dumps(
+                    {
+                        "watcher": "backstory-health",
+                        "outcome": "fatal",
+                        "records_checked": 0,
+                        "alerts_generated": 0,
+                        "failures": 1 + int(status_write == "failed"),
+                        "elapsed_seconds": round(elapsed, 1),
+                        "dry_run": False,
+                    },
+                    indent=2,
+                )
+            )
+        return WatcherRunResult("fatal", False, status_write)
+
+    with watcher_logging("backstory-health", enabled=not dry_run):
+        if dry_run:
+            if as_json:
+                print(
+                    json.dumps(
+                        {
+                            "watcher": "backstory-health",
+                            "outcome": "ok",
+                            "records_checked": 0,
+                            "alerts_generated": 0,
+                            "failures": 0,
+                            "elapsed_seconds": 0.0,
+                            "dry_run": True,
+                            "provider_accessed": False,
+                        },
+                        indent=2,
+                    )
+                )
+            else:
+                print("[DRY-RUN] backstory-health: provider input was not requested; no files were written")
+            return WatcherRunResult("ok", True, None)
+
         accounts = _load_and_filter_accounts(account)
         if accounts is None:
-            return 1
+            return fail_before_scan()
+
+        endpoint = get_mcp_endpoint("backstory")
+        if endpoint is None:
+            raise ConfigError("Config key 'mcp_endpoints.backstory' is required for the Backstory watcher")
 
         state = load_state()
 
-        session = _open_mcp_session()
+        session = _open_mcp_session(endpoint)
         if session is None:
-            return 1
+            return fail_before_scan()
 
-        accounts_checked, alerts_generated, api_failures, updated_state = _check_all_accounts(
-            accounts=accounts,
-            session=session,
-            state=state,
-            threshold=threshold,
-            dry_run=dry_run,
-        )
-        session.close()
+        try:
+            scan = _check_all_accounts(
+                accounts=accounts,
+                session=session,
+                state=state,
+                threshold=threshold,
+                dry_run=dry_run,
+            )
+        finally:
+            session.close()
+
+        accounts_checked = scan.accounts_checked
+        alerts_generated = scan.alerts_generated
+        api_failures = scan.api_failures
+        updated_state = scan.updated_state
 
         state_write_failed = _state_write_failed(
-            dry_run=dry_run or not updated_state,
+            dry_run=dry_run or updated_state == state,
             write=lambda: save_state(updated_state, previous_state=state),
             logger=log,
             message="State file write failed — current scores not persisted.",
         )
 
         elapsed = time.monotonic() - start
-        failures = api_failures + int(state_write_failed)
+        failures = api_failures + scan.publication_failures + int(state_write_failed)
         outcome: WatcherOutcome = (
-            "fatal" if state_write_failed or accounts_checked == 0 else ("partial" if api_failures > 0 else "ok")
+            "fatal"
+            if state_write_failed
+            or scan.publication_failures
+            or (scan.accounts_attempted > 0 and accounts_checked == 0)
+            else ("partial" if api_failures > 0 else "ok")
         )
         log_run_summary(
             accounts_checked=accounts_checked,
@@ -562,7 +628,7 @@ def _run_backstory_health(
             dry_run=dry_run,
             elapsed_seconds=elapsed,
         )
-        write_run_status(
+        status_write = write_run_status(
             watcher="backstory-health",
             outcome=outcome,
             records_checked=accounts_checked,
@@ -571,6 +637,9 @@ def _run_backstory_health(
             elapsed_seconds=elapsed,
             dry_run=dry_run,
         )
+        if status_write == "failed":
+            outcome = "fatal"
+            failures += 1
         if as_json:
             # The run happened — emit the outcome even when it is partial/fatal,
             # which is exactly when a caller needs the detail. historic regression: `outcome`
@@ -590,21 +659,19 @@ def _run_backstory_health(
                     default=str,
                 )
             )
-            return 1 if state_write_failed else 0
+            return WatcherRunResult(outcome, True, status_write)
         # historic regression: print dry-run summary to stdout so --dry-run is useful as a preview.
         if dry_run:
             print(
                 f"[DRY-RUN] backstory-health: {accounts_checked} account(s) scanned, "
                 f"{alerts_generated} alert(s) would fire"
             )
-        return 1 if state_write_failed else 0
+        return WatcherRunResult(outcome, True, status_write)
 
 
 __all__ = [
     "_DEFAULT_THRESHOLD",
-    "_MCP_BASE",
     "_MCP_TIMEOUT",
-    "_accounts_config",
     "_alerts_file",
     "_check_all_accounts",
     "_load_and_filter_accounts",
@@ -616,11 +683,8 @@ __all__ = [
     "append_api_error",
     "check_account",
     "compute_health_score",
-    "find_account_id",
-    "get_engagement_score",
     "get_risk_count",
     "get_watchers_dir",
-    "load_accounts_config",
     "load_state",
     "log_run_summary",
     "save_state",

@@ -1,89 +1,69 @@
 # Google Workspace CLI catalog
 
-Use the installed `gws` CLI for Google Workspace. It exposes the generated API
-surface, prints JSON by default, and does not require mcpjungle.
+`gws` is optional and is not installed by fieldkit. Use it only when the
+executable is present, its current help exposes the required Google Workspace
+method, and the operator has authorized the intended account and scope.
 
-## Discover the exact command
+## Discover the installed interface
 
-```bash
-gws <service> --help
-gws <service> <resource> --help
-gws schema <service.resource.method> --resolve-refs
-```
+Start with `gws --help`, then inspect the exact service, resource, and method with
+that leaf's `--help`. For generated request details, use
+`gws schema SERVICE.RESOURCE.METHOD` without recursive reference expansion.
+Some CLI versions can fail while resolving recursive schema references, so
+`--resolve-refs` is not a required or approved discovery step in this workflow.
 
-Use `--params '<JSON>'` for URL/query parameters and `--json '<JSON>'` for a
-request body. Use `--dry-run` for local request validation where available.
-Do not guess fields: inspect the method schema first.
+Treat a nonzero exit, crash, malformed schema, or missing field definition as a
+discovery failure. Do not guess the request body or retry a mutation from memory;
+leave the operation pending until the installed CLI can describe it.
 
-## Services
+The current CLI convention uses `--params` for path and query parameters,
+`--json` for a JSON request body, and `--dry-run` for local validation where that
+leaf advertises it. Confirm these flags on the exact leaf because generated
+interfaces can change.
 
-| Task | CLI route |
-|---|---|
-| Gmail messages, threads, attachments, drafts, labels, history, settings | `gws gmail users ...` |
-| Drive files, folders, comments, permissions, revisions | `gws drive ...` |
-| Docs get/create/batch update | `gws docs documents ...` |
-| Sheets metadata, values, formatting, tables | `gws sheets spreadsheets ...` |
-| Calendar lists, calendars, events, free/busy | `gws calendar ...` |
-| Contacts, directory people, contact groups | `gws people ...` |
-| Slides get/create/batch update | `gws slides presentations ...` |
-| Task lists and tasks | `gws tasks ...` |
-| Forms and responses | `gws forms forms ...` |
-| Chat spaces, members, messages | `gws chat ...` |
-| Apps Script projects and executions | `gws script ...` |
+## Available service families
 
-## Common command shapes
+The installed CLI may expose Gmail, Drive, Docs, Sheets, Calendar, People,
+Slides, Tasks, Forms, Chat, Meet, Keep, Classroom, Workspace events, and Apps
+Script. Presence in top-level help does not prove the account has the necessary
+scope or that every resource method is available.
 
-```bash
-# Gmail: use fieldkit first for account-centric cached queries
-fieldkit gmail query account <account>
-gws gmail users messages list --params '{"userId":"me","q":"from:<sender> newer_than:7d"}'
-gws gmail users messages get --params '{"userId":"me","id":"<message-id>"}'
-gws gmail users drafts create --params '{"userId":"me"}' --json '<draft-resource-json>'
-gws gmail users messages modify --params '{"userId":"me","id":"<message-id>"}' --json '<label-change-json>'
+Use fieldkit's Gmail cache commands for supported account-centric local queries.
+Use `gws` only when the requested operation requires a live Google Workspace
+resource and the operator accepts that boundary.
 
-# Drive and Docs
-gws drive files list --params '<search-params-json>'
-gws drive permissions create --params '<permission-params-json>' --json '<permission-json>'
-gws docs documents get --params '{"documentId":"<document-id>"}'
-gws docs documents batchUpdate --params '{"documentId":"<document-id>"}' --json '<requests-json>'
+For task creation and completion, prefer the shipped `fieldkit gtask create` and
+`fieldkit gtask complete` commands. They preview by default and require
+`--confirm` for the external write. Direct Google Tasks insert, patch, and delete
+calls are outside this catalog; the task-sync skill owns its bounded list reads
+and reconciliation rules.
 
-# Sheets
-gws sheets spreadsheets get --params '{"spreadsheetId":"<spreadsheet-id>"}'
-gws sheets spreadsheets values get --params '<range-params-json>'
-gws sheets spreadsheets values update --params '<range-params-json>' --json '<values-json>'
+For Docs layout work, follow the bounded
+[Google Docs layout workflow](../references/docs-layout-workflow.md).
 
-# Calendar and Contacts
-gws calendar events list --params '<calendar-query-json>'
-gws calendar events insert --params '<calendar-params-json>' --json '<event-json>'
-gws calendar events patch --params '<event-params-json>' --json '<event-patch-json>'
-gws calendar freebusy query --json '<freebusy-json>'
-gws people people searchContacts --params '<search-params-json>'
-gws people people updateContact --params '<contact-params-json>' --json '<person-json>'
+## Read and write discipline
 
-# Other Workspace services
-gws slides presentations batchUpdate --params '<presentation-params-json>' --json '<requests-json>'
-gws tasks tasks insert --params '<task-list-params-json>' --json '<task-json>'
-gws forms forms get --params '<form-params-json>'
-gws chat spaces messages create --params '<space-params-json>' --json '<message-json>'
-gws script projects getContent --params '<project-params-json>'
-```
+Before a write, read the exact resource and capture only the fields needed to
+detect conflicts. Confirm the authenticated account, resource identifier,
+destination, and proposed change. Resolve every ambiguous match; never select a
+calendar, contact, file, recipient, task list, or message by result order.
 
-## Workflows
+Use a dry-run when the method supports it. After an authorized write,
+read the affected resource back and compare the requested fields with the
+approved values. For visual documents, export and inspect the artifact when API
+state alone cannot prove layout.
 
-For every authorized write: read the resource, issue the mutation, then read it
-again and verify the requested fields. When a search returns multiple plausible
-files, calendars, contacts, or recipients, resolve the identity before writing.
-Sending Gmail or Chat messages always requires explicit authorization.
-
-Google Tasks uses the operator's `fieldkit` task list and the task-sync contract.
-Resolve the list ID with `gws tasks tasklists list`; never guess it.
+Email and Chat sending, sharing, permission changes, contact edits, calendar
+changes, and task mutations always require authorization for the exact content
+and destination. Draft creation is a write but is not permission to send.
 
 ## Authentication
 
-```bash
-gws auth status
-gws auth login
-```
+Use `gws auth status` for a credential-safe status check. If login is required,
+show the intended service scope and have the operator approve or run
+`gws auth login --services SERVICE`. Use `gws auth setup` only when OAuth client
+configuration itself is absent and the operator intends to configure it.
 
-If scopes are missing, re-authenticate for the required service. Do not fall back
-to a Workspace MCP group.
+Do not use credential export as a diagnostic, print tokens, or copy credentials
+into logs. If authentication or required scopes remain unavailable, leave the
+operation pending. Do not substitute another transport and call it equivalent.

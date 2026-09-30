@@ -1,31 +1,37 @@
 """Tests for routines/watch_slack_threads.py.
 
 Covers:
-- Auth expiry path: SlackAuthError raised → write_auth_error_alert() writes named
-  error artifact and main() exits 0 (not 1)
+- Auth expiry path: SlackAuthError raised → write_slack_error_alert() writes a
+  sanitized named artifact and main() exits 2
 - Unanswered thread >48h: classify_message() returns alert dict; alert written to
   slack-thread-alerts.md
 - Recent thread (<48h): classify_message() returns None (no alert)
 - Self-sent message: classify_message() returns None (sender == current_username)
 - _is_auth_error() signal detection (various auth error strings)
-- write_auth_error_alert() dry_run=True writes nothing
+- write_slack_error_alert() dry_run=True writes nothing
 - append_thread_alert() output format (account, channel, age, sender, timestamp)
 - append_thread_alert() dry_run=True writes nothing
 - load_state() / save_state() round-trip
 - load_state() returns {} for missing/corrupt file
 - _ts_to_datetime() epoch string → UTC datetime conversion
-- main() auth expiry handled with exit 0 and named error artifact written
+- main() auth expiry handled with exit 2 and a named error artifact written
 """
 
 import datetime
 import json
+import logging
 import subprocess
+import sys
+import tempfile
+import time
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
 import pytest
-import yaml
+
+from fieldkit.watch.status import RunStatusWriteResult, WatcherRunResult
+from fieldkit.watch.status import write_run_status as real_write_run_status
 
 # ---------------------------------------------------------------------------
 
@@ -38,7 +44,14 @@ from click.testing import CliRunner  # noqa: E402
 import fieldkit.watch.slack_thread_classification as classification  # noqa: E402
 import fieldkit.watch.slack_threads as wst  # noqa: E402
 from fieldkit.commands.watch.slack_threads import cli  # noqa: E402
+from fieldkit.config import TIMEOUT_MCP_TOOL, TIMEOUT_PROCESS_KILL_GRACE  # noqa: E402
 from fieldkit.errors import FieldkitError  # noqa: E402
+from fieldkit.util.bounded_process import (  # noqa: E402
+    BoundedProcessBytesResult,
+    BoundedProcessError,
+    ProcessFailureReason,
+)
+from fieldkit.watch.slack_thread_classification import SlackAccountThread  # noqa: E402
 
 
 @pytest.mark.unit
@@ -48,6 +61,231 @@ def test_slack_auth_error_inherits_from_fieldkit_error() -> None:
 
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"error": "fictional private provider payload"},
+        {},
+        {"total": 0},
+        {"matches": []},
+        {"total": None, "matches": []},
+        {"total": False, "matches": []},
+        {"total": "0", "matches": []},
+        {"total": 0.0, "matches": []},
+        {"total": -1, "matches": []},
+        {"total": 0, "matches": None},
+        {"total": 0, "matches": {}},
+        {"total": 1, "matches": [None]},
+        {"total": 1, "matches": ["fictional private provider payload"]},
+        {"total": 0, "matches": [], "error": "fictional private provider payload"},
+        [],
+        None,
+    ],
+)
+def test_decoded_search_envelope_fails_closed(payload: object) -> None:
+    with (
+        patch.object(wst, "_run_slack_search_once", return_value=(0, json.dumps(payload).encode(), b"")),
+        pytest.raises(RuntimeError, match="slackcli returned an invalid search response") as error,
+    ):
+        wst.run_slack_search("acme", limit=50)
+    assert "fictional private provider payload" not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "payload", [{"total": 0, "matches": []}, {"query": "acme", "total": 0, "matches": [], "page": 1, "pages": 1}]
+)
+def test_valid_zero_match_envelope_is_success(payload: dict[str, Any]) -> None:
+    with patch.object(wst, "_run_slack_search_once", return_value=(0, json.dumps(payload).encode(), b"")):
+        result = wst.run_slack_search("acme", limit=50)
+    assert result == payload
+
+
+@pytest.mark.parametrize("stdout", [b"", b" \n"])
+def test_successful_producer_zero_match_empty_stdout_is_success(stdout: bytes) -> None:
+    with patch.object(wst, "_run_slack_search_once", return_value=(0, stdout, b"No messages found")):
+        result = wst.run_slack_search("acme", limit=50)
+    assert result == {"query": "acme", "total": 0, "matches": []}
+
+
+def test_unsuccessful_empty_stdout_cannot_manufacture_zero_match_success() -> None:
+    with (
+        patch.object(wst, "_run_slack_search_once", return_value=(1, b"", b"fictional private provider payload")),
+        pytest.raises(RuntimeError, match="slackcli search failed") as error,
+    ):
+        wst.run_slack_search("acme", limit=50)
+    assert "fictional private provider payload" not in str(error.value)
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+@pytest.mark.parametrize("completed_accounts", [0, 1])
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"error": "fictional private provider payload"},
+        {"matches": []},
+        {"total": False, "matches": []},
+        {"total": 0, "matches": {}},
+        None,
+    ],
+)
+def test_decoded_provider_error_is_incomplete_at_domain_and_real_cli(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    dry_run: bool,
+    completed_accounts: int,
+    payload: object,
+) -> None:
+    from fieldkit.__main__ import main
+
+    payloads = [(0, b'{"total":0,"matches":[]}', b"")] * completed_accounts
+    payloads.append((0, json.dumps(payload).encode(), b""))
+    accounts = {"acme": {}, "other": {}} if completed_accounts else {"acme": {}}
+    with (
+        patch.object(wst, "get_accounts_config", return_value={"accounts": accounts}),
+        patch.object(wst, "load_current_username", return_value=None),
+        patch.object(wst, "load_state", return_value={}),
+        patch.object(wst, "_run_slack_search_once", side_effect=payloads),
+        patch.object(wst, "get_watchers_dir", return_value=tmp_path),
+        patch.object(wst, "_alerts_file", return_value=tmp_path / "alerts.md"),
+        patch.object(wst, "_state_file", return_value=tmp_path / "state.json"),
+        patch("fieldkit.watch.status.get_fieldkit_home", return_value=tmp_path),
+        patch.object(wst, "write_run_status", real_write_run_status),
+    ):
+        result = wst._run_slack_threads(threshold_hours=48, account=None, limit=50, dry_run=dry_run)
+        with patch.object(wst, "_run_slack_search_once", side_effect=payloads):
+            exit_code = main(["watch", "run", "slack-threads"] + (["--dry-run"] if dry_run else []))
+
+    assert result.run == WatcherRunResult(
+        "partial" if completed_accounts else "fatal", False, None if dry_run else "written"
+    )
+    assert result.provider_error is True
+    assert result.auth_error is False
+    assert result.records_checked == completed_accounts
+    assert result.failures == 1
+    assert exit_code == 1
+    assert "fictional private provider payload" not in caplog.text
+    assert not (tmp_path / "state.json").exists()
+    if dry_run:
+        assert list(tmp_path.iterdir()) == []
+    else:
+        saved = json.loads((tmp_path / "watchers/watcher-run-status.json").read_text(encoding="utf-8"))["slack-threads"]
+        assert saved["outcome"] == result.run.outcome
+        assert saved["failures"] == 1
+        assert "fictional private provider payload" not in (tmp_path / "alerts.md").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("error,code", [(RuntimeError("provider"), 1), (wst.SlackAuthError("auth"), 2)])
+def test_interrupted_scan_retains_partial_but_is_incomplete(tmp_path: Path, error: Exception, code: int) -> None:
+    with (
+        patch.object(wst, "get_accounts_config", return_value={"accounts": {"acme": {}, "other": {}}}),
+        patch.object(wst, "load_current_username", return_value=None),
+        patch.object(wst, "load_state", return_value={}),
+        patch.object(wst, "scan_account_threads", side_effect=[[], error]),
+        patch.object(wst, "get_watchers_dir", return_value=tmp_path),
+        patch.object(wst, "_alerts_file", return_value=tmp_path / "alerts.md"),
+        patch.object(wst, "_state_file", return_value=tmp_path / "state.json"),
+        patch("fieldkit.watch.status.get_fieldkit_home", return_value=tmp_path),
+        patch.object(wst, "write_run_status", real_write_run_status),
+    ):
+        result = wst._run_slack_threads(threshold_hours=48, account=None, limit=50, dry_run=False)
+    assert result.run.outcome == "partial"
+    assert result.run.exit_code == code
+    assert result.run.completed is False
+    assert result.run.status_write == "written"
+    assert result.run.completed_partial is False
+    assert result.records_checked == 1
+    assert result.failures == 1
+    assert result.alerts_generated == 1
+    recorded = json.loads((tmp_path / "watchers" / "watcher-run-status.json").read_text(encoding="utf-8"))[
+        "slack-threads"
+    ]
+    assert recorded["outcome"] == result.run.outcome
+    assert recorded["failures"] == result.failures
+    if code == 1:
+        assert not (tmp_path / "state.json").exists()
+
+
+@pytest.mark.parametrize("auth,expected", [(True, 5), (False, 4)])
+def test_each_interrupted_scan_operation_failure_is_counted(tmp_path: Path, auth: bool, expected: int) -> None:
+    error = wst.SlackAuthError("auth") if auth else RuntimeError("provider")
+    with (
+        patch.object(wst, "get_accounts_config", return_value={"accounts": {"acme": {}}}),
+        patch.object(wst, "load_current_username", return_value=None),
+        patch.object(wst, "load_state", return_value={}),
+        patch.object(wst, "scan_account_threads", side_effect=error),
+        patch.object(wst, "write_slack_error_alert", side_effect=OSError("alert")) as alert,
+        patch.object(wst, "save_state", side_effect=OSError("state")) as state,
+        patch.object(wst, "append_run_summary", side_effect=OSError("summary")) as summary,
+        patch.object(wst, "write_run_status", return_value="failed"),
+    ):
+        result = wst._run_slack_threads(threshold_hours=48, account=None, limit=50, dry_run=False)
+    assert result.failures == expected
+    assert result.run.outcome == "fatal"
+    assert result.run.exit_code == (2 if auth else 1)
+    alert.assert_called_once()
+    summary.assert_called_once()
+    assert state.call_count == int(auth)
+
+
+@pytest.mark.parametrize("target", ["state", "status"])
+def test_actual_required_replacement_failure_is_fatal(tmp_path: Path, target: str) -> None:
+    state_path = tmp_path / "state.json"
+    status_path = tmp_path / "watchers" / "watcher-run-status.json"
+    failed_path = state_path if target == "state" else status_path
+    failed_path.parent.mkdir(parents=True, exist_ok=True)
+    failed_path.write_text("{}\n", encoding="utf-8")
+    previous = failed_path.read_bytes()
+    replace = Path.replace
+
+    def fail_required_replacement(path: Path, destination: str | Path) -> Path:
+        if Path(destination) == failed_path:
+            raise OSError("replacement failed")
+        return replace(path, destination)
+
+    with (
+        patch.object(wst, "get_accounts_config", return_value={"accounts": {"acme": {}}}),
+        patch.object(wst, "load_current_username", return_value=None),
+        patch.object(wst, "load_state", return_value={}),
+        patch.object(wst, "scan_account_threads", return_value=[]),
+        patch.object(wst, "get_watchers_dir", return_value=tmp_path),
+        patch.object(wst, "_alerts_file", return_value=tmp_path / "alerts.md"),
+        patch.object(wst, "_state_file", return_value=state_path),
+        patch("fieldkit.watch.status.get_fieldkit_home", return_value=tmp_path),
+        patch.object(wst, "write_run_status", real_write_run_status),
+        patch.object(Path, "replace", fail_required_replacement),
+    ):
+        result = wst._run_slack_threads(threshold_hours=48, account=None, limit=50, dry_run=False)
+    assert result.run.outcome == "fatal"
+    assert result.run.completed is True
+    assert result.run.exit_code == 1
+    assert result.run.status_write == ("failed" if target == "status" else "written")
+    assert result.failures == 1
+    assert result.records_checked == 1
+    assert failed_path.read_bytes() == previous
+
+
+def test_failed_thread_alerts_are_each_attempted_and_not_counted_as_published() -> None:
+    thread = _make_thread_append_thread_alert()
+    with (
+        patch.object(wst, "scan_account_threads", return_value=[thread, thread]),
+        patch.object(wst, "append_thread_alert", side_effect=OSError("alert")) as alert,
+    ):
+        result = wst._scan_all_accounts(
+            {"acme": {}},
+            account_filter=None,
+            current_username=None,
+            threshold_hours=48,
+            limit=50,
+            now_utc=datetime.datetime.now(datetime.UTC),
+            run_ts="2026-09-29T12:00:00Z",
+            updated_state={},
+            previous_state={},
+            dry_run=False,
+        )
+    assert result == (1, 0, None, 2)
+    assert alert.call_count == 2
 
 
 def test_state_paths_use_the_configured_roots(tmp_path: Path) -> None:
@@ -91,7 +329,7 @@ def _make_slack_msg(
     channel_id: str = "C001",
     text: str = "Has anyone seen the contract?",
     permalink: str = "https://app.slack.com/archives/C001/p1234567890",
-) -> dict:
+) -> dict[str, object]:
     """Build a minimal Slack search match dict."""
     return {
         "ts": _epoch_str(hours_ago),
@@ -113,15 +351,13 @@ def test_run_slack_search_retries_timeout_then_succeeds() -> None:
     """historic regression: a subprocess.TimeoutExpired on slackcli is retried and recovers."""
     call_count = {"n": 0}
 
-    def _fake_run(cmd: list[str], **kwargs: Any) -> Any:
+    def _fake_run(*_args: Any, **_kwargs: Any) -> BoundedProcessBytesResult:
         call_count["n"] += 1
         if call_count["n"] == 1:
-            raise subprocess.TimeoutExpired(cmd=cmd, timeout=60)
-        stdout_tmp = kwargs["stdout"]
-        stdout_tmp.write(b'{"query": "test", "total": 0, "matches": []}')
-        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=None, stderr=b"")
+            raise BoundedProcessError("private timeout detail", reason="timeout")
+        return BoundedProcessBytesResult(0, b'{"query": "test", "total": 0, "matches": []}', b"")
 
-    with patch.object(wst.subprocess, "run", side_effect=_fake_run), patch("time.sleep"):
+    with patch.object(wst, "run_bounded_process_bytes", side_effect=_fake_run), patch("time.sleep"):
         result = wst.run_slack_search("test", limit=10)
 
     assert call_count["n"] == 2, "Expected exactly 2 subprocess calls (1 timeout + 1 success)"
@@ -133,18 +369,141 @@ def test_run_slack_search_all_retries_exhausted_raises_runtime_error() -> None:
     """historic regression: persistent subprocess.TimeoutExpired still raises after retries."""
     call_count = {"n": 0}
 
-    def _fake_run(cmd: list[str], **kwargs: Any) -> Any:
+    def _fake_run(*_args: Any, **_kwargs: Any) -> BoundedProcessBytesResult:
         call_count["n"] += 1
-        raise subprocess.TimeoutExpired(cmd=cmd, timeout=60)
+        raise BoundedProcessError("private timeout detail", reason="timeout")
 
     with (
-        patch.object(wst.subprocess, "run", side_effect=_fake_run),
+        patch.object(wst, "run_bounded_process_bytes", side_effect=_fake_run),
         patch("time.sleep"),
         pytest.raises(RuntimeError, match="slackcli timed out after 60s"),
     ):
         wst.run_slack_search("test", limit=10)
 
     assert call_count["n"] == 3, "Expected exactly 3 attempts (stop_after_attempt(3))"
+
+
+@pytest.mark.parametrize(
+    ("reason", "exception_type", "message"),
+    [
+        ("start", FileNotFoundError, "slackcli"),
+        ("pipes", RuntimeError, "output pipes"),
+        ("overflow", RuntimeError, "bounded capture"),
+        ("cleanup", RuntimeError, "cleanup failed"),
+    ],
+)
+def test_run_slack_search_maps_bounded_process_failures_without_private_payload(
+    reason: ProcessFailureReason,
+    exception_type: type[BaseException],
+    message: str,
+) -> None:
+    failure = BoundedProcessError("private provider path and payload", reason=reason)
+    with (
+        patch.object(wst, "run_bounded_process_bytes", side_effect=failure),
+        pytest.raises(exception_type, match=message) as captured,
+    ):
+        wst._run_slack_search_once(["slackcli"])
+
+    assert "private" not in str(captured.value)
+
+
+def test_run_slack_search_uses_canonical_bounded_process_contract() -> None:
+    completed = BoundedProcessBytesResult(0, b"stdout", b"stderr")
+    command = ["slackcli", "search", "messages", "acme"]
+
+    with patch.object(wst, "run_bounded_process_bytes", return_value=completed) as run_process:
+        result = wst._run_slack_search_once(command)
+
+    assert result == (0, b"stdout", b"stderr")
+    run_process.assert_called_once_with(
+        command,
+        timeout=TIMEOUT_MCP_TOOL,
+        stdout_limit=wst._MAX_SLACKCLI_STREAM_BYTES,
+        stderr_limit=wst._MAX_SLACKCLI_STREAM_BYTES,
+        cleanup_timeout=TIMEOUT_PROCESS_KILL_GRACE,
+    )
+
+
+def test_run_slack_search_timeout_kills_descendant_pipe_holders() -> None:
+    """A timed-out search cannot hang on a descendant that inherited its pipes."""
+    child = "import time; time.sleep(60)"
+    parent = f"import subprocess, sys, time; subprocess.Popen([sys.executable, '-c', {child!r}]); time.sleep(60)"
+    started = time.monotonic()
+
+    with (
+        patch.object(wst, "TIMEOUT_MCP_TOOL", 0.05),
+        patch("time.sleep"),
+        pytest.raises(subprocess.TimeoutExpired),
+    ):
+        wst._run_slack_search_once([sys.executable, "-c", parent])
+
+    assert time.monotonic() - started < 5
+
+
+def test_run_slack_search_wrapper_does_not_create_tempfiles() -> None:
+    """The real subprocess wrapper must remain filesystem-free for dry runs."""
+    payload = json.dumps({"query": "test", "total": 0, "matches": [], "padding": "x" * 100_000})
+    with patch.object(tempfile, "TemporaryFile", side_effect=AssertionError("tempfile write")):
+        returncode, stdout, stderr = wst._run_slack_search_once(
+            [sys.executable, "-c", f"import sys; sys.stdout.write({payload!r})"]
+        )
+
+    assert returncode == 0
+    parsed = json.loads(stdout)
+    assert parsed["query"] == "test"
+    assert len(parsed["padding"]) == 100_000
+    assert stderr == b""
+
+
+@pytest.mark.parametrize(
+    ("returncode", "stderr", "exception_type"),
+    [
+        (1, b"invalid_auth token=secret-customer-value", wst.SlackAuthError),
+        (7, b"provider rejected private-account-name", RuntimeError),
+    ],
+)
+def test_slack_search_exceptions_do_not_expose_provider_output(
+    returncode: int, stderr: bytes, exception_type: type[Exception]
+) -> None:
+    with (
+        patch.object(wst, "_run_slack_search_once", return_value=(returncode, b"", stderr)),
+        pytest.raises(exception_type) as captured,
+    ):
+        wst.run_slack_search("private query", limit=10)
+
+    diagnostic = str(captured.value)
+    assert "secret-customer-value" not in diagnostic
+    assert "private-account-name" not in diagnostic
+    assert "private query" not in diagnostic
+
+
+def test_account_scan_logs_only_counts_not_account_query_or_channel(caplog: pytest.LogCaptureFixture) -> None:
+    search_result = {
+        "total": 1,
+        "matches": [_make_slack_msg(channel_name="private-customer-channel", text="private customer message")],
+    }
+    caplog.set_level(logging.DEBUG, logger=wst.__name__)
+
+    with patch.object(wst, "run_slack_search", return_value=search_result):
+        result = wst.scan_account_threads(
+            "private-account",
+            {"keywords": ["private customer query"], "account_channels": ["expected-channel"]},
+            current_username="tester",
+            threshold_hours=48,
+            search_limit=50,
+            now_utc=_NOW_UTC,
+        )
+
+    assert result == []
+    logged = caplog.text
+    for private_value in (
+        "private-account",
+        "private customer query",
+        "private-customer-channel",
+        "private customer message",
+    ):
+        assert private_value not in logged
+    assert "total=1 inspecting=1" in logged
 
 
 # ---------------------------------------------------------------------------
@@ -166,6 +525,8 @@ def test_run_slack_search_all_retries_exhausted_raises_runtime_error() -> None:
         (1, "token expired", True),
         (1, "account_inactive", True),
         (1, "login required", True),
+        (1, "plugin initialization failed", False),
+        (1, "catalog ingestion failed", False),
         (0, "success", False),
         (1, "unrelated error", False),
         (2, "command not found", False),
@@ -338,50 +699,48 @@ def test_classify_message_text_snippet_truncated_at_120_chars() -> None:
 
 
 # ---------------------------------------------------------------------------
-# write_auth_error_alert
+# write_slack_error_alert
 # ---------------------------------------------------------------------------
 
 
 # ── TestWriteAuthErrorAlert (flattened) ─────────────────────────────────────────────
 
 
-def test_write_auth_error_alert_writes_named_error_entry(tmp_path: Path) -> None:
+def test_write_slack_error_alert_writes_named_error_entry(tmp_path: Path) -> None:
     alerts_file = tmp_path / "slack-thread-alerts.md"
     with (
         patch.object(wst, "_alerts_file", return_value=alerts_file),
         patch.object(wst, "get_watchers_dir", return_value=tmp_path),
     ):
-        wst.write_auth_error_alert("token_revoked: expired", dry_run=False)
+        wst.write_slack_error_alert(dry_run=False, failure_kind="auth")
 
     content = alerts_file.read_text()
     assert "auth expired" in content.lower() or "auth-error" in content
     assert "slackcli" in content
-    assert "token_revoked: expired" in content
+    assert "Slack authentication failed; run slackcli auth login." in content
 
 
-def test_write_auth_error_alert_dry_run_does_not_write_file(tmp_path: Path) -> None:
+def test_write_slack_error_alert_dry_run_does_not_write_file(tmp_path: Path) -> None:
     alerts_file = tmp_path / "slack-thread-alerts.md"
     with (
         patch.object(wst, "_alerts_file", return_value=alerts_file),
         patch.object(wst, "get_watchers_dir", return_value=tmp_path),
     ):
-        wst.write_auth_error_alert("not_authed", dry_run=True)
+        wst.write_slack_error_alert(dry_run=True, failure_kind="auth")
 
     assert not alerts_file.exists()
 
 
-def test_write_auth_error_alert_error_message_truncated_to_200_chars(tmp_path: Path) -> None:
-    long_msg = "A" * 500
+def test_write_slack_error_alert_uses_sanitized_detail(tmp_path: Path) -> None:
     alerts_file = tmp_path / "slack-thread-alerts.md"
     with (
         patch.object(wst, "_alerts_file", return_value=alerts_file),
         patch.object(wst, "get_watchers_dir", return_value=tmp_path),
     ):
-        wst.write_auth_error_alert(long_msg, dry_run=False)
+        wst.write_slack_error_alert(dry_run=False, failure_kind="auth")
 
     content = alerts_file.read_text()
-    # The detail line should have at most 200 A's in it
-    assert "A" * 201 not in content
+    assert "Slack authentication failed; run slackcli auth login." in content
 
 
 # ---------------------------------------------------------------------------
@@ -398,7 +757,7 @@ def _make_thread_append_thread_alert(
     channel: str = "general",
     age_hours: float = 72.0,
     sender: str = "alice",
-) -> dict:
+) -> SlackAccountThread:
     return {
         "account": account,
         "channel": channel,
@@ -426,6 +785,33 @@ def test_append_thread_alert_alert_written_to_file(tmp_path: Path) -> None:
     assert "general" in content
     assert "72" in content
     assert "alice" in content
+
+
+def test_thread_alert_write_failure_marks_scan_partial(caplog: pytest.LogCaptureFixture) -> None:
+    thread = _make_thread_append_thread_alert()
+    with (
+        patch.object(wst, "scan_account_threads", return_value=[thread]),
+        patch.object(wst, "append_thread_alert", side_effect=OSError("/private/alerts/path")),
+        caplog.at_level(logging.ERROR),
+    ):
+        checked, alerts, failure_kind, persistence_failed = wst._scan_all_accounts(
+            {"acme": {}},
+            account_filter=None,
+            current_username="tester",
+            threshold_hours=48,
+            limit=50,
+            now_utc=datetime.datetime.now(datetime.UTC),
+            run_ts="2026-09-27T12:00:00Z",
+            updated_state={},
+            previous_state={},
+            dry_run=False,
+        )
+
+    assert checked == 1
+    assert alerts == 0
+    assert failure_kind is None
+    assert persistence_failed == 1
+    assert "/private/alerts/path" not in caplog.text
 
 
 def test_append_thread_alert_dry_run_does_not_write_file(tmp_path: Path) -> None:
@@ -493,9 +879,8 @@ def test_save_and_load(tmp_path: Path) -> None:
         patch.object(wst, "_state_file", return_value=state_file),
         patch.object(wst, "get_watchers_dir", return_value=watchers_dir),
     ):
-        result = wst.save_state(data)
+        wst.save_state(data)
         loaded = wst.load_state()
-    assert result is None
     assert loaded == data
 
 
@@ -528,22 +913,46 @@ def test_state_write_failure_is_fatal(tmp_path: Path) -> None:
     """A completed Slack scan must fail closed when its state cannot persist."""
     config = {"accounts": {"acme": {"keywords": ["Acme"]}}}
     with (
-        patch.object(wst, "load_accounts_config", return_value=config),
+        patch.object(wst, "get_accounts_config", return_value=config),
         patch.object(wst, "load_current_username", return_value="operator"),
         patch.object(wst, "load_state", return_value={}),
-        patch.object(wst, "_scan_all_accounts", return_value=(1, 0, False, False)),
+        patch.object(wst, "_scan_all_accounts", return_value=(1, 0, None, False)),
         patch.object(wst, "_persist_and_summarise", return_value=True),
-        patch.object(wst, "write_run_status") as write_status,
+        patch.object(wst, "write_run_status", return_value="written") as write_status,
     ):
         rc = wst._run_slack_threads(threshold_hours=48, account=None, limit=50, dry_run=False)
 
-    assert rc == 1
+    assert rc.run.outcome == "fatal"
+    assert rc.run.exit_code == 1
     assert write_status.call_args.kwargs["outcome"] == "fatal"
     assert write_status.call_args.kwargs["failures"] == 1
 
 
+@pytest.mark.parametrize("failure", [json.JSONDecodeError("bad", "[", 0), TypeError("non-object root")])
+def test_state_persistence_shape_failures_are_bounded(failure: Exception, caplog: pytest.LogCaptureFixture) -> None:
+    with (
+        patch.object(wst, "save_state", side_effect=failure),
+        patch.object(wst, "append_run_summary"),
+        caplog.at_level(logging.ERROR),
+    ):
+        failed = wst._persist_and_summarise(
+            updated_state={"acme": {}},
+            previous_state={},
+            failure_kind=None,
+            dry_run=False,
+            run_ts="2026-09-27T12:00:00Z",
+            checked_accounts=1,
+            total_alerts=0,
+            elapsed=0.1,
+        )
+
+    assert failed == 1
+    assert "non-object root" not in caplog.text
+    assert "Traceback" not in caplog.text
+
+
 # ---------------------------------------------------------------------------
-# main() — auth expiry path: exit 0, named error artifact written
+# main() — auth expiry path: exit 2, named error artifact written
 # ---------------------------------------------------------------------------
 
 
@@ -556,14 +965,13 @@ def _make_accounts_yaml_main_auth_expiry(tmp_path: Path) -> Path:
     return p
 
 
-def test_auth_error_exits_zero(tmp_path: Path) -> None:
+def test_auth_error_exits_two(tmp_path: Path) -> None:
     accounts_yaml = _make_accounts_yaml_main_auth_expiry(tmp_path)
     alerts_file = tmp_path / "slack-thread-alerts.md"
     state_file = tmp_path / "slack-thread-state.json"
 
     with (
-        patch.object(wst, "_accounts_config", return_value=accounts_yaml),
-        patch.object(wst, "load_accounts_config", side_effect=lambda: yaml.safe_load(accounts_yaml.read_text())),
+        patch("fieldkit.config._accounts.get_config_path", return_value=accounts_yaml),
         patch("fieldkit.watch.slack_threads.get_fieldkit_home", return_value=tmp_path),
         patch.object(wst, "get_watchers_dir", return_value=tmp_path),
         patch.object(wst, "_alerts_file", return_value=alerts_file),
@@ -576,7 +984,7 @@ def test_auth_error_exits_zero(tmp_path: Path) -> None:
     ):
         result = CliRunner().invoke(cli, [])
 
-    assert result.exit_code == 0
+    assert result.exit_code == 2
 
 
 def test_auth_error_writes_named_error_artifact(tmp_path: Path) -> None:
@@ -585,8 +993,7 @@ def test_auth_error_writes_named_error_artifact(tmp_path: Path) -> None:
     state_file = tmp_path / "slack-thread-state.json"
 
     with (
-        patch.object(wst, "_accounts_config", return_value=accounts_yaml),
-        patch.object(wst, "load_accounts_config", side_effect=lambda: yaml.safe_load(accounts_yaml.read_text())),
+        patch("fieldkit.config._accounts.get_config_path", return_value=accounts_yaml),
         patch("fieldkit.watch.slack_threads.get_fieldkit_home", return_value=tmp_path),
         patch.object(wst, "get_watchers_dir", return_value=tmp_path),
         patch.object(wst, "_alerts_file", return_value=alerts_file),
@@ -613,8 +1020,7 @@ def test_auth_error_writes_error_to_state_json(tmp_path: Path) -> None:
     state_file = tmp_path / "slack-thread-state.json"
 
     with (
-        patch.object(wst, "_accounts_config", return_value=accounts_yaml),
-        patch.object(wst, "load_accounts_config", side_effect=lambda: yaml.safe_load(accounts_yaml.read_text())),
+        patch("fieldkit.config._accounts.get_config_path", return_value=accounts_yaml),
         patch("fieldkit.watch.slack_threads.get_fieldkit_home", return_value=tmp_path),
         patch.object(wst, "get_watchers_dir", return_value=tmp_path),
         patch.object(wst, "_alerts_file", return_value=alerts_file),
@@ -648,7 +1054,7 @@ def _make_accounts_yaml_main_thread_alert(tmp_path: Path) -> Path:
     return p
 
 
-def _stale_search_result_main_thread_alert() -> dict:
+def _stale_search_result_main_thread_alert() -> dict[str, object]:
     """Return a mocked run_slack_search result with one stale message."""
     ts = _epoch_str(72)
     return {
@@ -785,7 +1191,7 @@ def test_classify_message_allows_non_bot_sender() -> None:
 
 def _make_msg_bug094_channel_attribution(
     ts_offset_hours: int, channel_name: str, username: str = "other.person"
-) -> dict:
+) -> dict[str, object]:
     now = datetime.datetime(2026, 6, 7, 12, 0, 0, tzinfo=datetime.UTC)
     ts = (now - datetime.timedelta(hours=ts_offset_hours)).timestamp()
     return {
@@ -900,7 +1306,7 @@ def _make_thread_bug121_alert_dedup(
     channel: str = "general",
     age_hours: float = 72.0,
     sender: str = "alice",
-) -> dict:
+) -> SlackAccountThread:
     return {
         "account": account,
         "channel": channel,
@@ -957,7 +1363,7 @@ def test_different_account_channel_still_written(tmp_path: Path) -> None:
 
 
 def test_duplicate_auth_error_alert_not_written_on_second_call(tmp_path: Path) -> None:
-    """Second call to write_auth_error_alert on the same date is a no-op."""
+    """Second call to write_slack_error_alert on the same date is a no-op."""
     alerts_file = tmp_path / "slack-thread-alerts.md"
 
     with (
@@ -965,15 +1371,15 @@ def test_duplicate_auth_error_alert_not_written_on_second_call(tmp_path: Path) -
         patch.object(wst, "get_watchers_dir", return_value=tmp_path),
     ):
         # First write — should succeed.
-        wst.write_auth_error_alert("token_revoked: expired", dry_run=False)
+        wst.write_slack_error_alert(dry_run=False, failure_kind="auth")
         content_after_first = alerts_file.read_text(encoding="utf-8")
 
         # Second write — same date — must be a no-op.
-        wst.write_auth_error_alert("token_revoked: expired again", dry_run=False)
+        wst.write_slack_error_alert(dry_run=False, failure_kind="auth")
         content_after_second = alerts_file.read_text(encoding="utf-8")
 
     assert content_after_first == content_after_second, (
-        "write_auth_error_alert wrote a duplicate entry on the second call"
+        "write_slack_error_alert wrote a duplicate entry on the second call"
     )
     assert "auth" in content_after_first.lower()
 
@@ -1001,12 +1407,12 @@ def test_auth_error_with_zero_accounts_produces_fatal_outcome(tmp_path: Path) ->
 
     captured_outcome: list[str] = []
 
-    def _capture_write_run_status(**kwargs: object) -> None:
+    def _capture_write_run_status(**kwargs: object) -> RunStatusWriteResult:
         captured_outcome.append(str(kwargs.get("outcome", "")))
+        return "written"
 
     with (
-        patch.object(wst, "_accounts_config", return_value=accounts_yaml),
-        patch.object(wst, "load_accounts_config", side_effect=lambda: yaml.safe_load(accounts_yaml.read_text())),
+        patch("fieldkit.config._accounts.get_config_path", return_value=accounts_yaml),
         patch("fieldkit.watch.slack_threads.get_fieldkit_home", return_value=tmp_path),
         patch.object(wst, "get_watchers_dir", return_value=tmp_path),
         patch.object(wst, "_alerts_file", return_value=alerts_file),
@@ -1020,7 +1426,7 @@ def test_auth_error_with_zero_accounts_produces_fatal_outcome(tmp_path: Path) ->
     ):
         result = CliRunner().invoke(cli, [])
 
-    assert result.exit_code == 0, "cli must still exit 0 on auth error"
+    assert result.exit_code == 2, "authentication failures require user action"
     assert len(captured_outcome) == 1, "write_run_status should be called exactly once"
     assert captured_outcome[0] == "fatal", (
         f"Expected outcome='fatal' when auth error fires before any account is checked, "
@@ -1042,8 +1448,9 @@ def test_auth_error_after_some_accounts_produces_partial_outcome(tmp_path: Path)
 
     captured_outcome: list[str] = []
 
-    def _capture_write_run_status(**kwargs: object) -> None:
+    def _capture_write_run_status(**kwargs: object) -> RunStatusWriteResult:
         captured_outcome.append(str(kwargs.get("outcome", "")))
+        return "written"
 
     # First call returns empty results (acme succeeds), second raises auth error (globalpay fails).
     empty_result = {"query": "Acme Corp", "total": 0, "matches": []}
@@ -1057,8 +1464,7 @@ def test_auth_error_after_some_accounts_produces_partial_outcome(tmp_path: Path)
         raise wst.SlackAuthError("token_revoked on second account")
 
     with (
-        patch.object(wst, "_accounts_config", return_value=accounts_yaml),
-        patch.object(wst, "load_accounts_config", side_effect=lambda: yaml.safe_load(accounts_yaml.read_text())),
+        patch("fieldkit.config._accounts.get_config_path", return_value=accounts_yaml),
         patch("fieldkit.watch.slack_threads.get_fieldkit_home", return_value=tmp_path),
         patch.object(wst, "get_watchers_dir", return_value=tmp_path),
         patch.object(wst, "_alerts_file", return_value=alerts_file),
@@ -1068,12 +1474,280 @@ def test_auth_error_after_some_accounts_produces_partial_outcome(tmp_path: Path)
     ):
         result = CliRunner().invoke(cli, [])
     # pii-guard: ignore
-    assert result.exit_code == 0
+    assert result.exit_code == 2
     assert len(captured_outcome) == 1
     assert captured_outcome[0] == "partial", (
         f"Expected outcome='partial' when auth error fires after one account succeeded, "
         f"got outcome={captured_outcome[0]!r}"
     )
+
+
+def test_dry_run_creates_no_logs_status_state_or_alert_files(tmp_path: Path) -> None:
+    """A Slack dry run is observational even at the shared logger/status layers."""
+    before = sorted(path.relative_to(tmp_path) for path in tmp_path.rglob("*"))
+    with (
+        patch.object(wst, "get_accounts_config", return_value={"accounts": {"acme": {}}}),
+        patch.object(wst, "load_current_username", return_value="tester"),
+        patch.object(wst, "load_state", return_value={}),
+        patch.object(wst, "_scan_all_accounts", return_value=(1, 0, None, False)),
+        patch("fieldkit.watch.logging.get_fieldkit_home", return_value=tmp_path),
+        patch("fieldkit.watch.slack_threads.get_fieldkit_home", return_value=tmp_path),
+        patch.object(wst, "get_watchers_dir", return_value=tmp_path / "watchers"),
+        patch.object(wst, "write_run_status", return_value="written") as write_status,
+    ):
+        result = wst._run_slack_threads(threshold_hours=48, account=None, limit=50, dry_run=True)
+
+    assert result.run.exit_code == 0
+    assert sorted(path.relative_to(tmp_path) for path in tmp_path.rglob("*")) == before
+    write_status.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("accounts", "account_filter"),
+    [
+        ({"acme": "not-a-mapping"}, None),
+        ({"acme": {"keywords": "acme"}}, None),
+        ({"acme": {"keywords": [["nested"]]}}, None),
+        ({"acme": {"account_channels": "acme-channel"}}, None),
+        ({"acme": {"account_channels": [["nested"]]}}, None),
+        ({"acme": {"slack_watch": "false"}}, None),
+        ({"acme": {"internal": "false"}}, None),
+        ({"acme": {"slack_watch": False}}, None),
+        ({"acme": {"internal": True}}, "acme"),
+    ],
+)
+def test_invalid_or_ineligible_selected_config_exits_data_without_scanning(
+    accounts: dict[str, object], account_filter: str | None
+) -> None:
+    with (
+        patch.object(wst, "get_accounts_config", return_value={"accounts": accounts}),
+        patch.object(wst, "_scan_all_accounts") as scan,
+    ):
+        result = wst._run_slack_threads(
+            threshold_hours=48,
+            account=account_filter,
+            limit=50,
+            dry_run=True,
+        )
+
+    assert result.run == WatcherRunResult("fatal", False, None, 3)
+    scan.assert_not_called()
+
+
+def test_filtered_valid_account_ignores_invalid_unselected_account() -> None:
+    accounts = {"acme": {"keywords": ["Acme"]}, "broken": "not-a-mapping"}
+    with (
+        patch.object(wst, "get_accounts_config", return_value={"accounts": accounts}),
+        patch.object(wst, "load_current_username", return_value="tester"),
+        patch.object(wst, "load_state", return_value={}),
+        patch.object(wst, "_scan_all_accounts", return_value=(1, 0, None, False)) as scan,
+        patch.object(wst, "_persist_and_summarise", return_value=False),
+    ):
+        result = wst._run_slack_threads(
+            threshold_hours=48,
+            account="acme",
+            limit=50,
+            dry_run=True,
+        )
+
+    assert result.run.exit_code == 0
+    assert scan.call_args.args[0] == {"acme": {"keywords": ["Acme"]}}
+
+
+def test_run_status_disk_failure_exits_partial() -> None:
+    with (
+        patch.object(wst, "get_accounts_config", return_value={"accounts": {"acme": {}}}),
+        patch.object(wst, "load_current_username", return_value="tester"),
+        patch.object(wst, "load_state", return_value={}),
+        patch.object(wst, "_scan_all_accounts", return_value=(1, 0, None, False)),
+        patch.object(wst, "_persist_and_summarise", return_value=False),
+        patch.object(wst, "write_run_status", return_value="failed"),
+    ):
+        result = wst._run_slack_threads(threshold_hours=48, account=None, limit=50, dry_run=False)
+
+    assert result.run.outcome == "fatal"
+    assert result.run.exit_code == 1
+    assert result.run.status_write == "failed"
+    assert result.failures == 1
+
+
+def test_cli_json_uses_adapter_renderer_not_domain_print() -> None:
+    with (
+        patch.object(wst, "get_accounts_config", return_value={"accounts": {"acme": {}}}),
+        patch.object(wst, "load_current_username", return_value="tester"),
+        patch.object(wst, "load_state", return_value={}),
+        patch.object(wst, "_scan_all_accounts", return_value=(1, 0, None, False)),
+        patch.object(wst, "_persist_and_summarise", return_value=False),
+        patch.object(wst, "write_run_status", return_value="written"),
+        patch("builtins.print", side_effect=AssertionError("domain print")),
+    ):
+        result = CliRunner().invoke(cli, ["--json"])
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout)["watcher"] == "slack-threads"
+
+
+def test_cli_json_renders_provider_failure_as_partial() -> None:
+    with (
+        patch.object(wst, "get_accounts_config", return_value={"accounts": {"acme": {}}}),
+        patch.object(wst, "load_current_username", return_value="tester"),
+        patch.object(wst, "load_state", return_value={}),
+        patch.object(wst, "_scan_all_accounts", return_value=(1, 0, "provider", False)),
+        patch.object(wst, "_persist_and_summarise", return_value=False),
+        patch.object(wst, "write_run_status", return_value="written"),
+    ):
+        result = CliRunner().invoke(cli, ["--json"])
+
+    payload = json.loads(result.stdout)
+    assert result.exit_code == 1
+    assert payload["outcome"] == "partial"
+    assert payload["provider_error"] is True
+    assert payload["auth_error"] is False
+
+
+@pytest.mark.parametrize(
+    ("scan_result", "expected_result"),
+    [
+        ((0, 0, "auth", False), 2),
+        ((1, 0, "auth", False), 2),
+        ((0, 0, "provider", False), 1),
+        ((1, 0, "provider", False), 1),
+        ((1, 0, None, True), 1),
+    ],
+)
+def test_run_exit_distinguishes_auth_and_partial_failures(
+    tmp_path: Path,
+    scan_result: tuple[int, int, str | None, bool],
+    expected_result: object,
+) -> None:
+    with (
+        patch.object(wst, "get_accounts_config", return_value={"accounts": {"acme": {}}}),
+        patch.object(wst, "load_current_username", return_value="tester"),
+        patch.object(wst, "load_state", return_value={}),
+        patch.object(wst, "_scan_all_accounts", return_value=scan_result),
+        patch.object(wst, "_persist_and_summarise", return_value=scan_result[3]),
+        patch.object(wst, "write_run_status", return_value="written"),
+        patch("fieldkit.watch.logging.get_fieldkit_home", return_value=tmp_path),
+    ):
+        result = wst._run_slack_threads(threshold_hours=48, account=None, limit=50, dry_run=False)
+
+    assert result.run.exit_code == expected_result
+
+
+@pytest.mark.parametrize(
+    ("threshold_hours", "limit", "limit_per_account"),
+    [(0, 50, None), (-1, 50, None), (48, 0, None), (48, -1, None), (48, 50, 0), (48, 50, -1)],
+)
+def test_non_positive_numeric_inputs_are_invalid_before_config_or_provider_calls(
+    threshold_hours: int, limit: int, limit_per_account: int | None
+) -> None:
+    with (
+        patch.object(wst, "get_accounts_config") as load_config,
+        patch.object(wst, "run_slack_search") as search,
+    ):
+        result = wst._run_slack_threads(
+            threshold_hours=threshold_hours,
+            account=None,
+            limit=limit,
+            limit_per_account=limit_per_account,
+            dry_run=True,
+        )
+
+    assert result.run == WatcherRunResult("fatal", False, None, 3)
+    load_config.assert_not_called()
+    search.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--threshold-hours", "0"],
+        ["--limit", "0"],
+        ["--limit-per-account", "-1"],
+    ],
+)
+def test_cli_non_positive_numeric_inputs_exit_data(args: list[str]) -> None:
+    with patch.object(wst, "get_accounts_config") as load_config:
+        result = CliRunner().invoke(cli, args)
+
+    assert result.exit_code == 3
+    load_config.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("args", "config_or_error"),
+    [
+        (["--threshold-hours", "0"], {"accounts": {"private-account": {}}}),
+        (["--limit", "0"], {"accounts": {"private-account": {}}}),
+        (["--limit-per-account", "0"], {"accounts": {"private-account": {}}}),
+        ([], RuntimeError("private config path")),
+        ([], {}),
+        ([], {"accounts": "private malformed accounts"}),
+        (["--account", "private-missing"], {"accounts": {"private-account": {}}}),
+        ([], {"accounts": {"private-account": {"keywords": "private-keyword"}}}),
+        ([], {"accounts": {"private-account": {"slack_watch": False}}}),
+    ],
+)
+def test_cli_json_validation_failures_are_sanitized_and_write_free(
+    tmp_path: Path,
+    args: list[str],
+    config_or_error: object,
+) -> None:
+    load_error = config_or_error if isinstance(config_or_error, RuntimeError) else None
+    config = {} if load_error is not None else config_or_error
+    before = sorted(path.relative_to(tmp_path) for path in tmp_path.rglob("*"))
+    with (
+        patch.object(wst, "get_accounts_config", return_value=config, side_effect=load_error) as load_config,
+        patch.object(wst, "_scan_all_accounts") as scan,
+        patch.object(wst, "run_slack_search") as search,
+        patch.object(wst, "_persist_and_summarise") as persist,
+        patch.object(wst, "write_run_status", return_value="written") as write_status,
+        patch("fieldkit.watch.logging.get_fieldkit_home", return_value=tmp_path),
+        patch("fieldkit.watch.slack_threads.get_fieldkit_home", return_value=tmp_path),
+        patch.object(wst, "get_watchers_dir", return_value=tmp_path / "watchers"),
+    ):
+        result = CliRunner().invoke(cli, ["--json", *args])
+
+    assert result.exit_code == 3
+    assert result.exception is not None
+    payload = json.loads(result.stdout)
+    assert payload == {
+        "watcher": "slack-threads",
+        "outcome": "fatal",
+        "records_checked": 0,
+        "alerts_generated": 0,
+        "failures": 1,
+        "auth_error": False,
+        "provider_error": False,
+        "elapsed_seconds": payload["elapsed_seconds"],
+        "dry_run": False,
+    }
+    assert isinstance(payload["elapsed_seconds"], float)
+    assert "private" not in result.output.lower()
+    assert sorted(path.relative_to(tmp_path) for path in tmp_path.rglob("*")) == before
+    scan.assert_not_called()
+    search.assert_not_called()
+    persist.assert_not_called()
+    write_status.assert_not_called()
+    if args and args[0] != "--account":
+        load_config.assert_not_called()
+
+
+def test_summary_write_failure_is_partial_with_bounded_diagnostic(caplog: pytest.LogCaptureFixture) -> None:
+    with (
+        patch.object(wst, "get_accounts_config", return_value={"accounts": {"acme": {}}}),
+        patch.object(wst, "load_current_username", return_value="tester"),
+        patch.object(wst, "load_state", return_value={}),
+        patch.object(wst, "_scan_all_accounts", return_value=(1, 0, None, False)),
+        patch.object(wst, "save_state"),
+        patch.object(wst, "append_run_summary", side_effect=OSError("/private/status/path")),
+        caplog.at_level(logging.ERROR),
+    ):
+        result = wst._run_slack_threads(threshold_hours=48, account=None, limit=50, dry_run=False)
+
+    assert result.run.outcome == "fatal"
+    assert result.run.exit_code == 1
+    assert "/private/status/path" not in caplog.text
 
 
 # ---------------------------------------------------------------------------
@@ -1091,14 +1765,13 @@ def _make_accounts_yaml_bug122_runtime_error_alert(tmp_path: Path) -> Path:
 
 
 def test_runtime_error_writes_alert(tmp_path: Path) -> None:
-    """RuntimeError must trigger write_auth_error_alert (not silently continue)."""
+    """RuntimeError must trigger a sanitized provider alert (not silently continue)."""
     accounts_yaml = _make_accounts_yaml_bug122_runtime_error_alert(tmp_path)
     alerts_file = tmp_path / "slack-thread-alerts.md"
     state_file = tmp_path / "slack-thread-state.json"
 
     with (
-        patch.object(wst, "_accounts_config", return_value=accounts_yaml),
-        patch.object(wst, "load_accounts_config", side_effect=lambda: yaml.safe_load(accounts_yaml.read_text())),
+        patch("fieldkit.config._accounts.get_config_path", return_value=accounts_yaml),
         patch("fieldkit.watch.slack_threads.get_fieldkit_home", return_value=tmp_path),
         patch.object(wst, "get_watchers_dir", return_value=tmp_path),
         patch.object(wst, "_alerts_file", return_value=alerts_file),
@@ -1111,10 +1784,12 @@ def test_runtime_error_writes_alert(tmp_path: Path) -> None:
     ):
         result = CliRunner().invoke(cli, [])
 
-    assert result.exit_code == 0, "cli must still exit 0 after RuntimeError"
+    assert result.exit_code == 1, "provider search failures are retryable partial results"
     assert alerts_file.exists(), "Alert file must be written on RuntimeError"
     content = alerts_file.read_text(encoding="utf-8")
-    assert "slackcli" in content.lower() or "auth" in content.lower(), "Alert must contain error detail"
+    assert "provider-error" in content
+    assert "Slack search failed" in content
+    assert "slackcli not found" not in content
 
 
 def test_runtime_error_stops_scanning_remaining_accounts(tmp_path: Path) -> None:
@@ -1135,8 +1810,7 @@ def test_runtime_error_stops_scanning_remaining_accounts(tmp_path: Path) -> None
         raise RuntimeError("slackcli timed out after 60s")
 
     with (
-        patch.object(wst, "_accounts_config", return_value=accounts_yaml),
-        patch.object(wst, "load_accounts_config", side_effect=lambda: yaml.safe_load(accounts_yaml.read_text())),
+        patch("fieldkit.config._accounts.get_config_path", return_value=accounts_yaml),
         patch("fieldkit.watch.slack_threads.get_fieldkit_home", return_value=tmp_path),
         patch.object(wst, "get_watchers_dir", return_value=tmp_path),
         patch.object(wst, "_alerts_file", return_value=alerts_file),
@@ -1161,8 +1835,7 @@ def test_runtime_error_sets_auth_error_flag(tmp_path: Path) -> None:
         captured_outcome.append(str(kwargs.get("outcome", "")))
 
     with (
-        patch.object(wst, "_accounts_config", return_value=accounts_yaml),
-        patch.object(wst, "load_accounts_config", side_effect=lambda: yaml.safe_load(accounts_yaml.read_text())),
+        patch("fieldkit.config._accounts.get_config_path", return_value=accounts_yaml),
         patch("fieldkit.watch.slack_threads.get_fieldkit_home", return_value=tmp_path),
         patch.object(wst, "get_watchers_dir", return_value=tmp_path),
         patch.object(wst, "_alerts_file", return_value=alerts_file),
@@ -1540,12 +2213,12 @@ def test_run_slack_search_does_not_retry_missing_binary() -> None:
     """
     call_count = {"n": 0}
 
-    def _fake_run(cmd: list[str], **kwargs: Any) -> Any:
+    def _fake_popen(cmd: list[str], **kwargs: Any) -> Any:
         call_count["n"] += 1
         raise FileNotFoundError("slackcli: command not found")
 
     with (
-        patch.object(wst.subprocess, "run", side_effect=_fake_run),
+        patch("subprocess.Popen", side_effect=_fake_popen),
         patch("time.sleep"),
         pytest.raises((FileNotFoundError, RuntimeError)),
     ):

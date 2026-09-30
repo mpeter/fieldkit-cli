@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import argparse
-import shutil
+import os
+import secrets
 import stat
 import sys
-import tempfile
 import zipfile
 from pathlib import Path, PurePosixPath
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING or __package__:
+    from scripts import release_filesystem
+else:
+    import release_filesystem
 
 _MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
 _MAX_MEMBER_BYTES = 128 * 1024 * 1024
@@ -16,25 +22,71 @@ _MAX_TOTAL_BYTES = 512 * 1024 * 1024
 _MAX_MEMBERS = 256
 
 
+def _open_directory_at(parent_fd: int, name: str) -> int:
+    try:
+        return release_filesystem.open_directory_at(parent_fd, name)
+    except ValueError as error:
+        raise ValueError("approval archive path component must be a directory") from error
+
+
+def _open_real_directory(path: Path, *, create: bool) -> int:
+    """Open a directory by traversing real components from the filesystem root."""
+    absolute = path.absolute()
+    descriptor = release_filesystem.open_directory(Path(absolute.anchor))
+    try:
+        for part in absolute.parts[1:]:
+            try:
+                child = _open_directory_at(descriptor, part)
+            except FileNotFoundError:
+                if not create:
+                    raise
+                os.mkdir(part, mode=0o700, dir_fd=descriptor)
+                child = _open_directory_at(descriptor, part)
+            os.close(descriptor)
+            descriptor = child
+        return descriptor
+    except BaseException as error:
+        os.close(descriptor)
+        if isinstance(error, (OSError, ValueError)):
+            raise ValueError("approval archive paths must have only real path components") from error
+        raise
+
+
+def _open_archive(path: Path) -> int:
+    if not path.name:
+        raise ValueError("approval archive must be a regular file")
+    parent_fd = _open_real_directory(path.parent, create=False)
+    try:
+        flags = release_filesystem.file_flags()
+        try:
+            descriptor = os.open(path.name, flags, dir_fd=parent_fd)
+        except OSError as error:
+            raise ValueError("approval archive must be a regular file") from error
+    finally:
+        os.close(parent_fd)
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ValueError("approval archive must be a regular file")
+        if metadata.st_size > _MAX_ARCHIVE_BYTES:
+            raise ValueError("approval archive exceeds compressed-size limit")
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
 def _member_path(name: str) -> PurePosixPath:
     path = PurePosixPath(name.rstrip("/"))
     if not name or not path.parts or path.is_absolute() or "\\" in name or "\0" in name or ".." in path.parts:
-        raise ValueError(f"approval archive member path is unsafe: {name!r}")
+        raise ValueError("approval archive member path is unsafe")
     if path.as_posix() != name.rstrip("/"):
-        raise ValueError(f"approval archive member path is noncanonical: {name!r}")
+        raise ValueError("approval archive member path is noncanonical")
     return path
 
 
-def _check_archive(archive: Path) -> list[zipfile.ZipInfo]:
-    if archive.is_symlink() or not archive.is_file():
-        raise ValueError("approval archive must be a regular file")
-    if archive.stat().st_size > _MAX_ARCHIVE_BYTES:
-        raise ValueError("approval archive exceeds compressed-size limit")
-    try:
-        with zipfile.ZipFile(archive) as source:
-            members = source.infolist()
-    except zipfile.BadZipFile as error:
-        raise ValueError("approval archive is not a valid ZIP file") from error
+def _check_archive(source: zipfile.ZipFile) -> list[zipfile.ZipInfo]:
+    members = source.infolist()
     if not members or len(members) > _MAX_MEMBERS:
         raise ValueError("approval archive member count is invalid")
     paths: set[PurePosixPath] = set()
@@ -60,37 +112,103 @@ def _check_archive(archive: Path) -> list[zipfile.ZipInfo]:
     return members
 
 
+def _create_staging_directory(parent_fd: int, destination_name: str) -> tuple[str, int]:
+    for _attempt in range(100):
+        name = f".{destination_name}-{secrets.token_hex(8)}"
+        try:
+            os.mkdir(name, mode=0o700, dir_fd=parent_fd)
+        except FileExistsError:
+            continue
+        return name, _open_directory_at(parent_fd, name)
+    raise ValueError("cannot allocate approval archive staging directory")
+
+
+def _open_or_create_member_directory(root_fd: int, parts: tuple[str, ...]) -> int:
+    descriptor = os.dup(root_fd)
+    try:
+        for part in parts:
+            try:
+                child = _open_directory_at(descriptor, part)
+            except FileNotFoundError:
+                os.mkdir(part, mode=0o700, dir_fd=descriptor)
+                child = _open_directory_at(descriptor, part)
+            os.close(descriptor)
+            descriptor = child
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _rename_no_replace_at(parent_fd: int, source: str, destination: str) -> None:
+    """Translate publication failures into this consumer's diagnostics."""
+    try:
+        release_filesystem.rename_no_replace_at(parent_fd, source, destination)
+    except FileExistsError as error:
+        raise ValueError("approval archive destination must not already exist") from error
+    except ValueError as error:
+        raise ValueError("atomic approval archive publication is unavailable or unsupported") from error
+
+
 def extract(archive: Path, destination: Path) -> None:
     """Safely extract one bounded artifact archive into a new destination directory."""
-    members = _check_archive(archive)
-    if destination.exists() or destination.is_symlink():
-        raise ValueError("approval archive destination must not already exist")
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    staging = Path(tempfile.mkdtemp(prefix=f".{destination.name}-", dir=destination.parent))
+    if not destination.name:
+        raise ValueError("approval archive destination must be a named directory")
+    archive_fd = _open_archive(archive)
     try:
-        with zipfile.ZipFile(archive) as source:
-            for member in members:
-                relative = _member_path(member.filename)
-                target = staging.joinpath(*relative.parts)
-                if member.is_dir():
-                    target.mkdir(parents=True, exist_ok=True)
-                    continue
-                target.parent.mkdir(parents=True, exist_ok=True)
-                with source.open(member) as input_stream, target.open("xb") as output_stream:
-                    remaining = member.file_size
-                    while remaining:
-                        chunk = input_stream.read(min(1024 * 1024, remaining))
-                        if not chunk:
-                            raise ValueError(f"approval archive member is truncated: {member.filename}")
-                        output_stream.write(chunk)
-                        remaining -= len(chunk)
-                    if input_stream.read(1):
-                        raise ValueError(f"approval archive member is oversized: {member.filename}")
-                target.chmod(0o600)
-        staging.replace(destination)
-    except BaseException:
-        shutil.rmtree(staging, ignore_errors=True)
-        raise
+        with os.fdopen(archive_fd, "rb") as archive_stream, zipfile.ZipFile(archive_stream) as source:
+            members = _check_archive(source)
+            parent_fd = _open_real_directory(destination.parent, create=True)
+            staging_name: str | None = None
+            staging_fd: int | None = None
+            try:
+                try:
+                    os.stat(destination.name, dir_fd=parent_fd, follow_symlinks=False)
+                except FileNotFoundError:
+                    pass
+                else:
+                    raise ValueError("approval archive destination must not already exist")
+                staging_name, staging_fd = _create_staging_directory(parent_fd, destination.name)
+                for member in members:
+                    relative = _member_path(member.filename)
+                    directory_parts = relative.parts if member.is_dir() else relative.parts[:-1]
+                    directory_fd = _open_or_create_member_directory(staging_fd, directory_parts)
+                    try:
+                        if member.is_dir():
+                            continue
+                        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+                        output_fd = os.open(relative.parts[-1], flags, 0o600, dir_fd=directory_fd)
+                        with os.fdopen(output_fd, "wb") as output_stream, source.open(member) as input_stream:
+                            remaining = member.file_size
+                            while remaining:
+                                chunk = input_stream.read(min(1024 * 1024, remaining))
+                                if not chunk:
+                                    raise ValueError("approval archive member is truncated")
+                                output_stream.write(chunk)
+                                remaining -= len(chunk)
+                            if input_stream.read(1):
+                                raise ValueError("approval archive member is oversized")
+                    finally:
+                        os.close(directory_fd)
+                _rename_no_replace_at(parent_fd, staging_name, destination.name)
+                published_fd = _open_directory_at(parent_fd, destination.name)
+                try:
+                    staged = os.fstat(staging_fd)
+                    published = os.fstat(published_fd)
+                    identity = (staged.st_dev, staged.st_ino)
+                    if (published.st_dev, published.st_ino) != identity:
+                        raise ValueError("published approval archive identity does not match retained staging")
+                    final = os.stat(destination.name, dir_fd=parent_fd, follow_symlinks=False)
+                    if not stat.S_ISDIR(final.st_mode) or (final.st_dev, final.st_ino) != identity:
+                        raise ValueError("published approval archive identity changed before completion")
+                finally:
+                    os.close(published_fd)
+            finally:
+                if staging_fd is not None:
+                    os.close(staging_fd)
+                os.close(parent_fd)
+    except zipfile.BadZipFile as error:
+        raise ValueError("approval archive is not a valid ZIP file") from error
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -100,10 +218,13 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         extract(args.archive, args.destination)
-    except (OSError, ValueError, zipfile.BadZipFile) as error:
+    except OSError:
+        print("Release approval archive: ERROR: approval archive filesystem operation failed", file=sys.stderr)
+        return 2
+    except (ValueError, zipfile.BadZipFile) as error:
         print(f"Release approval archive: ERROR: {error}", file=sys.stderr)
         return 2
-    print(f"Release approval archive: PASS ({args.destination})")
+    print("Release approval archive: PASS")
     return 0
 
 

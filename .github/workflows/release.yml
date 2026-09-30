@@ -84,6 +84,7 @@ jobs:
           path: |
             scripts/release_promotion_evidence.py
             scripts/release_bundle.py
+            scripts/runtime_license_inventory.py
             scripts/release_consumer.py
             scripts/release_wheelhouse.py
             pyproject.toml
@@ -169,6 +170,7 @@ jobs:
             candidate/
             scripts/check_release_consumer.py
             scripts/release_bundle.py
+            scripts/runtime_license_inventory.py
             scripts/release_consumer.py
             scripts/release_promotion_evidence.py
             scripts/release_wheelhouse.py

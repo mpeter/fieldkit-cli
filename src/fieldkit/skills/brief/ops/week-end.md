@@ -1,133 +1,69 @@
-# Week End
+# Week end
 
-Complete end-of-week close-out in 1–2 minutes.
-Closes open loops, captures lessons, drafts your 1:1, and resets for next week.
+Review the week's work, identify open loops, and prepare next-week proposals.
+This is an agent-assisted review, not a timed automation or a task-reset command.
 
-Invoked on Friday afternoon. This is the weekly close-out counterpart to
-`ops/week-start.md`: that one opens the week and sets priorities, this one
-closes it and resets TASKS.md for the next.
+## Review hygiene and follow-ups
 
-Previously a standalone skill named `week-end`. Folded here under D1 Wave 5
-per the D4 fold mechanics — it is a brief cadence, so it lives with the brief.
+Confirm the reporting interval and account scope. Read available task and pursuit
+records from the configured workspace. Flag missing or old Salesforce pull
+timestamps and absent next steps without claiming a fresh Salesforce comparison.
 
-## Gotchas
+For the implemented pursuit audit:
 
-- **Stale vault signals** — run `/brief` first if data hasn't been refreshed today
-- **Trigger overlap with adjacent ops** — this is the Friday close-out;
-  `ops/week-start.md` is the Monday setup and the brief root is the daily run
-
-## Constraints
-
-- **Never write to account or pursuit files without explicit confirmation**
-- **Always surface generated output for review before any external send**
-
-## Options
-
-- `--skip-1on1` — skip 1:1 draft generation
-- `--no-reset` — skip TASKS.md reset (manage manually)
-
-Routes needed: `gws tasks` (Google Tasks sync). TASKS.md, pursuit files,
-and meeting notes are read directly from disk (native file reads).
-
----
-
-## Step 1: SF hygiene check
-
-For each active pursuit file with `sf_opportunity_id` set:
-- Check `sf_last_pulled` frontmatter field: if > 7 days ago → flag
-- Do not inspect local historical qualification values. Note that a current
-  ClosePlan review requires `/grill`; this hygiene pass reports qualification as
-  unavailable rather than inventing a cached result
-- Check `sf_next_steps` field: if empty → flag for update before EOW
-
-```bash
-fieldkit pursuit audit --account <all>
+```console
+fieldkit pursuit audit --json
 ```
 
-Read the audit output. Report: "N pursuits need SF update before EOW."
-Keep structural/timeline audit results separate from native qualification.
+Omit the account filter for all accounts; `<all>` is not an account slug. JSON
+mode suppresses the report-file write. Exit `1` means findings were reported,
+including per-file parse errors; inspect the results for unreadable or malformed
+pursuits. Exit `3` means a fatal configuration or input-availability error,
+such as a missing accounts directory. If the operator wants the
+Markdown report, agree on its destination before running without `--json`.
+`--fix` is a separate pursuit mutation that requires a preview and explicit
+approval. Audit findings do not prove current ClosePlan qualification.
 
----
+Identify overdue follow-ups from explicit dates. If an item's creation date
+is unknown, report unknown age rather than assigning one.
 
-## Step 2: Follow-up audit
+## Summarize accomplishments
 
-Read TASKS.md **Waiting On** section. For each item:
-- Parse the follow-up date (if present)
-- If follow-up date is past or item is > 7 days old with no date → flag
+Count completed tasks only when completion evidence falls within the reporting
+interval. A checked item without a completion date is not proof it was completed
+this week.
 
-Output: "N waiting-on items past follow-up date: [list with age]"
+Use dated meeting content to identify meetings and dated transition records to
+identify stage changes. A note's creation or modification timestamp alone does
+not prove a meeting occurred or a pursuit advanced. Deduplicate records and label
+drafts, cancellations, and incomplete histories.
 
----
+## Capture lessons and prepare a manager update
 
-## Step 3: Done-this-week summary
+Ask whether the operator wants lessons captured. Agree on a workspace destination
+and the exact addition before writing; do not assume a private harness memory
+directory. Preserve existing content and read back the addition.
 
-Read TASKS.md **Done Today** and **Done** sections.
-Scan `accounts/*/meetings/` for files created or modified this week.
-Scan pursuit file `transition-history` for entries with this week's date.
+If a manager update is requested, load the
+[one-on-one workflow](../../meeting/ops/one-on-one.md), verify its prerequisites,
+and agree on a destination. Keep it a draft until reviewed; sending it is a
+separate authorized action.
 
-Summarise:
-- N tasks completed
-- N meetings with external accounts (meeting note files from this week)
-- Stage advances this week: [list of deal → stage]
+## Propose next-week task changes
 
----
+Present completed items, carry-forward candidates, and unresolved follow-ups.
+Do not automatically clear Today, move managed entries between sections, delete
+tasks, or reset Google Tasks.
 
-## Step 4: Lessons learned
+When reconciliation is requested, use the
+[task-sync workflow](../../task-sync/SKILL.md). Preserve task identifiers and
+anchors, require confirmation for destructive changes, and verify remote
+read-back before regenerating managed local state. A failed or partial read
+must not become a deletion or a successful reset claim.
 
-Prompt: "Any lessons from this week to capture? (yes / skip)"
+## Report
 
-If yes: collect lesson text from user. Append to `memory/system/lessons-learned.md`:
-
-```markdown
-## [DATE] — [account or topic if applicable]
-- [lesson 1]
-- [lesson 2]
-- [lesson 3]
-```
-
----
-
-## Step 5: Draft 1:1 update (skip if --skip-1on1)
-
-Invoke the `meeting` skill's `src/fieldkit/skills/meeting/ops/one-on-one.md` logic.
-Save to `<fieldkit_home>/archive/one-on-ones/YYYY-MM-DD-1on1-update.md`.
-Report: "1:1 draft saved. Review before Monday."
-
----
-
-## Step 6: Reset TASKS.md for next week (skip if --no-reset)
-
-1. Move **Done Today** items → **Done** section
-2. Move any **Today** items not completed → **Active** with carry-forward note: "(carried from [DATE])"
-3. Clear **Today** section
-4. Run `/task-sync` to push changes to Google Tasks
-
-Report: "N items moved to Done, N items carried to Active, Today section cleared."
-
----
-
-## Output Format
-
-```markdown
-## Week Wrap — [DATE]
-
-### ✅ Accomplished This Week
-- N tasks completed
-- N meetings with external accounts
-- Stage advances: [list or 'none']
-
-### ⚠️ SF Hygiene Issues
-- [pursuit]: sf_last_pulled N days ago — run sf-sync
-- [pursuit]: no Next Steps — update before EOW
-- (none)
-
-### 📬 Follow-Ups Past Due
-- Waiting on [name] re: [topic] — sent [date], N days past due
-- (none)
-
-### 📝 1:1 Draft
-Saved to: <fieldkit_home>/archive/one-on-ones/[DATE]-1on1-update.md
-
-### 🔄 TASKS.md Reset
-N items moved to Done, N items carried to Active, Today section cleared.
-```
+Separate evidenced accomplishments, uncertain dates, hygiene findings, overdue
+follow-ups, reviewed drafts, and proposed task changes. Report persisted or
+synchronized changes only after read-back. Include unfinished requested steps;
+do not substitute a template's success wording for observed results.

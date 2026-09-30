@@ -19,7 +19,6 @@ Exit 0: fragment present, or the change is exempt (doc-only / waived / no diff).
 Exit 1: non-doc files changed with no fragment added.
 """
 
-import fnmatch
 import os
 import re
 import subprocess
@@ -28,7 +27,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from _changelog_common import FRAGMENTS_DIRNAME, META_FRAGMENTS
+from _changelog_common import FRAGMENTS_DIRNAME, META_FRAGMENTS, fragment_boundary_problem
+from semantic_python_changes import is_prose_path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FRAGMENTS_DIR = FRAGMENTS_DIRNAME
@@ -39,22 +39,6 @@ _GIT_TIMEOUT_SECONDS = 30
 
 _PUBLIC_SLUG_RE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\.md")
 _PRIVATE_TRACKER_RE = re.compile(r"(?i)(?<![a-z0-9])(?:bug|enh|bi)-[0-9]+(?![a-z0-9])")
-
-# Files that do not on their own require a fragment. This glob list mirrors the
-# `case` arm in the `changes` job of .github/workflows/ci.yml — one definition of
-# "doc-only" for the whole repo. Parity is enforced by
-# tests/test_changelog_fragments.py::test_doc_patterns_match_ci_workflow, because
-# a silently-broadened list here makes the gate exit 0 while reporting OK.
-#
-# Only the glob list is shared; the two compute their diffs differently (the
-# `changes` job uses a two-dot BASE_SHA..HEAD_SHA diff, this uses merge-base).
-_DOC_PATTERNS: tuple[str, ...] = (
-    "docs/*",
-    "openspec/*",
-    ".opencode/*",
-    ".specify/*",
-    "*.md",
-)
 
 
 def _git(*args: str) -> str:
@@ -69,15 +53,6 @@ def _git(*args: str) -> str:
         timeout=_GIT_TIMEOUT_SECONDS,
     )
     return result.stdout.strip()
-
-
-def _is_doc_only(path: str) -> bool:
-    """Return True when *path* is exempt from the fragment requirement.
-
-    Uses fnmatch, whose ``*`` spans ``/`` — matching the shell ``case`` globs in
-    the CI `changes` job, where ``*.md`` matches a .md file at any depth.
-    """
-    return any(fnmatch.fnmatch(path, pattern) for pattern in _DOC_PATTERNS)
 
 
 def _is_fragment(path: str) -> bool:
@@ -103,6 +78,8 @@ def _fragment_problem(path: str, content: str) -> str | None:
         return f"{path}: content must start with a descriptive heading"
     if not any(line.strip() for line in lines[1:]):
         return f"{path}: content must describe an observable result below the heading"
+    if problem := fragment_boundary_problem(content):
+        return f"{path}: {problem}"
     return None
 
 
@@ -188,7 +165,7 @@ def main() -> int:
         print(f"OK: no files changed vs {base_ref}.")
         return 0
 
-    changed_code = [path for path in changed if not _is_doc_only(path)]
+    changed_code = [path for path in changed if not is_prose_path(path)]
     if not changed_code:
         print(f"OK: {len(changed)} file(s) changed, all doc-only — no fragment required.")
         return 0

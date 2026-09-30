@@ -54,6 +54,7 @@ _EXPECTED_KEYS = [
     "primary_account",
     "accounts.0",
     "accounts.all",
+    "fieldkit_home",
 ]
 
 _MOCK_CTX = {
@@ -69,7 +70,7 @@ _MOCK_CTX = {
     "accounts.all": "acme-corp",
     "internal_domain": "example.com",
     "primary_pursuit": "",
-    "data_repo": "<user-home-path>/fieldkit-data",  # pii-guard: ignore
+    "fieldkit_home": "<user-home-path>/fieldkit-workspace",  # pii-guard: ignore
     "example_sf_id": "006Pe000000ExampleId",
 }
 

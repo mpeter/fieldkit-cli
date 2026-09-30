@@ -1,6 +1,5 @@
 """Concurrency contract for bounded contact enrichment batches."""
 
-import sqlite3
 import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -143,38 +142,53 @@ def test_enrich_batch_worker_failure_prevents_memory_writes() -> None:
     write.assert_not_called()
 
 
-def test_enrich_batch_prepares_gmail_once_before_read_only_workers(tmp_path: Path) -> None:
-    db_path = tmp_path / "gmail.db"
-    conn = sqlite3.connect(str(db_path))
-    conn.executescript(
-        """
-        CREATE TABLE messages (
-            message_id TEXT PRIMARY KEY, thread_id TEXT, date_epoch INTEGER,
-            date_str TEXT, from_addr TEXT, to_addr TEXT, cc_addr TEXT,
-            subject TEXT, snippet TEXT, body_plain TEXT
-        );
-        CREATE TABLE people (email TEXT PRIMARY KEY, display_name TEXT);
-        INSERT INTO messages VALUES
-            ('m1', 't1', 1710460800, '2024-03-15', 'contact0@example.com',
-             'contact1@example.com', NULL, 'Hello', '', '');
-        """
-    )
-    conn.commit()
-    conn.close()
-    coordinator_thread = threading.get_ident()
-    migration_threads: list[int] = []
+def test_enrich_batch_uses_ready_published_cache_in_read_only_workers(tmp_path: Path) -> None:
+    from fieldkit.gmail import query_domain
+    from fieldkit.gmail.publication import GMAIL_QUERY_READY_KEY, apply_gmail_page, initialize_gmail_publication
+    from fieldkit.sqlite_publication import SQLiteMutationConnection
 
-    def record_migration(_conn: sqlite3.Connection) -> None:
-        migration_threads.append(threading.get_ident())
+    db_path = tmp_path / "gmail.db"
+    initialize_gmail_publication(db_path)
+
+    def insert_fixture(connection: SQLiteMutationConnection) -> None:
+        connection.execute("INSERT INTO threads(thread_id, subject, message_count) VALUES ('t1', 'Hello', 1)")
+        connection.execute(
+            "INSERT INTO messages(message_id, thread_id, date_epoch, date_str, from_addr, to_addr, "
+            "cc_addr, subject, snippet, body_plain) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "m1",
+                "t1",
+                1710460800,
+                "2024-03-15",
+                "contact0@example.com",
+                "contact1@example.com",
+                None,
+                "Hello",
+                "",
+                "",
+            ),
+        )
+        connection.execute(
+            "INSERT OR REPLACE INTO sync_state(key, value) VALUES (?, 'true')",
+            (GMAIL_QUERY_READY_KEY,),
+        )
+
+    apply_gmail_page(db_path, insert_fixture)
+    coordinator_thread = threading.get_ident()
+    connection_threads: list[int] = []
+
+    def record_connection(path: Path):
+        connection_threads.append(threading.get_ident())
+        return query_domain.connect(path)
 
     with (
         patch("fieldkit.contact._enrich_helpers.get_gmail_db_path", return_value=db_path),
-        patch("fieldkit.gmail.query_domain._ensure_indexes", side_effect=record_migration),
-        patch("fieldkit.gmail.query_domain._ensure_schema", side_effect=record_migration),
+        patch("fieldkit.contact._enrich_helpers.connect_gmail_cache", side_effect=record_connection),
         patch("fieldkit.contact._enrich_helpers.write_to_memory"),
     ):
         enriched, failed = enrich_batch([_contact(0), _contact(1)], 0)
 
-    assert migration_threads == [coordinator_thread, coordinator_thread]
+    assert len(connection_threads) == 2
+    assert all(thread != coordinator_thread for thread in connection_threads)
     assert [record["email_frequency"] for record in enriched] == [1, 1]
     assert failed == []

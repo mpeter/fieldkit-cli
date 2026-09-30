@@ -14,8 +14,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-import fieldkit.commands.brief.collect as collect_mod
-from fieldkit.commands.brief.collect import (
+import fieldkit.brief.collect as collect_mod
+from fieldkit.brief.collect import (
     _champion_signal_block,
     collect_decay_signals,
     collect_pipeline_pulse,
@@ -356,8 +356,8 @@ def test_champion_signal_block_db_error_returns_none(tmp_path: Path) -> None:
 # ── TestCollectDecaySignals (flattened) ─────────────────────────────────────
 
 
-def test_collect_decay_signals_no_accounts_yaml_returns_sentinel(tmp_path: Path) -> None:
-    """collect_decay_signals returns the unavailable sentinel when accounts.yaml is absent."""
+def test_collect_decay_signals_no_accounts_yaml_returns_no_data(tmp_path: Path) -> None:
+    """Absent optional accounts configuration produces no decay data."""
     (tmp_path / "accounts").mkdir()
 
     with (
@@ -365,14 +365,13 @@ def test_collect_decay_signals_no_accounts_yaml_returns_sentinel(tmp_path: Path)
         patch.object(collect_mod, "_gmail_connect"),
         patch.object(
             collect_mod,
-            "read_accounts_config",
-            side_effect=FileNotFoundError("no such file"),
+            "get_accounts_config",
+            return_value={},
         ),
     ):
         result = collect_decay_signals(tmp_path)
 
-    assert "accounts.yaml not found" in result
-    assert "unavailable" in result
+    assert result == "No decay data available."
 
 
 def test_collect_decay_signals_account_filter_excludes_other_accounts(tmp_path: Path) -> None:
@@ -381,36 +380,40 @@ def test_collect_decay_signals_account_filter_excludes_other_accounts(tmp_path: 
 
     mock_config = {
         "accounts": {
-            "acme-corp": {"domain": "acme-corp.com"},
-            "globalpay": {"domain": "globalpay.com"},
+            "acme-corp": {"domains": ["acme-corp.example.com"]},
+            "globalpay": {"domains": ["globalpay.com"]},
         }
     }
 
     called_for: list[str] = []
 
-    def fake_decay_report(conn, account, **kwargs):
-        called_for.append(account)
+    def fake_query_decay(conn, scope, query):
+        called_for.append(scope.key)
+        assert query.limit == 10
+        return MagicMock()
 
     with (
         patch.object(collect_mod, "_gmail_db_exists", return_value=True),
-        patch.object(collect_mod, "read_accounts_config", return_value=mock_config),
+        patch.object(collect_mod, "get_accounts_config", return_value=mock_config),
         patch.object(collect_mod, "_gmail_connect", return_value=MagicMock()),
-        patch.object(collect_mod, "decay_report", side_effect=fake_decay_report),
+        patch.object(collect_mod, "query_decay", side_effect=fake_query_decay),
+        patch.object(collect_mod, "render_decay_text", return_value="decay report"),
     ):
         # Patch conn.close so MagicMock context manager doesn't fail
-        collect_decay_signals(tmp_path, account_filter="acme-corp")
+        result = collect_decay_signals(tmp_path, account_filter="acme-corp")
 
+    assert result == "**acme-corp**\ndecay report"
     assert called_for == ["acme-corp"] or "acme-corp" in called_for
     assert "globalpay" not in called_for
 
 
 def test_collect_decay_signals_db_connection_error_returns_sentinel(tmp_path: Path) -> None:
     """Returns the unavailable sentinel when gmail.db connection fails."""
-    mock_config = {"accounts": {"acme-corp": {"domain": "acme-corp.com"}}}
+    mock_config = {"accounts": {"acme-corp": {"domain": "acme-corp.example.com"}}}
 
     with (
         patch.object(collect_mod, "_gmail_db_exists", return_value=True),
-        patch.object(collect_mod, "read_accounts_config", return_value=mock_config),
+        patch.object(collect_mod, "get_accounts_config", return_value=mock_config),
         patch.object(
             collect_mod,
             "_gmail_connect",
@@ -427,23 +430,27 @@ def test_collect_decay_signals_non_dict_account_data_skipped(tmp_path: Path) -> 
     mock_config = {
         "accounts": {
             "bad-entry": "not-a-dict",
-            "acme-corp": {"domain": "acme-corp.com"},
+            "acme-corp": {"domains": ["acme-corp.example.com"]},
         }
     }
 
     called_for: list[str] = []
 
-    def fake_decay_report(conn, account, **kwargs):
-        called_for.append(account)
+    def fake_query_decay(conn, scope, query):
+        called_for.append(scope.key)
+        assert query.limit == 10
+        return MagicMock()
 
     with (
         patch.object(collect_mod, "_gmail_db_exists", return_value=True),
-        patch.object(collect_mod, "read_accounts_config", return_value=mock_config),
+        patch.object(collect_mod, "get_accounts_config", return_value=mock_config),
         patch.object(collect_mod, "_gmail_connect", return_value=MagicMock()),
-        patch.object(collect_mod, "decay_report", side_effect=fake_decay_report),
+        patch.object(collect_mod, "query_decay", side_effect=fake_query_decay),
+        patch.object(collect_mod, "render_decay_text", return_value="decay report"),
     ):
-        collect_decay_signals(tmp_path)
+        result = collect_decay_signals(tmp_path)
 
+    assert result == "**acme-corp**\ndecay report"
     assert "bad-entry" not in called_for
 
 

@@ -2,6 +2,12 @@
   "skill_name": "grill",
   "static_checks": [
     {
+      "id": "bounded_scope_not_implicit_mutation",
+      "type": "contains_all",
+      "patterns": ["read-only by default", "separate explicitly requested", "report incomplete review coverage", "unknown stages or dates", "product freshness guarantee"],
+      "message": "Coaching must preserve scope, incomplete evidence, and separate mutation approval"
+    },
+    {
       "id": "native_reader",
       "type": "contains",
       "pattern": "fieldkit sf meddpicc <opp_id> --json",
@@ -36,7 +42,7 @@
         "weight: null",
         "readable and read-only"
       ],
-      "message": "Must preserve the Answers-only future writer boundary without inventing weight or mutating other modes"
+      "message": "Must preserve the Answers-only guarded writer boundary without inventing weight or mutating other modes"
     },
     {
       "id": "read_states",

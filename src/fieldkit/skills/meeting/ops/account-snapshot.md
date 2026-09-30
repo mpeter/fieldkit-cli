@@ -1,140 +1,121 @@
 # Account Snapshot
 
-1-page weekly status brief per account. Takes 60–90 seconds.
-Answers: what are my projects doing, where are my deals, what's the email signal, what are the risks?
+Prepare a short weekly account brief from the configured fieldkit workspace and
+local Gmail cache. Use it to identify current delivery and pursuit risks before
+planning a meeting. The snapshot is a reviewed draft, not a live CRM writeback.
 
-## Gotchas
+## Inputs and scope
 
-- **Trigger overlap with similar skills** — check skill names carefully; e.g. this skill vs adjacent skills with similar names
-- **Missing context** — this skill relies on vault files being up to date; run `/brief` first if signals are stale
+The skill accepts one configured account slug. `--all` means repeat the workflow
+for each configured account, and `--since YYYY-MM-DD` chooses the start of the
+email window; both are skill-request options, not flags on a single `fieldkit`
+command. `--no-backstory` means omit optional Backstory research. If the user
+does not supply a date, use the last 14 days in the user's local timezone.
 
-## Constraints
+Read the configured workspace, not the repository checkout. If an account is
+unknown or its data root is unavailable, report that condition instead of
+creating a blank snapshot. Do not modify account or pursuit source files. Show
+the draft and ask for confirmation before saving it under the account's
+`meetings/` directory; do not send it externally.
 
-- **Read the relevant reference files before acting** — don't guess tool parameters
-- **Never modify pursuit frontmatter without explicit instruction**
-- **Always confirm before writing back** to any account file or Salesforce
+## Gather local signals
 
-## Flags
+1. Read project health from the configured workspace.
 
-- `[account]` — account slug (e.g. `/account-snapshot <account-slug>`)
-- `--all` — run for all configured accounts (one snapshot file per account)
-- `--since YYYY-MM-DD` — custom email lookback window (default: 14 days)
-- `--no-backstory` — skip Backstory API calls (offline/fast mode)
+   ```console
+   fieldkit pursuit projects --account <account> --json
+   ```
 
-Groups needed: **fieldkit-sales** (Backstory — skipped with --no-backstory).
-Project + pursuit files and watcher alerts are read directly from disk (native file reads).
+   Use its reported `ZOMBIE`, `EXPIRING`, `SOON`, `ACTIVE`, and `UNKNOWN`
+   classes. `EXPIRING` is within 30 days; `SOON` is within 90 days. A missing
+   end date is `UNKNOWN`, not healthy. Do not infer capacity utilization from
+   this command.
+2. Read pursuit health from the configured workspace.
 
----
+   ```console
+   fieldkit pursuit health --account <account> --json
+   ```
 
-## Data Sources (in execution order)
+   Include each returned pursuit's stage, days in stage when available, close
+   date, risk tier, and risk reasons. Current native qualification is
+   `unavailable` in this local report; use an authorized live Salesforce read
+   if it is needed. Do not substitute a historical local score.
+3. Read matching thread summaries from the existing local Gmail cache.
 
-### 1. Project health
+   ```console
+   fieldkit gmail query account <account> --since <YYYY-MM-DD> --limit 10 --json
+   ```
 
-```bash
-fieldkit pursuit projects --account <account>
-```
+   This report returns up to 10 recent matching cached threads. Its count is
+   the returned rows, not the total matching threads; a short or empty result
+   cannot establish complete source coverage or absence of activity. It also
+   does not establish sender direction, the last inbound message, or
+   unanswered-message counts.
+   If the cache or account index is unavailable, mark the email signal
+   unavailable. Read the bounded cache-derived contact recency signal next.
 
-Read output and categorise each project:
-- ✓ ACTIVE — end date > 30 days out, normal CU burn
-- ⚠ SOON — end date within 30 days (renewal conversation needed)
-- ☠ ZOMBIE — end date in the past (needs formal closeout)
+   ```console
+   fieldkit gmail decay --account <account> --limit 10 --json
+   ```
 
-### 2. Pursuit health
+   The decay report calculates recency only from messages in threads tagged to
+   the selected account. A newer message involving the same contact in another
+   account does not make this account's relationship current. Do not call a
+   contact COLD or WARM without this report's classification.
 
-```bash
-fieldkit pursuit health --account <account>
-```
+   The command defaults to `--max-age-days 365`, excluding contacts whose latest
+   account-tagged message is older than a year. Even a complete empty result
+   does not establish that there are no older stale contacts. If that older
+   period matters, review a wider `--max-age-days` window and its scan bounds.
 
-For each active pursuit, capture: deal name, stage, days in stage, close date,
-risk tier, and Native Qualification. The local health command does not fetch
-ClosePlan, so qualification is `unavailable`; do not substitute historical scores.
+   Read its bounds separately. `truncated: true` means the contacts found by this scan
+   exceeded the requested result limit; both flags can be true.
+   `scan_truncated: true` means
+   the cache work budget was exhausted: the command emits the bounded report,
+   exits `1`, and the listed contacts are incomplete. Record `scanned_rows` and
+   do not treat an empty incomplete report as evidence that no stale contact
+   exists.
+4. Read relevant watcher alerts from `watchers/` under the configured workspace,
+   recording their date and account match. An absent watcher file means no
+   watcher evidence, not proof that no risk exists.
 
-### 3. Email signal (14-day window)
+These local commands report only the configured workspace and published cache.
+Record each source's observation date, scope, and completeness. Credentialed
+and optional sources require their own configured and authorized identity;
+local report success does not establish that a live integration is available.
 
-```bash
-fieldkit gmail query account <account> --since <14-days-ago>
-```
+## Optional account intelligence
 
-Summarise:
-- Last inbound from customer domain: who, when, subject
-- Total threads in window (customer-initiated vs our-initiated)
-- Any threads with no reply from us > 3 days old
+If the operator has authorized and configured a Backstory client,
+and did not request `--no-backstory`, inspect account status and recent
+activity. Record the source and observation date. Treat scores, risks, and
+suggested next steps as unverified account-intelligence signals. If the route
+is missing, unavailable, or omitted, write `Backstory Signal: unavailable`;
+continue from the available local evidence. Never claim a live Backstory read from a
+local cache or infer a score from an absent result.
 
-Also run:
-```bash
-fieldkit gmail decay <account-domain>
-```
+## Draft and review
 
-Surface any contacts in COLD or cooling range who are named in active pursuits.
+Use these sections, omitting empty rows rather than inventing account facts:
 
-### 4. Backstory signal (skip if --no-backstory)
+- **Active Delivery:** project name, end date, reported health class, and
+  source date. Call out `ZOMBIE`, `EXPIRING`, and `UNKNOWN` explicitly.
+- **Active Pursuits:** pursuit name, stage, days in stage if known, close date,
+  reported risk and reasons; native qualification remains unavailable unless a
+  separate live read was made.
+- **Email Signal:** date window, matching threads and contacts from the local
+  cache, and recency flags from the decay report. Mark unavailable inputs.
+- **Backstory Signal:** dated, attributed findings or `unavailable`.
+- **This Week's Priorities:** actions tied to the evidence above, with an
+  owner or a question when ownership is unknown.
 
-Via **fieldkit-sales** group:
-```
-backstory__backstory__find_account(<account name>)
-backstory__backstory__get_account_status(peopleai_account_id)
-backstory__backstory__get_recent_account_activity(peopleai_account_id)
-```
+For `--all`, generate one reviewed draft per configured account and summarize
+which accounts have evidence gaps. A draft already present at the intended path
+requires confirmation before replacement. Do not imply that creating a brief
+refreshes Gmail, Salesforce, Backstory, or watcher state.
 
-Extract: engagement score, recent topics, risks flagged by Backstory.
-
-If `--no-backstory` is set, skip all Backstory API calls and include this note in the output:
-```
-### 📊 Backstory Signal
-_Backstory unavailable (--no-backstory mode). Run without this flag for live signals._
-```
-
-### 5. Watcher alerts
-
-Read:
-- `<fieldkit_home>/watchers/backstory-alerts.md` — filter to this account
-- `<fieldkit_home>/watchers/pursuit-stall-alerts.md` — filter to this account
-
----
-
-## Output Format
-
-Saved to: `accounts/<account>/meetings/YYYY-WNN-weekly-snapshot.md`
-
-```markdown
-## [Account] — Week of [DATE]
-
-### 🏗️ Active Delivery (Projects)
-| Project | End Date | Health | Notes |
-|---|---|---|---|
-| [name] | YYYY-MM-DD | ✓ ACTIVE | On track |
-| [name] | YYYY-MM-DD | ⚠ SOON | Expires in N days |
-| [name] | YYYY-MM-DD | ☠ ZOMBIE | Past end date, needs closure |
-
-### 🎯 Active Pursuits
-| Deal | Stage | Days | Native Qualification | Close | Risk |
-|---|---|---|---|---|---|
-| [deal] | negotiate | 32d | unavailable — run `/grill` for live read | Nov-26 | ⚠ |
-
-### 📧 Email Signal (Last 14 Days)
-- Last inbound: [name] N days ago re: [subject]
-- Threads: N total (N customer-initiated)
-- Unanswered (>3d): N
-
-### 📊 Backstory Signal
-- Engagement score: [N]/100
-- Recent topics: [brief]
-- Risks: [list or 'none flagged']
-
-### ⚡ This Week's Priorities
-1. [action derived from stalls/expiring projects/risks]
-2. ...
-```
-
----
-
-## When --all
-
-Run for each account in `config/accounts.yaml`. Output one file per account.
-Print a summary table of all accounts when done:
-
-```
-Account    Projects  Pursuits  Backstory  Alerts
-<account-slug>       3 active  2 deals   72/100     2 stalls
-<account-slug>  1 active  1 deal    45/100     1 zombie
-```
+Bound reads to the selected accounts, date window, and approved sources. Validate
+each save destination within the configured workspace, rejecting traversal and
+symlink escapes. Save approved private drafts atomically as UTF-8, reread them,
+and report only verified writes. Do not upload or share private source material
+without separate authorization.

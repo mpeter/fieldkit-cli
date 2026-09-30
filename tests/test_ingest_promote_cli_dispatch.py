@@ -25,6 +25,175 @@ from click.testing import CliRunner, Result
 pytestmark = pytest.mark.unit
 
 
+def test_recent_disappearing_candidate_fails_before_promotion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from fieldkit.__main__ import main
+
+    home = _make_home(tmp_path)
+    meeting = _make_meeting(home, "acme-corp", "note.md")
+    original = (home / "TASKS.md").read_bytes()
+    original_stat = Path.stat
+
+    def disappearing_stat(path: Path, *, follow_symlinks: bool = True) -> os.stat_result:
+        if path == meeting and not follow_symlinks:
+            raise FileNotFoundError("private-path-sentinel")
+        return original_stat(path, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr("fieldkit.config.get_fieldkit_home", lambda: home)
+    monkeypatch.setattr(Path, "stat", disappearing_stat)
+    result = main(["ingest", "promote", "--recent", "2"])
+    assert result == 3
+    assert (home / "TASKS.md").read_bytes() == original
+    captured = capsys.readouterr()
+    assert "Cannot safely select meeting notes" in captured.err
+    assert "private-path-sentinel" not in captured.err
+    assert "Promotion complete" not in captured.out
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_promote_allows_configured_workspace_alias(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, explicit: bool
+) -> None:
+    from fieldkit.__main__ import main
+
+    home = tmp_path / "workspace"
+    home.mkdir()
+    _make_home(home)
+    meeting = _make_meeting(home, "acme-corp", "note.md")
+    alias = tmp_path / "alias"
+    alias.symlink_to(home, target_is_directory=True)
+    monkeypatch.setattr("fieldkit.config.get_fieldkit_home", lambda: alias)
+    args = [str(alias / meeting.relative_to(home))] if explicit else ["--recent", "2"]
+    result = main(["ingest", "promote", *args])
+    assert result == 0
+
+
+@pytest.mark.parametrize("account", ["../acme-corp", "*", "acme?corp", "[ae]*", "", "a/b", "a\\b"])
+def test_recent_rejects_nonliteral_account(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, account: str) -> None:
+    from fieldkit.__main__ import main
+
+    home = _make_home(tmp_path)
+    original = (home / "TASKS.md").read_bytes()
+    monkeypatch.setattr("fieldkit.config.get_fieldkit_home", lambda: home)
+    result = main(["ingest", "promote", "--recent", "2", "--account", account])
+    assert result == 3
+    assert (home / "TASKS.md").read_bytes() == original
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+@pytest.mark.parametrize("redirect", ["accounts", "account", "meetings"])
+def test_promote_rejects_redirected_ancestors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, explicit: bool, redirect: str
+) -> None:
+    from fieldkit.__main__ import main
+
+    home = tmp_path / "workspace"
+    home.mkdir()
+    _make_home(home)
+    original = (home / "TASKS.md").read_bytes()
+    target = tmp_path / "outside"
+    target.mkdir()
+    parts = {"accounts": (), "account": ("accounts",), "meetings": ("accounts", "acme-corp")}
+    parent = home.joinpath(*parts[redirect])
+    parent.mkdir(parents=True, exist_ok=True)
+    leaf = {"accounts": "accounts", "account": "acme-corp", "meetings": "meetings"}[redirect]
+    (parent / leaf).symlink_to(target, target_is_directory=True)
+    meeting = _make_meeting(home, "acme-corp", "note.md")
+    monkeypatch.setattr("fieldkit.config.get_fieldkit_home", lambda: home)
+    result = main(["ingest", "promote", *([str(meeting)] if explicit else ["--recent", "2"])])
+    assert result == 3
+    assert (home / "TASKS.md").read_bytes() == original
+
+
+@pytest.mark.parametrize("unsafe_kind", ["oversized", "symlink", "directory", "invalid_utf8", "fifo"])
+def test_dispatcher_rejects_unsafe_meeting_input(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], unsafe_kind: str
+) -> None:
+    from fieldkit.__main__ import main
+    from fieldkit.ingest.note_effect import MAX_NOTE_BYTES
+
+    home = _make_home(tmp_path)
+    tasks = home / "TASKS.md"
+    original = tasks.read_bytes()
+    meeting = home / "meeting.md"
+    text = "---\naction_items: []\n---\n"
+    if unsafe_kind == "oversized":
+        meeting.write_text(text + "x" * MAX_NOTE_BYTES, encoding="utf-8")
+    elif unsafe_kind == "symlink":
+        target = home / "target.md"
+        target.write_text(text, encoding="utf-8")
+        meeting.symlink_to(target)
+    elif unsafe_kind == "directory":
+        meeting.mkdir()
+    elif unsafe_kind == "fifo":
+        os.mkfifo(meeting)
+    else:
+        meeting.write_bytes(b"\xff")
+    monkeypatch.setattr("fieldkit.config.get_fieldkit_home", lambda: home)
+
+    result = main(["ingest", "promote", str(meeting)])
+
+    assert result == 3
+    assert tasks.read_bytes() == original
+    captured = capsys.readouterr()
+    assert "Traceback" not in captured.out + captured.err
+    assert "Promotion complete" not in captured.out
+    assert str(tmp_path) not in captured.out + captured.err
+
+
+@pytest.mark.parametrize("text", ["# Notes\n", "---\naction_items: [sensitive-example\n---\n"])
+def test_dispatcher_rejects_unreadable_meeting_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], text: str
+) -> None:
+    from fieldkit.__main__ import main
+
+    home = _make_home(tmp_path)
+    tasks = home / "TASKS.md"
+    original = tasks.read_bytes()
+    meeting = home / "meeting.md"
+    meeting.write_text(text, encoding="utf-8")
+    monkeypatch.setattr("fieldkit.config.get_fieldkit_home", lambda: home)
+    result = main(["ingest", "promote", str(meeting)])
+    assert result == 3
+    captured = capsys.readouterr()
+    assert "Promotion refused ambiguous metadata or task provenance" in captured.err
+    assert "Promotion complete" not in captured.out
+    assert "sensitive-example" not in captured.err + captured.out
+    assert "Traceback" not in captured.err + captured.out
+    assert tasks.read_bytes() == original
+
+
+def test_dispatcher_reports_task_lock_contention_as_retryable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from fieldkit.__main__ import main
+    from fieldkit.config import get_fieldkit_data
+    from fieldkit.util.atomic import exclusive_file_lock, prepare_runtime_lock_path
+
+    home = _make_home(tmp_path)
+    tasks = home / "TASKS.md"
+    original = tasks.read_bytes()
+    meeting = home / "meeting.md"
+    meeting.write_text("---\nsource_id: source-1\naction_items:\n  - Send proposal\n---\n", encoding="utf-8")
+    monkeypatch.setattr("fieldkit.config.get_fieldkit_home", lambda: home)
+    monkeypatch.setattr("fieldkit.config.get_user_name", lambda: "Example User")
+    monkeypatch.setattr("fieldkit.config.get_user_email", lambda: "user@example.com")
+    monkeypatch.setattr("fieldkit.commands.ingest.promote._prompt_item", lambda *args: "m")
+    monkeypatch.setattr("fieldkit.tasks.writer.TASK_WRITE_TIMEOUT_SECONDS", 0)
+
+    with exclusive_file_lock(prepare_runtime_lock_path(tasks, get_fieldkit_data(), "tasks")):
+        result = main(["ingest", "promote", str(meeting)])
+
+    assert result == 1
+    captured = capsys.readouterr()
+    assert captured.err == "TASKS.md is busy; retry promotion after the current writer finishes.\n"
+    assert "Traceback" not in captured.out + captured.err
+    assert str(tmp_path) not in captured.out + captured.err
+    assert "Promotion complete" not in captured.out
+    assert tasks.read_bytes() == original
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -125,6 +294,9 @@ def test_recent_with_account_scopes_glob_to_one_account(tmp_path: Path) -> None:
 def test_gitkeep_and_dotfiles_excluded_from_candidates(tmp_path: Path) -> None:
     data_root = _make_home(tmp_path)
     real_meeting = _make_meeting(data_root, "acme-corp", "real.md")
+    (data_root / "accounts" / ".audit").mkdir()
+    (data_root / "accounts" / ".gitkeep").write_text("", encoding="utf-8")
+    (data_root / "accounts" / "README.md").write_text("Account index", encoding="utf-8")
     meetings_dir = data_root / "accounts" / "acme-corp" / "meetings"
     (meetings_dir / ".gitkeep").write_text("", encoding="utf-8")
     (meetings_dir / ".hidden.md").write_text("---\naction_items: []\n---\n", encoding="utf-8")

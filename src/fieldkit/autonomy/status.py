@@ -1,6 +1,8 @@
 """Assemble a provenance-bearing snapshot of autonomous fieldkit operation."""
 
 import json
+import os
+import stat
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -8,7 +10,10 @@ from math import isfinite
 from pathlib import Path
 from typing import Any
 
+from fieldkit.driver.status_types import RUN_OUTCOMES
+
 _HEALTH_FRESHNESS_WINDOW = timedelta(hours=26)
+MAX_STATUS_RECORD_BYTES = 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -63,21 +68,32 @@ class AutonomyStatus:
         }
 
 
-def _load_latest(path: Path, *, label: str) -> tuple[dict[str, Any] | None, SourceObservation | None]:
-    if not path.exists():
-        return None, SourceObservation("missing", f"{label} record does not exist")
+def _load_latest(
+    path: Path, *, label: str, collection: str = "runs"
+) -> tuple[dict[str, Any] | None, SourceObservation | None]:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        return None, SourceObservation("malformed", f"cannot read {label} record: {exc}")
+        descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+        with os.fdopen(descriptor, "rb") as stream:
+            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                return None, SourceObservation("malformed", f"{label} record is not a regular file")
+            raw = stream.read(MAX_STATUS_RECORD_BYTES + 1)
+        if len(raw) > MAX_STATUS_RECORD_BYTES:
+            return None, SourceObservation("malformed", f"{label} record exceeds the size limit")
+        payload = json.loads(raw.decode("utf-8"))
+    except FileNotFoundError:
+        return None, SourceObservation("missing", f"{label} record does not exist")
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, RecursionError):
+        return None, SourceObservation("malformed", f"cannot read {label} record")
     if not isinstance(payload, dict):
         return None, SourceObservation("malformed", f"{label} record is not an object")
-    runs = payload.get("runs")
+    runs = payload.get(collection)
     if not isinstance(runs, list):
-        return None, SourceObservation("malformed", f"{label} record has no runs list")
+        return None, SourceObservation("malformed", f"{label} record has no {collection} list")
     entries = [entry for entry in runs if isinstance(entry, dict)]
+    if len(entries) != len(runs):
+        return None, SourceObservation("malformed", f"{label} record contains a non-object entry")
     if not entries:
-        return None, SourceObservation("missing", f"{label} record has no runs")
+        return None, SourceObservation("missing", f"{label} record has no {collection}")
     return entries[-1], None
 
 
@@ -115,7 +131,8 @@ def _health_observation(data_root: Path, now: datetime) -> SourceObservation:
     )
 
 
-def _driver_observation(data_root: Path) -> SourceObservation:
+def observe_driver(data_root: Path) -> SourceObservation:
+    """Read the latest local driver evidence without invoking or starting a driver."""
     record, error = _load_latest(data_root / "logs" / "driver" / "driver-run-status.json", label="driver")
     if error is not None:
         return error
@@ -125,40 +142,39 @@ def _driver_observation(data_root: Path) -> SourceObservation:
     if _parse_timestamp(observed_at) is None:
         return SourceObservation("malformed", "driver record has an invalid timestamp")
     outcome = record.get("outcome")
-    if not isinstance(outcome, str):
-        return SourceObservation("malformed", "driver record has no outcome", str(observed_at))
+    if not isinstance(outcome, str) or outcome not in RUN_OUTCOMES:
+        return SourceObservation("malformed", "driver record has an invalid outcome", str(observed_at))
+    failure = record.get("error", "")
+    if not isinstance(failure, str):
+        return SourceObservation("malformed", "driver record has an invalid error", str(observed_at))
     values: dict[str, object] = {"outcome": outcome}
-    if isinstance(record.get("error"), str) and record["error"]:
-        values["error"] = record["error"]
+    if failure:
+        values["error"] = failure
     return SourceObservation("available", "latest demand-driven driver record", str(observed_at), values)
 
 
-def _admission_observation(data_root: Path) -> SourceObservation:
-    path = data_root / "driver" / "developer-admission.json"
-    if not path.exists():
-        return SourceObservation("missing", "developer admission record does not exist")
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        return SourceObservation("malformed", f"cannot read developer admission record: {exc}")
-    if not isinstance(payload, dict) or not isinstance(payload.get("decisions"), list):
-        return SourceObservation("malformed", "developer admission record has no decisions list")
-    decisions = [entry for entry in payload["decisions"] if isinstance(entry, dict)]
-    if not decisions:
-        return SourceObservation("missing", "developer admission record has no decisions")
-    latest = decisions[-1]
+def observe_admission(data_root: Path) -> SourceObservation:
+    """Read the latest admission decision, preserving missing versus malformed state."""
+    latest, error = _load_latest(
+        data_root / "driver" / "developer-admission.json", label="developer admission", collection="decisions"
+    )
+    if error is not None:
+        return error
+    if latest is None:
+        return SourceObservation("malformed", "developer admission decision could not be selected")
     observed_at = latest.get("ts")
     if _parse_timestamp(observed_at) is None:
         return SourceObservation("malformed", "developer admission record has an invalid timestamp")
     allowed = latest.get("allowed")
     reason = latest.get("reason_code")
-    if not isinstance(allowed, bool) or not isinstance(reason, str):
+    detail = latest.get("detail")
+    if not isinstance(allowed, bool) or not isinstance(reason, str) or not isinstance(detail, str):
         return SourceObservation("malformed", "developer admission record has an invalid decision", str(observed_at))
     return SourceObservation(
         "available",
         "latest developer admission decision",
         str(observed_at),
-        {"allowed": allowed, "reason_code": reason},
+        {"allowed": allowed, "reason_code": reason, "detail": detail},
     )
 
 
@@ -217,8 +233,8 @@ def build_status(
 ) -> AutonomyStatus:
     """Build a side-effect-free status snapshot from existing local records."""
     health = _health_observation(data_root, now)
-    driver = _driver_observation(data_root)
-    admission = _admission_observation(data_root)
+    driver = observe_driver(data_root)
+    admission = observe_admission(data_root)
     spend = _spend_observation(spend_reader)
     return AutonomyStatus(
         generated_at=now.strftime("%Y-%m-%dT%H:%M:%SZ"),

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import json
+import io
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -14,20 +15,20 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
-from typing import Literal, cast
+from typing import Literal, Protocol, cast
 from urllib.parse import urlparse
-from urllib.request import urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from scripts import release_bundle, release_wheelhouse
+from scripts import _release_bundle_evidence, release_bundle, release_filesystem, release_wheelhouse
+from scripts.artifact_limits import MAX_ARTIFACT_BYTES
+from scripts.json_policy import load_json_bytes
 
 _MAX_REPORT_BYTES = 5 * 1024 * 1024
-_MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024
 _SHA256_LENGTH = 64
 _WHEELHOUSE_ARCHIVE = "runtime-wheelhouse.zip"
 _WHEELHOUSE_MANIFEST = "runtime-wheelhouse.json"
-_MAX_WHEELHOUSE_MEMBERS = 4096
-_MAX_WHEELHOUSE_BYTES = 100 * 1024 * 1024
 _INSTALL_TIMEOUT_SECONDS = 300
+_CHECK_TIMEOUT_SECONDS = 60
 _OFFLINE_SCENARIOS = (
     ("CONSUMER001", ("python", "-m", "venv", "<venv>")),
     ("CONSUMER002", ("python", "-m", "pip", "install", "runtime requirements")),
@@ -57,6 +58,7 @@ class ExpectedRelease:
     planned_tag: str
     source_commit: str
     artifacts: tuple[ExpectedArtifact, ...]
+    bundle_report: release_bundle.BundleReport | None = None
 
 
 @dataclass(frozen=True)
@@ -102,6 +104,115 @@ class DownloadedArtifact:
 
 
 @dataclass(frozen=True)
+class OfflineDependencies:
+    """Caller-authenticated files for one interpreter/platform dependency closure.
+
+    Digests must come from verified candidate evidence, never from the files being
+    checked. Wheels include runtime and release-build dependencies for this target.
+    """
+
+    artifact: ExpectedArtifact
+    wheels: tuple[DownloadedArtifact, ...]
+    runtime_requirements: DownloadedArtifact
+    release_build_requirements: DownloadedArtifact
+
+
+@dataclass(frozen=True)
+class LocalClosure:
+    """Private, digest-checked snapshot consumed by offline installers."""
+
+    artifact: Path
+    kind: Literal["wheel", "sdist"]
+    wheelhouse: Path
+    runtime_requirements: Path
+    release_build_requirements: Path
+
+
+def _open_source_file(path: Path) -> int:
+    parent_fd = release_filesystem.open_real_directory(path.parent)
+    try:
+        return os.open(path.name, release_filesystem.file_flags(), dir_fd=parent_fd)
+    finally:
+        os.close(parent_fd)
+
+
+def _copy_verified_file(source: DownloadedArtifact, destination: Path) -> None:
+    descriptor = _open_source_file(source.path)
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > MAX_ARTIFACT_BYTES:
+            raise ValueError("offline closure requires bounded regular files")
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            data = stream.read(MAX_ARTIFACT_BYTES + 1)
+        if len(data) > MAX_ARTIFACT_BYTES or sha256(data).hexdigest() != source.sha256:
+            raise ValueError("offline closure digest mismatch")
+        destination.write_bytes(data)
+    finally:
+        os.close(descriptor)
+
+
+def validate_hashed_requirements(path: Path) -> None:
+    """Require nonempty exact hashed pins without installer directives."""
+    text = path.read_text(encoding="utf-8")
+    logical = text.replace("\\\n", " ")
+    requirement_pattern = (
+        r"[A-Za-z0-9][A-Za-z0-9_.-]*(?:\[[A-Za-z0-9_,.-]+\])?==[A-Za-z0-9_.!+-]+"
+        r"(?:\s*;\s*[A-Za-z0-9_ .'\"<>=!() -]+)?"
+    )
+    found = False
+    for raw_line in logical.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        requirement, separator, hashes = line.partition(" --hash=")
+        if (
+            not separator
+            or re.fullmatch(requirement_pattern, requirement.strip()) is None
+            or re.fullmatch(r"sha256:[0-9a-f]{64}(?:\s+--hash=sha256:[0-9a-f]{64})*", hashes.strip()) is None
+        ):
+            raise ValueError("offline requirements must contain only hashed exact package pins")
+        found = True
+    if not found:
+        raise ValueError("offline requirements must not be empty")
+
+
+def snapshot_offline_closure(artifact: Path, dependencies: OfflineDependencies, destination: Path) -> LocalClosure:
+    """Copy bounded verified bytes once, rejecting links and ambiguous wheel names."""
+    expected = dependencies.artifact
+    if artifact.name != expected.name or expected.kind not in {"wheel", "sdist"}:
+        raise ValueError("offline artifact does not match the expected release")
+    suffix = ".whl" if expected.kind == "wheel" else ".tar.gz"
+    if not artifact.name.endswith(suffix):
+        raise ValueError("offline artifact kind does not match its filename")
+    names = [wheel.path.name for wheel in dependencies.wheels]
+    if (
+        not names
+        or len(names) > release_wheelhouse.MAX_WHEELHOUSE_MEMBERS
+        or len(set(names)) != len(names)
+        or any(not name.endswith(".whl") for name in names)
+    ):
+        raise ValueError("offline wheelhouse requires unique wheel files")
+    destination.mkdir()
+    wheelhouse = destination / "wheels"
+    wheelhouse.mkdir()
+    copied_artifact = destination / expected.name
+    _copy_verified_file(DownloadedArtifact(artifact, expected.sha256), copied_artifact)
+    wheel_bytes = 0
+    for wheel in dependencies.wheels:
+        _copy_verified_file(wheel, wheelhouse / wheel.path.name)
+        wheel_bytes += (wheelhouse / wheel.path.name).stat().st_size
+        if wheel_bytes > _release_bundle_evidence.MAX_WHEELHOUSE_BYTES:
+            raise ValueError("offline wheelhouse exceeds the size limit")
+    runtime = destination / "runtime-requirements.txt"
+    build = destination / "release-build-requirements.txt"
+    _copy_verified_file(dependencies.runtime_requirements, runtime)
+    _copy_verified_file(dependencies.release_build_requirements, build)
+    validate_hashed_requirements(runtime)
+    validate_hashed_requirements(build)
+    return LocalClosure(copied_artifact, expected.kind, wheelhouse, runtime, build)
+
+
+@dataclass(frozen=True)
 class OfflineScenarioResult:
     """One isolated consumer scenario with an explicit execution outcome."""
 
@@ -111,19 +222,9 @@ class OfflineScenarioResult:
     exit_status: int | None
 
 
-def _reject_duplicate_json_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
-    result: dict[str, object] = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError(f"duplicate JSON key: {key}")
-        result[key] = value
-    return result
-
-
 def _read_regular(path: Path) -> bytes:
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     try:
-        descriptor = os.open(path, flags)
+        descriptor = _open_source_file(path)
     except OSError as error:
         raise ValueError("candidate report is unavailable") from error
     try:
@@ -141,15 +242,29 @@ def _read_regular(path: Path) -> bytes:
 
 def extract_runtime_wheelhouse(bundle: Path, candidate_report: Path, destination: Path) -> Path:
     """Extract a verified wheelhouse archive into a fresh caller-owned directory."""
-    release_bundle.verify(bundle, candidate_report=_read_regular(candidate_report))
-    archive_path = bundle / _WHEELHOUSE_ARCHIVE
+    captured = _capture_bundle(bundle, candidate_report)
+    return _extract_wheelhouse_bytes(captured.members[_WHEELHOUSE_ARCHIVE], destination)
+
+
+def _capture_bundle(bundle: Path, candidate_report: Path) -> release_bundle.VerifiedBundle[release_bundle.BundleReport]:
+    report_bytes = _read_regular(candidate_report)
+    descriptor = release_filesystem.open_real_directory(bundle)
+    try:
+        return release_bundle.capture_open_bundle(descriptor, candidate_report=report_bytes)
+    finally:
+        os.close(descriptor)
+
+
+def _extract_wheelhouse_bytes(data: bytes, destination: Path) -> Path:
+    if len(data) > _release_bundle_evidence.MAX_WHEELHOUSE_BYTES:
+        raise ValueError("wheelhouse archive exceeds the size limit")
     if destination.exists() or destination.is_symlink():
         raise ValueError("wheelhouse destination must not already exist")
     destination.mkdir(parents=True)
     try:
-        with zipfile.ZipFile(archive_path) as archive:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
             entries = archive.infolist()
-            if not entries or len(entries) > _MAX_WHEELHOUSE_MEMBERS:
+            if not entries or len(entries) > release_wheelhouse.MAX_WHEELHOUSE_MEMBERS:
                 raise ValueError("wheelhouse archive has an invalid member count")
             names = [entry.filename for entry in entries]
             if names[0] != _WHEELHOUSE_MANIFEST or len(names) != len(set(names)):
@@ -165,52 +280,17 @@ def extract_runtime_wheelhouse(bundle: Path, candidate_report: Path, destination
                 ):
                     raise ValueError("wheelhouse archive has an unsafe member")
                 total_bytes += entry.file_size
-                if total_bytes > _MAX_WHEELHOUSE_BYTES:
+                if total_bytes > _release_bundle_evidence.MAX_WHEELHOUSE_BYTES:
                     raise ValueError("wheelhouse archive exceeds the size limit")
                 target = destination / path
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(archive.read(entry))
-        manifest = json.loads((destination / _WHEELHOUSE_MANIFEST).read_text(encoding="utf-8"))
-        if (
-            not isinstance(manifest, dict)
-            or set(manifest) != {"schema_version", "targets"}
-            or manifest.get("schema_version") != 1
-        ):
-            raise ValueError("wheelhouse manifest has an unsupported schema")
-        targets = manifest["targets"]
-        if not isinstance(targets, list) or len(targets) != len(release_wheelhouse.supported_targets()):
-            raise ValueError("wheelhouse manifest has an unsupported target matrix")
-        expected_names = [target.name for target in release_wheelhouse.supported_targets()]
-        if [target.get("name") if isinstance(target, dict) else None for target in targets] != expected_names:
-            raise ValueError("wheelhouse manifest has an unsupported target matrix")
-        for target, expected in zip(targets, release_wheelhouse.supported_targets(), strict=True):
-            if not isinstance(target, dict) or set(target) != {"name", "python_version", "platform", "wheels"}:
-                raise ValueError("wheelhouse manifest target has an unsupported schema")
-            if target["python_version"] != expected.python_version or target["platform"] != expected.platform:
-                raise ValueError("wheelhouse manifest target does not match the supported matrix")
-            wheels = target["wheels"]
-            if not isinstance(wheels, list) or not wheels:
-                raise ValueError("wheelhouse manifest target has no wheels")
-            declared: dict[str, str] = {}
-            for wheel in wheels:
-                if not isinstance(wheel, dict) or set(wheel) != {"name", "sha256"}:
-                    raise ValueError("wheelhouse manifest wheel has an unsupported schema")
-                name = wheel["name"]
-                digest = wheel["sha256"]
-                if not isinstance(name, str) or not name.endswith(".whl") or not isinstance(digest, str):
-                    raise ValueError("wheelhouse manifest wheel is invalid")
-                if (
-                    name in declared
-                    or len(digest) != _SHA256_LENGTH
-                    or any(character not in "0123456789abcdef" for character in digest)
-                ):
-                    raise ValueError("wheelhouse manifest wheel is invalid")
-                declared[name] = digest
-            actual = {
-                path.name: sha256(path.read_bytes()).hexdigest() for path in (destination / expected.name).iterdir()
-            }
-            if declared != actual:
-                raise ValueError("wheelhouse manifest does not match extracted wheels")
+        actual = {
+            path.relative_to(destination).as_posix(): sha256(path.read_bytes()).hexdigest()
+            for path in destination.rglob("*")
+            if path.is_file() and path != destination / _WHEELHOUSE_MANIFEST
+        }
+        release_wheelhouse.validate_manifest((destination / _WHEELHOUSE_MANIFEST).read_bytes(), actual)
         return destination
     except BaseException:
         for path in sorted(destination.rglob("*"), reverse=True):
@@ -249,86 +329,156 @@ def install_offline(
     system: str,
     machine: str,
     python_version: str,
+    expected_bundle_report: release_bundle.BundleReport,
     cwd: Path | None = None,
     env: dict[str, str] | None = None,
     runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
 ) -> tuple[subprocess.CompletedProcess[str], subprocess.CompletedProcess[str] | None]:
-    """Install one verified artifact in a fresh environment without any package index."""
-    bundle = bundle.resolve()
-    candidate_report = candidate_report.resolve()
-    artifact_path = artifact.path.resolve()
-    if artifact_path.name != expected.name or artifact.sha256 != expected.sha256:
+    """Install captured candidate bytes without an index or mutable source paths.
+
+    wheelhouse_destination reserves a fresh location; private sibling snapshots
+    are retained only through installation and removed on success or failure.
+    """
+    if expected_bundle_report is None:
+        raise ValueError("initial bundle verification binding is required for offline installation")
+    if artifact.path.name != expected.name or artifact.sha256 != expected.sha256:
         raise ValueError("offline artifact does not match the expected release")
-    if sha256(artifact_path.read_bytes()).hexdigest() != expected.sha256:
-        raise ValueError("offline artifact digest does not match the expected release")
     target = _runtime_target_name(system=system, machine=machine, python_version=python_version)
-    wheelhouse = extract_runtime_wheelhouse(bundle, candidate_report, wheelhouse_destination)
-    requirements = bundle / "runtime-requirements.txt"
+    if wheelhouse_destination.exists() or wheelhouse_destination.is_symlink():
+        raise ValueError("wheelhouse destination must not already exist")
+    wheelhouse_destination.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        prefix=f"{wheelhouse_destination.name}-", dir=wheelhouse_destination.parent.absolute()
+    ) as temporary:
+        root = Path(temporary)
+        artifact_path = root / expected.name
+        _copy_verified_file(artifact, artifact_path)
+        captured = _capture_bundle(bundle, candidate_report)
+        if captured.report != expected_bundle_report:
+            raise ValueError("offline bundle does not match the initially verified candidate")
+        suffix = ".whl" if expected.kind == "wheel" else ".tar.gz"
+        if (
+            not expected.name.endswith(suffix)
+            or dict(captured.report.files).get(expected.name) != expected.sha256
+            or expected.name not in captured.members
+        ):
+            raise ValueError("offline artifact does not match the authenticated candidate bundle")
+        wheelhouse = _extract_wheelhouse_bytes(captured.members[_WHEELHOUSE_ARCHIVE], root / "wheelhouse")
+        requirements = root / "runtime-requirements.txt"
+        build_requirements = root / "release-build-requirements.txt"
+        requirements.write_bytes(captured.members[requirements.name])
+        build_requirements.write_bytes(captured.members[build_requirements.name])
+        validate_hashed_requirements(requirements)
+        validate_hashed_requirements(build_requirements)
+        return install_local_closure(
+            LocalClosure(artifact_path, expected.kind, wheelhouse / target, requirements, build_requirements),
+            python,
+            cwd=cwd,
+            env=env,
+            runner=runner,
+        )
+
+
+def install_local_closure(
+    closure: LocalClosure,
+    python: Path,
+    *,
+    uv: str | None = None,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> tuple[subprocess.CompletedProcess[str], subprocess.CompletedProcess[str] | None]:
+    """Install hashed wheels then the exact artifact, without indexes or caches."""
+    prefix = [uv, "pip"] if uv is not None else [str(python), "-m", "pip"]
+    interpreter = ["--python", str(python)] if uv is not None else []
+    offline_env = {
+        **{
+            name: value
+            for name, value in (os.environ if env is None else env).items()
+            if not name.startswith(("PIP_", "UV_"))
+        },
+        "PIP_CONFIG_FILE": os.devnull,
+        "PIP_NO_CACHE_DIR": "1",
+        "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+        "UV_OFFLINE": "1",
+        "UV_NO_CACHE": "1",
+        "UV_NO_CONFIG": "1",
+        "UV_PYTHON_DOWNLOADS": "never",
+    }
     dependencies = runner(
         [
-            str(python),
-            "-m",
-            "pip",
+            *prefix,
             "install",
+            *interpreter,
             "--no-index",
             "--find-links",
-            str(wheelhouse / target),
+            str(closure.wheelhouse),
             "--require-hashes",
+            "--no-deps",
             "--requirement",
-            str(requirements),
+            str(closure.runtime_requirements),
         ],
         capture_output=True,
         text=True,
         check=False,
         timeout=_INSTALL_TIMEOUT_SECONDS,
         cwd=cwd,
-        env=env,
+        env=offline_env,
     )
     if dependencies.returncode != 0:
         return dependencies, None
-    if expected.kind == "sdist":
-        build_requirements = bundle / "release-build-requirements.txt"
+    if closure.kind == "sdist":
         build = runner(
             [
-                str(python),
-                "-m",
-                "pip",
+                *prefix,
                 "install",
+                *interpreter,
                 "--no-index",
                 "--find-links",
-                str(wheelhouse / target),
+                str(closure.wheelhouse),
                 "--require-hashes",
+                "--no-deps",
                 "--requirement",
-                str(build_requirements),
+                str(closure.release_build_requirements),
             ],
             capture_output=True,
             text=True,
             check=False,
             timeout=_INSTALL_TIMEOUT_SECONDS,
             cwd=cwd,
-            env=env,
+            env=offline_env,
         )
         if build.returncode != 0:
             return dependencies, build
     artifact_result = runner(
         [
-            str(python),
-            "-m",
-            "pip",
+            *prefix,
             "install",
+            *interpreter,
             "--no-index",
             "--no-deps",
-            *(["--no-build-isolation"] if expected.kind == "sdist" else []),
-            str(artifact_path),
+            *(["--no-build-isolation"] if closure.kind == "sdist" else []),
+            str(closure.artifact),
         ],
         capture_output=True,
         text=True,
         check=False,
         timeout=_INSTALL_TIMEOUT_SECONDS,
         cwd=cwd,
-        env=env,
+        env=offline_env,
     )
-    return dependencies, artifact_result
+    if artifact_result.returncode != 0:
+        return dependencies, artifact_result
+    checked = runner(
+        [*prefix, "check", *interpreter],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=_CHECK_TIMEOUT_SECONDS,
+        cwd=cwd,
+        env=offline_env,
+    )
+    return dependencies, artifact_result if checked.returncode == 0 else checked
 
 
 def _scenario_result(index: int, result: subprocess.CompletedProcess[str] | None) -> OfflineScenarioResult:
@@ -348,9 +498,12 @@ def run_offline_scenarios(
     system: str,
     machine: str,
     python_version: str,
+    expected_bundle_report: release_bundle.BundleReport,
     runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
 ) -> tuple[OfflineScenarioResult, ...]:
     """Run fixed-argv user scenarios after one isolated offline installation."""
+    if expected_bundle_report is None:
+        raise ValueError("initial bundle verification binding is required for offline scenarios")
     with tempfile.TemporaryDirectory(prefix="fieldkit-consumer-") as raw_root:
         root = Path(raw_root)
         home = root / "home"
@@ -392,6 +545,7 @@ def run_offline_scenarios(
             system=system,
             machine=machine,
             python_version=python_version,
+            expected_bundle_report=expected_bundle_report,
             cwd=run_dir,
             env=environment,
             runner=runner,
@@ -448,9 +602,9 @@ def offline_scenario_evidence(
 
 def _candidate_identity(data: bytes) -> tuple[str, str, tuple[ExpectedArtifact, ...]]:
     try:
-        report = json.loads(data.decode("utf-8"), object_pairs_hook=_reject_duplicate_json_keys)
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise ValueError("candidate report is invalid JSON") from error
+        report = load_json_bytes(data)
+    except ValueError:
+        raise ValueError("candidate report is invalid JSON") from None
     if not isinstance(report, dict):
         raise ValueError("candidate report must be an object")
     repository = report.get("expected_repository")
@@ -486,12 +640,16 @@ def _candidate_identity(data: bytes) -> tuple[str, str, tuple[ExpectedArtifact, 
 def expected_release(bundle: Path, candidate_report: Path) -> ExpectedRelease:
     """Return expected consumer artifacts only after verifying the closed bundle."""
     candidate_bytes = _read_regular(candidate_report)
-    bundle_report = release_bundle.verify(bundle, candidate_report=candidate_bytes)
+    descriptor = release_filesystem.open_real_directory(bundle)
+    try:
+        bundle_report = release_bundle.capture_open_bundle(descriptor, candidate_report=candidate_bytes).report
+    finally:
+        os.close(descriptor)
     repository, planned_tag, artifacts = _candidate_identity(candidate_bytes)
     bundle_artifacts = {(name, digest) for name, digest in bundle_report.files if name.endswith((".whl", ".tar.gz"))}
     if {(artifact.name, artifact.sha256) for artifact in artifacts} != bundle_artifacts:
         raise ValueError("candidate artifacts do not match the verified bundle")
-    return ExpectedRelease(repository, planned_tag, bundle_report.source_commit, artifacts)
+    return ExpectedRelease(repository, planned_tag, bundle_report.source_commit, artifacts, bundle_report)
 
 
 def _https_host(url: str, subject: str) -> str:
@@ -547,21 +705,35 @@ def index_observations(
     return tuple(observed)
 
 
+class _ClosableResponse(Protocol):
+    def close(self) -> None: ...
+
+
+class _RejectRedirects(HTTPRedirectHandler):
+    """Reject redirects before urllib can contact another URL or drain its body."""
+
+    def redirect_request(
+        self, req: Request, fp: _ClosableResponse, code: int, msg: str, headers: object, newurl: str
+    ) -> Request | None:
+        fp.close()
+        raise ValueError("artifact redirects are not allowed")
+
+
 def fetch_https_bytes(url: str, *, timeout_seconds: float, allowed_download_hosts: frozenset[str]) -> bytes:
-    """Fetch bounded bytes and revalidate the final redirect destination."""
+    """Fetch bounded bytes from an allowed HTTPS host without following redirects."""
     if timeout_seconds <= 0:
         raise ValueError("download timeout must be positive")
     allowed_hosts = {host.lower() for host in allowed_download_hosts}
     if _https_host(url, "artifact URL") not in allowed_hosts:
         raise ValueError("artifact URL host is not allowed")
     try:
-        with urlopen(url, timeout=timeout_seconds) as response:
+        with build_opener(_RejectRedirects()).open(url, timeout=timeout_seconds) as response:
             if _https_host(response.geturl(), "artifact URL") not in allowed_hosts:
                 raise ValueError("artifact URL host is not allowed")
-            payload = response.read(_MAX_DOWNLOAD_BYTES + 1)
+            payload = response.read(MAX_ARTIFACT_BYTES + 1)
     except OSError as error:
         raise IndexTransportError("artifact download failed") from error
-    if not isinstance(payload, bytes) or len(payload) > _MAX_DOWNLOAD_BYTES:
+    if not isinstance(payload, bytes) or len(payload) > MAX_ARTIFACT_BYTES:
         raise ValueError("download payload is invalid or exceeds the size limit")
     return payload
 
@@ -577,9 +749,9 @@ def fetch_index_observations(
         allowed_download_hosts=frozenset({endpoint_host}),
     )
     try:
-        parsed = json.loads(payload.decode("utf-8"), object_pairs_hook=_reject_duplicate_json_keys)
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise ValueError("index response is invalid JSON") from error
+        parsed = load_json_bytes(payload)
+    except ValueError:
+        raise ValueError("index response is invalid JSON") from None
     return index_observations(parsed, endpoint=endpoint, allowed_download_hosts=allowed_download_hosts)
 
 
@@ -599,7 +771,7 @@ def download_verified(
     if destination.is_symlink() or not destination.is_dir():
         raise ValueError("download destination must be a directory")
     payload = fetch(observed.url, timeout_seconds)
-    if not isinstance(payload, bytes) or len(payload) > _MAX_DOWNLOAD_BYTES:
+    if not isinstance(payload, bytes) or len(payload) > MAX_ARTIFACT_BYTES:
         raise ValueError("download payload is invalid or exceeds the size limit")
     digest = sha256(payload).hexdigest()
     if digest != expected.sha256:
@@ -646,8 +818,8 @@ def download_expected_artifacts(
                 )
             )
     except (OSError, ValueError):
-        for artifact in downloaded:
-            artifact.path.unlink(missing_ok=True)
+        for downloaded_artifact in downloaded:
+            downloaded_artifact.path.unlink(missing_ok=True)
         raise
     return tuple(downloaded)
 

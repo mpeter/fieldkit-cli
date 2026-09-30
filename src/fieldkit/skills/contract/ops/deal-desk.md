@@ -1,171 +1,58 @@
-# Deal Desk
+# Deal desk
 
-Look up pricing, compute margins, flag approval tiers, and size engagements against the CY26Q1 rate card.
+Prepare a draft engagement estimate from current, operator-authorized commercial
+inputs. fieldkit does not supply a rate card, discount policy, approval threshold,
+or authority to issue a quote.
 
-## Gotchas
+## Required inputs
 
-- **Stale vault signals** — run `/brief` first if data hasn't been refreshed today; this skill reads from cached files
-- **Trigger overlap with adjacent skills** — check that you need this specific skill and not a closely named one (e.g. contract-check vs contract-extract)
+Before calculating, obtain:
 
-## Constraints
+- the applicable agreement and approved rate-card revision;
+- each role's customer rate, internal cost rate if authorized, currency, and
+  billing unit;
+- the agreed quantity for each role, including any calendar or utilization
+  assumptions;
+- the pricing model and any explicitly approved discount or contingency;
+- the current approval policy and responsible approver.
 
-- **Never write to account files without explicit confirmation**
-- **Do not modify pursuit frontmatter mid-workflow** — only write at designated save steps
-- **Always surface output for review before sending externally**
+Do not infer private rates from a role title, reuse a historical rate card, or
+assume that a month contains a fixed number of billable days. Resolve ambiguous
+roles, mixed currencies, and incompatible billing units with the operator.
 
-## Rate Card — CY26Q1
+Keep internal costs and margins in the operator's private working material.
+Do not include them in a customer-facing draft unless specifically authorized.
 
-All rates in USD per day. **L = List. C = Cost. CR = Customer Rate (List × 0.80).**
+## Calculate the draft
 
-| Role | List (L) | Cost (C) | Customer Rate (CR) | Margin |
-|------|----------|----------|--------------------|--------|
-| Architect | $379.00 | $196.00 | $303.20 | 35.3% |
-| Associate Consultant | $211.00 | $120.51 | $168.80 | 28.6% |
-| Associate Project Manager | $211.00 | $103.00 | $168.80 | 39.0% |
-| Consultant | $260.00 | $123.60 | $208.00 | 40.6% |
-| Delivery Lead | $314.00 | $172.01 | $251.20 | 31.5% |
-| Engagement Lead | $368.00 | $244.11 | $294.40 | 17.0% |
-| Managing Director | $610.00 | $592.25 | $488.00 | -21.4% |
-| Principal Architect | $449.00 | $247.20 | $359.20 | 31.2% |
-| Principal Consultant | $389.00 | $185.40 | $311.20 | 40.4% |
-| Program Manager | $368.00 | $192.61 | $294.40 | 34.6% |
-| Project Manager | $281.00 | $141.11 | $224.80 | 37.2% |
-| Senior Architect | $281.00 | $141.11 | $224.80 | 37.2% |
-| Senior Consultant | $281.00 | $141.11 | $224.80 | 37.2% |
-| Senior Project Manager | $314.00 | $164.80 | $251.20 | 34.4% |
+For each role, multiply the approved customer rate by the quantity in the same
+billing unit to obtain revenue. Calculate internal cost separately from the
+authorized cost rate and quantity. Sum revenue and cost across compatible
+currency and unit inputs.
 
-Margin formula: `(Customer Rate − Cost) / Customer Rate`
+When total revenue is positive, blended margin is
+`(total revenue - total cost) / total revenue`. It is not the average of the
+individual role margins. If costs are unavailable, report margin as unavailable;
+if revenue is zero or negative, stop and ask how that commercial case should be
+handled rather than dividing or inventing a margin.
 
-**Note:** These are standard list/cost rates. Always check the customer's MSA or HCS agreement for pre-negotiated rates before quoting — customer-specific rates may differ.
+Do not apply a default discount. Fixed-price contingency, prepaid-credit
+conversion, expiry, and available balances must come from the applicable
+agreement or authorized policy, not this skill.
 
----
+## Review and approval
 
-## Approval Tiers
+Show the operator the source revision, assumptions, role quantities, revenue,
+and any authorized cost/margin calculations. Mark incomplete inputs explicitly.
+Apply only the supplied approval policy; without it, report approval status as
+undetermined, never “no approval needed.”
 
-| Margin | Status | Action |
-|--------|--------|--------|
-| ≥ 35% | Green — healthy | No approval needed |
-| 30–34% | Yellow — acceptable | Monitor; no approval needed |
-| < 30% | Red — tight | Manager approval required |
-| < 25% | Hard Stop | Not allowed |
+This is a draft, not an approved quote. Do not send it, submit an approval,
+change a CRM opportunity, or write account/pursuit files without explicit
+authorization for that action. Preserve the operator's existing files.
 
----
+## Related workflows
 
-## Duration Conversions
-
-| Input | Days |
-|-------|------|
-| 1 week | 5 days |
-| 1 month | 22 days |
-
----
-
-## Execution
-
-### Step 1: Parse the request
-
-Identify:
-- **Role(s)** — fuzzy match to the rate card (e.g., "senior arch" → Senior Architect)
-- **Duration** — convert weeks/months to days
-- **Pricing model** — T&M, fixed price, or HCS drawdown
-- **Customer rate override** — if the customer has a pre-negotiated rate, use that instead of List × 0.80
-
-If any role is ambiguous, list the candidates and ask which applies.
-
-### Step 2: Compute per-role estimates
-
-For each role × duration:
-
-```
-Customer Rate = List × 0.80  (or pre-negotiated rate if provided)
-Total Customer Cost = Customer Rate × Days
-Total Cost = Cost Rate × Days
-Margin = (Customer Rate − Cost Rate) / Customer Rate
-```
-
-### Step 3: Multi-role totals
-
-Sum across all roles:
-
-```
-Total Engagement Revenue = Σ (Customer Rate × Days) per role
-Total Engagement Cost    = Σ (Cost Rate × Days) per role
-Blended Margin           = (Total Revenue − Total Cost) / Total Revenue
-```
-
-### Step 4: Approval tier
-
-Apply the approval tier to the **blended margin** for the engagement total.
-
-### Step 5: Fixed-price and HCS context
-
-**Fixed price:**
-- Add contingency: [DATA NEEDED: firm standard contingency %]
-- Recommended approach: price T&M first, then add contingency to produce fixed price
-- Flag scope risk if the engagement is exploratory
-
-**HCS drawdown:**
-- CU-to-day conversion rate: [DATA NEEDED]
-- Confirm remaining CU balance and contract window before scoping
-- Expiring credits are a forcing function — use them as a deal accelerator
-
-### Step 6: Output
-
-```markdown
-## Deal Desk — [Engagement Name or Account]
-
-### Role Breakdown
-
-| Role | Days | List Rate | Customer Rate | Revenue | Cost | Margin | Tier |
-|------|------|-----------|---------------|---------|------|--------|------|
-| [role] | [N] | $[L] | $[CR] | $[total] | $[cost] | [%] | [Green/Yellow/Red] |
-
-**Totals**
-| Metric | Amount |
-|--------|--------|
-| Total Revenue | $[sum] |
-| Total Cost | $[sum] |
-| Blended Margin | [%] |
-| Approval Required? | [Yes / No / Hard Stop] |
-
-### Pricing Model Notes
-
-[T&M / Fixed / HCS context — contingency flag, CU balance reminder, scope risk]
-
-### Recommended Actions
-
-1. [Highest-impact pricing action — e.g., swap role to improve margin]
-2. [Approval path if required]
-3. [Scope or model adjustment if margin is in Red or Hard Stop]
-```
-
----
-
-## Pricing Principles
-
-1. Price to value, not to cost. What is the outcome worth to the customer?
-2. Never lead with price. Establish value and pain first.
-3. Phase large engagements. A $500K SOW is harder to approve than two $250K phases.
-4. Use HCS credits as an accelerator — "You've already paid for this."
-5. Anchor high, negotiate scope, not rate. Protect the rate card; adjust deliverables.
-6. Never discount without getting something in return (longer term, larger scope, reference).
-
----
-
-## Common Scenarios
-
-**"Too expensive"** → See `objection-handling.md` — Pricing Objections section.
-
-**HCS balance is low** → Scope Phase 1 to fit remaining credits. Propose new CU purchase for Phase 2.
-
-**Customer wants fixed price, scope is unclear** → Propose a paid discovery phase (T&M, 2–4 weeks). Use the output to build a fixed-price SOW for the main engagement.
-
-**Delivery team says "this will take longer"** → Revisit scope with the customer before starting. Never absorb overruns silently.
-
----
-
-## Related Skills
-
-- `pipeline` skill's `ops/forecast.md` — Weighted pipeline forecast and gap-to-quota analysis
-- **grill** — Read-only review of exact native ClosePlan qualification evidence
-- `contract` skill's `ops/contract-check.md` — Validate a draft against account contract terms
+Use the [contract check](contract-check.md) to compare a draft with supplied
+contract terms. Use the [pipeline forecast](../../pipeline/ops/forecast.md)
+for portfolio forecasting; an engagement estimate is not a forecast.

@@ -1,7 +1,7 @@
 """Tests for fieldkit CLI group dispatch:
 - fieldkit.commands.sf.cli  → sf subcommands
-- fieldkit.commands.pipeline.main → pipeline command
-- fieldkit.commands.brief.main   → brief command
+- fieldkit.commands.pipeline.cli → pipeline command
+- fieldkit.commands.brief.cli    → brief command
 - fieldkit.commands.gmail.cli      → gmail subcommands
 
 Tests verify option propagation, return code propagation, and SystemExit handling.
@@ -75,7 +75,7 @@ def test_sf_group_unknown_subcommand_gives_nonzero() -> None:
 
 def test_collect_pipeline_pulse_normal_return_gives_0() -> None:
     runner = CliRunner()
-    with patch("fieldkit.commands.pipeline.main._run") as mock_run:
+    with patch("fieldkit.commands.pipeline.cli._run") as mock_run:
         mock_run.return_value = None
         result = runner.invoke(pipeline_cli, [])
     assert result.exit_code == 0
@@ -83,7 +83,7 @@ def test_collect_pipeline_pulse_normal_return_gives_0() -> None:
 
 def test_collect_pipeline_pulse_systemexit_propagated() -> None:
     runner = CliRunner()
-    with patch("fieldkit.commands.pipeline.main._run") as mock_run:
+    with patch("fieldkit.commands.pipeline.cli._run") as mock_run:
         mock_run.side_effect = SystemExit(2)
         result = runner.invoke(pipeline_cli, [])
     assert result.exit_code == 2
@@ -91,7 +91,7 @@ def test_collect_pipeline_pulse_systemexit_propagated() -> None:
 
 def test_collect_pipeline_pulse_argv_set_correctly() -> None:
     runner = CliRunner()
-    with patch("fieldkit.commands.pipeline.main._run") as mock_run:
+    with patch("fieldkit.commands.pipeline.cli._run") as mock_run:
         mock_run.return_value = None
         result = runner.invoke(pipeline_cli, ["--no-llm"])
     assert result.exit_code == 0
@@ -118,7 +118,7 @@ def test_brief_group_bare_invocation_shows_help_and_exits_1() -> None:
 
 def test_brief_group_normal_return_gives_0() -> None:
     runner = CliRunner()
-    with patch("fieldkit.commands.brief.cli._run") as mock_run:
+    with patch("fieldkit.commands.brief.cli._run_pipeline_only") as mock_run:
         mock_run.return_value = None
         result = runner.invoke(brief_cli, ["generate", "--pipeline-only"])
     assert result.exit_code == 0
@@ -126,7 +126,7 @@ def test_brief_group_normal_return_gives_0() -> None:
 
 def test_brief_group_systemexit_propagated() -> None:
     runner = CliRunner()
-    with patch("fieldkit.commands.brief.cli._run") as mock_run:
+    with patch("fieldkit.commands.brief.cli._run_pipeline_only") as mock_run:
         mock_run.side_effect = SystemExit(1)
         result = runner.invoke(brief_cli, ["generate", "--pipeline-only"])
     assert result.exit_code == 1
@@ -135,7 +135,7 @@ def test_brief_group_systemexit_propagated() -> None:
 def test_brief_group_argv_set_correctly() -> None:
     runner = CliRunner()
     with (
-        patch("fieldkit.commands.brief.cli._run") as mock_run,
+        patch("fieldkit.commands.brief.cli._run_pipeline_only") as mock_run,
         patch("fieldkit.config.get_account_names", return_value=["TestCorp"]),
     ):
         mock_run.return_value = None

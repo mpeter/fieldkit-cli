@@ -2,165 +2,116 @@
   "skill_name": "contact",
   "static_checks": [
     {
-      "id": "command_correct",
+      "id": "lookup_command",
       "type": "contains",
-      "pattern": "fieldkit contact find",
-      "message": "Must use 'fieldkit contact find', not 'uv run python -m'"
+      "pattern": "fieldkit contact find QUERY --affiliations --json",
+      "message": "Must use the shipped contact lookup command"
     },
     {
-      "id": "json_flag",
-      "type": "contains",
-      "pattern": "--affiliations --json",
-      "message": "Must pass --affiliations --json to get merged payload"
-    },
-    {
-      "id": "no_hardcoded_db",
-      "type": "not_contains",
-      "pattern": "data/gmail.db",
-      "message": "Must not hardcode db path"
-    },
-    {
-      "id": "three_outcomes",
+      "id": "lookup_outcomes",
       "type": "contains_all",
       "patterns": [
-        "resolved",
-        "ambiguous",
-        "not_found"
+        "`resolved`",
+        "`ambiguous`",
+        "`not_found`"
       ],
-      "message": "Must handle all three outcome types"
+      "message": "Must handle every contact lookup outcome"
     },
     {
-      "id": "sowhat",
+      "id": "local_discovery",
       "type": "contains",
-      "pattern": "So what",
-      "message": "Must include So what synthesis instruction"
+      "pattern": "fieldkit contact enrich --discover --account ACCOUNT --json",
+      "message": "Must use scoped local contact discovery"
     },
     {
-      "id": "research_groups",
-      "type": "contains_all",
-      "patterns": [
-        "fieldkit-sales",
-        "tvly search"
-      ],
-      "message": "Must use the Backstory MCP exception and tvly CLI"
-    },
-    {
-      "id": "slackcli",
+      "id": "attributed_competitive_research",
       "type": "contains",
-      "pattern": "slackcli search",
-      "message": "Must use slackcli for Slack field intel"
+      "pattern": "source URL, publication date, and access date",
+      "message": "Must attribute competitive research"
     },
     {
-      "id": "battlecard_output",
+      "id": "battlecard_review_first",
       "type": "contains",
-      "pattern": "battlecard",
-      "message": "Must produce a battlecard output"
-    },
-    {
-      "id": "saves_battlecard",
-      "type": "contains",
-      "pattern": "artifacts/battlecard",
-      "message": "Must save battlecard to the account artifacts folder"
-    },
-    {
-      "id": "correct_paths",
-      "type": "not_contains",
-      "pattern": "fieldkit/enrich/contacts_raw",
-      "message": "Must not reference old site-packages path \u2014 use data_root/contact-enrich/"
-    },
-    {
-      "id": "no_run_pipeline_sh",
-      "type": "not_contains",
-      "pattern": "run_pipeline.sh",
-      "message": "run_pipeline.sh does not exist \u2014 removed"
-    },
-    {
-      "id": "fieldkit_enrich_commands",
-      "type": "contains_all",
-      "patterns": [
-        "fieldkit contact enrich --discover",
-        "fieldkit contact enrich --apply-web",
-        "fieldkit contact enrich",
-        "fieldkit contact report"
-      ],
-      "message": "Must use fieldkit contact subcommands"
-    },
-    {
-      "id": "tavily_web_search",
-      "type": "contains",
-      "pattern": "tvly search",
-      "message": "Must specify Tavily as the web search tool for enrichment"
+      "pattern": "The default result is a draft in chat",
+      "message": "Must review competitive research before saving"
     }
   ],
   "evals": [
     {
       "id": 0,
-      "prompt": "look up contact@{{accounts.1}}.com",
-      "expected_behavior": "Calls contact-lookup CLI with --affiliations --json, renders full contact card",
+      "prompt": "Look up jordan.lee@acme-corp.example.com and include any workspace affiliations.",
+      "expected_behavior": "Runs the local contact lookup and renders the returned outcome without external calls or writes",
       "assertions": [
-        "Runs 'fieldkit contact find \"contact@{{accounts.1}}.com\" --affiliations --json'",
-        "Produces a contact card with Identity, Communication, Signals sections",
-        "Includes a 'So what' synthesis line about relationship posture",
-        "Does not pass --db flag (uses configured path)"
+        "Uses `fieldkit contact find jordan.lee@acme-corp.example.com --affiliations --json`",
+        "Handles resolved, ambiguous, and not_found from the JSON type rather than assuming a match",
+        "Attributes affiliation data to workspace files and cached communication to the Gmail database",
+        "Does not write a contact note, account file, CRM record, or external resource"
       ]
     },
     {
       "id": 1,
-      "prompt": "who is Chandra at <account-slug>",
-      "expected_behavior": "Resolves name to email, runs contact lookup",
+      "prompt": "Who is Jordan Lee at Acme Corp? There may be more than one match.",
+      "expected_behavior": "Presents bounded candidates and asks for an exact identity when lookup is ambiguous",
       "assertions": [
-        "Passes 'Chandra' (or 'Chandra <account-slug>') as the query argument",
-        "If ambiguous result, presents candidates and asks user to pick"
+        "Uses the supplied name as the local query",
+        "Shows email, display name, message count, and account only when returned",
+        "Does not select the first or busiest candidate",
+        "Reruns with the selected exact email"
       ]
     },
     {
       "id": 2,
-      "prompt": "what do we know about someone@unknown.example.com",
-      "expected_behavior": "Reports not_found cleanly, still shows any pursuit affiliations",
+      "prompt": "What do we know about nobody@example.com?",
+      "expected_behavior": "Reports not_found honestly while preserving any separately returned workspace affiliations",
       "assertions": [
-        "Reports 'No contact found' rather than crashing or staying silent",
-        "Still displays any pursuit file affiliations even when not in email DB"
+        "Reports that the people index did not resolve nobody@example.com",
+        "Displays non-empty affiliations separately if the CLI returned them",
+        "Does not infer identity from the example.com domain",
+        "Does not automatically search an external service"
       ]
     },
     {
       "id": 3,
-      "prompt": "competitive intel on OpenShift vs VMware for Globalpay",
-      "expected_behavior": "Pulls account context, searches Backstory and web for VMware intel, produces battlecard saved to the account artifacts folder",
+      "prompt": "Draft competitive research for Acme Corp comparing our data platform with Northwind Analytics for an architecture review.",
+      "expected_behavior": "Builds a source-attributed battlecard draft from confirmed local scope and optional authorized public research",
       "assertions": [
-        "Reads the {{primary_account}} account.md directly from disk (the account named in the prompt)",
-        "Queries Backstory for competitor mentions via fieldkit-sales",
-        "Uses `tvly search` for VMware competitive intelligence",
-        "Runs slackcli search for VMware field intel",
-        "Outputs a structured battlecard",
-        "Saves the battlecard to accounts/<account>/artifacts/"
+        "Confirms the Acme Corp account and exact pursuit before using account-specific files",
+        "Records source URL, publication date, and access date for public claims",
+        "Labels missing pricing, support, outcome, or version evidence unavailable",
+        "Presents the draft and source ledger without saving by default"
       ]
     },
     {
       "id": 4,
-      "prompt": "what are our win themes against competitors in this platform category?",
-      "expected_behavior": "Recognizes as competitive-intel trigger, runs research even without specific account named",
+      "prompt": "What are our win themes against competitors in this platform category? I have not named an account, competitor, or source set.",
+      "expected_behavior": "Keeps the request as a scoped research outline until the missing comparison inputs are supplied",
       "assertions": [
-        "Recognizes competitive intel trigger and runs the skill",
-        "Produces positioning content and talk tracks"
+        "Asks for the competitor or comparison set, product area, audience, and decision",
+        "Does not invent a win rate or reusable win/loss pattern",
+        "Marks account-specific evidence and internal context unavailable",
+        "Does not save a generic battlecard"
       ]
     },
     {
       "id": 5,
-      "prompt": "discover new contacts",
-      "expected_behavior": "Runs fieldkit contact enrich --discover across all accounts",
+      "prompt": "Discover locally known contacts for Acme Corp and report what was found.",
+      "expected_behavior": "Runs scoped local discovery and reports its writes and source coverage",
       "assertions": [
-        "Invokes 'fieldkit contact enrich --discover'",
-        "Reports the total number of contacts discovered (summary count)"
+        "Confirms the configured workspace before running `fieldkit contact enrich --discover --account acme-corp --json`",
+        "Reports the discovered count and source counts",
+        "Does not claim to refresh Gmail, Salesforce, Slack, or the web",
+        "Treats zero discovered contacts as a valid written result, not proof that no contacts exist"
       ]
     },
     {
       "id": 6,
-      "prompt": "enrich contacts",
-      "expected_behavior": "Runs discover \u2192 contacts --full (generates web_search_batch.json) \u2192 Claude does Tavily search \u2192 apply-web \u2192 enrich \u2192 generate-report",
+      "prompt": "Apply this reviewed Acme Corp web-result JSON to the local contact enrichment data.",
+      "expected_behavior": "Validates the source and destination, applies only missing supported fields, and reviews the merged local file",
       "assertions": [
-        "Runs all pipeline stages: discover, contacts --full, apply-web, enrich, generate-report",
-        "Uses the `tvly search` CLI for web enrichment",
-        "References data_root/contact-enrich/ for output files, not fieldkit/enrich/"
+        "Confirms the configured workspace and reviewed web-search-results.json",
+        "Runs `fieldkit contact enrich --apply-web --account acme-corp --json`",
+        "Adds only supported missing linkedin_url, email, or phone fields",
+        "Does not claim the command performed a web search or independently verified identity"
       ]
     }
   ]

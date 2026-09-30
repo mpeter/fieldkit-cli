@@ -9,8 +9,9 @@ from unittest.mock import patch
 
 import pytest
 
+from fieldkit.config import ConfigError
 from fieldkit.skill.template import (
-    _load_identity_fields,
+    build_template_ctx,
     install_skill_dir,
 )
 from tests.conftest import skip_if_root
@@ -18,15 +19,20 @@ from tests.conftest import skip_if_root
 pytestmark = pytest.mark.unit
 
 
+def _identity_fields_from_context() -> dict[str, str]:
+    context = build_template_ctx()
+    return {key: context.get(key, "") for key in ("territory", "salesforce_user_id")}
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def _write_config(tmp_path: Path, data_repo: Path) -> Path:
-    """Write a minimal config.yaml pointing to data_repo and return config path."""
+def _write_config(tmp_path: Path, fieldkit_home: Path) -> Path:
+    """Write a minimal config.yaml pointing to fieldkit_home and return config path."""
     cfg = tmp_path / "config.yaml"
-    cfg.write_text(f"data_repo: {data_repo}\n", encoding="utf-8")
+    cfg.write_text(f"fieldkit_home: {fieldkit_home}\n", encoding="utf-8")
     return cfg
 
 
@@ -51,43 +57,43 @@ def test_load_identity_fields_no_config_returns_defaults_when_config_absent(
     missing = tmp_path / "nonexistent-config.yaml"
     _patch_config(monkeypatch, missing)
 
-    result = _load_identity_fields()
+    result = _identity_fields_from_context()
 
     assert result == {"territory": "", "salesforce_user_id": ""}
 
 
-def test_load_identity_fields_no_config_returns_defaults_on_yaml_parse_error(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_identity_context_rejects_personal_yaml_parse_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cfg = tmp_path / "config.yaml"
     cfg.write_text(":[invalid yaml:\n  broken: {\n", encoding="utf-8")
     _patch_config(monkeypatch, cfg)
 
-    result = _load_identity_fields()
+    original = cfg.read_bytes()
+    with pytest.raises(ConfigError, match="invalid YAML"):
+        _identity_fields_from_context()
+    assert cfg.read_bytes() == original
 
-    assert result == {"territory": "", "salesforce_user_id": ""}
 
-
-def test_load_identity_fields_no_config_returns_defaults_when_config_not_a_dict(
+def test_identity_context_rejects_non_mapping_personal_configuration(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg = tmp_path / "config.yaml"
     cfg.write_text("- item1\n- item2\n", encoding="utf-8")
     _patch_config(monkeypatch, cfg)
 
-    result = _load_identity_fields()
+    original = cfg.read_bytes()
+    with pytest.raises(ConfigError, match="YAML mapping"):
+        _identity_fields_from_context()
+    assert cfg.read_bytes() == original
 
-    assert result == {"territory": "", "salesforce_user_id": ""}
 
-
-def test_load_identity_fields_no_config_returns_defaults_when_no_data_repo(
+def test_load_identity_fields_no_config_returns_defaults_when_no_fieldkit_home(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cfg = tmp_path / "config.yaml"
     cfg.write_text("name: Alice\n", encoding="utf-8")
     _patch_config(monkeypatch, cfg)
 
-    result = _load_identity_fields()
+    result = _identity_fields_from_context()
 
     assert result == {"territory": "", "salesforce_user_id": ""}
 
@@ -103,13 +109,13 @@ def test_load_identity_fields_no_config_returns_defaults_when_no_data_repo(
 def test_load_identity_fields_no_identity_file_returns_defaults_when_identity_yaml_absent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    data_repo = tmp_path / "fieldkit-data"
-    data_repo.mkdir()
-    cfg = _write_config(tmp_path, data_repo)
+    fieldkit_home = tmp_path / "fieldkit-workspace"
+    fieldkit_home.mkdir()
+    cfg = _write_config(tmp_path, fieldkit_home)
     _patch_config(monkeypatch, cfg)
     # No config/identity.yaml created
 
-    result = _load_identity_fields()
+    result = _identity_fields_from_context()
 
     assert result == {"territory": "", "salesforce_user_id": ""}
 
@@ -125,16 +131,16 @@ def test_load_identity_fields_no_identity_file_returns_defaults_when_identity_ya
 def test_load_identity_fields_flat_layout_flat_layout_both_keys(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    data_repo = tmp_path / "fieldkit-data"
-    (data_repo / "config").mkdir(parents=True)
-    (data_repo / "config" / "identity.yaml").write_text(
+    fieldkit_home = tmp_path / "fieldkit-workspace"
+    (fieldkit_home / "config").mkdir(parents=True)
+    (fieldkit_home / "config" / "identity.yaml").write_text(
         "territory: West\nsalesforce_user_id: 005ABC123456789\n",
         encoding="utf-8",
     )
-    cfg = _write_config(tmp_path, data_repo)
+    cfg = _write_config(tmp_path, fieldkit_home)
     _patch_config(monkeypatch, cfg)
 
-    result = _load_identity_fields()
+    result = _identity_fields_from_context()
 
     assert result["territory"] == "West"
     assert result["salesforce_user_id"] == "005ABC123456789"
@@ -143,16 +149,16 @@ def test_load_identity_fields_flat_layout_flat_layout_both_keys(
 def test_load_identity_fields_flat_layout_flat_layout_only_salesforce_user_id(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    data_repo = tmp_path / "fieldkit-data"
-    (data_repo / "config").mkdir(parents=True)
-    (data_repo / "config" / "identity.yaml").write_text(
+    fieldkit_home = tmp_path / "fieldkit-workspace"
+    (fieldkit_home / "config").mkdir(parents=True)
+    (fieldkit_home / "config" / "identity.yaml").write_text(
         "salesforce_user_id: 005XYZ\n",
         encoding="utf-8",
     )
-    cfg = _write_config(tmp_path, data_repo)
+    cfg = _write_config(tmp_path, fieldkit_home)
     _patch_config(monkeypatch, cfg)
 
-    result = _load_identity_fields()
+    result = _identity_fields_from_context()
 
     assert result["salesforce_user_id"] == "005XYZ"
     assert result["territory"] == ""
@@ -162,18 +168,18 @@ def test_load_identity_fields_flat_layout_flat_layout_territory_empty_triggers_f
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """When territory is absent from identity.yaml, fall back to accounts.yaml sf_territory."""
-    data_repo = tmp_path / "fieldkit-data"
-    cfg_dir = data_repo / "config"
+    fieldkit_home = tmp_path / "fieldkit-workspace"
+    cfg_dir = fieldkit_home / "config"
     cfg_dir.mkdir(parents=True)
     (cfg_dir / "identity.yaml").write_text("salesforce_user_id: 005ABC\n", encoding="utf-8")
     (cfg_dir / "accounts.yaml").write_text(
         "accounts:\n  acme:\n    sf_territory: North\n",
         encoding="utf-8",
     )
-    cfg = _write_config(tmp_path, data_repo)
+    cfg = _write_config(tmp_path, fieldkit_home)
     _patch_config(monkeypatch, cfg)
 
-    result = _load_identity_fields()
+    result = _identity_fields_from_context()
 
     assert result["territory"] == "North"
     assert result["salesforce_user_id"] == "005ABC"
@@ -190,16 +196,16 @@ def test_load_identity_fields_flat_layout_flat_layout_territory_empty_triggers_f
 def test_load_identity_fields_nested_layout_nested_layout_both_keys(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    data_repo = tmp_path / "fieldkit-data"
-    (data_repo / "config").mkdir(parents=True)
-    (data_repo / "config" / "identity.yaml").write_text(
+    fieldkit_home = tmp_path / "fieldkit-workspace"
+    (fieldkit_home / "config").mkdir(parents=True)
+    (fieldkit_home / "config" / "identity.yaml").write_text(
         "identity:\n  territory: East\n  salesforce_user_id: 005NESTED\n",
         encoding="utf-8",
     )
-    cfg = _write_config(tmp_path, data_repo)
+    cfg = _write_config(tmp_path, fieldkit_home)
     _patch_config(monkeypatch, cfg)
 
-    result = _load_identity_fields()
+    result = _identity_fields_from_context()
 
     assert result["territory"] == "East"
     assert result["salesforce_user_id"] == "005NESTED"
@@ -209,19 +215,20 @@ def test_load_identity_fields_nested_layout_nested_layout_identity_key_not_a_dic
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """identity: <scalar> — falls back to treating top-level as lookup dict."""
-    data_repo = tmp_path / "fieldkit-data"
-    (data_repo / "config").mkdir(parents=True)
-    (data_repo / "config" / "identity.yaml").write_text(
+    fieldkit_home = tmp_path / "fieldkit-workspace"
+    (fieldkit_home / "config").mkdir(parents=True)
+    (fieldkit_home / "config" / "identity.yaml").write_text(
         "identity: not-a-dict\nsalesforce_user_id: 005TOP\n",
         encoding="utf-8",
     )
-    cfg = _write_config(tmp_path, data_repo)
+    cfg = _write_config(tmp_path, fieldkit_home)
     _patch_config(monkeypatch, cfg)
 
-    result = _load_identity_fields()
-
-    # identity is not a dict, so lookup uses top-level
-    assert result["salesforce_user_id"] == "005TOP"
+    identity = fieldkit_home / "config" / "identity.yaml"
+    original = identity.read_bytes()
+    with pytest.raises(ConfigError, match="identity mapping"):
+        _identity_fields_from_context()
+    assert identity.read_bytes() == original
 
 
 # ---------------------------------------------------------------------------
@@ -232,32 +239,34 @@ def test_load_identity_fields_nested_layout_nested_layout_identity_key_not_a_dic
 # ── TestLoadIdentityFieldsParseErrors (flattened) ───────────────────────────
 
 
-def test_load_identity_fields_parse_errors_identity_yaml_parse_error_returns_defaults(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    data_repo = tmp_path / "fieldkit-data"
-    (data_repo / "config").mkdir(parents=True)
-    (data_repo / "config" / "identity.yaml").write_text(":[bad yaml\n", encoding="utf-8")
-    cfg = _write_config(tmp_path, data_repo)
+def test_identity_context_rejects_scalar_identity_yaml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    fieldkit_home = tmp_path / "fieldkit-workspace"
+    (fieldkit_home / "config").mkdir(parents=True)
+    (fieldkit_home / "config" / "identity.yaml").write_text(":[bad yaml\n", encoding="utf-8")
+    cfg = _write_config(tmp_path, fieldkit_home)
     _patch_config(monkeypatch, cfg)
 
-    result = _load_identity_fields()
+    identity = fieldkit_home / "config" / "identity.yaml"
+    original = identity.read_bytes()
+    with pytest.raises(ConfigError, match="YAML mapping"):
+        _identity_fields_from_context()
+    assert identity.read_bytes() == original
 
-    assert result == {"territory": "", "salesforce_user_id": ""}
 
-
-def test_load_identity_fields_parse_errors_identity_yaml_not_a_dict_returns_defaults(
+def test_identity_context_rejects_non_mapping_identity_configuration(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    data_repo = tmp_path / "fieldkit-data"
-    (data_repo / "config").mkdir(parents=True)
-    (data_repo / "config" / "identity.yaml").write_text("- a\n- b\n", encoding="utf-8")
-    cfg = _write_config(tmp_path, data_repo)
+    fieldkit_home = tmp_path / "fieldkit-workspace"
+    (fieldkit_home / "config").mkdir(parents=True)
+    (fieldkit_home / "config" / "identity.yaml").write_text("- a\n- b\n", encoding="utf-8")
+    cfg = _write_config(tmp_path, fieldkit_home)
     _patch_config(monkeypatch, cfg)
 
-    result = _load_identity_fields()
-
-    assert result == {"territory": "", "salesforce_user_id": ""}
+    identity = fieldkit_home / "config" / "identity.yaml"
+    original = identity.read_bytes()
+    with pytest.raises(ConfigError, match="YAML mapping"):
+        _identity_fields_from_context()
+    assert identity.read_bytes() == original
 
 
 # ---------------------------------------------------------------------------
@@ -272,8 +281,8 @@ def test_load_identity_fields_territory_fallback_skips_internal_accounts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Internal accounts (internal: true) must be skipped in territory fallback."""
-    data_repo = tmp_path / "fieldkit-data"
-    cfg_dir = data_repo / "config"
+    fieldkit_home = tmp_path / "fieldkit-workspace"
+    cfg_dir = fieldkit_home / "config"
     cfg_dir.mkdir(parents=True)
     (cfg_dir / "identity.yaml").write_text("salesforce_user_id: 005X\n", encoding="utf-8")
     (cfg_dir / "accounts.yaml").write_text(
@@ -285,10 +294,10 @@ def test_load_identity_fields_territory_fallback_skips_internal_accounts(
         "    sf_territory: Southwest\n",
         encoding="utf-8",
     )
-    cfg = _write_config(tmp_path, data_repo)
+    cfg = _write_config(tmp_path, fieldkit_home)
     _patch_config(monkeypatch, cfg)
 
-    result = _load_identity_fields()
+    result = _identity_fields_from_context()
 
     assert result["territory"] == "Southwest"
 
@@ -297,15 +306,15 @@ def test_load_identity_fields_territory_fallback_accounts_yaml_absent_territory_
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """No accounts.yaml → territory stays empty string."""
-    data_repo = tmp_path / "fieldkit-data"
-    cfg_dir = data_repo / "config"
+    fieldkit_home = tmp_path / "fieldkit-workspace"
+    cfg_dir = fieldkit_home / "config"
     cfg_dir.mkdir(parents=True)
     (cfg_dir / "identity.yaml").write_text("salesforce_user_id: 005Y\n", encoding="utf-8")
     # No accounts.yaml
-    cfg = _write_config(tmp_path, data_repo)
+    cfg = _write_config(tmp_path, fieldkit_home)
     _patch_config(monkeypatch, cfg)
 
-    result = _load_identity_fields()
+    result = _identity_fields_from_context()
 
     assert result["territory"] == ""
 
@@ -314,56 +323,58 @@ def test_load_identity_fields_territory_fallback_accounts_yaml_no_sf_territory_k
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Accounts without sf_territory key are skipped."""
-    data_repo = tmp_path / "fieldkit-data"
-    cfg_dir = data_repo / "config"
+    fieldkit_home = tmp_path / "fieldkit-workspace"
+    cfg_dir = fieldkit_home / "config"
     cfg_dir.mkdir(parents=True)
     (cfg_dir / "identity.yaml").write_text("salesforce_user_id: 005Z\n", encoding="utf-8")
     (cfg_dir / "accounts.yaml").write_text(
         "accounts:\n  acme:\n    stage: discover\n",
         encoding="utf-8",
     )
-    cfg = _write_config(tmp_path, data_repo)
+    cfg = _write_config(tmp_path, fieldkit_home)
     _patch_config(monkeypatch, cfg)
 
-    result = _load_identity_fields()
+    result = _identity_fields_from_context()
 
     assert result["territory"] == ""
 
 
-def test_load_identity_fields_territory_fallback_accounts_yaml_non_dict_account_info_skipped(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Account info that is not a dict must be skipped without crash."""
-    data_repo = tmp_path / "fieldkit-data"
-    cfg_dir = data_repo / "config"
+def test_identity_context_rejects_non_mapping_account_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An invalid account record cannot produce a partial template context."""
+    fieldkit_home = tmp_path / "fieldkit-workspace"
+    cfg_dir = fieldkit_home / "config"
     cfg_dir.mkdir(parents=True)
     (cfg_dir / "identity.yaml").write_text("salesforce_user_id: 005Z\n", encoding="utf-8")
     (cfg_dir / "accounts.yaml").write_text(
         "accounts:\n  acme: null\n  globalpay:\n    sf_territory: Southeast\n",
         encoding="utf-8",
     )
-    cfg = _write_config(tmp_path, data_repo)
+    cfg = _write_config(tmp_path, fieldkit_home)
     _patch_config(monkeypatch, cfg)
 
-    result = _load_identity_fields()
+    accounts = cfg_dir / "accounts.yaml"
+    original = accounts.read_bytes()
+    with pytest.raises(ConfigError, match=r"accounts\.yaml"):
+        _identity_fields_from_context()
+    assert accounts.read_bytes() == original
 
-    assert result["territory"] == "Southeast"
 
-
-def test_load_identity_fields_territory_fallback_accounts_not_a_dict_does_not_crash(
+def test_identity_context_rejects_non_mapping_accounts_configuration(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    data_repo = tmp_path / "fieldkit-data"
-    cfg_dir = data_repo / "config"
+    fieldkit_home = tmp_path / "fieldkit-workspace"
+    cfg_dir = fieldkit_home / "config"
     cfg_dir.mkdir(parents=True)
     (cfg_dir / "identity.yaml").write_text("salesforce_user_id: 005Z\n", encoding="utf-8")
     (cfg_dir / "accounts.yaml").write_text("accounts:\n  - list\n  - format\n", encoding="utf-8")
-    cfg = _write_config(tmp_path, data_repo)
+    cfg = _write_config(tmp_path, fieldkit_home)
     _patch_config(monkeypatch, cfg)
 
-    result = _load_identity_fields()
-
-    assert result["territory"] == ""
+    accounts = cfg_dir / "accounts.yaml"
+    original = accounts.read_bytes()
+    with pytest.raises(ConfigError, match=r"accounts\.yaml"):
+        _identity_fields_from_context()
+    assert accounts.read_bytes() == original
 
 
 # ---------------------------------------------------------------------------
@@ -498,10 +509,10 @@ def test_install_skill_dir_mkdir_oserror_increments_errors(tmp_path: Path) -> No
 
     original_mkdir = Path.mkdir
 
-    def _failing_mkdir(self: Path, **kwargs: object) -> None:
+    def _failing_mkdir(self: Path, mode: int = 0o777, parents: bool = False, exist_ok: bool = False) -> None:
         if "target" in str(self):
             raise OSError("Permission denied")
-        original_mkdir(self, **kwargs)
+        original_mkdir(self, mode=mode, parents=parents, exist_ok=exist_ok)
 
     with patch.object(Path, "mkdir", _failing_mkdir):
         result = install_skill_dir(skill_dir, target, {"name": "Alice", "email": "x"})

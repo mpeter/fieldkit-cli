@@ -7,7 +7,9 @@ import pytest
 from click.testing import CliRunner
 
 from fieldkit.commands.sf.schema import cli
-from fieldkit.sf.client import SFAPIError, SFAuthError, SFDataAccessError, SFDirectClient, SFNotFoundError
+from fieldkit.sf import _transport
+from fieldkit.sf.client import SFDirectClient
+from fieldkit.sf.errors import SFAPIError, SFAuthError, SFDataAccessError, SFNotFoundError
 from fieldkit.sf.schema import MAX_SAMPLE_RECORDS, classify_observed_population, collect_schema_reference
 
 pytestmark = pytest.mark.unit
@@ -34,15 +36,19 @@ def test_describe_sobject_requests_metadata() -> None:
     [(401, SFAuthError), (403, SFDataAccessError), (404, SFNotFoundError), (500, SFAPIError)],
 )
 def test_describe_sobject_maps_errors(status: int, error_type: type[Exception]) -> None:
+    """Map errors after the required attempts without real backoff sleeps."""
     response = MagicMock(status_code=status, text="error")
     mock_http = MagicMock()
     mock_http.request.return_value = response
+    retry_policy = getattr(_transport._sf_request_idempotent, "with_policy")  # noqa: B009 - dynamically attached API
     with (
         patch("httpx.Client", return_value=mock_http),
+        patch.object(_transport, "_sf_request_idempotent", retry_policy(wait_min=0, wait_max=0)),
         pytest.raises(error_type, match=r"."),
         SFDirectClient(session_id="sid", base_url="https://sf.example.com") as client,
     ):
         client.describe_sobject("Account")
+    assert mock_http.request.call_count == (3 if status == 500 else 1)
 
 
 def test_describe_sobject_maps_html_login_to_auth_error() -> None:

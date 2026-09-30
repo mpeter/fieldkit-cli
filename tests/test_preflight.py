@@ -219,21 +219,20 @@ def test_mcp_unexpected_exception() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_llm_no_llm_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Returns None when NO_LLM env var is set (LLM disabled via llm_disabled())."""
+def test_retired_no_llm_env_var_is_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("NO_LLM", "1")
     monkeypatch.delenv("FIELDKIT_NO_LLM", raising=False)
     monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
 
     result = _check_llm_available()
 
-    assert result is None
+    assert result is not None
+    assert "Application Default Credentials not found" in result
 
 
 def test_llm_fieldkit_no_llm_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
     """Returns None when FIELDKIT_NO_LLM env var is set (primary name via llm_disabled())."""
     monkeypatch.setenv("FIELDKIT_NO_LLM", "1")
-    monkeypatch.delenv("NO_LLM", raising=False)
     monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
 
     result = _check_llm_available()
@@ -266,17 +265,16 @@ def test_llm_check_uses_llm_disabled_source() -> None:
     assert "llm_disabled()" in src, (
         "historic regression: _check_llm_available() must call llm_disabled() — inline os.environ.get() check found instead"
     )
+    assert 'os.environ.get("NO_LLM")' not in src, (
+        "historic regression: retired inline NO_LLM check still present in _check_llm_available()"
+    )
     assert 'os.environ.get("FIELDKIT_NO_LLM")' not in src, (
         "historic regression: stale inline FIELDKIT_NO_LLM check still present in _check_llm_available()"
-    )
-    assert 'os.environ.get("NO_LLM")' not in src, (
-        "historic regression: stale inline NO_LLM check still present in _check_llm_available()"
     )
 
 
 def test_llm_adc_file_exists(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Returns None when the ADC file exists."""
-    monkeypatch.delenv("NO_LLM", raising=False)
     monkeypatch.delenv("FIELDKIT_NO_LLM", raising=False)
     monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
 
@@ -297,7 +295,6 @@ def test_llm_adc_file_exists(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
 
 def test_llm_google_credentials_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
     """Returns None when GOOGLE_APPLICATION_CREDENTIALS is set."""
-    monkeypatch.delenv("NO_LLM", raising=False)
     monkeypatch.delenv("FIELDKIT_NO_LLM", raising=False)
     monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/path/to/creds.json")
 
@@ -308,7 +305,6 @@ def test_llm_google_credentials_env_var(monkeypatch: pytest.MonkeyPatch) -> None
 
 def test_llm_no_credentials(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Returns an error message when no ADC file and no env var are present."""
-    monkeypatch.delenv("NO_LLM", raising=False)
     monkeypatch.delenv("FIELDKIT_NO_LLM", raising=False)
     monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
 
@@ -383,7 +379,7 @@ def test_preflight_all_pass(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     token_path = tmp_path / "google-oauth-token.json"
     _write_gmail_token(token_path, expired=False)
 
-    monkeypatch.setenv("NO_LLM", "1")
+    monkeypatch.setenv("FIELDKIT_NO_LLM", "1")
 
     mock_response = MagicMock()
     mock_response.status_code = 200

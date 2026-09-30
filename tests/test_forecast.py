@@ -1,9 +1,11 @@
 """Tests for fieldkit.pursuit.forecast — weighted pipeline forecast."""
 
+import re
 from datetime import date
 from pathlib import Path
 
 import pytest
+import yaml
 
 from fieldkit.commands.pursuit.forecast import _parse_acv, compute_forecast
 
@@ -40,6 +42,41 @@ sf_last_pulled: 2026-05-14T17:35:36Z
 """
 
 TODAY = date(2026, 6, 1)
+
+
+@pytest.mark.unit
+def test_documentation_forecast_example_matches_implemented_scenarios(tmp_path: Path) -> None:
+    """The published deal amounts, weights, and scenario totals must agree with the domain."""
+    document = Path("docs/guides/pipeline-workflow.md").read_text(encoding="utf-8")
+    section = document.split("## Step 4: Forecast\n", 1)[1].split("## Pipeline quota\n", 1)[0]
+    blocks = re.findall(r"```[^\n]*\n(.*?)```", section, flags=re.DOTALL)
+    assert len(blocks) == 2
+    table = [line for line in blocks[1].splitlines() if line.startswith("|")]
+    assert [cell.strip() for cell in table[0].split("|")[1:-1]] == ["Deal", "Stage", "Weight", "ACV"]
+    rows = [line.split("|")[1:-1] for line in table[2:]]
+    assert len(rows) == 3
+    expected_weights: dict[float, float] = {}
+    files: list[tuple[str, str, str]] = []
+    for index, row in enumerate(rows):
+        _, stage, weight, acv = (value.strip() for value in row)
+        amount = float(acv.removeprefix("$").replace(",", ""))
+        expected_weights[amount] = float(weight.removesuffix("%")) / 100
+        frontmatter = yaml.safe_dump({"stage": stage, "sf_consulting_acv": amount, "sf_contract_type": "standard"})
+        files.append(("example", f"deal-{index}", f"---\n{frontmatter}---\n"))
+    summaries = re.findall(r"^([A-Za-z ]+)\s*:\s*\$([0-9,]+)", blocks[1], flags=re.MULTILINE)
+    assert len(summaries) == 4
+    totals = {label.strip(): float(amount.replace(",", "")) for label, amount in summaries}
+    assert set(totals) == {"Commit", "Weighted", "Best Case", "Closed Won"}
+
+    result = compute_forecast(_make_account(tmp_path, files), today=TODAY)
+
+    assert result.commit == totals["Commit"]
+    assert result.weighted == totals["Weighted"]
+    assert result.best_case == totals["Best Case"]
+    assert result.closed_won == totals["Closed Won"]
+    assert result.skipped == []
+    assert len(result.deals) == len(expected_weights) == len(rows)
+    assert {deal.acv: deal.weight for deal in result.deals} == expected_weights
 
 
 def _make_account(tmp_path: Path, deals: list[tuple[str, str, str]]) -> Path:

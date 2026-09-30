@@ -18,17 +18,28 @@ from collections.abc import Iterator, Sequence
 from contextlib import ExitStack, contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import NoReturn
+from typing import TYPE_CHECKING, NoReturn
 
-from scripts.hook_install_runtime import (
-    InstallError,
-    InstallInterrupted,
-    TerminationSignals,
-    _failure_description,
-    _hooks_directory,
-    _run,
-    _termination_signals_as_interrupts,
-)
+if TYPE_CHECKING or __package__:
+    from scripts import process_supervision
+    from scripts.hook_install_runtime import (
+        InstallError,
+        InstallInterrupted,
+        TerminationSignals,
+        _hooks_directory,
+        _run,
+        _termination_signals_as_interrupts,
+    )
+else:
+    import process_supervision
+    from hook_install_runtime import (
+        InstallError,
+        InstallInterrupted,
+        TerminationSignals,
+        _hooks_directory,
+        _run,
+        _termination_signals_as_interrupts,
+    )
 
 
 @dataclass(frozen=True)
@@ -74,10 +85,10 @@ def _reverse_after_inspection_failure(
         failure = InstallError(
             f"cannot reverse rollback exchange for {destination}; recovery preserved at: {Path.cwd() / staged}"
         )
-        failure.add_note(f"rollback inspection failed: {_failure_description(inspection_error)}")
-        failure.add_note(f"reverse exchange failed: {_failure_description(exchange_error)}")
+        failure.add_note(f"rollback inspection failed: {process_supervision.failure_description(inspection_error)}")
+        failure.add_note(f"reverse exchange failed: {process_supervision.failure_description(exchange_error)}")
         if cleanup_error is not None:
-            failure.add_note(f"placeholder cleanup failed: {_failure_description(cleanup_error)}")
+            failure.add_note(f"placeholder cleanup failed: {process_supervision.failure_description(cleanup_error)}")
         raise failure from (cleanup_error or exchange_error)
     raise inspection_error.with_traceback(inspection_error.__traceback__)
 
@@ -300,15 +311,15 @@ def _recover_failed_exchange(
             f"displaced hook preserved at: {Path.cwd() / staged}"
         )
         if trigger_error is not None:
-            failure.add_note(f"publication inspection failed: {_failure_description(trigger_error)}")
-        failure.add_note(f"atomic exchange rollback failed: {_failure_description(exchange_error)}")
+            failure.add_note(f"publication inspection failed: {process_supervision.failure_description(trigger_error)}")
+        failure.add_note(f"atomic exchange rollback failed: {process_supervision.failure_description(exchange_error)}")
         raise failure from restore_error
     failure = InstallError(
         f"destination changed during publication: {destination}; displaced hook preserved at: {Path.cwd() / staged}"
     )
     if trigger_error is not None:
-        failure.add_note(f"publication inspection failed: {_failure_description(trigger_error)}")
-    failure.add_note(f"atomic exchange rollback failed: {_failure_description(exchange_error)}")
+        failure.add_note(f"publication inspection failed: {process_supervision.failure_description(trigger_error)}")
+    failure.add_note(f"atomic exchange rollback failed: {process_supervision.failure_description(exchange_error)}")
     raise failure from exchange_error
 
 
@@ -783,7 +794,7 @@ def install(
             mutated = False
         except BaseException as exc:  # noqa: BLE001 - rollback must run after interruption
             if failure is not None and exc is not failure:
-                exc.add_note(f"prior installation failure: {_failure_description(failure)}")
+                exc.add_note(f"prior installation failure: {process_supervision.failure_description(failure)}")
             failure = exc
             if mutated:
                 try:
@@ -818,8 +829,12 @@ def install(
             cleanup.close()
 
             if cleanup_errors:
-                failure_note = f"installation failure: {_failure_description(failure)}; " if failure is not None else ""
-                cleanup_note = "; ".join(_failure_description(exc) for exc in cleanup_errors)
+                failure_note = (
+                    f"installation failure: {process_supervision.failure_description(failure)}; "
+                    if failure is not None
+                    else ""
+                )
+                cleanup_note = "; ".join(process_supervision.failure_description(exc) for exc in cleanup_errors)
                 recovery_paths = ", ".join(
                     str(path if path.is_absolute() else Path.cwd() / path) for path in sorted(preserved_temporaries)
                 )

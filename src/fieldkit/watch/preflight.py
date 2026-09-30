@@ -1,16 +1,14 @@
 """Pre-flight connectivity checks for heavy fieldkit operations (implementation note).
 
 Provides a fast, local probe for each required service before starting
-long-running operations. All checks complete in < 3 seconds total.
+long-running operations. The MCP reachability probe uses its named two-second
+request timeout; the other checks read local configuration and credential files.
 
 Usage:
     from fieldkit.watch.preflight import preflight_check
 
-    failures = preflight_check(["sf", "gmail", "mcp", "llm"])
-    if failures:
-        for msg in failures:
-            click.echo(f"Pre-flight check failed: {msg}", err=True)
-        sys.exit(1)
+    for failure in preflight_check(["sf", "gmail", "mcp", "llm"]):
+        click.echo(f"Pre-flight check failed: {failure}", err=True)
 """
 
 import json
@@ -88,9 +86,9 @@ def _check_mcp_reachable() -> str | None:
     """
     import httpx
 
-    from fieldkit.config import get_mcp_gateway_base
+    from fieldkit.config import get_mcp_gateway_url
 
-    base = get_mcp_gateway_base()
+    base = get_mcp_gateway_url()
     try:
         response = httpx.get(f"{base}/", timeout=2.0)
         if response.status_code != 200:
@@ -107,15 +105,15 @@ def _check_llm_available() -> str | None:
     """Check that Google Application Default Credentials are available for LLM calls.
 
     Skipped entirely when LLM calls are disabled (via llm_disabled() from
-    fieldkit.config, which checks both FIELDKIT_NO_LLM and NO_LLM).
+    fieldkit.config, which checks FIELDKIT_NO_LLM).
     Checks GOOGLE_APPLICATION_CREDENTIALS env var or the well-known ADC file.
     Does NOT make any HTTP requests.
 
     Returns:
         None if credentials are available (or LLM is disabled), or an error message.
     """
-    # historic regression: use llm_disabled() — single source of truth for both FIELDKIT_NO_LLM
-    # and NO_LLM, instead of inline os.environ.get() checks.
+    # Use llm_disabled() as the single source of truth instead of an inline
+    # os.environ.get() check.
     if llm_disabled():
         return None  # LLM disabled — check not applicable
 

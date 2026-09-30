@@ -11,29 +11,54 @@ Two properties matter and neither was previously covered:
    levels of nesting and silently omitted anything deeper.
 """
 
-import importlib.util
 import os
-import sys
-from pathlib import Path
+import re
 
 import pytest
 
+from scripts import generate_cli_docs as generator
+
 pytestmark = pytest.mark.unit
 
-_SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "generate_cli_docs.py"
+
+@pytest.mark.parametrize(
+    "command,example",
+    [("gmail decay", "acme-corp.example.com"), ("sf account", "acme-corp"), ("pursuit create", "acme-corp")],
+)
+def test_account_help_includes_documented_fictional_example(command: str, example: str) -> None:
+    from fieldkit.cli_registry import walk_cli
+
+    node = next(node for node in walk_cli() if node.full_name == command)
+    content = generator.render_help(node)
+
+    assert example in content
 
 
-def _load_generator():  # type: ignore[no-untyped-def]
-    """Import the generator by path — scripts/ is not an importable package."""
-    spec = importlib.util.spec_from_file_location("generate_cli_docs", _SCRIPT)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["generate_cli_docs"] = module
-    spec.loader.exec_module(module)
-    return module
+def test_every_generated_block_is_live_command_help() -> None:
+    from fieldkit.cli_registry import walk_cli
+
+    content = generator.generate()
+
+    assert "## Common patterns" not in content
+    assert "> **Auth:**" not in content
+    blocks = re.findall(r"```[^\n]*\n(.*?)\n```", content, re.DOTALL)
+    expected = [generator.render_help(node) for node in walk_cli(generator.command_groups())]
+    assert blocks == expected
 
 
-generator = _load_generator()
+def test_generated_reference_header_has_no_calendar_dependency() -> None:
+    content = generator.generate()
+
+    assert "> Generated from the registered CLI command tree." in content
+    assert not re.search(r"^> Auto-generated \d{4}-\d{2}-\d{2}", content, re.MULTILINE)
+
+
+def test_new_registered_group_appears_without_copied_inventory(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(generator._COMMANDS_DICT, "sample", ("Sample command", "fieldkit.commands.version.cli"))
+
+    content = generator.generate()
+
+    assert "## `fieldkit sample`" in content
 
 
 def test_output_is_independent_of_terminal_width(monkeypatch: pytest.MonkeyPatch) -> None:

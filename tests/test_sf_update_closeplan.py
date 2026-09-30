@@ -6,8 +6,8 @@ import pytest
 from click.testing import CliRunner
 
 from fieldkit.commands.sf.update_closeplan import cli
-from fieldkit.sf.client import SFAuthError
 from fieldkit.sf.closeplan_writer import ClosePlanScoreWriteOutcome, ClosePlanScoreWriteResult
+from fieldkit.sf.errors import SFAuthError
 
 pytestmark = pytest.mark.unit
 

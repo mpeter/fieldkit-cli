@@ -4,7 +4,7 @@ Maps one ``AttentionItem`` to a ``ProposedAction``: a candidate fieldkit
 command, the read-only context command that makes the proposal reviewable, a
 suggested skill, and a plain-language rationale. The mapping is a static table
 (the D3 "the table IS the documented judgment" philosophy, same as
-``mapping.py``) — fully deterministic, no LLM, testable under ``NO_LLM=1``.
+``mapping.py``) — fully deterministic, no LLM, testable under ``FIELDKIT_NO_LLM=1``.
 
 ``ProposedAction`` is the seam a future LLM brain plugs into: swap the table
 lookup for an ``fieldkit.llm`` call that emits the same dataclass and nothing

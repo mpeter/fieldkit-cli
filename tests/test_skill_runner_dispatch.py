@@ -14,16 +14,35 @@ from unittest.mock import patch
 import pytest
 
 import fieldkit.commands.skill._runner as runner
+import fieldkit.config._loader as config_loader
+from fieldkit.config import ConfigError, clear_config_caches
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.mark.parametrize("value", ["relative-checkout", "", None])
+def test_skills_dir_rejects_invalid_configured_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str | None
+) -> None:
+    """An invalid explicit root cannot silently select another skill corpus."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(json.dumps({"fieldkit_root": value}), encoding="utf-8")
+    monkeypatch.setattr(config_loader, "CONFIG_PATH", cfg)
+    monkeypatch.delenv("FIELDKIT_SKILLS_DIR", raising=False)
+    clear_config_caches()
+
+    with pytest.raises(ConfigError, match="fieldkit_root"):
+        runner._skills_dir()
 
 
 @pytest.fixture(autouse=True)
 def _clear_skills_dir_cache() -> Iterator[None]:
     """_skills_dir is @functools.cache'd; a stale value would leak into other test files."""
     runner._skills_dir.cache_clear()
+    clear_config_caches()
     yield
     runner._skills_dir.cache_clear()
+    clear_config_caches()
 
 
 # ---------------------------------------------------------------------------
@@ -100,7 +119,7 @@ def test_skills_dir_config_root_prefers_agents_skills_over_bare_skills(
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setattr(runner, "CONFIG_PATH", home / ".config" / "fieldkit" / "config.yaml")
+    monkeypatch.setattr(config_loader, "CONFIG_PATH", home / ".config" / "fieldkit" / "config.yaml")
     root = tmp_path / "project-root"
     agents_skills = root / ".agents" / "skills"
     agents_skills.mkdir(parents=True)
@@ -120,7 +139,7 @@ def test_skills_dir_config_root_falls_back_to_bare_skills_when_agents_dir_absent
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setattr(runner, "CONFIG_PATH", home / ".config" / "fieldkit" / "config.yaml")
+    monkeypatch.setattr(config_loader, "CONFIG_PATH", home / ".config" / "fieldkit" / "config.yaml")
     root = tmp_path / "project-root"
     bare_skills = root / "skills"
     bare_skills.mkdir(parents=True)
@@ -139,7 +158,7 @@ def test_skills_dir_malformed_config_yaml_falls_through_without_raising(
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setattr(runner, "CONFIG_PATH", home / ".config" / "fieldkit" / "config.yaml")
+    monkeypatch.setattr(config_loader, "CONFIG_PATH", home / ".config" / "fieldkit" / "config.yaml")
     config_dir = home / ".config" / "fieldkit"
     config_dir.mkdir(parents=True)
     (config_dir / "config.yaml").write_text("fieldkit_root: [unterminated\n", encoding="utf-8")
@@ -150,24 +169,69 @@ def test_skills_dir_malformed_config_yaml_falls_through_without_raising(
     assert result.is_dir()
 
 
-def test_skills_dir_importlib_resources_failure_falls_back_to_repo_relative_path(
+def test_skills_dir_importlib_resources_failure_is_fixed_config_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Priority 4 (last resort): when importlib.resources can't find the package,
-    fall back to the fixed skill/->commands/->fieldkit/->src/->repo-root/skills path.
-    """
+    """Missing bundled resources cannot select a guessed checkout path."""
     monkeypatch.delenv("FIELDKIT_SKILLS_DIR", raising=False)
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))  # no ~/.config/fieldkit/config.yaml here
-    monkeypatch.setattr(runner, "CONFIG_PATH", home / ".config" / "fieldkit" / "config.yaml")
+    monkeypatch.setattr(config_loader, "CONFIG_PATH", home / ".config" / "fieldkit" / "config.yaml")
 
-    expected = Path(runner.__file__).resolve().parent.parent.parent.parent.parent / "skills"
+    with (
+        patch("importlib.resources.files", side_effect=ModuleNotFoundError("no such package")),
+        pytest.raises(ConfigError, match="Bundled skill resources are unavailable") as caught,
+    ):
+        runner._skills_dir()
 
-    with patch("importlib.resources.files", side_effect=ModuleNotFoundError("no such package")):
-        result = runner._skills_dir()
+    assert "no such package" not in str(caught.value)
 
-    assert result == expected
+
+def test_skills_dir_rejects_non_directory_bundled_resource(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A resource lookup result must be a real skill directory."""
+    monkeypatch.delenv("FIELDKIT_SKILLS_DIR", raising=False)
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(config_loader, "CONFIG_PATH", home / ".config" / "fieldkit" / "config.yaml")
+    not_a_directory = tmp_path / "skills.txt"
+    not_a_directory.write_text("not skills", encoding="utf-8")
+
+    with (
+        patch("importlib.resources.files", return_value=not_a_directory),
+        pytest.raises(ConfigError, match="Bundled skill resources are unavailable"),
+    ):
+        runner._skills_dir()
+
+
+@pytest.mark.parametrize("failure_point", ["lookup", "inspect"])
+def test_skills_dir_resource_filesystem_failure_is_fixed_config_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_point: str
+) -> None:
+    """Resource filesystem failures never reflect provider or path details."""
+    monkeypatch.delenv("FIELDKIT_SKILLS_DIR", raising=False)
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(config_loader, "CONFIG_PATH", home / ".config" / "fieldkit" / "config.yaml")
+    marker = "fictional-private-resource-path"
+    files_result = patch("importlib.resources.files", return_value=tmp_path / "skills")
+    inspection = patch.object(Path, "is_dir", side_effect=PermissionError(marker))
+    selected_failure = (
+        patch("importlib.resources.files", side_effect=PermissionError(marker))
+        if failure_point == "lookup"
+        else inspection
+    )
+
+    with (
+        files_result,
+        selected_failure,
+        pytest.raises(ConfigError, match="Bundled skill resources are unavailable") as caught,
+    ):
+        runner._skills_dir()
+
+    assert marker not in str(caught.value)
 
 
 # ---------------------------------------------------------------------------

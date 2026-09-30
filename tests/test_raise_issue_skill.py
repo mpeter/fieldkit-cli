@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from fieldkit.commands.issue.gh_store import GHIssueStore
+from fieldkit.issue import GHIssueStore
 
 pytestmark = pytest.mark.unit
 

@@ -6,21 +6,24 @@ matches to local pursuit files, and writes cache + frontmatter.
 Usage:
     fieldkit sf listview [account_name|--all]
 
-account_name: global-pay | acme-bank | shield-ins
+account_name: a configured account slug such as acme-corp
 --all: sync all accounts (default)
 """
 
-import contextlib
-import json
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import click
 
 from fieldkit.cli_exit import EXIT_AUTH, EXIT_DATA, EXIT_PARTIAL
+from fieldkit.cli_registry import declare_write
 from fieldkit.commands.sf.listview_render import print_sync_summary, print_untracked_table
-from fieldkit.config import get_account_names, get_accounts_config, get_sf_rest_base_url, get_sf_session_id
-from fieldkit.sf.client import reauth_hint_message as _reauth_hint
+from fieldkit.config import get_accounts_config, get_fieldkit_home, get_sf_rest_base_url, get_sf_session_id
+from fieldkit.errors import AuthError, FieldkitError
+from fieldkit.sf import errors as sf_errors
+from fieldkit.sf.errors import reauth_hint_message as _reauth_hint
+from fieldkit.sf.sync import configured_accounts, match_pursuit, sync_opportunity
 
 LOG_PREFIX = "[sf-listview-sync]"
 
@@ -39,7 +42,12 @@ def _error(msg: str) -> None:
     click.echo(f"{LOG_PREFIX} ERROR: {msg}", err=True)
 
 
-def _process_opp(opp: dict[str, str], pursuit_dir: str) -> tuple[int, int, int, dict[str, str] | None]:
+def _process_opp(
+    opp: dict[str, str],
+    pursuit_dir: str,
+    *,
+    write: bool = True,
+) -> tuple[int, int, int, dict[str, str] | None]:
     """Process one Salesforce opportunity dict.
 
     Returns (updated_delta, untracked_delta, error_delta, untracked_opp_or_None).
@@ -49,19 +57,19 @@ def _process_opp(opp: dict[str, str], pursuit_dir: str) -> tuple[int, int, int, 
     display a formatted table of untracked opportunities.  Closed opportunities
     and successfully-written opportunities return None as the fourth element.
     """
-    import io
-
-    from fieldkit.commands.sf.sync import do_match_pursuit, do_write_opp
-
     opp_id = opp.get("opportunity_id", "")
     opp_name = opp.get("name", "") or ""
     if not opp_id:
-        return 0, 0, 0, None
+        _error("Salesforce candidate has no opportunity identity; no local data was written.")
+        return 0, 0, 1, None
 
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        do_match_pursuit(pursuit_dir, opp_id)
-    pursuit_file = buf.getvalue().strip()
+    try:
+        pursuit_file = match_pursuit(Path(pursuit_dir), opp_id, workspace=get_fieldkit_home())
+    except AuthError:
+        raise
+    except (FieldkitError, OSError) as exc:
+        _error(f"matching {opp_id}: {exc}")
+        return 0, 0, 1, None
 
     if not pursuit_file:
         stage = opp.get("stage", "")
@@ -76,13 +84,12 @@ def _process_opp(opp: dict[str, str], pursuit_dir: str) -> tuple[int, int, int, 
     write_data.setdefault("pulled_at", datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"))
 
     try:
-        do_write_opp(opp_id, pursuit_file, json.dumps(write_data))
-        _log(f"  ✓ {opp_id} → {pursuit_file}")
+        sync_opportunity(opp_id, pursuit_file, write_data, dry_run=not write)
+        _log(f"  {'✓' if write else 'WOULD UPDATE:'} {opp_id} → {pursuit_file}")
         return 1, 0, 0, None
-    except SystemExit as exc:  # historic regression: defensive guard against any remaining sys.exit() callee
-        _error(f"writing {opp_id} → {pursuit_file}: unexpected SystemExit({exc.code})")
-        return 0, 0, 1, None
-    except Exception as exc:  # noqa: BLE001
+    except AuthError:
+        raise
+    except (FieldkitError, OSError) as exc:
         _error(f"writing {opp_id} → {pursuit_file}: {exc}")
         return 0, 0, 1, None
 
@@ -128,9 +135,9 @@ def _sync_account_opps(
     *,
     services_only: bool = False,
     limit: int = 50,
+    dry_run: bool = False,
 ) -> tuple[int, int, int, bool, list[dict[str, str]]]:
     """Sync opportunities for one account. Returns (updated, untracked, errors, had_auth_error, untracked_opps)."""
-    import fieldkit.sf.client as _sf_direct
 
     keywords: list[str] = accounts_cfg.get(account, {}).get("keywords", [])
     if not keywords:
@@ -156,11 +163,11 @@ def _sync_account_opps(
                 return 0, 0, 1, False, []
         else:
             results = client.search_opportunities(keywords=keywords, account_name=account)
-    except _sf_direct.SFAuthError as exc:
+    except sf_errors.SFAuthError as exc:
         # historic regression: don't sys.exit(2) here — that kills all remaining accounts.
         _error(f"Auth failure for {account}: {exc}. {_reauth_hint()}")
         return 0, 0, 0, True, []
-    except _sf_direct.SFAPIError as exc:
+    except sf_errors.SFAPIError as exc:
         _error(f"SOSL search failed for {account}: {exc}")
         return 0, 0, 1, False, []
 
@@ -179,9 +186,9 @@ def _sync_account_opps(
                 continue
             try:
                 lines = fetch_opp_component_lines(client, str(opp_id))
-            except _sf_direct.SFAuthError:
+            except sf_errors.SFAuthError:
                 raise
-            except _sf_direct.SFAPIError as exc:
+            except sf_errors.SFAPIError as exc:
                 _error(f"component scan failed for {opp_id}: {exc}")
                 total_errors += 1
                 continue
@@ -196,14 +203,18 @@ def _sync_account_opps(
     untracked_opps: list[dict[str, str]] = []
 
     for opp in opps:
-        u, unt, err, untracked_opp = _process_opp(opp, pursuit_dir)
+        if dry_run:
+            u, unt, err, untracked_opp = _process_opp(opp, pursuit_dir, write=False)
+        else:
+            u, unt, err, untracked_opp = _process_opp(opp, pursuit_dir)
         account_updated += u
         account_untracked += unt
         total_errors += err
         if untracked_opp is not None:
             untracked_opps.append(untracked_opp)
 
-    _log(f"{account}: updated={account_updated} untracked={account_untracked}")
+    update_label = "would_update" if dry_run else "updated"
+    _log(f"{account}: {update_label}={account_updated} untracked={account_untracked}")
     return account_updated, account_untracked, total_errors, False, untracked_opps
 
 
@@ -215,20 +226,23 @@ def _run_listview(
     quiet: bool = False,
     services_only: bool = False,
     limit: int = 50,
+    dry_run: bool = False,
 ) -> None:
     """Core listview logic — SOSL-only Salesforce opportunity discovery and frontmatter sync."""
     import fieldkit.sf.client as _sf_direct
-    from fieldkit.commands.sf.sync import _project_root
 
     # implementation change: resolve --territory to an account name before any other processing
     target = _resolve_territory_target(territory, target)
 
     sid, base_url = _check_sf_auth()
 
-    accounts_cfg = get_accounts_config().get("accounts", {})
-    account_names = get_account_names() if target == "--all" else [target]
+    accounts_cfg = get_accounts_config(strict=True).get("accounts", {})
+    known_accounts = configured_accounts()
+    account_names = known_accounts if target == "--all" else (target,)
+    if any(account not in known_accounts for account in account_names):
+        raise FieldkitError("Salesforce account is not configured")
 
-    root = _project_root()
+    root = get_fieldkit_home()
     total_updated = 0
     total_untracked = 0
     total_errors = 0
@@ -252,6 +266,7 @@ def _run_listview(
                 client,
                 services_only=services_only,
                 limit=limit,
+                dry_run=dry_run,
             )
             total_updated += u
             total_untracked += unt
@@ -266,13 +281,21 @@ def _run_listview(
         raise SystemExit(EXIT_AUTH)
 
     click.echo("", err=True)
-    _log(f"Done. updated={total_updated} untracked={total_untracked} errors={total_errors}")
+    update_label = "would_update" if dry_run else "updated"
+    _log(f"Done. {update_label}={total_updated} untracked={total_untracked} errors={total_errors}")
 
     # implementation change: print a formatted table of untracked open opportunities
     if not quiet:
         print_untracked_table(all_untracked_opps, _log)
-    print_sync_summary(total_updated, total_untracked, total_errors, as_json=as_json, quiet=quiet)
-    if services_only and total_errors:
+    print_sync_summary(
+        total_updated,
+        total_untracked,
+        total_errors,
+        as_json=as_json,
+        quiet=quiet,
+        dry_run=dry_run,
+    )
+    if total_errors:
         raise SystemExit(EXIT_PARTIAL)
 
 
@@ -297,6 +320,7 @@ def _validate_territory(ctx: click.Context, param: click.Parameter, value: str |
     return value
 
 
+@declare_write("workspace")
 @click.command("listview")
 @click.argument("target", default=None, required=False)
 @click.option(
@@ -316,6 +340,12 @@ def _validate_territory(ctx: click.Context, param: click.Parameter, value: str |
 @click.option("--json", "as_json", is_flag=True, default=False, help="Emit JSON summary to stdout.")
 @click.option("--quiet", is_flag=True, default=False, help="Suppress [sf-listview-sync] progress lines.")
 @click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Read and match Salesforce opportunities without writing cache or frontmatter.",
+)
+@click.option(
     "--services-only",
     is_flag=True,
     default=False,
@@ -330,12 +360,13 @@ def cli(
     territory: str | None,
     as_json: bool,
     quiet: bool,
+    dry_run: bool,
     services_only: bool,
     limit: int | None,
 ) -> None:
     """Fetch and display Salesforce list view records.
 
-    TARGET is an account name (e.g. global-pay, acme-bank, shield-ins).
+    TARGET is a configured account slug (e.g. acme-corp).
     Use --all to sync all accounts (default when no TARGET given).
     --territory overrides TARGET by resolving the sf_territory value to an account name.
 
@@ -369,4 +400,5 @@ def cli(
         quiet=quiet,
         services_only=services_only,
         limit=limit if limit is not None else 50,
+        dry_run=dry_run,
     )

@@ -1,21 +1,19 @@
-# Vault routes
+# Workspace content routes
 
-Vault markdown is plain content under the workspace root. Use native file tools,
-`rg`, and Git for exact reads, writes, search, and history. Use `qmd` for lexical,
-vector, or hybrid retrieval:
+Workspace Markdown and data files are ordinary local content beneath the
+configured fieldkit workspace and data roots. Use native file reads and `rg` for
+exact search. Use Git only when the workspace is a repository and history is
+actually available.
 
-```bash
-qmd query "<question>"
-qmd search "<exact terms>"
-git log -- <path>
-git diff -- <path>
-```
+An optional local index may help with lexical or semantic retrieval when the
+operator has configured one, but fieldkit does not install or require an indexer.
+Identify the index's coverage and age before treating its result as current.
 
-Respect field ownership: pursuit frontmatter goes through
-`fieldkit.pursuit.io`, and Salesforce-owned account fields go through the
-corresponding `fieldkit sf` command.
+Respect field ownership and safe writers. Pursuit frontmatter is read and written
+through fieldkit's pursuit I/O behavior, multi-writer task state uses its owned
+writer, and Salesforce-owned fields change through supported Salesforce commands.
+Do not bypass those boundaries with a generic text replacement.
 
-There is no vault MCP backend. The former vault group was removed as phantom
-configuration. Backlink,
-outlink, orphan, and connection-path graph operations have no maintained route;
-state that limitation instead of inventing an endpoint.
+Backlink, outlink, orphan, and connection-path graph operations have no shipped
+fieldkit route. Report that limitation instead of inventing a backend. An exact
+text search is a different operation and must not be described as graph parity.

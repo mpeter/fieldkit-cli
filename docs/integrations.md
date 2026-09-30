@@ -1,9 +1,11 @@
 ---
-last_reviewed: 2026-09-10
+last_reviewed: 2026-09-27
 covers:
   - pyproject.toml
   - src/fieldkit/commands/auth/
   - src/fieldkit/commands/doctor/
+  - src/fieldkit/config/_integrations.py
+  - src/fieldkit/gmail/auth.py
 audience: user
 ---
 
@@ -22,9 +24,10 @@ remain separate, explicit steps.
 | `chrome-auth` | Browser credential-store dependencies | Supported Linux desktop, local browser profile, and authorized session |
 | `all` | Every dependency above | Every service is still configured independently |
 
-Install a profile with `uv tool install 'fieldkit-cli[profile]'`. In a source
-checkout, `make bootstrap` installs the locked contributor environment with all
-extras.
+Install a chosen profile, for example, with `uv tool install 'fieldkit-cli[google]'`.
+If the base tool is already installed, add `--force` to replace its tool
+environment. In a source checkout, `make bootstrap` installs the locked
+contributor environment with all extras.
 
 ## Salesforce
 
@@ -43,10 +46,20 @@ configuration, not as a portable-core guarantee.
 
 ## Google and Gmail
 
+`fieldkit meeting list` reads locally recorded workbook links and works without
+the Google profile or provider access. Meeting group help is also base-capable.
+The link, note, and open commands retain their Google profile requirement;
+installing it does not configure or authorize the separate workbook service.
+
 The `google` profile provides Gmail and Google API clients. You supply an OAuth
-client, grant only the scopes you intend to use, and complete the first consent
-flow interactively. fieldkit stores the resulting token in its runtime-data root,
-not in this repository.
+client and complete the first consent flow interactively. That flow requests one
+shared scope set: Gmail read-only, Google Docs read/write, and Google Drive
+read/write. It does not select narrower scopes for each command. Review the
+requested access before granting consent, even if you only plan to sync Gmail.
+
+The token defaults to `google-oauth-token.json` in the runtime-data root. A
+configured `gmail_token` path overrides that location; keep it outside the source
+repository and protect it as a credential.
 
 See [Connect Gmail](guides/gmail.md) and verify configured credentials with:
 
@@ -61,6 +74,10 @@ The `llm` profile provides the client libraries, not model access. Configure a
 supported provider and review what a command will send before using sensitive
 workspace content. Set `FIELDKIT_NO_LLM=1` when exercising a documented no-AI
 path.
+
+The assembled `fieldkit brief generate` command uses its deterministic local
+renderer when `llm_model` is absent or `FIELDKIT_NO_LLM=1` is set.
+Only an explicitly configured model selects provider preflight and synthesis.
 
 Model availability, data handling, retention, cost, and regional controls belong
 to the provider and your organization. fieldkit does not make those decisions for
@@ -77,10 +94,21 @@ core health.
 Only configure an endpoint and credential you are authorized to use. If your
 organization does not provide the service, leave that capability unconfigured.
 
+Backstory health, the assembled brief's calendar section, and draft-queue
+monitoring each use an independent full URL under `mcp_endpoints`. fieldkit does
+not ship a default route for them. Their absence does not block local pursuit,
+ingest, watcher, sync, or no-LLM brief work. See the
+[configuration reference](reference/config-file.md#optional-integration-keys).
+Configured endpoints must complete the MCP initialization lifecycle and return
+matching, schema-valid JSON-RPC responses. Malformed calendar, Backstory, or
+draft data is reported as unavailable or failed; it is never treated as a
+healthy empty result.
+
 ## Trust boundary
 
-Installing a profile causes no external request by itself. A configured command
-can send account identifiers, email-derived context, prompts, or other selected
-data to its provider. Read [Local data and privacy](privacy.md) before using real
-data, and use the relevant `fieldkit doctor` subcommand to distinguish missing
+Installing a profile can contact package indexes to download dependencies; it
+does not authorize access to your service accounts. A configured command can send
+account identifiers, email-derived context, prompts, or other selected data to
+its provider. Read [Local data and privacy](privacy.md) before using real data,
+and use the relevant `fieldkit doctor` subcommand to distinguish missing
 configuration from an authentication failure.

@@ -1,86 +1,68 @@
-# Competitive Intelligence
+# Prepare competitive research
 
-Research competitors active in a deal or account and produce an actionable
-battlecard. Not a feature matrix — a tool for winning conversations.
+Use this workflow to draft a battlecard for an identified competitor, product
+area, and optional account or pursuit. It organizes evidence for a conversation;
+it does not produce a verified market ranking, qualification score, or permission
+to change an account or CRM record.
 
-## Gotchas
+## Confirm the scope
 
-- **Backstory availability** — check `mcpjungle` only immediately before selecting the `fieldkit-sales` exception; public research uses `tvly`
-- **Trigger overlap with similar skills** — check skill names carefully; e.g. this skill vs adjacent skills with similar names
-- **Missing context** — this skill relies on vault files being up to date; run `/brief` first if signals are stale
+Require the competitor name and comparison area. When the request is account- or
+deal-specific, confirm the exact account slug and pursuit before reading local
+files. If several pursuits or similarly named competitors match, ask the operator
+to choose; never select by list order.
 
-## Constraints
+State the intended audience and decision: for example, preparing discovery
+questions is different from publishing a feature comparison. A broad request
+without a product area should remain a high-level research outline until the
+operator narrows it.
 
-- **Read the relevant reference files before acting** — don't guess tool parameters
-- **Never modify pursuit frontmatter without explicit instruction**
-- **Always confirm before writing back** to any account file or Salesforce
+## Gather attributed evidence
 
-## Inputs
+Start with the confirmed workspace account and pursuit files when they exist.
+Record the source path and relevant date. Separate customer statements, internal
+notes, CRM-derived fields, and prior model synthesis.
 
-Required: competitor name(s) or account context (will pull competitors from pursuit file).
+Public research is optional and requires an available research tool plus operator
+approval for any sensitive query terms. Prefer official product documentation,
+release notes, pricing pages, security or support policies, primary company
+announcements, and clearly identified independent analysis. For each retained
+claim, capture the source URL, publication date, and access date. A search snippet
+alone is not adequate support for a product or pricing claim.
 
-Optional: specific product/service area to focus comparison.
+Internal conversation context is also optional. Use Slack or another internal
+source only when it is configured, authorized, and bounded to the intended
+workspace, channels, and dates. Attribute observations without copying private
+message bodies into the battlecard. A colleague's opinion, a customer statement,
+and a confirmed outcome are different evidence types.
 
-## Execution
+When a source is missing, stale, conflicting, paywalled, or incomplete, label the
+claim unavailable or disputed. Do not fill gaps from brand familiarity, generic
+sales lore, or an unsourced prior battlecard.
 
-Routes needed: **fieldkit-sales** (Backstory) and `tvly search` (public web research). Account/pursuit files are read from disk and the battlecard is written directly (native file reads/writes).
+## Build the draft
 
-### Step 1: Gather context
+Use the [battlecard template](competitive-intel-battlecard-template.md). Include
+only comparison dimensions relevant to the confirmed scope. Ground every claim,
+question, objection response, and win/loss pattern in a cited source or label it
+as a hypothesis for review.
 
-```
-1. read accounts/<account>/pursuits/<opp>.md — competitive context
-2. read accounts/<account>/account.md — account priorities
-3. backstory__backstory__find_account(<account>) → get peopleai_account_id
-4. backstory__backstory__ask_sales_ai_about_account(peopleai_account_id,
-   "What competitive threats or mentions have come up for this account?")
-```
+Avoid invented win rates, unsupported pricing, loaded “landmine” questions, and
+claims about lock-in, support, ecosystem, or ownership that are not established
+for the compared versions and date. Do not turn internal or model-generated
+material into customer evidence.
 
-### Step 2: Research our position
+The default result is a draft in chat. Show the source ledger, unsupported areas,
+and conflicts with the draft. Ask for corrections before offering to save it.
 
-Web search for recent company news relevant to this deal area:
-- Product releases, certifications, partnership announcements
-- Customer success stories in this vertical
-- Analyst positioning (Gartner, Forrester, IDC)
+## Save only with approval
 
-### Step 3: Research each competitor
+If the operator requests a file, propose a path under the confirmed account's
+`artifacts/` directory using a sanitized competitor slug and meeting-relevant
+date. Confirm the configured workspace root; do not write into the code checkout.
+Ask before creating or replacing the file. Refuse a symlinked destination or a
+path that escapes the intended account.
 
-For each competitor, web search for:
-- Product features and recent releases
-- Pricing models (public info only)
-- Customer reviews and satisfaction signals
-- Recent news, funding, M&A, leadership changes
-- Hiring patterns (signals strategic direction)
-- Known weaknesses from analyst reports and reviews
-
-### Step 4: Cross-reference with internal signals
-
-- Backstory — account-level mentions of competitor in recent conversations
-- Slack — `slackcli search messages "[competitor name]"` for field intel
-- Past pursuit files — win/loss history against this competitor
-
-### Step 5: Build the battlecard
-
-Read `competitive-intel-battlecard-template.md` for output format.
-
-Key sections:
-- Comparison matrix (feature/capability/positioning)
-- Talk tracks for different buyer personas (EB, technical, user)
-- Landmine questions to naturally expose competitor weaknesses
-- Objection handling for competitor claims
-- Win/loss patterns from history
-
-## Output Options
-
-- **Markdown battlecard** — default, saved to account artifacts
-
-Save by writing the file `accounts/<account>/artifacts/battlecard-[competitor]-YYYY-MM-DD.md` directly.
-
-**File write guardrail:** Do not write Backstory-derived competitive signals into
-pursuit frontmatter, `account.md`, or native ClosePlan fields. Reference the
-battlecard path as context for `/grill`; Backstory synthesis is not confirmation
-and must not become a local score.
-
-## Related Skills
-
-- `meeting` — Feed competitive positioning into meeting briefs
-- `/grill` — Feeds Competition element scoring
+After an approved write, read the file back and confirm the heading, scope,
+source ledger, and unsupported-claim markers. Saving a battlecard does not
+authorize pursuit-frontmatter, Salesforce, task, or qualification changes.

@@ -1,7 +1,7 @@
 """fieldkit.watch.status — Shared run-status writer for all fieldkit watchers.
 
 Writes a single ``watcher-run-status.json`` file in the watchers directory
-with one entry per watcher, updated atomically on every successful run.
+with one entry per watcher, updated atomically when a run's status is persisted.
 
 A cold-start agent can read this file to verify that all scheduled watchers
 are alive and when they last ran, without parsing alert files or log output.
@@ -14,9 +14,9 @@ The file is a JSON object keyed by watcher name::
       "backstory-health": {
         "last_run": "2026-05-27T06:45:01Z",
         "outcome": "ok",          # "ok" | "partial" | "fatal"
-        "accounts_checked": 3,
+        "records_checked": 3,
         "alerts_generated": 1,
-        "api_failures": 0,
+        "failures": 0,
         "elapsed_seconds": 4.2,
         "dry_run": false
       },
@@ -29,7 +29,8 @@ Outcome classification
 ----------------------
 - ``ok``      — all records processed, zero failures
 - ``partial`` — some records processed, some failures (retry may help)
-- ``fatal``   — zero records processed (pipeline did not run meaningfully)
+- ``fatal``   — the run did not meaningfully succeed, including total scan
+               failure or failure of required state, alert, or status persistence
 
 Usage
 -----
@@ -48,8 +49,9 @@ Usage
 
 import json
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from fieldkit.config import get_fieldkit_home
 from fieldkit.util.atomic import locked_json_update
@@ -87,20 +89,7 @@ def was_run_today(watcher: str) -> bool:
     Args:
         watcher: Stable watcher name key (e.g. ``"run-all"``).
     """
-    if watcher not in KNOWN_WATCHERS:
-        log.warning("was_run_today: unknown watcher %r — returning False", watcher)
-        return False
-    status = _load_run_status()
-    entry = status.get(watcher)
-    if not entry:
-        return False
-    last_run = entry.get("last_run", "")
-    try:
-        # Timestamps are stored as ISO-8601 UTC: "2026-06-06T06:45:01Z"
-        run_date = datetime.strptime(last_run, "%Y-%m-%dT%H:%M:%SZ").date()
-        return run_date == datetime.now(UTC).date()
-    except ValueError:
-        return False
+    return get_daily_run_snapshot(watcher).ran_today
 
 
 def load_all_statuses() -> dict[str, dict[str, Any]]:
@@ -113,6 +102,60 @@ def load_all_statuses() -> dict[str, dict[str, Any]]:
 
 
 WatcherOutcome = Literal["ok", "partial", "fatal"]
+RunStatusWriteResult = Literal["written", "skipped", "failed"]
+
+
+@dataclass(frozen=True)
+class WatcherRunResult:
+    """Facts from one invocation, independent of aggregate admission policy."""
+
+    outcome: WatcherOutcome
+    completed: bool
+    status_write: RunStatusWriteResult | None
+    failure_code: Literal[1, 2, 3] = 1
+
+    def __post_init__(self) -> None:
+        if type(self.outcome) is not str or self.outcome not in get_args(WatcherOutcome):
+            raise ValueError("outcome must be a canonical watcher outcome")
+        if type(self.completed) is not bool:
+            raise ValueError("completed must be an exact bool")
+        if self.status_write is not None and (
+            type(self.status_write) is not str or self.status_write not in get_args(RunStatusWriteResult)
+        ):
+            raise ValueError("status_write must be a canonical write result or None")
+        if type(self.failure_code) is not int or self.failure_code not in get_args(Literal[1, 2, 3]):
+            raise ValueError("failure_code must be an exact integer 1, 2, or 3")
+        if self.status_write == "failed" and self.outcome != "fatal":
+            raise ValueError("failed status write requires fatal outcome")
+
+    @property
+    def exit_code(self) -> Literal[0, 1, 2, 3]:
+        """Derive the process status without storing a second authority."""
+        return 0 if self.outcome == "ok" else self.failure_code
+
+    @property
+    def completed_partial(self) -> bool:
+        """Whether this invocation supplies the facts for partial allowance."""
+        return self.outcome == "partial" and self.exit_code == 1 and self.completed and self.status_write == "written"
+
+
+def validate_watcher_result(result: object, *, dry_run: bool) -> WatcherRunResult:
+    """Admit invocation facts using the same live persistence policy for every step."""
+    if type(result) is not WatcherRunResult:
+        return WatcherRunResult("fatal", False, None)
+    if not dry_run and (
+        result.status_write == "skipped"
+        or (result.completed and result.outcome in ("ok", "partial") and result.status_write != "written")
+    ):
+        return WatcherRunResult("fatal", result.completed, result.status_write, result.failure_code)
+    return result
+
+
+def classify_watcher_outcome(*, checked: int, failures: int) -> WatcherOutcome:
+    """Classify a completed scan without hiding record failures."""
+    if failures == 0:
+        return "ok"
+    return "fatal" if checked == 0 else "partial"
 
 
 def get_last_run_outcome(watcher: str) -> WatcherOutcome | None:
@@ -124,18 +167,42 @@ def get_last_run_outcome(watcher: str) -> WatcherOutcome | None:
     Args:
         watcher: Stable watcher name key (e.g. ``"pursuit-stalls"``).
     """
-    status = _load_run_status()
-    entry = status.get(watcher)
-    if not entry:
-        return None
-    outcome = entry.get("outcome")
-    if outcome == "ok":
-        return "ok"
-    if outcome == "partial":
-        return "partial"
-    if outcome == "fatal":
-        return "fatal"
-    return None
+    return get_daily_run_snapshot(watcher).outcome
+
+
+@dataclass(frozen=True)
+class WatcherDailySnapshot:
+    """Daily suppression facts read from one persisted record."""
+
+    ran_today: bool
+    outcome: WatcherOutcome | None
+
+
+def get_daily_run_snapshot(watcher: str) -> WatcherDailySnapshot:
+    """Load date and recognized outcome together; never certify invocation completion."""
+    if watcher not in KNOWN_WATCHERS:
+        log.warning("get_daily_run_snapshot: unknown watcher %r", watcher)
+        return WatcherDailySnapshot(False, None)
+    entry = _load_run_status().get(watcher)
+    if not isinstance(entry, dict):
+        return WatcherDailySnapshot(False, None)
+    raw_outcome = entry.get("outcome")
+    outcome: WatcherOutcome | None = None
+    if raw_outcome == "ok":
+        outcome = "ok"
+    elif raw_outcome == "partial":
+        outcome = "partial"
+    elif raw_outcome == "fatal":
+        outcome = "fatal"
+    last_run = entry.get("last_run")
+    ran_today = False
+    if isinstance(last_run, str):
+        try:
+            run_date = datetime.strptime(last_run, "%Y-%m-%dT%H:%M:%SZ").date()
+            ran_today = run_date == datetime.now(UTC).date()
+        except ValueError:
+            pass
+    return WatcherDailySnapshot(ran_today, outcome)
 
 
 def write_run_status(
@@ -147,11 +214,11 @@ def write_run_status(
     failures: int,
     elapsed_seconds: float,
     dry_run: bool,
-) -> None:
+) -> RunStatusWriteResult:
     """Update watcher-run-status.json with this run's result.
 
-    Written atomically via a .tmp rename.  Silently logs a warning on any
-    filesystem error so a disk issue never blocks the main watcher pipeline.
+    Written atomically via a .tmp rename. Returns an explicit result so each
+    watcher can fail closed when status persistence is part of its contract.
 
     Args:
         watcher:          Stable watcher name key (e.g. ``"backstory-health"``).
@@ -164,7 +231,7 @@ def write_run_status(
                           are not meaningful to persist).
     """
     if dry_run:
-        return
+        return "skipped"
 
     watchers_dir = get_fieldkit_home() / "watchers"
     run_status_file = watchers_dir / "watcher-run-status.json"
@@ -189,10 +256,7 @@ def write_run_status(
             outcome,
             elapsed_seconds,
         )
-    except OSError as exc:
-        log.warning(
-            "watcher-run-status: could not write %s — %s",
-            run_status_file,
-            exc,
-            exc_info=True,
-        )
+        return "written"
+    except (OSError, TypeError, ValueError):
+        log.warning("watcher-run-status: write failed")
+        return "failed"

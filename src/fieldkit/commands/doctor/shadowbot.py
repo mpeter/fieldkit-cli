@@ -2,7 +2,6 @@
 
 import click
 
-from fieldkit.cli_exit import EXIT_AUTH, EXIT_SUCCESS
 from fieldkit.commands.doctor._result import DoctorResult
 from fieldkit.shadowbot.auth import ShadowbotAuthError, get_token, get_token_path
 
@@ -15,6 +14,7 @@ def _live_token_result() -> DoctorResult:
         return DoctorResult(
             "shadowbot",
             healthy=False,
+            failure_kind="auth",
             configured=True,
             message=f"{exc} — run 'fieldkit auth shadowbot'",
         )
@@ -25,7 +25,9 @@ def check_shadowbot() -> DoctorResult:
     """Check ShadowBot auth by resolving a live access token (refreshing if needed)."""
     token_path = get_token_path()
     if not token_path.exists():
-        return DoctorResult("shadowbot", healthy=False, configured=False, message="run 'fieldkit auth shadowbot'")
+        return DoctorResult(
+            "shadowbot", healthy=False, failure_kind="auth", configured=False, message="run 'fieldkit auth shadowbot'"
+        )
     return _live_token_result()
 
 
@@ -52,4 +54,4 @@ def doctor_shadowbot_cmd(as_json: bool) -> None:
         )
     else:
         click.echo(result.render())
-    raise SystemExit(EXIT_SUCCESS if result.healthy else EXIT_AUTH)
+    raise SystemExit(result.exit_code)

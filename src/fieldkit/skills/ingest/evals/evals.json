@@ -2,140 +2,129 @@
   "skill_name": "ingest",
   "static_checks": [
     {
-      "id": "no_plaud",
+      "id": "installed_cli",
       "type": "not_contains",
-      "pattern": "plaud-ingest",
-      "message": "plaud-ingest was removed \u2014 must not reference it"
+      "pattern": "<repo-root>",
+      "message": "The public workflow must use the installed command without a checkout."
     },
     {
       "id": "pipeline_id",
       "type": "contains",
       "pattern": "transcript-ingest",
-      "message": "Must reference transcript-ingest as primary pipeline ID"
+      "message": "The supported Google Docs pipeline must be named explicitly."
     },
     {
-      "id": "standard_flow",
+      "id": "account_scope",
       "type": "contains_all",
       "patterns": [
-        "fieldkit ingest status",
-        "fieldkit ingest discover",
-        "fieldkit ingest run",
-        "fieldkit ingest backfill"
+        "fieldkit ingest discover --pipeline transcript-ingest --dry-run --account <account> --json",
+        "fieldkit gmail account-tags --account <account> --json",
+        "fieldkit gmail enrich-pursuits --account <account> --json"
       ],
-      "message": "Must document all four ingest commands"
+      "message": "Discovery and Gmail report writes must name the confirmed account."
     },
     {
-      "id": "dry_run",
+      "id": "approval_boundary",
+      "type": "contains_all",
+      "patterns": [
+        "obtain explicit approval",
+        "does not accept `--account`",
+        "pending queue can therefore contain other accounts"
+      ],
+      "message": "Transcript execution must disclose and gate its global queue."
+    },
+    {
+      "id": "dry_run_registry_boundary",
       "type": "contains",
-      "pattern": "--dry-run",
-      "message": "Must show --dry-run option"
+      "pattern": "may initialize `pipeline.db` and register sources",
+      "message": "Run dry-run must not be described as fully read-only."
+    },
+    {
+      "id": "no_secret_output_claim",
+      "type": "not_contains",
+      "pattern": "GOOGLE_OAUTH_CLIENT_SECRET",
+      "message": "The workflow must not claim doctor output reveals secret variables."
+    },
+    {
+      "id": "no_broad_sync_command",
+      "type": "not_contains",
+      "pattern": "```bash\nfieldkit sync",
+      "message": "The broad data pipeline must not be presented as a Gmail-refresh command."
     },
     {
       "id": "commands_exist",
       "type": "commands_exist",
       "commands": [
+        "fieldkit ingest status",
+        "fieldkit ingest discover",
+        "fieldkit ingest run",
+        "fieldkit ingest backfill",
+        "fieldkit doctor google",
+        "fieldkit doctor gmail",
         "fieldkit gmail sync",
         "fieldkit gmail account-tags",
-        "fieldkit sync",
         "fieldkit gmail enrich-pursuits"
       ]
-    },
-    {
-      "id": "no_uv_run",
-      "type": "not_contains",
-      "pattern": "`uv run python",
-      "message": "Must not invoke 'uv run python' as a command (backtick-prefixed)"
-    },
-    {
-      "id": "no_hardcoded_db",
-      "type": "not_contains",
-      "pattern": "data/gmail.db",
-      "message": "Must not hardcode data/gmail.db path"
-    },
-    {
-      "id": "modes_defined",
-      "type": "contains_all",
-      "patterns": [
-        "full",
-        "core",
-        "refresh-only"
-      ],
-      "message": "Must define all three modes"
-    },
-    {
-      "id": "error_handling",
-      "type": "contains",
-      "pattern": "exits non-zero",
-      "message": "Must document non-zero exit handling"
     }
   ],
   "evals": [
     {
-      "id": 0,
-      "prompt": "ingest transcripts",
-      "expected_behavior": "Runs the standard flow: status \u2192 discover \u2192 run for transcript-ingest pipeline",
+      "id": "scoped_transcript",
+      "prompt": "Ingest the meeting notes for acme-corp.",
+      "expected_behavior": "Inspects acme-corp status and a scoped dry-run, shows candidate identities, and waits for approval instead of starting the global pending queue.",
       "assertions": [
-        "Runs 'fieldkit ingest status' first",
-        "Runs 'fieldkit ingest discover --pipeline transcript-ingest'",
-        "Runs 'fieldkit ingest run --pipeline transcript-ingest'"
+        "Uses status and discover --dry-run with --account acme-corp and --json.",
+        "Does not infer the source from recency or title alone.",
+        "Explains that ingest run has no account filter and asks for explicit approval."
       ]
     },
     {
-      "id": 1,
-      "prompt": "what ingest pipelines are registered",
-      "expected_behavior": "Runs fieldkit ingest status",
+      "id": "interactive_transcript",
+      "prompt": "I approve reviewing the transcript queue; process only the confirmed acme-corp note.",
+      "expected_behavior": "Checks Google authorization, uses interactive transcript execution, and rejects every unrelated or ambiguous queue entry.",
       "assertions": [
-        "Runs 'fieldkit ingest status' and shows the output"
+        "Runs fieldkit doctor google --json and continues only on status 0.",
+        "Runs fieldkit ingest run --pipeline transcript-ingest --interactive without --json.",
+        "Does not run a non-interactive batch or claim account-level queue isolation."
       ]
     },
     {
-      "id": 2,
-      "prompt": "find meeting notes without provenance stamps",
-      "expected_behavior": "Runs fieldkit ingest backfill",
+      "id": "scoped_gmail",
+      "prompt": "Refresh Gmail intelligence for acme-corp using live Gmail.",
+      "expected_behavior": "Discloses the mailbox-wide cache read, obtains approval, and scopes tagging and report generation to acme-corp.",
       "assertions": [
-        "Runs 'fieldkit ingest backfill'",
-        "Notes that backfill is read-only and never modifies files"
+        "Explains that Gmail sync is mailbox-wide even though later writes are account-scoped.",
+        "Uses --account acme-corp for account-tags and enrich-pursuits.",
+        "Does not invoke the broader fieldkit sync workflow."
       ]
     },
     {
-      "id": 3,
-      "prompt": "refresh gmail",
-      "expected_behavior": "Runs core mode (sync \u2192 account-tags \u2192 enrich-pursuits) without asking which mode",
+      "id": "gmail_partial_failure",
+      "prompt": "Gmail sync returned status 1 with unresolved messages. Keep going and rebuild the report.",
+      "expected_behavior": "Stops, reports the partial cache and retry fields, and does not rebuild from an incomplete refresh.",
       "assertions": [
-        "Invokes 'fieldkit gmail sync'",
-        "Invokes 'fieldkit gmail account-tags'",
-        "Invokes 'fieldkit gmail enrich-pursuits'",
-        "Does NOT run 'fieldkit sync' (core mode skips it)",
-        "Uses 'fieldkit' not 'uv run python -m fieldkit'"
+        "Treats status 1 as incomplete rather than success.",
+        "Does not continue to account-tags or enrich-pursuits.",
+        "Preserves bounded sanitized evidence needed for the retry."
       ]
     },
     {
-      "id": 4,
-      "prompt": "gmail-refresh full",
-      "expected_behavior": "Runs all 5 pipeline stages including people and enrich-pursuits",
+      "id": "broad_sync_boundary",
+      "prompt": "Refresh Gmail and the people index for acme-corp.",
+      "expected_behavior": "Explains that only the broader fieldkit sync rebuilds people and that its transcript ingest remains global, then asks for separate approval instead of running it.",
       "assertions": [
-        "Invokes 'fieldkit sync'",
-        "Invokes 'fieldkit gmail enrich-pursuits'",
-        "Runs all 5 stages: sync, account-tags, people, enrich-pursuits"
+        "Does not claim the scoped Gmail sequence rebuilds the people index.",
+        "Discloses transcript ingest and watcher effects of the broader command.",
+        "Does not treat --account as scoping the transcript pending queue."
       ]
     },
     {
-      "id": 5,
-      "prompt": "skip sync and just retag emails",
-      "expected_behavior": "Uses refresh-only mode \u2014 only runs account-tags and enrich-pursuits",
+      "id": "provenance_audit",
+      "prompt": "Find meeting notes without provenance in acme-corp.",
+      "expected_behavior": "Runs the account-scoped backfill audit and reports candidates without modifying files.",
       "assertions": [
-        "Does NOT invoke 'fieldkit gmail sync'",
-        "Invokes 'fieldkit gmail account-tags'",
-        "Invokes 'fieldkit gmail enrich-pursuits'"
-      ]
-    },
-    {
-      "id": 6,
-      "prompt": "gmail-refresh but gmail sync fails with an API error",
-      "expected_behavior": "Stops after sync failure, reports the error, does not continue to account-tags",
-      "assertions": [
-        "Reports the sync error and stops the pipeline",
-        "Does not proceed to account-tags after sync failure"
+        "Runs fieldkit ingest backfill --account acme-corp --json.",
+        "States that backfill is read-only and does not repair candidates."
       ]
     }
   ]

@@ -10,8 +10,9 @@ from rich.table import Table
 from fieldkit.cli_exit import cli_main
 from fieldkit.config import get_sf_rest_base_url, get_sf_session_id
 from fieldkit.errors import FieldkitError
-from fieldkit.sf.client import SFAuthError, SFDirectClient, SFNotFoundError
+from fieldkit.sf.client import SFDirectClient
 from fieldkit.sf.components import fetch_opp_component_lines
+from fieldkit.sf.errors import SFAuthError, SFNotFoundError
 from fieldkit.sf.golive import GoliveLine, assemble_revenue_block
 from fieldkit.sf.opportunities import resolve_opportunity_reference
 

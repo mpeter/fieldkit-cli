@@ -33,7 +33,7 @@ def _baseline() -> ProposedAction:
 
 
 def _enable_llm(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("NO_LLM", raising=False)
+    monkeypatch.delenv("FIELDKIT_NO_LLM", raising=False)
     monkeypatch.delenv("FIELDKIT_NO_LLM", raising=False)
 
 
@@ -52,7 +52,7 @@ def test_prompt_caps_and_escapes_untrusted_evidence() -> None:
 
 
 def test_no_llm_returns_deterministic_without_call(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("NO_LLM", "1")
+    monkeypatch.setenv("FIELDKIT_NO_LLM", "1")
     synthesis = MagicMock()
 
     result = decide_with_llm(_item(), _baseline(), "context", synthesize_fn=synthesis, wrap_fn=wrap_user_data)

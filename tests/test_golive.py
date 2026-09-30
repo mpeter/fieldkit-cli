@@ -9,8 +9,8 @@ from click.testing import CliRunner
 from fieldkit.__main__ import main
 from fieldkit.commands.golive.cli import cli
 from fieldkit.errors import FieldkitError
-from fieldkit.sf.client import SFAuthError, SFNotFoundError
 from fieldkit.sf.components import Bucket, ComponentLine
+from fieldkit.sf.errors import SFAuthError, SFNotFoundError
 from fieldkit.sf.golive import assemble_revenue_block
 
 pytestmark = pytest.mark.unit
@@ -215,7 +215,9 @@ def test_cli_auth_error_uses_exit_2() -> None:
         result = runner.invoke(cli, [_OPP_ID])
 
     assert result.exit_code == 2
-    assert "Auth error" in result.output
+    assert "Salesforce authentication failed" in result.output
+    assert "fieldkit auth sf" in result.output
+    assert "expired" not in result.output
 
 
 def test_cli_unresolved_opportunity_uses_exit_3() -> None:

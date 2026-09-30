@@ -2,39 +2,60 @@
   "skill_name": "task-management",
   "static_checks": [
     {
-      "id": "tasks_md",
+      "id": "workspace_root",
       "type": "contains",
-      "pattern": "TASKS.md",
-      "message": "Must manage via TASKS.md"
+      "pattern": "configured fieldkit workspace root",
+      "message": "TASKS.md must resolve from the configured workspace, not the source checkout"
     },
     {
-      "id": "sections",
+      "id": "review_before_write",
       "type": "contains_all",
       "patterns": [
-        "Active",
-        "Waiting On"
+        "Show the exact proposed diff",
+        "operator approves that diff"
       ],
-      "message": "Must maintain Active and Waiting On sections"
+      "message": "Local task changes must be previewed and confirmed"
     },
     {
-      "id": "account_tagging",
+      "id": "sync_boundary",
       "type": "contains_all",
       "patterns": [
-        "account name",
-        "slug"
+        "<!-- task-sync:start -->",
+        "<!-- task-sync:end -->",
+        "separate prerequisites"
       ],
-      "message": "Must instruct tagging tasks with the account name and slug (workspace-agnostic)"
+      "message": "Local task management must preserve the task-sync boundary and separate approval"
+    },
+    {
+      "id": "evidence_boundary",
+      "type": "contains_all",
+      "patterns": [
+        "Unknown owners and due dates remain unknown",
+        "infer qualification gaps"
+      ],
+      "message": "Task proposals must not invent evidence"
     }
   ],
   "evals": [
     {
       "id": 0,
-      "prompt": "add a task to follow up with Chandra at <account-slug> next week",
-      "expected_behavior": "Adds a dated follow-up task to the TASKS.md Active section under <account-slug>",
+      "prompt": "Add a task to follow up with a contact at acme-corp next week.",
+      "expected_behavior": "Resolves the configured workspace, asks for the exact date if it is material, and previews an Active TASKS.md diff without writing or synchronizing Google Tasks until the relevant confirmation is given.",
       "assertions": [
-        "Writes the new task to TASKS.md",
-        "Places it in the Active section under the <account-slug> account",
-        "Includes a target date (next week)"
+        "Uses TASKS.md under the configured fieldkit workspace rather than the source checkout",
+        "Does not invent which date next week or claim a source-supported commitment",
+        "Shows an exact local diff and waits for confirmation before writing",
+        "Does not treat local approval as confirmation for a Google Tasks write"
+      ]
+    },
+    {
+      "id": 1,
+      "prompt": "What's on my plate? Do not change anything.",
+      "expected_behavior": "Reads and summarizes the local task sections without refreshing integrations, moving entries, pruning history, or writing files.",
+      "assertions": [
+        "Presents Today before Active, Waiting On, and Backlog",
+        "Uses explicit dates only when calling an item overdue",
+        "Performs no local or external write and requests no unnecessary confirmation"
       ]
     }
   ]

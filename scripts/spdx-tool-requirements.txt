@@ -1,0 +1,4 @@
+# QA-only SPDX tools; hashes and versions must match uv.lock.
+# Dependency review installs this file from the immutable trusted base commit.
+boolean-py==5.0 --hash=sha256:ef28a70bd43115208441b53a045d1549e2f0ec6e3d08a9d142cbc41c1938e8d9
+license-expression==30.4.4 --hash=sha256:421788fdcadb41f049d2dc934ce666626265aeccefddd25e162a26f23bcbf8a4

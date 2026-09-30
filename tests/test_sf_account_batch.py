@@ -17,7 +17,8 @@ from fieldkit.commands.sf.account import (
     _SOSL_CHUNK_SIZE,
     _resolve_account_id_by_pursuit_scan,
 )
-from fieldkit.sf.client import SFAPIError, SFAuthError
+from fieldkit.errors import FieldkitError
+from fieldkit.sf.errors import SFAPIError, SFAuthError
 
 pytestmark = pytest.mark.unit
 
@@ -87,17 +88,20 @@ def test_empty_pursuit_dir_returns_none(tmp_path: Path) -> None:
     mock_client.sosl_search.assert_not_called()
 
 
-def test_all_invalid_opp_ids_returns_none(tmp_path: Path) -> None:
-    """Returns None without calling sosl_search when all opp IDs fail _SF_ID_RE.fullmatch."""
+def test_invalid_opp_ids_reject_scan_without_provider_calls(tmp_path: Path) -> None:
+    """An invalid local ID is not a completed scan with no matching account."""
     pursuits_dir = _make_pursuits_dir(tmp_path)
     _write_pursuit(pursuits_dir, "deal-a", _FM_INVALID_OPP_ID)
     _write_pursuit(pursuits_dir, "deal-b", _FM_NO_OPP_ID)
 
     mock_client = MagicMock()
-    with patch("fieldkit.commands.sf.account.get_fieldkit_home", return_value=tmp_path):
-        result = _resolve_account_id_by_pursuit_scan("acme", {}, mock_client)
+    with (
+        patch("fieldkit.commands.sf.account.get_fieldkit_home", return_value=tmp_path),
+        pytest.raises(FieldkitError, match="Salesforce pursuit opportunity identity is invalid") as caught,
+    ):
+        _resolve_account_id_by_pursuit_scan("acme", {}, mock_client)
 
-    assert result is None
+    assert "NEEDS-LOOKUP" not in str(caught.value)
     mock_client.sosl_search.assert_not_called()
 
 
@@ -130,18 +134,19 @@ def test_sosl_search_returns_account_id(tmp_path: Path) -> None:
     assert result == "001abc123456789ABC"
 
 
-def test_sfapi_error_caught_returns_none(tmp_path: Path) -> None:
-    """SFAPIError from sosl_search is caught (continue to next chunk); returns None."""
+def test_sfapi_error_propagates(tmp_path: Path) -> None:
+    """SFAPIError from a provider lookup must not become a successful no-match."""
     pursuits_dir = _make_pursuits_dir(tmp_path)
     _write_pursuit(pursuits_dir, "deal-a", _FM_WITH_OPP_ID)
 
     mock_client = MagicMock()
     mock_client.sosl_search.side_effect = SFAPIError("SOSL query failed")
 
-    with patch("fieldkit.commands.sf.account.get_fieldkit_home", return_value=tmp_path):
-        result = _resolve_account_id_by_pursuit_scan("acme", {}, mock_client)
-
-    assert result is None
+    with (
+        patch("fieldkit.commands.sf.account.get_fieldkit_home", return_value=tmp_path),
+        pytest.raises(SFAPIError, match="SOSL query failed"),
+    ):
+        _resolve_account_id_by_pursuit_scan("acme", {}, mock_client)
     mock_client.sosl_search.assert_called_once()
 
 

@@ -39,12 +39,16 @@ def test_sosl_injection_multi_word_phrase_quoted() -> None:
     assert _quote_keyword("Example Vendor") == '"Example Vendor"'
 
 
-def test_sosl_injection_injection_chars_stripped() -> None:
+def test_sosl_injection_injection_chars_stripped(capsys: pytest.CaptureFixture[str]) -> None:
     from fieldkit.sf.client import _quote_keyword
 
     result = _quote_keyword('acme"} RETURNING User')
     assert '"} RETURNING User' not in result
     assert "acme" in result
+    captured = capsys.readouterr()
+    assert "SOSL keyword contained unsupported characters and was sanitized" in captured.err
+    assert 'acme"} RETURNING User' not in captured.err
+    assert result not in captured.err
 
 
 def test_sosl_injection_ampersand_preserved_at_and_t() -> None:
@@ -88,14 +92,19 @@ def test_sosl_injection_all_injection_chars_stripped() -> None:
 
 def _sql_limit_bounds_check_make_dbs(tmp_path: Path) -> tuple[sqlite3.Connection, Path]:
     """Return (pipeline_conn, gmail_db_path) for test use."""
+    from fieldkit.gmail.publication import GMAIL_QUERY_READY_KEY, apply_gmail_page, initialize_gmail_publication
+    from fieldkit.sqlite_publication import SQLiteMutationConnection
+
     gmail_db = tmp_path / "gmail.db"
-    conn = sqlite3.connect(gmail_db)
-    conn.execute(
-        "CREATE TABLE messages (message_id TEXT, from_addr TEXT, subject TEXT, "
-        "body_html TEXT, body_plain TEXT, date_epoch INTEGER)"
-    )
-    conn.commit()
-    conn.close()
+    initialize_gmail_publication(gmail_db)
+
+    def mark_ready(connection: SQLiteMutationConnection) -> None:
+        connection.execute(
+            "INSERT OR REPLACE INTO sync_state(key, value) VALUES (?, 'true')",
+            (GMAIL_QUERY_READY_KEY,),
+        )
+
+    apply_gmail_page(gmail_db, mark_ready)
     # pipeline.db in-memory
     pipeline_conn = sqlite3.connect(":memory:")
     pipeline_conn.execute(
@@ -323,8 +332,8 @@ def test_prompt_injection_call_sites_narrative_prompt_wraps_all_sections() -> No
     """_build_narrative_prompt() must wrap all three CRM-sourced sections."""
     from datetime import date
 
-    from fieldkit.commands.pipeline.render import _build_narrative_prompt
     from fieldkit.llm.sanitize import UNTRUSTED_DATA_PREAMBLE
+    from fieldkit.pipeline.render import _build_narrative_prompt
 
     result = _build_narrative_prompt(
         rows=[],
@@ -347,28 +356,29 @@ def test_prompt_injection_call_sites_narrative_prompt_wraps_all_sections() -> No
 # ── TestSFErrorSanitization (flattened) ─────────────────────────────────────
 
 
-def test_sf_request_json_error_extracts_message() -> None:
-    from fieldkit.sf.client import _safe_error_detail
+def test_sf_request_json_error_does_not_extract_message() -> None:
+    from fieldkit.sf._responses import _safe_error_detail
 
     resp = MagicMock()
     resp.json.return_value = [{"message": "Session expired", "errorCode": "INVALID_SESSION_ID"}]
     resp.headers = {}
-    assert _safe_error_detail(resp) == "Session expired"
+    resp.status_code = 400
+    assert _safe_error_detail(resp) == "Request rejected; check the request data and permissions."
 
 
-def test_sf_request_html_response_returns_content_type() -> None:
-    from fieldkit.sf.client import _safe_error_detail
+def test_sf_request_html_response_does_not_reflect_content_type() -> None:
+    from fieldkit.sf._responses import _safe_error_detail
 
     resp = MagicMock()
     resp.json.side_effect = ValueError("not JSON")
     resp.headers = {"content-type": "text/html; charset=utf-8"}
     result = _safe_error_detail(resp)
-    assert "text/html" in result
+    assert "text/html" not in result
     assert "Session" not in result  # no raw body
 
 
 def test_sf_request_no_raw_body_in_output() -> None:
-    from fieldkit.sf.client import _safe_error_detail
+    from fieldkit.sf._responses import _safe_error_detail
 
     resp = MagicMock()
     resp.json.side_effect = ValueError("not JSON")

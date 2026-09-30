@@ -32,6 +32,8 @@ exclude_docs: |
   adr/0008-shell-free-independent-completion-verification.md
   adr/0009-ingest-meeting-writebacks.md
   adr/0010-promote-approved-release-input.md
+  adr/0011-require-meeting-task-writeback.md
+  adr/0012-journal-prepared-ingest-output.md
   archive/
   audit/
   handoffs/

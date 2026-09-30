@@ -32,6 +32,27 @@ nothing for that tick.
 - **THEN** no issue MUST execute
 - **AND** the run status MUST record a skipped outcome with the error
 
+#### Scenario: Pull-request listing reaches its retrieval limit
+
+- **GIVEN** the open pull-request listing reaches the configured retrieval limit
+- **WHEN** completeness of the busy set cannot be established
+- **THEN** no issue MUST execute in that tick
+- **AND** the diagnostic MUST identify the potentially truncated listing
+
+#### Scenario: A file entry is malformed
+
+- **GIVEN** a pull-request file entry is not an object with a nonempty path
+- **WHEN** the driver reads either the initial listing or paginated file results
+- **THEN** it MUST reject the busy set rather than silently omit that entry
+- **AND** no issue MUST execute in that tick
+
+#### Scenario: Paginated file observations are incomplete or inconsistent
+
+- **GIVEN** a pull request requires paginated file retrieval
+- **WHEN** the response reaches the API file limit or omits a path already observed
+- **THEN** the driver MUST reject the uncertain busy set
+- **AND** no issue MUST execute in that tick
+
 ### Requirement: The driver MUST honor `depends_on` frontmatter
 
 The driver MUST honor optional `depends_on: [NNNN, ...]` issue numbers in a
@@ -57,9 +78,11 @@ A nonexistent referenced issue MUST be treated as open and logged.
 The driver MUST select only work orders with pairwise-disjoint `covers` sets
 within one tick. When `driver.max_concurrent` exceeds one, it MAY execute up to
 that many selected issues in separate worktrees. Selection priority MUST remain
-oldest-first by issue number. A missing or empty `covers` field, or an
-OpenSpec/Speckit-sourced issue, MUST be treated as covering all files and can
-run only when no other in-flight or batched work conflicts.
+oldest-first by issue number. Every admitted prompt MUST declare nonempty
+`covers` authority for its edit sites. WorkOrder frontmatter and OpenSpec/Speckit
+`driver.yaml` use the same contract; the prompt format alone MUST NOT make its
+covers universal. A prompt with missing or invalid covers MUST fail admission
+before execution rather than run with inferred unrestricted authority.
 
 #### Scenario: Disjoint work orders run together
 
@@ -82,30 +105,82 @@ run only when no other in-flight or batched work conflicts.
 - **WHEN** the driver tick runs
 - **THEN** it MUST select at most one eligible work order
 
-### Requirement: The work-order execution agent MUST resolve edit sites by quoted snippet, not line number
+#### Scenario: OpenSpec prompts declare disjoint authority
 
-The work-order execution agent MUST locate each edit site by searching the
-target file for the work order's quoted snippet. A cited line number is
-advisory; a mismatch between the cited line and the snippet's actual location
-MUST NOT halt the run. The execution agent MUST stop and exit with an error
-naming the file and snippet when the snippet is absent from the file or matches
-more than one location.
+- **GIVEN** two OpenSpec prompts have validated, pairwise-disjoint covers in their frozen `driver.yaml` contracts
+- **AND** both are otherwise eligible and the concurrency limit is 2
+- **WHEN** the driver selects work for the tick
+- **THEN** both MAY be selected without treating their format as covering all files
+
+#### Scenario: A prompt omits covers authority
+
+- **GIVEN** a prompt declares edit sites but omits nonempty covers
+- **WHEN** the driver validates the frozen contract
+- **THEN** it MUST reject the prompt before agent launch
+- **AND** it MUST NOT infer unrestricted execution authority
+
+### Requirement: The driver MUST validate structured edit sites at the frozen execution revision
+
+Each WorkOrder prompt MUST carry a version-1 `edit_sites` object in its
+frontmatter. OpenSpec and Speckit prompt directories MUST carry edit-site and
+done-check authority in `driver.yaml`. Every edit-site entry MUST name a safe candidate-relative path and an
+exact, nonempty anchor. The driver MUST freeze `origin/main`, read scheduling
+fields and target blobs from that commit, prove each anchor occurs exactly once,
+and create the execution worktree from the same commit. It MUST reject missing,
+ambiguous, unsafe, malformed, or unavailable input before launching an agent.
+Line numbers and Markdown fences are prose only and MUST NOT become inferred
+execution authority.
 
 #### Scenario: Drifted line number with a unique snippet
 
-- **GIVEN** a work order cites a snippet at line 128
-- **AND** the snippet now appears exactly once at line 133
-- **WHEN** the work-order execution agent executes the work order
-- **THEN** it MUST apply the edit at line 133 and continue
+- **GIVEN** a prompt's prose cites an old line number
+- **AND** its structured anchor occurs exactly once at a different line in the frozen revision
+- **WHEN** the driver validates the prompt
+- **THEN** it MUST admit the prompt without using the stale line number
 
 #### Scenario: Snippet missing
 
-- **GIVEN** a work order cites a snippet that no longer exists in the file
-- **WHEN** the work-order execution agent executes the work order
-- **THEN** it MUST stop and exit with an error naming the file and snippet
+- **GIVEN** a structured anchor no longer exists in its target
+- **WHEN** the driver validates the prompt
+- **THEN** it MUST not launch the execution agent
+- **AND** it MUST record a non-passing reason naming the relative path
 
 #### Scenario: Ambiguous snippet
 
-- **GIVEN** a work order cites a snippet that appears twice in the file
-- **WHEN** the work-order execution agent executes the work order
-- **THEN** it MUST stop and exit with an error naming the file and snippet
+- **GIVEN** a structured anchor appears twice in its target
+- **WHEN** the driver validates the prompt
+- **THEN** it MUST not launch the execution agent
+- **AND** it MUST record a non-passing reason naming the relative path
+
+### Requirement: Driver execution MUST use a packaged portable instruction source
+
+The driver MUST construct the unattended OpenCode invocation from the executor
+instructions shipped inside the fieldkit package. It MUST use OpenCode's
+built-in build agent in plugin-free mode and MUST NOT depend on a repository-local
+agent definition excluded from the public tree.
+
+#### Scenario: Fresh checkout has no local agent configuration
+
+- **GIVEN** fieldkit is installed from a public artifact
+- **AND** the checkout contains no `.claude` or `.opencode` agent definition
+- **WHEN** the driver launches an eligible prompt
+- **THEN** the invocation MUST use the packaged executor instructions
+- **AND** it MUST explicitly select the built-in build agent
+
+### Requirement: Blocked and uncertain ticks MUST remain visibly non-passing
+
+The driver MUST expose every blocked or uncertain nonempty tick as non-passing.
+An empty queue MAY exit successfully. A source-binding failure, invalid prompt,
+spend denial, busy-set failure, unresolved dependency, or all-blocked queue MUST
+expose its reason in human and JSON output and MUST return a nonzero exit status.
+Retryable scheduling failures MUST return partial/retryable status; authentication
+failures MUST propagate to the canonical authentication exit status (`2`), rather
+than being converted into a retryable scheduling result. Each candidate skipped by scheduling MUST receive its own persisted
+status record.
+
+#### Scenario: All candidates are blocked
+
+- **GIVEN** agent-ready issues exist but none is eligible
+- **WHEN** `fieldkit driver run` completes
+- **THEN** output MUST name the blocking reason
+- **AND** the command MUST return partial/retryable status

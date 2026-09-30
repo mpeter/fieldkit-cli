@@ -6,14 +6,17 @@ Patch httpx.Client with a mock whose .request side_effect controls the sequence 
 """
 
 import logging
+import traceback
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 
-import fieldkit.sf.client as sf_client
-from fieldkit.sf.client import SFAPIError, SFAuthError, SFDataAccessError, SFDirectClient, SFNotFoundError
+from fieldkit.config.retry import RETRY_MAX_ATTEMPTS, RETRY_TRANSIENT_STATUSES
+from fieldkit.sf import _responses, _transport
+from fieldkit.sf.client import SFDirectClient
+from fieldkit.sf.errors import SFAPIError, SFAuthError, SFDataAccessError, SFNotFoundError
 
 pytestmark = pytest.mark.unit
 
@@ -21,11 +24,72 @@ pytestmark = pytest.mark.unit
 @pytest.fixture(autouse=True)
 def _zero_retry_waits(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep retry counts and error paths while avoiding real backoff in unit tests."""
+    with_policy = vars(_transport._sf_request_idempotent)["with_policy"]
+    assert callable(with_policy)
+    request = with_policy(wait_min=0, wait_max=0)
+    assert callable(request)
     monkeypatch.setattr(
-        sf_client,
+        _transport,
         "_sf_request_idempotent",
-        sf_client._sf_request_idempotent.with_policy(wait_min=0, wait_max=0),
+        request,
     )
+    unsafe_with_policy = vars(_transport._sf_request_unsafe)["with_policy"]
+    assert callable(unsafe_with_policy)
+    unsafe_request = unsafe_with_policy(wait_min=0, wait_max=0)
+    assert callable(unsafe_request)
+    monkeypatch.setattr(_transport, "_sf_request_unsafe", unsafe_request)
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout],
+)
+@pytest.mark.parametrize("method", ["GET", "PATCH", "POST"])
+def test_transport_exhaustion_is_private_and_obeys_method_policy(
+    failure: type[httpx.RequestError], method: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    error = failure("private-transport-sentinel")
+    error.__cause__ = ValueError("private-cause-sentinel")
+    transport = MagicMock(spec=httpx.Client)
+    transport.request.side_effect = error
+    url = "https://private-url.example.com"
+    with (
+        patch("httpx.Client", return_value=transport),
+        SFDirectClient(session_id="private-cookie-sentinel", base_url=url) as client,
+        pytest.raises(SFAPIError, match="SF request failed") as caught,
+    ):
+        client._request_with_retry(method, url)
+    assert str(caught.value) == "SF request failed; check Salesforce availability and configuration."
+    expected = (
+        RETRY_MAX_ATTEMPTS if method != "POST" or issubclass(failure, (httpx.ConnectError, httpx.ConnectTimeout)) else 1
+    )
+    assert transport.request.call_count == expected
+    assert caught.value.__cause__ is None
+    assert "private-" not in "".join(traceback.format_exception(caught.value)) + caplog.text
+
+
+@pytest.mark.parametrize("status", sorted(RETRY_TRANSIENT_STATUSES))
+@pytest.mark.parametrize("method", ["GET", "PATCH", "POST"])
+def test_http_retry_counts_source_shared_policy(status: int, method: str) -> None:
+    transport = MagicMock(spec=httpx.Client)
+    transport.request.return_value = httpx.Response(status, text="private-body-sentinel")
+    with (
+        patch("httpx.Client", return_value=transport),
+        SFDirectClient(session_id="synthetic", base_url="https://crm.example.com") as client,
+        pytest.raises(SFAPIError, match="SF request failed") as caught,
+    ):
+        client._request_with_retry(method, "https://crm.example.com")
+    assert caught.value.__cause__ is None
+    assert transport.request.call_count == (1 if method == "POST" else RETRY_MAX_ATTEMPTS)
+
+
+def test_unexpected_json_decoder_error_keeps_traceback() -> None:
+    response = MagicMock(spec=httpx.Response)
+    response.headers = {"content-type": "application/json"}
+    response.json.side_effect = RuntimeError("decoder-programming-bug")
+    with pytest.raises(RuntimeError, match="decoder-programming-bug") as caught:
+        _responses._parse_json_response(response, "test")
+    assert "RuntimeError: decoder-programming-bug" in "".join(traceback.format_exception(caught.value))
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +206,26 @@ def test_sosl_search_sosl_search_empty_results() -> None:
     assert result == []
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"searchRecords": {"Id": "private-record"}},
+        {"searchRecords": [{"Id": "006SAFE"}, "private-member"]},
+    ],
+)
+def test_sosl_search_rejects_malformed_record_collections_without_payload(payload: object) -> None:
+    """Malformed provider data is retryable and never exposed in the exception."""
+    mock_instance = _make_mock_http_client(status_code=200, json_body=payload)
+    with (
+        patch("httpx.Client", return_value=mock_instance),
+        pytest.raises(SFAPIError, match="invalid response shape") as exc_info,
+    ):
+        _make_client().sosl_search("FIND {Private Customer} RETURNING Opportunity(Id)")
+
+    assert "private" not in str(exc_info.value).lower()
+
+
 def test_sosl_search_sosl_search_401_raises_auth_error() -> None:
     """sosl_search: HTTP 401 raises SFAuthError with re-auth guidance (historic regression)."""
     mock_instance = _make_mock_http_client(status_code=401)
@@ -161,12 +245,12 @@ def test_sosl_search_sosl_search_500_raises_api_error() -> None:
 def test_sosl_search_sosl_search_connection_error_raises_api_error() -> None:
     """sosl_search: httpx.ConnectError raises SFAPIError."""
     mock_instance = _make_mock_http_client(raise_connect_error=True)
-    with patch("httpx.Client", return_value=mock_instance), pytest.raises(SFAPIError, match="connection"):
+    with patch("httpx.Client", return_value=mock_instance), pytest.raises(SFAPIError, match="SF request failed"):
         _make_client().sosl_search("FIND {x}")
 
 
-def test_sosl_search_sosl_search_logs_query_and_count(caplog: pytest.LogCaptureFixture) -> None:
-    """sosl_search: logs the query terms and result count via the named logger."""
+def test_sosl_search_logs_count_without_query_payload(caplog: pytest.LogCaptureFixture) -> None:
+    """SOSL diagnostics retain counts without customer query terms."""
     mock_instance = _make_mock_http_client(
         status_code=200,
         json_body={"searchRecords": [{"Id": "1"}]},
@@ -177,15 +261,17 @@ def test_sosl_search_sosl_search_logs_query_and_count(caplog: pytest.LogCaptureF
         patch("httpx.Client", return_value=mock_instance),
     ):
         _make_client().sosl_search("FIND {Acme} IN ALL FIELDS RETURNING Opportunity(Id)")
-    assert "SOSL query" in caplog.text
-    assert "1" in caplog.text  # result count
+    assert "SOSL search started" in caplog.text
+    assert "1 record" in caplog.text
+    assert "Acme" not in caplog.text
+    assert "Opportunity(Id)" not in caplog.text
 
 
 def test_sosl_search_sosl_search_logs_error_status(caplog: pytest.LogCaptureFixture) -> None:
     """sosl_search: HTTP 503 (retried) emits WARNING log lines with the status code."""
 
     # 503 is a retried status — return it 3 times so retries are exhausted.
-    resp = _make_response(status_code=503, text_body="Service Unavailable")
+    resp = _make_response(status_code=503, text_body="private-response-sentinel")
     mock_instance = MagicMock()
     mock_instance.request.return_value = resp
 
@@ -198,6 +284,9 @@ def test_sosl_search_sosl_search_logs_error_status(caplog: pytest.LogCaptureFixt
         _make_client().sosl_search("FIND {x}")
     assert "503" in str(exc_info.value)
     assert "503" in caplog.text
+    assert "private-response-sentinel" not in caplog.text
+    assert _SID not in caplog.text
+    assert _BASE_URL not in caplog.text
 
 
 # ---------------------------------------------------------------------------
@@ -263,10 +352,10 @@ def test_fetch_record_fetch_record_cookie_header() -> None:
 @pytest.mark.parametrize(
     ("mock_kwargs", "exception", "message"),
     [
-        ({"status_code": 403}, SFDataAccessError, "Account 001ABC is not readable"),
-        ({"status_code": 400}, SFAPIError, "SF Account fetch failed with HTTP 400"),
-        ({"raise_connect_error": True}, SFAPIError, "SF connection failed"),
-        ({"raise_request_error": True}, SFAPIError, "SF request error"),
+        ({"status_code": 403}, SFDataAccessError, "Salesforce record is not readable"),
+        ({"status_code": 400}, SFAPIError, "SF record fetch failed with HTTP 400"),
+        ({"raise_connect_error": True}, SFAPIError, "SF request failed"),
+        ({"raise_request_error": True}, SFAPIError, "SF request failed"),
     ],
 )
 def test_fetch_sobject_errors_raise_public_exception_with_message(
@@ -317,6 +406,16 @@ def test_search_opportunities_search_opportunities_maps_fields() -> None:
 
     assert len(results) == 1
     opp = results[0]
+    assert "opportunity_id" in opp
+    assert "name" in opp
+    assert "stage" in opp
+    assert "close_date" in opp
+    assert "arr" in opp
+    assert "owner" in opp
+    assert "next_steps" in opp
+    assert "acv" in opp
+    assert "consulting_acv" in opp
+    assert "training_acv" in opp
     assert opp["opportunity_id"] == "006A1"
     assert opp["name"] == "Big Deal"
     assert opp["stage"] == "Proposal"
@@ -415,8 +514,12 @@ def test_search_opportunities_search_opportunities_null_currency_fields() -> Non
     mock_instance = _make_mock_http_client(status_code=200, json_body={"searchRecords": [rec]})
     with patch("httpx.Client", return_value=mock_instance):
         results = _make_client().search_opportunities(keywords=["Acme"], account_name="acme-corp")
-    assert results[0]["consulting_acv"] is None
-    assert results[0]["training_acv"] is None
+    assert len(results) == 1
+    opp = results[0]
+    assert "consulting_acv" in opp
+    assert "training_acv" in opp
+    assert opp["consulting_acv"] is None
+    assert opp["training_acv"] is None
 
 
 def test_search_opportunities_search_opportunities_multiple_keywords() -> None:
@@ -431,8 +534,8 @@ def test_search_opportunities_search_opportunities_multiple_keywords() -> None:
     assert " OR " in q
 
 
-def test_search_opportunities_search_opportunities_logs_account_and_count(caplog: pytest.LogCaptureFixture) -> None:
-    """search_opportunities logs account name and result count via named logger."""
+def test_search_opportunities_logs_counts_without_account_payload(caplog: pytest.LogCaptureFixture) -> None:
+    """Search diagnostics retain counts without account names or query terms."""
     rec = _search_opportunities_make_sf_record()
     mock_instance = _make_mock_http_client(status_code=200, json_body={"searchRecords": [rec]})
 
@@ -441,7 +544,8 @@ def test_search_opportunities_search_opportunities_logs_account_and_count(caplog
         patch("httpx.Client", return_value=mock_instance),
     ):
         _make_client().search_opportunities(keywords=["Acme"], account_name="acme-corp")
-    assert "acme-corp" in caplog.text
+    assert "acme-corp" not in caplog.text
+    assert "Acme" not in caplog.text
     assert "1" in caplog.text
 
 
@@ -605,7 +709,7 @@ def test_fetch_deal_splits_fetch_deal_splits_500_raises_api_error() -> None:
 def test_fetch_deal_splits_fetch_deal_splits_connection_error_raises_api_error() -> None:
     """fetch_deal_splits: httpx.ConnectError raises SFAPIError."""
     mock_instance = _make_mock_http_client(raise_connect_error=True)
-    with patch("httpx.Client", return_value=mock_instance), pytest.raises(SFAPIError, match="connection"):
+    with patch("httpx.Client", return_value=mock_instance), pytest.raises(SFAPIError, match="SF request failed"):
         _make_client().fetch_deal_splits(_FETCH_DEAL_SPLITS__OPP_ID)
 
 
@@ -718,7 +822,7 @@ def test_fetch_related_list_records_500_raises_api_error() -> None:
 def test_fetch_related_list_records_connection_error_raises_api_error() -> None:
     """fetch_related_list_records: httpx.ConnectError raises SFAPIError."""
     mock_instance = _make_mock_http_client(raise_connect_error=True)
-    with patch("httpx.Client", return_value=mock_instance), pytest.raises(SFAPIError, match="connection"):
+    with patch("httpx.Client", return_value=mock_instance), pytest.raises(SFAPIError, match="SF request failed"):
         _make_client().fetch_related_list_records(_RLR__PARENT_ID, _RLR__RELATED_LIST)
 
 
@@ -867,12 +971,14 @@ def test_resolve_account_id_by_keywords_sosl_query_contains_keywords_and_filter(
     assert "Consulting_Total_USD__c > 0 OR Training_Total_USD__c > 0" in sosl_query
 
 
-def test_resolve_account_id_by_keywords_api_error_returns_none() -> None:
-    """Returns None (does not raise) when SOSL fails with SFAPIError."""
+def test_resolve_account_id_by_keywords_api_error_propagates() -> None:
+    """A provider failure must not be mistaken for a completed no-match."""
     mock_http = _make_mock_http_client(status_code=500, text_body="server error")
-    with patch("httpx.Client", return_value=mock_http):
-        result = _make_client().resolve_account_id_by_keywords(keywords=["Bank of America"], account_name="acme-corp")
-    assert result is None
+    with (
+        patch("httpx.Client", return_value=mock_http),
+        pytest.raises(SFAPIError),
+    ):
+        _make_client().resolve_account_id_by_keywords(keywords=["Bank of America"], account_name="acme-corp")
 
 
 def test_resolve_account_id_by_keywords_first_record_with_account_id_wins() -> None:
@@ -886,6 +992,29 @@ def test_resolve_account_id_by_keywords_first_record_with_account_id_wins() -> N
     with patch("httpx.Client", return_value=mock_http):
         result = _make_client().resolve_account_id_by_keywords(keywords=["Acme"], account_name="acme-corp")
     assert result == "001FIRST"
+
+
+def test_resolve_account_id_diagnostics_exclude_customer_identifiers(caplog: pytest.LogCaptureFixture) -> None:
+    """Resolution diagnostics contain only operation state and counts."""
+    records = [
+        {"Id": "006PRIVATEA", "Account": {"Id": "001PRIVATEA"}},
+        {"Id": "006PRIVATEB", "Account": {"Id": "001PRIVATEB"}},
+    ]
+    mock_http = _make_mock_http_client(json_body={"searchRecords": records})
+    with (
+        caplog.at_level(logging.DEBUG, logger="fieldkit.sf.client"),
+        patch("httpx.Client", return_value=mock_http),
+    ):
+        result = _make_client().resolve_account_id_by_keywords(
+            keywords=["Private Customer"], account_name="private-customer"
+        )
+
+    assert result == "001PRIVATEA"
+    assert "private-customer" not in caplog.text
+    assert "Private Customer" not in caplog.text
+    assert "001PRIVATEA" not in caplog.text
+    assert "001PRIVATEB" not in caplog.text
+    assert "2 candidate" in caplog.text
 
 
 def test_resolve_account_id_by_keywords_resolve_account_id_uses_name_fields_scope() -> None:
@@ -956,26 +1085,28 @@ def test_fetch_account_by_id_uses_custom_fields() -> None:
 
 
 # ---------------------------------------------------------------------------
-# historic regression: _parse_json_response names the content-type on parse failure
+# Malformed provider JSON has fixed diagnostics; decoder bugs remain visible.
 # ---------------------------------------------------------------------------
 
 
 def test_parse_json_response_parse_failure_names_content_type() -> None:
-    """_parse_json_response: non-HTML unparseable body raises SFAPIError citing the actual content-type (historic regression)."""
-    from fieldkit.sf.client import _parse_json_response
+    """Malformed bodies and server-controlled headers never appear in diagnostics."""
+    from fieldkit.sf._responses import _parse_json_response
 
-    resp = httpx.Response(200, headers={"content-type": "application/xml"}, content=b"<not-json/>")
-    with pytest.raises(SFAPIError, match=r"application/xml") as exc_info:
+    resp = httpx.Response(200, headers={"content-type": "private-header-sentinel"}, content=b"private-body-sentinel")
+    with pytest.raises(SFAPIError, match=r"failed to parse JSON response") as exc_info:
         _parse_json_response(resp, "SOSL search")
-    assert "failed to parse JSON response" in str(exc_info.value)
+    assert str(exc_info.value) == "SF response: failed to parse JSON response"
+    assert exc_info.value.__cause__ is None
+    assert "private-" not in "".join(traceback.format_exception(exc_info.value))
 
 
 def test_parse_json_response_rejects_non_dict_body() -> None:
     """_parse_json_response: a JSON array body (SF error-response shape) raises SFAPIError, not a silent bad cast."""
-    from fieldkit.sf.client import _parse_json_response
+    from fieldkit.sf._responses import _parse_json_response
 
     resp = httpx.Response(200, headers={"content-type": "application/json"}, json=[{"message": "bad request"}])
-    with pytest.raises(SFAPIError, match=r"expected a JSON object response, got list"):
+    with pytest.raises(SFAPIError, match=r"expected a JSON object response"):
         _parse_json_response(resp, "SOSL search")
 
 

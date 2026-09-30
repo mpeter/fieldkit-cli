@@ -6,25 +6,24 @@ idempotency judgement, which is the point:
     transient_retry(predicate, logger)   idempotent calls only — retries connect
                                          failures, timeouts, and 429/5xx.
     connect_retry(logger)                non-idempotent calls — retries ONLY
-                                         connect-phase failures, where the request
-                                         provably never reached the server.
+                                         ConnectError and ConnectTimeout only.
 
 Retrying is at-least-once. A timeout or lost response *after* the request has been
-transmitted does not prove the server did not act on it, so anything that creates or
-mutates server-side state must use ``connect_retry``.
+transmitted does not prove the server did not act on it. Operations whose effects
+are not harmless to repeat must use ``connect_retry``; absolute field assignments
+may use ``transient_retry`` when repeating them preserves the intended state.
 
-Per-attempt logging is baked in and cannot be disabled. Eight of the nine retry sites
-that existed before this module omitted it; a convention that depends on authors
-remembering an optional argument has already been shown to fail here.
+Per-attempt logging is baked in and cannot be disabled, so every caller reports
+retries without relying on an optional logging argument.
 
-Two constraints on this module (design D3):
+Two constraints on this module:
 
 1. It MUST NOT import a third-party API client. ``httpx`` is imported for the
    connect-phase exception types only; ``googleapiclient``, ``litellm``, and ``openai``
    stay out. That is what keeps the domain predicates in their own domain modules.
 2. It MUST NOT be re-exported from ``fieldkit.config.__init__``. ``fieldkit.config`` is
    a pure foundation imported on every CLI invocation and today pulls neither ``httpx``
-   nor ``tenacity`` (232ms and 51ms cumulative). Import this module directly:
+   nor ``tenacity``. Import this module directly:
    ``from fieldkit.config.retry import connect_retry``.
 """
 
@@ -34,7 +33,7 @@ from collections.abc import Callable
 from typing import ParamSpec, TypeVar
 
 import httpx
-from tenacity import RetryError, before_sleep_log, retry, retry_if_exception, stop_after_attempt, wait_exponential
+from tenacity import RetryCallState, RetryError, retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 # ---------------------------------------------------------------------------
 # Policy
@@ -56,8 +55,8 @@ RETRY_TRANSIENT_STATUSES = frozenset({429, 500, 502, 503, 504})
 rather than declaring their own set."""
 
 _CONNECT_EXCEPTIONS = (httpx.ConnectError, httpx.ConnectTimeout)
-"""Failures that occur before the request reaches the server, so replaying is safe
-even for a non-idempotent call."""
+"""Connection-failure categories allowed by the connect-only retry policy.
+Their classification does not establish exactly-once server execution."""
 
 
 # ---------------------------------------------------------------------------
@@ -100,11 +99,14 @@ def _build(
     _logger, _attempts, _wait_min, _wait_max = logger, attempts, wait_min, wait_max
 
     def decorate(fn: Callable[_P, _R]) -> Callable[_P, _R]:
+        def report_retry(state: RetryCallState) -> None:
+            logger.warning("%s retrying after failed attempt %d", fn.__qualname__, state.attempt_number)
+
         retrying = retry(
             stop=stop_after_attempt(attempts),
             wait=wait_exponential(multiplier=1, min=wait_min, max=wait_max),
             retry=retry_if_exception(predicate),
-            before_sleep=before_sleep_log(logger, logging.WARNING),
+            before_sleep=report_retry,
         )(fn)
 
         @functools.wraps(fn)
@@ -117,7 +119,7 @@ def _build(
                     raise
                 # The operator-visible report. Emitted here, by the factory, so it does
                 # not depend on how a calling module formats its own error message.
-                logger.error("%s failed after %d attempts: %s", fn.__qualname__, attempts, exc)
+                logger.error("%s failed after %d attempts", fn.__qualname__, attempts)
                 exc.add_note(f"{fn.__qualname__} failed after {attempts} attempts")
                 # Re-raise from the exception's OWN cause, not `from None`. Both hide
                 # tenacity's RetryError from the traceback, but `from None` also nulls
@@ -148,7 +150,7 @@ def _build(
 
 
 def _is_connect_failure(exc: BaseException) -> bool:
-    """True for failures that occurred before the request reached the server."""
+    """True for the connection-failure categories allowed by shared policy."""
     return isinstance(exc, _CONNECT_EXCEPTIONS)
 
 
@@ -167,10 +169,10 @@ def transient_retry(
 ) -> Callable[[Callable[_P, _R]], Callable[_P, _R]]:
     """Retry a transient failure. **Idempotent calls only.**
 
-    Do not use this on anything that creates or mutates server-side state: the
-    predicate necessarily matches failures that occur after the request was
-    transmitted, so a retry can repeat an effect the server already applied. Use
-    ``connect_retry`` for those.
+    Use only when repeating the operation is harmless, including absolute field
+    assignments that preserve the intended state. A retry can repeat an effect
+    already applied by the server. Operations that create resources or otherwise
+    have non-repeatable effects must use ``connect_retry`` instead.
 
     Args:
         predicate: Classifies an exception as transient. Lives in the caller's domain
@@ -194,8 +196,8 @@ def connect_retry(
     """Retry only a failure to connect. **Required for non-idempotent calls.**
 
     Retries ``httpx.ConnectError`` and ``httpx.ConnectTimeout`` only. A read timeout,
-    a mid-response protocol error, or any 5xx means the request reached the server and
-    may already have taken effect, so none of them is retried here.
+    a mid-response protocol error, or any 5xx does not prove that the operation had
+    no effect, so none of them is retried here.
 
     This narrows the duplicate-write window; it does not eliminate it. A connection can
     in principle be established and lost before any response. Closing that fully needs

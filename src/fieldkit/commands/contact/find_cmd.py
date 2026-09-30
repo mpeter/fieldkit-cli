@@ -171,6 +171,12 @@ def cli(query: str, db: str | None, affiliations: bool, output_json: bool) -> No
 
         try:
             result = resolve(query, db_path)
+        except FileNotFoundError:
+            click.echo(
+                "Error: people index database not found. Run 'fieldkit sync' to build it first.",
+                err=True,
+            )
+            raise SystemExit(EXIT_PARTIAL) from None
         except sqlite3.OperationalError as exc:
             if "no such table: people" in str(exc):
                 click.echo(

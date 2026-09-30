@@ -1,10 +1,19 @@
-"""Shared sentinel types for the morning brief pipeline.
-
-Moved from ``commands/watch/_morning_brief_types.py`` (watch-domain-migration,
-implementation change slice 2.4). No Click or config dependencies — stdlib only.
-"""
+"""Shared source availability and publication results for the morning brief."""
 
 from dataclasses import dataclass
+
+from fieldkit.watch.status import WatcherRunResult
+
+
+@dataclass(frozen=True)
+class BriefWriteResult:
+    """Whether this invocation published a nonempty artifact, and its overall status."""
+
+    written: bool
+    run: WatcherRunResult
+    records_checked: int
+    alerts_generated: int
+    failures: int
 
 
 @dataclass(frozen=True)

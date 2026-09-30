@@ -19,8 +19,8 @@ from pathlib import Path
 from typing import Any
 
 from fieldkit.config.retry import RETRY_TRANSIENT_STATUSES, transient_retry
-from fieldkit.errors import FieldkitError
-from fieldkit.google_oauth import refresh_google_credentials
+from fieldkit.errors import AuthError, FieldkitError
+from fieldkit.google_oauth import build_google_service, refresh_google_credentials
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +68,12 @@ class GeminiDocContent:
 # ---------------------------------------------------------------------------
 
 
+def _build_service(api: str, version: str, token_path: Path | None) -> Any:
+    """Build an optional Google client with a bounded HTTP transport."""
+    credentials = _get_creds(token_path)
+    return build_google_service(api, version, credentials)
+
+
 def get_docs_service(token_path: Path | None = None) -> Any:
     """Return an authenticated Google Docs v1 service.
 
@@ -79,12 +85,10 @@ def get_docs_service(token_path: Path | None = None) -> Any:
         A ``googleapiclient.discovery.Resource`` for the Docs v1 API.
 
     Raises:
-        FileNotFoundError: If token_path does not exist.
+        AuthError: If token_path does not exist.
         google.auth.exceptions.RefreshError: If the token cannot be refreshed.
     """
-    from googleapiclient.discovery import build
-
-    return build("docs", "v1", credentials=_get_creds(token_path))
+    return _build_service("docs", "v1", token_path)
 
 
 def _get_creds(token_path: Path | None = None) -> Any:
@@ -96,17 +100,15 @@ def _get_creds(token_path: Path | None = None) -> Any:
 
         token_path = get_google_token_path()
 
-    if not token_path.exists():
-        raise FileNotFoundError(
-            f"OAuth token not found at {token_path}. Run 'fieldkit gmail sync' once to complete the Google OAuth flow."
-        )
-
     from fieldkit.config import GOOGLE_OAUTH_SCOPES
 
-    creds: Credentials = Credentials.from_authorized_user_file(  # type: ignore[no-untyped-call]
-        str(token_path),
-        scopes=GOOGLE_OAUTH_SCOPES,
-    )
+    try:
+        creds: Credentials = Credentials.from_authorized_user_file(  # type: ignore[no-untyped-call]
+            str(token_path),
+            scopes=GOOGLE_OAUTH_SCOPES,
+        )
+    except FileNotFoundError:
+        raise AuthError("Google credentials are missing; run 'fieldkit auth google' and retry.") from None
     if creds.expired and creds.refresh_token:
         refresh_google_credentials(creds, token_path)
     return creds
@@ -124,9 +126,7 @@ def get_drive_service(token_path: Path | None = None) -> Any:
     Returns:
         A ``googleapiclient.discovery.Resource`` for the Drive v3 API.
     """
-    from googleapiclient.discovery import build
-
-    return build("drive", "v3", credentials=_get_creds(token_path))
+    return _build_service("drive", "v3", token_path)
 
 
 # ---------------------------------------------------------------------------
@@ -337,6 +337,7 @@ def fetch_gemini_doc(service: Any, doc_id: str) -> GeminiDocContent:
         ``GeminiDocContent`` with populated fields.
 
     Raises:
+        AuthError:             Terminal HTTP 401 from the Docs API.
         DocNotFoundError:       HTTP 404 from the Docs API.
         DocAccessDeniedError:   HTTP 403 from the Docs API.
     """
@@ -351,6 +352,8 @@ def fetch_gemini_doc(service: Any, doc_id: str) -> GeminiDocContent:
         )
     except Exception as exc:
         status = _google_http_status(exc)
+        if status == 401:
+            raise AuthError("Google authentication failed; run 'fieldkit auth google' and retry.") from None
         if status == 404:
             raise DocNotFoundError(doc_id) from exc
         if status == 403:
@@ -378,12 +381,8 @@ def fetch_gemini_doc(service: Any, doc_id: str) -> GeminiDocContent:
     # tab (or a doc grows a 3rd tab). Fall back to index order (0=Notes, 1=Transcript)
     # instead of silently dropping the transcript, and log so the drift is visible.
     if transcript_tab is None and tab_count >= 2:
-        tab_titles = [tab.get("tabProperties", {}).get("title", "") for tab in tabs]
         logger.warning(
-            "fetch_gemini_doc: transcript tab not identified by title heuristic "
-            "(doc_id=%s, tab_titles=%r); falling back to index order (tabs[1])",
-            doc_id,
-            tab_titles,
+            "fetch_gemini_doc: transcript tab not identified by title heuristic; falling back to index order (tabs[1])",
         )
         transcript_tab = tabs[1]
         if notes_tab is None:

@@ -7,13 +7,16 @@ Strategy:
 """
 
 import sqlite3
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, tzinfo
 from pathlib import Path
+from typing import Self
+from unittest.mock import patch
 
 import pytest
 
 from fieldkit.commands.ingest.registry import PIPELINES
 from fieldkit.config import ConfigError
+from fieldkit.errors import GmailSyncPartialError, SQLiteSnapshotError
 from fieldkit.gmail.discover import (
     GmailCandidate,
     _extract_doc_id,
@@ -21,50 +24,48 @@ from fieldkit.gmail.discover import (
     get_gmail_db_path,
     scan_gemini_candidates,
 )
+from fieldkit.gmail.exceptions import GmailDbNotFoundError, GmailSchemaError
+from fieldkit.gmail.publication import GMAIL_QUERY_READY_KEY, apply_gmail_page, initialize_gmail_publication
 from fieldkit.ingest.db import init_db
 from fieldkit.ingest.sources import filter_gemini_candidates_for_account
+from fieldkit.sqlite_publication import SQLiteMutationConnection
 
 pytestmark = pytest.mark.unit
 
 # ── gmail.db fixture helpers ────────────────────────────────────────────────
 
-GMAIL_SCHEMA = """
-CREATE TABLE IF NOT EXISTS threads (
-    thread_id     TEXT PRIMARY KEY,
-    subject       TEXT,
-    snippet       TEXT,
-    message_count INTEGER DEFAULT 0,
-    updated_at    TEXT
-);
-CREATE TABLE IF NOT EXISTS messages (
-    message_id  TEXT PRIMARY KEY,
-    thread_id   TEXT NOT NULL,
-    from_addr   TEXT,
-    to_addr     TEXT,
-    cc_addr     TEXT,
-    subject     TEXT,
-    date_str    TEXT,
-    date_epoch  INTEGER,
-    labels      TEXT,
-    body_plain  TEXT DEFAULT '',
-    body_html   TEXT DEFAULT '',
-    size_bytes  INTEGER DEFAULT 0,
-    snippet     TEXT,
-    synced_at   TEXT NOT NULL DEFAULT (datetime('now'))
-);
-"""
+
+class _PublishedGmailFixture:
+    """Small write facade that keeps legacy fixture setup on managed generations."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        initialize_gmail_publication(path)
+        self.execute(
+            "INSERT OR REPLACE INTO sync_state(key, value) VALUES (?, 'true')",
+            (GMAIL_QUERY_READY_KEY,),
+        )
+
+    def execute(self, statement: str, parameters: tuple[object, ...] = ()) -> None:
+        def mutation(connection: SQLiteMutationConnection) -> None:
+            connection.execute(statement, parameters)
+
+        apply_gmail_page(self.path, mutation)
+
+    def commit(self) -> None:
+        """Match sqlite fixture call sites; each statement is already published."""
+
+    def close(self) -> None:
+        """Match sqlite fixture call sites; publications own their connections."""
 
 
-def _make_gmail_db(path: Path) -> sqlite3.Connection:
-    """Create a minimal gmail.db at *path* with the test schema."""
-    conn = sqlite3.connect(str(path))
-    conn.executescript(GMAIL_SCHEMA)
-    conn.commit()
-    return conn
+def _make_gmail_db(path: Path) -> _PublishedGmailFixture:
+    """Create a query-ready managed Gmail publication at *path*."""
+    return _PublishedGmailFixture(path)
 
 
 def _insert_gemini_email(
-    gmail_conn: sqlite3.Connection,
+    gmail_conn: _PublishedGmailFixture,
     *,
     message_id: str,
     subject: str = 'Notes: "Test Meeting" May 1, 2026',
@@ -74,6 +75,7 @@ def _insert_gemini_email(
     date_epoch: int | None = None,
     to_addr: str | None = None,
     cc_addr: str | None = None,
+    from_addr: str = "Gemini <gemini-notes@google.com>",
 ) -> None:
     """Insert a fake Gemini meeting-notes email into the test gmail.db."""
     if date_epoch is None:
@@ -99,7 +101,7 @@ def _insert_gemini_email(
         (
             message_id,
             message_id,
-            "Gemini <gemini-notes@google.com>",
+            from_addr,
             to_addr,
             cc_addr,
             subject,
@@ -111,11 +113,128 @@ def _insert_gemini_email(
     gmail_conn.commit()
 
 
+def test_scan_requires_exact_gemini_sender_and_parses_rfc_recipients(tmp_path: Path) -> None:
+    gmail_db = tmp_path / "gmail.db"
+    conn = _make_gmail_db(gmail_db)
+    _insert_gemini_email(
+        conn,
+        message_id="spoofed",
+        doc_id="SpoofedDoc",
+        from_addr="Attacker <not-gemini-notes@google.com.example.com>",
+    )
+    _insert_gemini_email(
+        conn,
+        message_id="valid",
+        doc_id="ValidDoc",
+        to_addr='"Doe, Jamie" <jamie@acme-corp.example.com>, Team: alex@subsidiary.example.com;',
+        cc_addr="Jamie <jamie@acme-corp.example.com>",
+    )
+
+    candidates = scan_gemini_candidates(gmail_db, limit=10, max_age_days=None)
+
+    assert [candidate.source_id for candidate in candidates] == ["ValidDoc"]
+    assert candidates[0].recipient_addresses == (
+        "jamie@acme-corp.example.com",
+        "alex@subsidiary.example.com",
+        "jamie@acme-corp.example.com",
+    )
+
+
+def test_scan_rejects_multi_mailbox_sender_even_when_expected_mailbox_is_present(tmp_path: Path) -> None:
+    gmail_db = tmp_path / "gmail.db"
+    conn = _make_gmail_db(gmail_db)
+    _insert_gemini_email(
+        conn,
+        message_id="multi-sender",
+        doc_id="MultiSenderDoc",
+        from_addr="Attacker <attacker@example.net>, Gemini <gemini-notes@google.com>",
+    )
+
+    candidates = scan_gemini_candidates(gmail_db, limit=10, max_age_days=None)
+
+    assert candidates == []
+
+
+def test_scan_rejects_malformed_sender_with_fixed_schema_error(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from fieldkit.__main__ import main
+
+    gmail_db = tmp_path / "gmail.db"
+    conn = _make_gmail_db(gmail_db)
+    _insert_gemini_email(
+        conn,
+        message_id="malformed-sender",
+        doc_id="MalformedSenderDoc",
+        from_addr="not-an-address",
+    )
+
+    with pytest.raises(GmailSchemaError, match="could not be queried safely"):
+        scan_gemini_candidates(gmail_db, limit=10, max_age_days=None)
+
+    cli_db = tmp_path / "cli-gmail.db"
+    cli_conn = _make_gmail_db(cli_db)
+    _insert_gemini_email(
+        cli_conn,
+        message_id="cli-malformed-sender",
+        doc_id="CliMalformedSenderDoc",
+        from_addr="not-an-address",
+    )
+    with patch("fieldkit.gmail.discover.get_gmail_db_path", return_value=cli_db):
+        exit_code = main(["ingest", "discover", "--pipeline", "transcript-ingest", "--dry-run"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 3
+    assert str(tmp_path) not in captured.out + captured.err
+    assert "Traceback" not in captured.out + captured.err
+
+
+def _publish_gemini_email(path: Path, *, message_id: str, doc_id: str) -> None:
+    """Publish one query-ready fictional Gemini message through the managed writer."""
+    initialize_gmail_publication(path)
+
+    def mutation(connection: SQLiteMutationConnection) -> None:
+        connection.execute(
+            "INSERT OR REPLACE INTO sync_state(key, value) VALUES (?, 'true')",
+            (GMAIL_QUERY_READY_KEY,),
+        )
+        connection.execute(
+            "INSERT INTO threads(thread_id, subject, message_count) VALUES (?, ?, 1)",
+            (message_id, "Fictional meeting"),
+        )
+        connection.execute(
+            """
+            INSERT INTO messages(
+                message_id, thread_id, from_addr, to_addr, cc_addr, subject,
+                date_str, date_epoch, labels, body_plain, body_html, size_bytes, snippet
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                message_id,
+                message_id,
+                "Gemini <gemini-notes@google.com>",
+                "seller@example.com",
+                "",
+                'Notes: "Fictional meeting" May 1, 2026',
+                "2026-05-01",
+                int(datetime.now(UTC).timestamp()),
+                "[]",
+                f"https://docs.google.com/document/d/{doc_id}/edit",
+                "",
+                64,
+                "Fictional meeting",
+            ),
+        )
+
+    apply_gmail_page(path, mutation)
+
+
 # ── get_gmail_db_path ───────────────────────────────────────────────────────
 
 
 def test_get_gmail_db_path_ends_with_gmail_db() -> None:
-    """Canonical path must end with data/gmail.db."""
+    """Canonical path must end with gmail.db inside the configured data root."""
     p = get_gmail_db_path()
     assert p.name == "gmail.db"
     assert p.parent.name == "data"
@@ -200,6 +319,75 @@ def test_parse_subject_handles_special_chars_in_title() -> None:
 # ── scan_gemini_candidates ──────────────────────────────────────────────────
 
 
+def test_scan_gemini_candidates_reads_only_the_ready_published_generation(tmp_path: Path) -> None:
+    gmail_path = tmp_path / "gmail.db"
+    _publish_gemini_email(gmail_path, message_id="published", doc_id="PUBLISHED_DOC")
+    source = sqlite3.connect(gmail_path)
+    try:
+        source.execute(
+            """
+            INSERT INTO messages(
+                message_id, thread_id, from_addr, to_addr, cc_addr, subject,
+                date_str, date_epoch, labels, body_plain, body_html, size_bytes, snippet
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "source-only",
+                "source-only",
+                "gemini-notes@google.com",
+                "seller@example.com",
+                "",
+                "Unpublished source row",
+                "2026-05-02",
+                int(datetime.now(UTC).timestamp()) + 1,
+                "[]",
+                "https://docs.google.com/document/d/UNPUBLISHED_DOC/edit",
+                "",
+                64,
+                "Unpublished source row",
+            ),
+        )
+        source.commit()
+    finally:
+        source.close()
+
+    result = scan_gemini_candidates(gmail_path, limit=10)
+
+    assert [candidate.source_id for candidate in result] == ["PUBLISHED_DOC"]
+
+
+def test_scan_gemini_candidates_rejects_an_unready_publication(tmp_path: Path) -> None:
+    gmail_path = tmp_path / "gmail.db"
+    initialize_gmail_publication(gmail_path)
+
+    with pytest.raises(GmailSyncPartialError, match="not ready"):
+        scan_gemini_candidates(gmail_path, limit=10)
+
+
+def test_scan_gemini_candidates_interrupts_sqlite_work_beyond_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gmail_path = tmp_path / "gmail.db"
+    _publish_gemini_email(gmail_path, message_id="published", doc_id="PUBLISHED_DOC")
+
+    def add_noise(connection: SQLiteMutationConnection) -> None:
+        connection.executemany(
+            """
+            INSERT INTO messages(
+                message_id, thread_id, from_addr, to_addr, cc_addr, subject,
+                date_str, date_epoch, labels, body_plain, body_html, size_bytes, snippet
+            ) VALUES (?, ?, ?, '', '', '', '', ?, '[]', '', '', 0, '')
+            """,
+            [(f"noise-{index}", "published", "noise@example.net", 2_000_000_000 - index) for index in range(200)],
+        )
+
+    apply_gmail_page(gmail_path, add_noise)
+    monkeypatch.setattr("fieldkit.gmail.query_support.DEFAULT_SQLITE_STEPS_PER_ROW", 1)
+
+    with pytest.raises(GmailSyncPartialError, match="work bound"):
+        scan_gemini_candidates(gmail_path, limit=1)
+
+
 def test_scan_gemini_candidates_returns_list_of_candidates(tmp_path: Path) -> None:
     """A populated gmail.db returns GmailCandidate objects with all 6 fields."""
     gmail_path = tmp_path / "gmail.db"
@@ -235,8 +423,8 @@ def test_scan_gemini_candidates_empty_db_returns_empty_list(tmp_path: Path) -> N
     assert results == []
 
 
-def test_scan_gemini_candidates_supports_legacy_schema_without_recipient_columns(tmp_path: Path) -> None:
-    """Legacy gmail.db schemas remain scannable without account-routing metadata."""
+def test_scan_gemini_candidates_rejects_an_unmanaged_legacy_schema(tmp_path: Path) -> None:
+    """Raw legacy databases require explicit import into a managed publication."""
     gmail_path = tmp_path / "gmail.db"
     conn = sqlite3.connect(gmail_path)
     conn.execute(
@@ -262,10 +450,8 @@ def test_scan_gemini_candidates_supports_legacy_schema_without_recipient_columns
     conn.commit()
     conn.close()
 
-    candidates = scan_gemini_candidates(gmail_path, limit=None)
-
-    assert [candidate.source_id for candidate in candidates] == ["LEGACY_DOC"]
-    assert candidates[0].recipient_addresses == ()
+    with pytest.raises(SQLiteSnapshotError, match="requires explicit import"):
+        scan_gemini_candidates(gmail_path, limit=None)
 
 
 def test_scan_gemini_candidates_raises_on_wrong_suffix(tmp_path: Path) -> None:
@@ -278,10 +464,10 @@ def test_scan_gemini_candidates_raises_on_wrong_suffix(tmp_path: Path) -> None:
 
 
 def test_scan_gemini_candidates_raises_on_missing_file(tmp_path: Path) -> None:
-    """ConfigError raised when gmail.db does not exist."""
+    """A missing managed Gmail publication is a retryable source failure."""
     missing = tmp_path / "nonexistent.db"
 
-    with pytest.raises(ConfigError, match=r"gmail\.db not found"):
+    with pytest.raises(GmailDbNotFoundError, match="has not been published"):
         scan_gemini_candidates(missing, limit=None)
 
 
@@ -356,9 +542,8 @@ def test_filter_gemini_candidates_for_account_uses_recipients(tmp_path: Path, mo
     gmail_conn.close()
     monkeypatch.setattr(
         "fieldkit.ingest.router.get_accounts_config",
-        lambda: {"accounts": {"acme": {"domains": ["acme.example.com"]}}},
+        lambda **kwargs: {"accounts": {"acme": {"domains": ["acme.example.com"]}}},
     )
-    monkeypatch.setattr("fieldkit.ingest.router.get_internal_domains", lambda: [])
 
     results = filter_gemini_candidates_for_account(scan_gemini_candidates(gmail_path, limit=None), "acme")
 
@@ -373,8 +558,8 @@ def test_scan_gemini_candidates_includes_email_at_ninety_day_cutoff(
 
     class FrozenDateTime(datetime):
         @classmethod
-        def now(cls, tz: object | None = None) -> datetime:
-            return fixed_now
+        def now(cls, tz: tzinfo | None = None) -> Self:
+            return cls.fromtimestamp(fixed_now.timestamp(), tz=tz)
 
     monkeypatch.setattr("fieldkit.gmail.discover.datetime", FrozenDateTime)
     gmail_path = tmp_path / "gmail.db"

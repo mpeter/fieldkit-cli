@@ -9,6 +9,10 @@ from pathlib import Path
 import pytest
 
 from fieldkit.contact import resolver as cr
+from fieldkit.errors import GmailSyncPartialError, SQLiteSnapshotError
+from fieldkit.gmail.exceptions import GmailDbNotFoundError
+from fieldkit.gmail.publication import GMAIL_QUERY_READY_KEY, apply_gmail_page, initialize_gmail_publication
+from fieldkit.sqlite_publication import SQLiteMutationConnection
 
 pytestmark = pytest.mark.unit
 
@@ -41,6 +45,8 @@ def _make_conn(rows):
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     conn.execute(CREATE_PEOPLE)
+    conn.execute(CREATE_CALENDAR_EVENTS)
+    conn.execute(CREATE_MESSAGES)
     conn.executemany(
         """INSERT INTO people VALUES (
             :email, :display_name, :first_seen, :last_seen,
@@ -52,6 +58,28 @@ def _make_conn(rows):
     )
     conn.commit()
     return conn
+
+
+def _make_published_cache(path: Path, *, email: str, display_name: str) -> None:
+    initialize_gmail_publication(path)
+
+    def seed(connection: SQLiteMutationConnection) -> None:
+        connection.execute(
+            """
+            INSERT INTO people(
+                email, display_name, first_seen, last_seen, message_count,
+                thread_count, initiated_count, domain, account, is_internal,
+                meeting_count, slack_user_id, slack_message_count
+            ) VALUES (?, ?, '', '', 0, 0, 0, 'example.com', 'acme-corp', 0, 0, NULL, 0)
+            """,
+            (email, display_name),
+        )
+        connection.execute(
+            "INSERT OR REPLACE INTO sync_state(key, value) VALUES (?, 'true')",
+            (GMAIL_QUERY_READY_KEY,),
+        )
+
+    apply_gmail_page(path, seed)
 
 
 _EXTERNAL = {
@@ -293,10 +321,6 @@ def test_none_when_message_count_zero():
     assert cr._compute_champion_signal(0, 0) is None
 
 
-def test_none_when_message_count_none():
-    assert cr._compute_champion_signal(None, 0) is None
-
-
 # ── TestComputeDecaySignal (flattened) ─────────────────────────────────────────────
 
 
@@ -485,11 +509,23 @@ def test_limit_parameter_respected():
     assert len(meetings) == 2
 
 
-def test_missing_calendar_events_table_returns_empty():
-    # Use _make_conn which does NOT create calendar_events
-    conn = _make_conn([_EXTERNAL])
-    meetings = cr.get_recent_meetings("alice@globalpay.example.com", conn)
-    assert meetings == []
+def test_missing_calendar_events_table_is_unverified():
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(CREATE_PEOPLE)
+
+    with pytest.raises(SQLiteSnapshotError, match="unverified"):
+        cr.get_recent_meetings("alice@globalpay.example.com", conn)
+
+
+def test_malformed_calendar_attendees_are_unverified_without_payload():
+    malformed = {**_MEETING_A, "attendees": "fictional-private-not-json"}
+    conn = _make_conn_with_calendar([_EXTERNAL], [malformed])
+
+    with pytest.raises(SQLiteSnapshotError, match="unverified") as captured:
+        cr.get_recent_meetings("alice@globalpay.example.com", conn)
+
+    assert "fictional-private-not-json" not in str(captured.value)
 
 
 def test_not_found_result_has_no_recent_meetings_key():
@@ -654,16 +690,181 @@ def test_limit_parameter():
     assert len(threads) == 3
 
 
-def test_returns_empty_when_no_messages_table():
-    conn = _make_conn([_EXTERNAL])  # No messages table
-    threads = cr.get_recent_threads("alice@globalpay.example.com", conn)
-    assert threads == []
+def test_recent_threads_supports_limits_above_the_old_fetch_window():
+    messages = [
+        {
+            **_MSG_BASE,
+            "message_id": f"many-{index}",
+            "thread_id": f"many-thread-{index}",
+            "subject": f"Distinct topic {index}",
+            "date_epoch": 2_000_000_000 - index,
+        }
+        for index in range(150)
+    ]
+    conn = _make_conn_with_messages([], messages)
+
+    threads = cr.get_recent_threads("alice@globalpay.example.com", conn, limit=150)
+
+    assert len(threads) == 150
+
+
+def test_recent_threads_scans_past_duplicate_and_ooo_windows():
+    duplicate_messages = [
+        {
+            **_MSG_BASE,
+            "message_id": f"duplicate-{index}",
+            "thread_id": f"duplicate-thread-{index}",
+            "subject": "Re: Repeated topic",
+            "date_epoch": 2_000_000_000 - index,
+        }
+        for index in range(60)
+    ]
+    ooo_messages = [
+        {
+            **_MSG_BASE,
+            "message_id": f"ooo-{index}",
+            "thread_id": f"ooo-thread-{index}",
+            "subject": f"Out of office: {index}",
+            "date_epoch": 1_999_999_900 - index,
+        }
+        for index in range(60)
+    ]
+    valid_messages = [
+        {
+            **_MSG_BASE,
+            "message_id": f"valid-{index}",
+            "thread_id": f"valid-thread-{index}",
+            "subject": f"Valid topic {index}",
+            "date_epoch": 1_999_999_800 - index,
+        }
+        for index in range(9)
+    ]
+    conn = _make_conn_with_messages([], [*duplicate_messages, *ooo_messages, *valid_messages])
+
+    threads = cr.get_recent_threads("alice@globalpay.example.com", conn, limit=10)
+
+    assert len(threads) == 10
+    assert threads[-1]["subject"] == "Valid topic 8"
+
+
+def test_recent_threads_returns_available_topics_when_cache_ends_before_bound():
+    messages = [
+        {
+            **_MSG_BASE,
+            "message_id": f"ooo-short-{index}",
+            "thread_id": f"ooo-short-thread-{index}",
+            "subject": f"Out of office: {index}",
+            "date_epoch": 2_000_000_000 - index,
+        }
+        for index in range(50)
+    ]
+    messages.append(
+        {
+            **_MSG_BASE,
+            "message_id": "only-valid",
+            "thread_id": "only-valid-thread",
+            "subject": "Only available topic",
+            "date_epoch": 1_999_999_900,
+        }
+    )
+    conn = _make_conn_with_messages([], messages)
+
+    threads = cr.get_recent_threads("alice@globalpay.example.com", conn, limit=2)
+
+    assert [thread["subject"] for thread in threads] == ["Only available topic"]
+
+
+def test_recent_threads_fails_partial_when_raw_row_window_is_exhausted():
+    marker = "fictional-private-subject"
+    messages = [
+        {
+            **_MSG_BASE,
+            "message_id": f"bounded-{index}",
+            "thread_id": f"bounded-thread-{index}",
+            "subject": f"Out of office: {marker}-{index}",
+            "date_epoch": 2_000_000_000 - index,
+        }
+        for index in range(101)
+    ]
+    conn = _make_conn_with_messages([], messages)
+
+    with pytest.raises(GmailSyncPartialError, match="work bound") as captured:
+        cr.get_recent_threads("alice@globalpay.example.com", conn, limit=1)
+
+    assert marker not in str(captured.value)
+    assert conn.execute("SELECT 1").fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("limit", (True, 0, -1, 501))
+def test_recent_threads_reject_unbounded_limits(limit: int):
+    conn = _make_conn_with_messages([], [_MSG_BASE])
+
+    with pytest.raises(ValueError, match="between 1 and 500"):
+        cr.get_recent_threads("alice@globalpay.example.com", conn, limit=limit)
+
+
+def test_missing_messages_table_is_unverified():
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(CREATE_PEOPLE)
+
+    with pytest.raises(SQLiteSnapshotError, match="unverified"):
+        cr.get_recent_threads("alice@globalpay.example.com", conn)
 
 
 def test_returns_empty_for_unknown_contact():
     conn = _make_conn_with_messages([], [_MSG_BASE])
     threads = cr.get_recent_threads("nobody@nowhere.example.com", conn)  # pii-guard: ignore
     assert threads == []
+
+
+@pytest.mark.parametrize(
+    "address",
+    ["%@globalpay.example.com", "_@globalpay.example.com", "lice@globalpay.example.com"],
+)
+def test_recent_threads_require_exact_address(address: str):
+    conn = _make_conn_with_messages([], [_MSG_BASE])
+
+    threads = cr.get_recent_threads(address, conn)
+
+    assert threads == []
+
+
+def test_recent_threads_do_not_include_substring_address_subjects():
+    unrelated = {
+        **_MSG_BASE,
+        "message_id": "substring-address",
+        "thread_id": "substring-thread",
+        "from_addr": "malice@globalpay.example.com",
+        "subject": "Private unrelated topic",
+        "date_epoch": 1717600000,
+    }
+    conn = _make_conn_with_messages([], [_MSG_BASE, unrelated])
+
+    threads = cr.get_recent_threads("alice@globalpay.example.com", conn)
+
+    assert [thread["subject"] for thread in threads] == ["OpenShift upgrade plan"]
+
+
+def test_recent_threads_fail_partial_when_sqlite_work_budget_is_exhausted(monkeypatch: pytest.MonkeyPatch):
+    messages = [
+        {
+            **_MSG_BASE,
+            "message_id": f"noise-{index}",
+            "thread_id": f"noise-thread-{index}",
+            "from_addr": "noise@example.net",
+            "subject": f"Noise {index}",
+            "date_epoch": index,
+        }
+        for index in range(200)
+    ]
+    conn = _make_conn_with_messages([], messages)
+    monkeypatch.setattr("fieldkit.gmail.query_support.DEFAULT_SQLITE_STEPS_PER_ROW", 1)
+
+    with pytest.raises(GmailSyncPartialError, match="work bound"):
+        cr.get_recent_threads("alice@globalpay.example.com", conn)
+
+    assert conn.execute("SELECT 1").fetchone()[0] == 1
 
 
 def test_snippet_truncated_to_200_chars():
@@ -683,42 +884,58 @@ def test_snippet_truncated_to_200_chars():
 
 
 def test_resolve_with_email_routes_to_email_resolver(tmp_path: Path):
-    # Create a real DB file for resolve() to connect to
     db_path = tmp_path / "test.db"
-    conn = sqlite3.connect(str(db_path))
-    conn.execute(CREATE_PEOPLE)
-    conn.executemany(
-        """INSERT INTO people VALUES (
-            :email, :display_name, :first_seen, :last_seen,
-            :message_count, :thread_count, :initiated_count,
-            :domain, :account, :is_internal, :meeting_count,
-            :slack_user_id, :slack_message_count
-        )""",
-        [_EXTERNAL],
+    _make_published_cache(
+        db_path,
+        email="alice@globalpay.example.com",
+        display_name="Alice",
     )
-    conn.commit()
-    conn.close()
 
     result = cr.resolve("alice@globalpay.example.com", db_path)
     assert result["type"] == "resolved"
     assert result["email"] == "alice@globalpay.example.com"
 
 
+def test_resolve_refuses_malformed_published_calendar_data(tmp_path: Path):
+    db_path = tmp_path / "test.db"
+    _make_published_cache(
+        db_path,
+        email="alice@globalpay.example.com",
+        display_name="Alice",
+    )
+
+    def seed_malformed_calendar(connection: SQLiteMutationConnection) -> None:
+        connection.execute(
+            """
+            INSERT INTO calendar_events(
+                event_id, summary, start_time, end_time, organizer_email, attendees
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "evt-malformed",
+                "Private fictional subject",
+                "2025-01-01T09:00:00",
+                "2025-01-01T09:30:00",
+                "organizer@example.com",
+                "fictional-private-not-json",
+            ),
+        )
+
+    apply_gmail_page(db_path, seed_malformed_calendar)
+
+    with pytest.raises(SQLiteSnapshotError, match="unverified") as captured:
+        cr.resolve("alice@globalpay.example.com", db_path)
+
+    assert "fictional-private" not in str(captured.value)
+
+
 def test_resolve_with_name_routes_to_name_resolver(tmp_path: Path):
     db_path = tmp_path / "test.db"
-    conn = sqlite3.connect(str(db_path))
-    conn.execute(CREATE_PEOPLE)
-    conn.executemany(
-        """INSERT INTO people VALUES (
-            :email, :display_name, :first_seen, :last_seen,
-            :message_count, :thread_count, :initiated_count,
-            :domain, :account, :is_internal, :meeting_count,
-            :slack_user_id, :slack_message_count
-        )""",
-        [_EXTERNAL],
+    _make_published_cache(
+        db_path,
+        email="alice@globalpay.example.com",
+        display_name="Alice",
     )
-    conn.commit()
-    conn.close()
 
     result = cr.resolve("Alice", db_path)
     assert result["type"] == "resolved"
@@ -749,8 +966,7 @@ def test_resolve_whitespace_returns_not_found():
 
 def test_connect_returns_connection(tmp_path: Path):
     db_path = tmp_path / "test.db"
-    # Create a minimal DB file
-    sqlite3.connect(str(db_path)).close()
+    _make_published_cache(db_path, email="fixture@example.com", display_name="Fixture")
     conn = cr.connect(db_path)
     assert conn is not None
     conn.close()
@@ -758,10 +974,69 @@ def test_connect_returns_connection(tmp_path: Path):
 
 def test_connect_enables_row_factory(tmp_path: Path):
     db_path = tmp_path / "test.db"
-    sqlite3.connect(str(db_path)).close()
+    _make_published_cache(db_path, email="fixture@example.com", display_name="Fixture")
     conn = cr.connect(db_path)
     assert conn.row_factory is sqlite3.Row
     conn.close()
+
+
+def test_connect_missing_database_does_not_create_it(tmp_path: Path) -> None:
+    db_path = tmp_path / "missing.db"
+
+    with pytest.raises((FileNotFoundError, GmailDbNotFoundError)):
+        cr.connect(db_path)
+
+    assert not db_path.exists()
+
+
+def test_connect_refuses_an_unpublished_sqlite_file(tmp_path: Path) -> None:
+    db_path = tmp_path / "raw.db"
+    sqlite3.connect(db_path).close()
+
+    with pytest.raises(SQLiteSnapshotError, match="explicit import"):
+        cr.connect(db_path)
+
+
+def test_default_resolution_uses_the_current_configured_cache_each_time(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = tmp_path / "first.db"
+    second = tmp_path / "second.db"
+    email = "alex@acme-corp.example.com"
+    _make_published_cache(first, email=email, display_name="First Fixture")
+    _make_published_cache(second, email=email, display_name="Second Fixture")
+    selected = iter((first, second))
+    monkeypatch.setattr(cr, "get_gmail_db_path", lambda: next(selected))
+
+    first_result = cr.resolve(email)
+    second_result = cr.resolve(email)
+
+    assert first_result["display_name"] == "First Fixture"
+    assert second_result["display_name"] == "Second Fixture"
+
+
+def test_ready_published_resolution_is_read_only(tmp_path: Path) -> None:
+    db_path = tmp_path / "ready.db"
+    email = "alex@acme-corp.example.com"
+    _make_published_cache(db_path, email=email, display_name="Alex Example")
+    publication = db_path.with_name(f"{db_path.name}.publication")
+    before = {
+        str(path.relative_to(publication)): path.read_bytes()
+        for path in sorted(publication.rglob("*"))
+        if path.is_file()
+    }
+
+    result = cr.resolve(email, db_path)
+
+    assert result["type"] == "resolved"
+    assert result["display_name"] == "Alex Example"
+    after = {
+        str(path.relative_to(publication)): path.read_bytes()
+        for path in sorted(publication.rglob("*"))
+        if path.is_file()
+    }
+    assert after == before
 
 
 # ---------------------------------------------------------------------------
@@ -786,6 +1061,8 @@ def _make_row_with_nulls_build_profile_none_guards():
         )
         """
     )
+    conn.execute(CREATE_CALENDAR_EVENTS)
+    conn.execute(CREATE_MESSAGES)
     conn.execute(
         "INSERT INTO people VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
         ("user@example.com", None, None, None, None, None, None, None, None, 0, None, None, None),  # pii-guard: ignore

@@ -1,4 +1,4 @@
-"""Characterization tests for gmail-cache query.py and apply-intel.py behaviors.
+"""Characterization tests for Gmail query-domain and apply-intel behavior.
 
 Locks in current observable behavior of:
   - query.date_to_epoch / query.build_date_clause
@@ -13,7 +13,8 @@ from pathlib import Path
 
 import pytest
 
-from fieldkit.commands.gmail import apply_intel, query
+from fieldkit.commands.gmail import apply_intel
+from fieldkit.gmail import query_domain as query
 
 pytestmark = pytest.mark.characterization
 
@@ -256,26 +257,29 @@ def test_date_helpers_roundtrip_build_date_clause_no_args_returns_empty_fragment
 
 
 def test_date_helpers_roundtrip_build_date_clause_since_only():
-    fragment, params = query.build_date_clause("2025-01-01", None)
+    fragment, params = query.build_date_clause(query.date_to_epoch("2025-01-01"), None)
     assert "date_epoch >= ?" in fragment
     assert len(params) == 1
 
 
 def test_date_helpers_roundtrip_build_date_clause_before_only():
-    fragment, params = query.build_date_clause(None, "2025-06-01")
+    fragment, params = query.build_date_clause(None, query.date_to_epoch("2025-06-01"))
     assert "date_epoch < ?" in fragment
     assert len(params) == 1
 
 
 def test_date_helpers_roundtrip_build_date_clause_both_dates():
-    fragment, params = query.build_date_clause("2025-01-01", "2025-06-01")
+    fragment, params = query.build_date_clause(
+        query.date_to_epoch("2025-01-01"),
+        query.date_to_epoch("2025-06-01"),
+    )
     assert "date_epoch >= ?" in fragment
     assert "date_epoch < ?" in fragment
     assert len(params) == 2
 
 
 # ---------------------------------------------------------------------------
-# Characterize query module API surface
+# Characterize query-domain API surface
 # ---------------------------------------------------------------------------
 
 
@@ -283,16 +287,16 @@ def test_date_helpers_roundtrip_build_date_clause_both_dates():
 
 
 def test_query_module_api_surface_build_query_does_not_exist():
-    """Characterization: query.py has no top-level build_query function.
+    """The canonical query domain has no generic SQL builder.
     SQL assembly is inlined per command function (cmd_account, cmd_person, etc.).
     This test documents the current API — do not add build_query without updating tests."""
     assert not hasattr(query, "build_query"), (
-        "build_query unexpectedly appeared in query.py — update characterization tests"
+        "build_query unexpectedly appeared in query_domain.py — update characterization tests"
     )
 
 
 def test_query_module_api_surface_public_helper_functions_exist():
-    """Characterization: these helpers are the stable query.py public surface."""
+    """Core query helpers live on the canonical domain module."""
     assert callable(query.date_to_epoch)
     assert callable(query.build_date_clause)
     assert callable(query.connect)

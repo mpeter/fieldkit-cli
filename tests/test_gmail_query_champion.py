@@ -9,7 +9,7 @@ import sqlite3
 
 import pytest
 
-from fieldkit.commands.gmail.query import _champion_thread_stats, query_champion_signals
+from fieldkit.gmail.query_domain import _champion_thread_stats, query_champion_signals
 
 pytestmark = pytest.mark.unit
 
@@ -127,12 +127,20 @@ def test_champion_thread_stats_large_account_champion_stats_large_account_no_cra
     conn.execute(
         "INSERT INTO messages (thread_id, from_addr, to_addr, cc_addr, date_epoch, date_str, subject) "
         "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        ("t-large", "user0@acme-corp.com", "other@acme-corp.com", "", 1_710_000_000, "2025-03-01", "Large thread"),
+        (
+            "t-large",
+            "user0@acme-corp.example.com",
+            "other@acme-corp.example.com",
+            "",
+            1_710_000_000,
+            "2025-03-01",
+            "Large thread",
+        ),
     )
     conn.commit()
 
     # 200 unique fake email addresses — well above the 50-per-batch threshold
-    emails = [f"user{i}@acme-corp.com" for i in range(200)]
+    emails = [f"user{i}@acme-corp.example.com" for i in range(200)]
 
     # Must not raise sqlite3.OperationalError
     result = _champion_thread_stats(conn, emails)
@@ -184,7 +192,7 @@ def test_query_champion_signals_large_match_query_champion_signals_large_match()
     display = "Big Account Champion"
     conn.executemany(
         "INSERT INTO people (email, display_name) VALUES (?, ?)",
-        [(f"champ{i}@acme-corp.com", display) for i in range(200)],
+        [(f"champ{i}@acme-corp.example.com", display) for i in range(200)],
     )
 
     # Seed a thread initiated by the first alias so the query returns
@@ -198,8 +206,8 @@ def test_query_champion_signals_large_match_query_champion_signals_large_match()
         "VALUES (?, ?, ?, ?, ?, ?, ?)",
         (
             "t-champ",
-            "champ0@acme-corp.com",
-            "other@acme-corp.com",
+            "champ0@acme-corp.example.com",
+            "other@acme-corp.example.com",
             "",
             1_712_000_000,
             "2025-04-01",

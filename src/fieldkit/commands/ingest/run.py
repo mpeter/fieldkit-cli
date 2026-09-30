@@ -4,11 +4,12 @@ import json
 import logging
 import math
 import sqlite3
-import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import ExitStack, closing
 from contextvars import copy_context
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -18,30 +19,26 @@ from fieldkit.cli_registry import declare_write
 from fieldkit.commands.ingest._output import BatchOutcomes, human_echo, json_output
 from fieldkit.config import ConfigError
 from fieldkit.config.optional_dependencies import GOOGLE_IMPORT_ROOTS, require_optional_profile
+from fieldkit.errors import AuthError, LLMError, MissingOptionalDependencyError, RoutingReadRetryableError
 from fieldkit.ingest.constants import (
     AMBIENT_TRANSCRIPT_PIPELINE,
     GEMINI_TRANSCRIPT_PIPELINE,
     SOURCE_STATUS_FAILED,
     SOURCE_STATUS_PENDING,
-    SOURCE_STATUS_PROCESSED,
 )
 from fieldkit.ingest.docs import GeminiDocContent
-from fieldkit.ingest.pipeline import TranscriptMeta, primary_account
-from fieldkit.ingest.router import RouteResult
-from fieldkit.ingest.sources import SourceRecord, insert_vault_note_artifact, mark_source_status
-from fieldkit.ingest.writeback import MeetingWriteback, apply_meeting_writebacks
+from fieldkit.ingest.preparation import prepare_meeting
+from fieldkit.ingest.prepared import PreparedMeeting, load_prepared, save_prepared
+from fieldkit.ingest.replay import recover_interrupted_sources, replay_prepared
+from fieldkit.ingest.run_lock import transcript_run_lock
+from fieldkit.ingest.sources import SourceRecord, mark_source_status
+from fieldkit.util.atomic import PathLockTimeoutError
 
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
+    from fieldkit.gmail.discover import GmailCandidate
     from fieldkit.ingest.ambient_pipeline import AmbientOutcome
-
-
-@dataclass(frozen=True)
-class _CleanResult:
-    cleaned: str
-    meta: TranscriptMeta
-    used_fallback: bool
 
 
 @dataclass(frozen=True)
@@ -90,7 +87,7 @@ _MINUTES_PER_TRANSCRIPT = 3.0
 )
 @click.option(
     "--limit",
-    type=int,
+    type=click.IntRange(min=1),
     default=None,
     metavar="N",
     help="Maximum number of sources to process.",
@@ -131,11 +128,7 @@ def _run_run(
     # --- pipeline validation ---
     if pipeline_id not in PIPELINE_MAP:
         available = ", ".join(sorted(PIPELINE_MAP))
-        human_echo(
-            f"Error: unknown pipeline '{pipeline_id}'. Available pipelines: {available}",
-            err=True,
-        )
-        return 1
+        raise click.UsageError(f"Unknown pipeline. Available pipelines: {available}")
 
     spec = PIPELINE_MAP[pipeline_id]
 
@@ -181,8 +174,7 @@ def _run_ambient_transcript_ingest(
     from fieldkit.ingest.db import get_db_path, init_db
 
     if interactive:
-        human_echo("Error: --interactive is not supported for ambient-transcript-ingest.", err=True)
-        return 1
+        raise click.UsageError("--interactive is not supported for ambient-transcript-ingest")
 
     conn = init_db(get_db_path(), pipelines=PIPELINES)
     try:
@@ -265,17 +257,12 @@ def _prompt_process_choice(date_str: str, title: str, source_id: str) -> str:
         return "q"
 
 
-_FETCH_DOC_TIMEOUT = 30  # historic regression: cap each Drive API call to 30 seconds
-
-
 def _fetch_doc_for_run(service: object, source_id: str, conn: sqlite3.Connection) -> GeminiDocContent | None:
     """Fetch a Gemini doc from Drive and persist a recoverable source outcome.
 
     Returns the doc content object, or None if the source should be skipped.
-    Times out after _FETCH_DOC_TIMEOUT seconds (historic regression).
+    The service owns its transport timeout; no background fetch outlives this call.
     """
-    from concurrent.futures import TimeoutError as FuturesTimeoutError
-
     from fieldkit.ingest.docs import (
         DocAccessDeniedError,
         DocNotFoundError,
@@ -285,17 +272,9 @@ def _fetch_doc_for_run(service: object, source_id: str, conn: sqlite3.Connection
     )
 
     try:
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(_fetch, service, source_id)
-            try:
-                return future.result(timeout=_FETCH_DOC_TIMEOUT)
-            except FuturesTimeoutError:
-                human_echo(
-                    f"  Error: doc {source_id} timed out after {_FETCH_DOC_TIMEOUT}s; marking failed.",
-                    err=True,
-                )
-                mark_source_status(conn, source_id, SOURCE_STATUS_FAILED)
-                return None
+        return _fetch(service, source_id)
+    except AuthError:
+        raise
     except DocNotFoundError:
         human_echo(f"  Error: doc {source_id} not found (404); marking failed.", err=True)
         mark_source_status(conn, source_id, SOURCE_STATUS_FAILED)
@@ -304,180 +283,72 @@ def _fetch_doc_for_run(service: object, source_id: str, conn: sqlite3.Connection
         human_echo(f"  Error: doc {source_id} access denied (403); marking failed.", err=True)
         mark_source_status(conn, source_id, SOURCE_STATUS_FAILED)
         return None
-    except Exception as exc:  # noqa: BLE001 — pipeline must not abort on single-item failure
-        human_echo(f"  Error fetching {source_id}: {exc}", err=True)
+    except Exception:  # noqa: BLE001 — retain retryable state without exposing provider payloads
+        human_echo("Document fetch failed; check connectivity and retry. Source remains pending.", err=True)
         mark_source_status(conn, source_id, SOURCE_STATUS_PENDING)
         return None
 
 
-def _route_source(src: SourceRecord, doc_content: GeminiDocContent) -> RouteResult:
-    """Return a RouteResult for *src* using domain-then-title routing with pursuit matching.
-
-    Routing priority:
-    1. Email domains present -> route_with_pursuits (domain + pursuit keyword matching).
-    2. No domains / unknown  -> route_by_title (title keyword matching).
-    3. Either path that resolves an account -> match_pursuits_for_account with the
-       meeting title as an additional keyword hint, so pursuits are linked even when
-       no invitee email addresses appear in the Gemini doc.
-    """
-    from fieldkit.ingest.router import (
-        match_pursuits_for_account,
-        route_by_title,
-        route_with_pursuits,
-    )
-
-    title = src.meeting_title or doc_content.doc_title or ""
-
-    domains = [email.split("@")[-1].lower() for email in doc_content.invited_emails if "@" in email]
-
-    route = route_with_pursuits(domains, keywords=[title] if title else None)
-
-    if route.accounts == ["unknown"] and route.confidence.value == "none":
-        route = route_by_title(title)
-
-    # If we resolved an account, run pursuit matching with the title as a keyword hint.
-    # route_with_pursuits only fires when confidence is HIGH (requires domain match);
-    # match_pursuits_for_account works regardless of how the account was resolved.
-    if route.accounts != ["unknown"]:
-        account_name = primary_account(route)
-        pursuits = match_pursuits_for_account(account_name, keywords=[title] if title else [])
-        route = RouteResult(
-            accounts=route.accounts,
-            confidence=route.confidence,
-            is_internal=route.is_internal,
-            pursuits=pursuits,
+def _replay_source(conn: sqlite3.Connection, prepared: PreparedMeeting, data_root: Path) -> _ProcessResult:
+    """Use one payload-free failure boundary for initial and resumed replay."""
+    try:
+        path = replay_prepared(conn, prepared.source_id, data_root)
+    except AuthError:
+        raise
+    except Exception:  # noqa: BLE001
+        human_echo(
+            "Required meeting writeback failed; check note metadata and pursuit/task storage. Source not completed.",
+            err=True,
         )
-
-    return route
-
-
-def _clean_and_extract_transcript(source_id: str, doc_content: GeminiDocContent) -> _CleanResult:
-    """Run Stage 1 (clean) and Stage 2 (extract) with graceful degradation.
-
-    Returns (cleaned_text, TranscriptMeta).
-    """
-    from fieldkit.ingest.pipeline import Stage1Result, stage1_clean, stage2_extract
-
-    raw_text = doc_content.transcript_text or doc_content.notes_text
-    stage1_result: Stage1Result | str
-    used_fallback = False
-    try:
-        stage1_result = stage1_clean(raw_text)
-    except Exception as exc:  # noqa: BLE001
-        human_echo(f"  Warning: stage1_clean failed for {source_id}: {exc}", err=True)
-        stage1_result = raw_text  # fallback: plain str (backwards compat path)
-        used_fallback = True
-
-    # Extract cleaned text for vault note body (Stage1Result.text or plain str).
-    cleaned = stage1_result.text if isinstance(stage1_result, Stage1Result) else stage1_result
-
-    try:
-        meta = stage2_extract(stage1_result)
-    except Exception as exc:  # noqa: BLE001
-        human_echo(f"  Warning: stage2_extract failed for {source_id}: {exc}", err=True)
-        meta = TranscriptMeta(confidence="low")
-        used_fallback = True
-
-    return _CleanResult(cleaned=cleaned, meta=meta, used_fallback=used_fallback)
+        return _ProcessResult(completed=False, degraded=False)
+    human_echo(f"  Wrote: {path} (account: {prepared.account})")
+    return _ProcessResult(completed=True, degraded=prepared.degraded)
 
 
 def _process_one_source(
     *,
     src: SourceRecord,
-    service: object,
+    service: object | None,
     conn: sqlite3.Connection,
     data_root: Path,
     pipeline_version: str,
-    file_lock: "threading.Lock | None" = None,
 ) -> _ProcessResult:
     """Process a single pending source end-to-end.
 
-    file_lock, when provided, serialises writes to shared files (TASKS.md and
-    pursuit activity logs) so parallel workers don't corrupt them.
+    Effect publishers serialize shared file updates with target-specific locks.
 
     Returns completion and degradation state.
     """
-    _lock = file_lock or threading.Lock()  # fallback for single-threaded callers
-    from fieldkit.ingest.pipeline import compute_vault_path, infer_meeting_date, render_vault_note
-
     source_id: str = src.source_id
-    doc_content = _fetch_doc_for_run(service, source_id, conn)
+    prepared = load_prepared(conn, source_id)
+    if prepared is not None:
+        return _replay_source(conn, prepared, data_root)
+    with ExitStack() as provider_stack:
+        if service is None:
+            require_optional_profile("ingest run --pipeline transcript-ingest", "google", GOOGLE_IMPORT_ROOTS)
+            from fieldkit.ingest.docs import get_docs_service
+
+            service = provider_stack.enter_context(closing(get_docs_service()))
+        doc_content = _fetch_doc_for_run(service, source_id, conn)
     if doc_content is None:
         return _ProcessResult(completed=False, degraded=False)
 
-    route = _route_source(src, doc_content)
-    account = primary_account(route)
-
-    transcript = _clean_and_extract_transcript(source_id, doc_content)
-    cleaned = transcript.cleaned
-    meta = transcript.meta
-    meta.accounts = route.accounts
-
-    # Re-run pursuit matching now that we have LLM-extracted topics and decisions,
-    # which are richer signals than the meeting title alone.
-    if account != "unknown":
-        from fieldkit.ingest.router import match_pursuits_for_account
-
-        topic_keywords = meta.key_topics + meta.key_decisions
-        enriched_pursuits = match_pursuits_for_account(account, keywords=topic_keywords)
-        # Merge: keep any title-matched pursuits, add topic-matched ones
-        merged = list(dict.fromkeys(route.pursuits + enriched_pursuits))
-        meta.pursuits = merged
-    else:
-        meta.pursuits = route.pursuits
-
-    doc_url = f"https://docs.google.com/document/d/{source_id}"
-    if src.meeting_date:
-        meeting_date_str = src.meeting_date.strftime("%Y-%m-%d")
-    else:
-        # Try to parse meeting date from the title (Gemini format: "Topic - YYYY/MM/DD HH:MM TZ")
-        _title_for_date = src.meeting_title or doc_content.doc_title or ""
-        # None means the title carries no date; render_vault_note warns and uses today.
-        meeting_date_str = infer_meeting_date(_title_for_date) or datetime.now(UTC).strftime("%Y-%m-%d")
-
-    note_content = render_vault_note(
-        doc_content=doc_content,
-        route=route,
-        meta=meta,
-        cleaned_body=cleaned,
-        pipeline_version=pipeline_version,
-        doc_url=doc_url,
-        meeting_date=meeting_date_str,
-    )
-    vault_path = compute_vault_path(
-        data_root=data_root,
-        account=account,
-        meeting_date=meeting_date_str,
-        meeting_title=src.meeting_title or doc_content.doc_title or source_id,
-    )
-
-    vault_path.parent.mkdir(parents=True, exist_ok=True)
-    vault_path.write_text(note_content, encoding="utf-8")
-
-    meeting_title_str: str = src.meeting_title or doc_content.doc_title or source_id
-
-    # Shared file mutations — serialised with _lock so parallel workers
-    # don't interleave writes to pursuit activity logs or TASKS.md.
-    with _lock:
-        notices = apply_meeting_writebacks(
-            MeetingWriteback(
-                pursuits=tuple(meta.pursuits),
-                action_items=tuple(meta.action_items),
-                account=account,
-                meeting_date=meeting_date_str,
-                meeting_title=meeting_title_str,
-                data_root=data_root,
-                vault_path=vault_path,
-            )
+    try:
+        prepared = prepare_meeting(
+            src=src,
+            doc_content=doc_content,
+            data_root=data_root,
+            pipeline_version=pipeline_version,
+            report_warning=partial(human_echo, err=True),
         )
-        for notice in notices:
-            human_echo(notice.message, err=notice.err)
-
-    mark_source_status(conn, source_id, SOURCE_STATUS_PROCESSED)
-    insert_vault_note_artifact(conn, source_id, pipeline_version, str(vault_path))
-
-    human_echo(f"  Wrote: {vault_path} (account: {account})")
-    return _ProcessResult(completed=True, degraded=transcript.used_fallback or meta.confidence == "low")
+    except ConfigError:
+        mark_source_status(conn, source_id, SOURCE_STATUS_FAILED)
+        raise
+    except RoutingReadRetryableError:
+        mark_source_status(conn, source_id, SOURCE_STATUS_PENDING)
+        raise
+    save_prepared(conn, prepared)
+    return _replay_source(conn, prepared, data_root)
 
 
 def _run_transcript_ingest(
@@ -488,59 +359,146 @@ def _run_transcript_ingest(
     interactive: bool,
     as_json: bool = False,
 ) -> int:
+    """Own the canonical database's transcript run lock through worker shutdown."""
+    from fieldkit.ingest.db import get_db_path
+
+    db_path = get_db_path().resolve()
+    if dry_run:
+        return _preview_transcript_ingest(db_path=db_path, limit=limit, as_json=as_json)
+    with ExitStack() as stack:
+        try:
+            stack.enter_context(transcript_run_lock(db_path))
+        except PathLockTimeoutError:
+            human_echo("Transcript ingest is already running; retry after it finishes.", err=True)
+            if as_json:
+                click.echo(json.dumps({"pipeline": GEMINI_TRANSCRIPT_PIPELINE, "error": "ingest_busy"}))
+            return 1
+        return _run_locked_transcript_ingest(
+            db_path=db_path,
+            spec=spec,
+            limit=limit,
+            interactive=interactive,
+            as_json=as_json,
+        )
+
+
+def _preview_record(candidate: "GmailCandidate", *, discovered_at: str) -> SourceRecord:
+    """Return the in-memory source record a live discovery would register."""
+    return SourceRecord(
+        source_id=candidate.source_id,
+        pipeline_id=GEMINI_TRANSCRIPT_PIPELINE,
+        subject=candidate.subject,
+        meeting_title=candidate.meeting_title,
+        meeting_date=candidate.meeting_date,
+        doc_url=candidate.doc_url,
+        email_message_id=candidate.email_message_id,
+        discovered_at=discovered_at,
+    )
+
+
+def _emit_transcript_preview(pending: list[SourceRecord], *, limit: int | None, as_json: bool) -> int:
+    """Render one already-bounded, read-only transcript preview."""
+    if not pending:
+        human_echo("No pending sources to process.")
+        human_echo("NOTE: Unregistered files may exist — run 'fieldkit ingest backfill' to check.")
+        if as_json:
+            BatchOutcomes().emit(pipeline=GEMINI_TRANSCRIPT_PIPELINE, dry_run=True)
+        return 0
+
+    limit_str = f"up to {limit}" if limit is not None else "all"
+    human_echo(
+        f"Dry run: pipeline={GEMINI_TRANSCRIPT_PIPELINE}, {len(pending)} pending source(s) ({limit_str} requested):"
+    )
+    for src in pending:
+        date_str = src.meeting_date.strftime("%Y-%m-%d") if src.meeting_date else "unknown date"
+        title = src.meeting_title or src.source_id
+        human_echo(f"  [{date_str}] {title} ({src.source_id})")
+    if as_json:
+        BatchOutcomes(pending=[src.source_id for src in pending]).emit(
+            pipeline=GEMINI_TRANSCRIPT_PIPELINE, dry_run=True
+        )
+    return 0
+
+
+def _preview_transcript_ingest(*, db_path: Path, limit: int | None, as_json: bool) -> int:
+    """Preview registered and newly discovered sources without filesystem writes."""
+    from fieldkit.gmail.discover import get_gmail_db_path, scan_gemini_candidates
+    from fieldkit.ingest.db import get_db_read_only
+    from fieldkit.ingest.sources import get_pending_sources
+
+    candidates = scan_gemini_candidates(get_gmail_db_path(), limit=None)
+    registered_ids: set[str] = set()
+    pending: list[SourceRecord] = []
+    try:
+        conn = get_db_read_only(db_path)
+    except FileNotFoundError:
+        conn = None
+    if conn is not None:
+        try:
+            registered_ids = {
+                str(row["source_id"])
+                for row in conn.execute(
+                    "SELECT source_id FROM sources WHERE pipeline_id = ?",
+                    (GEMINI_TRANSCRIPT_PIPELINE,),
+                ).fetchall()
+            }
+            pending = get_pending_sources(conn, GEMINI_TRANSCRIPT_PIPELINE)
+        except sqlite3.DatabaseError:
+            from fieldkit.errors import SQLiteSnapshotError
+
+            raise SQLiteSnapshotError("pipeline database is unverified", reason="unverified") from None
+        finally:
+            conn.close()
+
+    new_candidates: dict[str, GmailCandidate] = {}
+    for candidate in candidates:
+        if candidate.source_id not in registered_ids:
+            new_candidates.setdefault(candidate.source_id, candidate)
+    discovered_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    pending.extend(
+        _preview_record(new_candidates[source_id], discovered_at=discovered_at) for source_id in sorted(new_candidates)
+    )
+    pending.sort(key=lambda source: (source.discovered_at, source.source_id))
+    if limit is not None:
+        pending = pending[:limit]
+    return _emit_transcript_preview(pending, limit=limit, as_json=as_json)
+
+
+def _run_locked_transcript_ingest(
+    *,
+    db_path: Path,
+    spec: object,
+    limit: int | None,
+    interactive: bool,
+    as_json: bool,
+) -> int:
     """Execute the transcript-ingest pipeline.
 
     Discovery runs first (idempotent), then pending sources are processed.
     Handles --dry-run, --limit, --interactive, and SIGINT gracefully.
 
     Returns:
-        0 on success (including partial completion after SIGINT).
+        1 when setup or source processing fails; otherwise 0 (including interruption without errors).
     """
     from fieldkit.commands.ingest.registry import PIPELINES
     from fieldkit.gmail.discover import get_gmail_db_path, scan_gemini_candidates
-    from fieldkit.ingest.db import get_db_path, init_db
+    from fieldkit.ingest.db import init_db
     from fieldkit.ingest.sources import discover_gemini_sources, get_pending_sources
 
     pipeline_version: str = getattr(spec, "version", "0.1.0")
-    db_path = get_db_path()
+    candidates = scan_gemini_candidates(get_gmail_db_path(), limit=None)
     conn = init_db(db_path, pipelines=PIPELINES)
     try:
-        # Discovery (idempotent)
-        try:
-            gmail_db_path = get_gmail_db_path()
-            candidates = scan_gemini_candidates(gmail_db_path, limit=None)
-            new_sources = discover_gemini_sources(conn, candidates)
-            if new_sources:
-                human_echo(f"Discovered {len(new_sources)} new source(s).")
-        except (FileNotFoundError, ConfigError) as exc:
-            # gmail.db absent — non-fatal warning; ingest continues with sources
-            # already registered in pipeline.db. ConfigError raised by implementation note path;
-            # FileNotFoundError retained for backward compatibility.
-            human_echo(f"Warning: {exc}", err=True)
+        recover_interrupted_sources(conn)
+        new_sources = discover_gemini_sources(conn, candidates)
+        if new_sources:
+            human_echo(f"Discovered {len(new_sources)} new source(s).")
 
         pending = get_pending_sources(conn, GEMINI_TRANSCRIPT_PIPELINE, limit=limit)
         if not pending:
             human_echo("No pending sources to process.")
-            # historic regression: when dry_run, hint that unregistered files may exist on disk
-            if dry_run:
-                human_echo("NOTE: Unregistered files may exist — run 'fieldkit ingest backfill' to check.")
             if as_json:
-                BatchOutcomes().emit(pipeline=GEMINI_TRANSCRIPT_PIPELINE, dry_run=dry_run)
-            return 0
-
-        if dry_run:
-            limit_str = f"up to {limit}" if limit is not None else "all"
-            human_echo(
-                f"Dry run: pipeline={GEMINI_TRANSCRIPT_PIPELINE}, {len(pending)} pending source(s) ({limit_str} requested):"
-            )
-            for src in pending:
-                date_str = src.meeting_date.strftime("%Y-%m-%d") if src.meeting_date else "unknown date"
-                title = src.meeting_title or src.source_id
-                human_echo(f"  [{date_str}] {title} ({src.source_id})")
-            if as_json:
-                BatchOutcomes(pending=[src.source_id for src in pending]).emit(
-                    pipeline=GEMINI_TRANSCRIPT_PIPELINE, dry_run=True
-                )
+                BatchOutcomes().emit(pipeline=GEMINI_TRANSCRIPT_PIPELINE, dry_run=False)
             return 0
 
         return _run_processing_loop(
@@ -571,7 +529,7 @@ def _dynamic_worker_count(queue_size: int) -> int:
 def _run_interactive_loop(
     pending: list[SourceRecord],
     *,
-    service: object,
+    service: object | None,
     conn: sqlite3.Connection,
     data_root: Path,
     pipeline_version: str,
@@ -580,6 +538,8 @@ def _run_interactive_loop(
 
     Returns (n_processed, n_degraded, n_skipped, n_errors).
     """
+    from fieldkit.ingest.sources import claim_pending_source
+
     n_processed = n_degraded = n_skipped = n_errors = 0
     try:
         for src in pending:
@@ -589,7 +549,9 @@ def _run_interactive_loop(
             if choice == "q":
                 human_echo("Stopping. Pending sources remain in pipeline.db for resume.")
                 break
-            if choice != "y":
+            if choice == "y" and load_prepared(conn, src.source_id) is None:
+                require_optional_profile("ingest run --pipeline transcript-ingest", "google", GOOGLE_IMPORT_ROOTS)
+            if choice != "y" or not claim_pending_source(conn, src.source_id):
                 human_echo(f"  Skipped: {src.source_id}")
                 n_skipped += 1
                 continue
@@ -607,6 +569,7 @@ def _run_interactive_loop(
             else:
                 n_errors += 1
     except KeyboardInterrupt:
+        n_errors += 1
         human_echo("\nInterrupted.", err=True)
     return n_processed, n_degraded, n_skipped, n_errors
 
@@ -624,13 +587,10 @@ def _run_parallel_loop(
     Returns (n_processed, n_degraded, n_skipped, n_errors).
     """
     from fieldkit.ingest.db import get_db
-    from fieldkit.ingest.docs import get_docs_service
 
     workers = _dynamic_worker_count(len(pending))
     if workers > 1:
         human_echo(f"Using {workers} workers for {len(pending)} pending sources (target ≤{_TARGET_MINUTES} min).")
-
-    file_lock = threading.Lock()
 
     def _worker(src: SourceRecord) -> tuple[str, str]:
         """Process one source in a worker thread. Returns (source_id, ok)."""
@@ -638,9 +598,10 @@ def _run_parallel_loop(
 
         date_str = src.meeting_date.strftime("%Y-%m-%d") if src.meeting_date else "unknown date"
         title = src.meeting_title or src.source_id
-        worker_service = get_docs_service()
         worker_conn = get_db(db_path)
         try:
+            if load_prepared(worker_conn, src.source_id) is None:
+                require_optional_profile("ingest run --pipeline transcript-ingest", "google", GOOGLE_IMPORT_ROOTS)
             # implementation note: atomically claim the source before processing to prevent
             # two concurrent workers from both processing the same source.
             if not _claim(worker_conn, src.source_id):
@@ -648,11 +609,10 @@ def _run_parallel_loop(
             human_echo(f"Processing [{date_str}] {title} ({src.source_id}) …")
             result = _process_one_source(
                 src=src,
-                service=worker_service,
+                service=None,
                 conn=worker_conn,
                 data_root=data_root,
                 pipeline_version=pipeline_version,
-                file_lock=file_lock,
             )
         finally:
             worker_conn.close()
@@ -674,12 +634,23 @@ def _run_parallel_loop(
                         n_degraded += int(status == "degraded")
                     elif status == "failed":
                         n_errors += 1
-                except Exception as exc:  # noqa: BLE001
+                except (AuthError, ConfigError, LLMError, MissingOptionalDependencyError):
+                    raise
+                except RoutingReadRetryableError:
+                    src = futures[fut]
+                    statuses[src.source_id] = "pending"
+                    human_echo("Routing inputs could not be inspected; source remains pending for retry.", err=True)
+                    n_errors += 1
+                except Exception:  # noqa: BLE001
                     src = futures[fut]
                     statuses[src.source_id] = "failed"
-                    human_echo(f"  Error processing {src.source_id}: {exc}", err=True)
+                    human_echo(
+                        "Source processing failed; check source metadata and output storage. Source not completed.",
+                        err=True,
+                    )
                     n_errors += 1
     except KeyboardInterrupt:
+        n_errors += 1
         human_echo("\nInterrupted. Pending sources remain in pipeline.db for resume.", err=True)
 
     n_skipped = sum(status == "skipped" for status in statuses.values())
@@ -712,32 +683,22 @@ def _run_processing_loop(
     Interactive mode falls back to single-threaded processing (prompts require
     synchronous input).  Parallel mode gives each worker its own DB connection
     and Google Docs service instance; shared file mutations (TASKS.md, pursuit
-    activity logs) are serialised with a threading.Lock.
+    activity logs) are serialized by their target-specific effect publishers.
 
-    Returns 0 on success (including partial completion after Ctrl-C).
+    Returns 1 when setup or source processing fails, regardless of output format;
+    otherwise 0.
     """
     from fieldkit.config import get_fieldkit_home as _get_fieldkit_home
     from fieldkit.ingest.db import get_db_path
 
-    require_optional_profile("ingest run --pipeline transcript-ingest", "google", GOOGLE_IMPORT_ROOTS)
-    from fieldkit.ingest.docs import get_docs_service
-
     data_root = _get_fieldkit_home()
     db_path = get_db_path()
-
-    # Validate Google auth before spawning workers
-    try:
-        _probe_service = get_docs_service()
-    except FileNotFoundError as exc:
-        human_echo(f"Error: {exc}", err=True)
-        human_echo("Run the Google Workspace auth flow to generate the OAuth token.", err=True)
-        return 1
 
     outcomes = BatchOutcomes()
     if interactive:
         n_processed, n_degraded, n_skipped, n_errors = _run_interactive_loop(
             pending,
-            service=_probe_service,
+            service=None,
             conn=conn,
             data_root=data_root,
             pipeline_version=pipeline_version,
@@ -754,4 +715,4 @@ def _run_processing_loop(
     human_echo(f"\nSummary: {n_processed} processed ({n_degraded} degraded), {n_skipped} skipped, {n_errors} error(s).")
     if as_json:
         outcomes.emit(pipeline=GEMINI_TRANSCRIPT_PIPELINE, dry_run=False, include_degraded=True)
-    return 1 if as_json and n_errors else 0
+    return 1 if n_errors else 0

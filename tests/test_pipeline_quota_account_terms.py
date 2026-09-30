@@ -1,30 +1,26 @@
-"""Tests for the quota module's account-term and territory-resolution helpers.
+"""Quota account terms and resolution retain selected-workspace authority.
 
-`_account_search_term` and `_load_account_names` sat at 0% line coverage and
-`_resolve_missing_territory_ids` at 42.9%, while `commands/pipeline/quota.py`
-around them read higher. gaze-py <=0.8.2 applied that file aggregate to every
-function in it, so none was flagged; gaze-py 0.9.0 attributes coverage per
-function and surfaced them carrying 130.7 CRAP.
-
-`_resolve_missing_territory_ids` imports its collaborators inside the function
-body, so they are patched at their source modules — that is the binding the
-deferred import resolves against.
+Patch the account accessor at its imported module binding; Salesforce and setter
+collaborators remain deferred imports patched at their source modules.
 """
 
+from copy import deepcopy
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+import yaml
 
-from fieldkit.commands.pipeline.quota import (
+from fieldkit.config import ConfigError, set_sf_territory_id_for_account
+from fieldkit.sf.quota import (
     _account_search_term,
     _load_account_names,
+    _quota_accounts,
     _resolve_missing_territory_ids,
 )
 
 pytestmark = pytest.mark.unit
 
-_ACCOUNTS_CONFIG = "fieldkit.config.get_accounts_config"
 _SET_TERRITORY_ID = "fieldkit.config.set_sf_territory_id_for_account"
 _SF_CLIENT = "fieldkit.sf.client.SFDirectClient"
 _RESOLVE_IDS = "fieldkit.sf.territory.resolve_territory_ids"
@@ -85,7 +81,7 @@ def test_account_search_term_humanizes_the_slug_when_no_keyword(slug: str, expec
         "null-first",
     ],
 )
-def test_account_search_term_falls_back_when_the_keyword_is_unusable(info: dict) -> None:
+def test_account_search_term_falls_back_when_the_keyword_is_unusable(info: dict[str, object]) -> None:
     """An unusable first keyword falls back to the slug rather than searching for a blank.
 
     A whitespace-only or non-string keyword reaching SOSL would search for
@@ -125,11 +121,11 @@ def test_load_account_names_returns_empty_when_the_file_is_missing(tmp_path: Pat
     assert result == []
 
 
-def test_load_account_names_returns_empty_on_malformed_yaml(tmp_path: Path) -> None:
-    """A YAML syntax error degrades to no terms rather than propagating."""
+def test_load_account_names_rejects_malformed_yaml(tmp_path: Path) -> None:
+    """Invalid configuration must stop territory search rather than erase terms."""
     _write_accounts(tmp_path, "accounts: [unclosed\n")
-    result = _load_account_names(tmp_path)
-    assert result == []
+    with pytest.raises(ConfigError, match=r"accounts\.yaml"):
+        _load_account_names(tmp_path)
 
 
 @pytest.mark.parametrize(
@@ -140,7 +136,6 @@ def test_load_account_names_returns_empty_on_malformed_yaml(tmp_path: Path) -> N
         "accounts: null\n",
         "accounts: a-string\n",
         "accounts: []\n",
-        "accounts: {}\n",
         "accounts:\n  globex: null\n",
         "accounts:\n  globex: a-string\n",
     ],
@@ -150,16 +145,27 @@ def test_load_account_names_returns_empty_on_malformed_yaml(tmp_path: Path) -> N
         "null-accounts",
         "scalar-accounts",
         "list-accounts",
-        "empty-accounts",
         "null-account",
         "scalar-account",
     ],
 )
-def test_load_account_names_returns_empty_for_unusable_shapes(tmp_path: Path, body: str) -> None:
-    """Anything that is not a mapping of account mappings yields no terms."""
+def test_load_account_names_rejects_unusable_shapes(tmp_path: Path, body: str) -> None:
+    """Malformed account shapes cannot become an empty search scope."""
     _write_accounts(tmp_path, body)
+    with pytest.raises(ConfigError, match=r"accounts\.yaml"):
+        _load_account_names(tmp_path)
+
+
+def test_load_account_names_allows_empty_mapping(tmp_path: Path) -> None:
+    _write_accounts(tmp_path, "accounts: {}\n")
     result = _load_account_names(tmp_path)
     assert result == []
+
+
+def test_load_account_names_rejects_duplicate_keys(tmp_path: Path) -> None:
+    _write_accounts(tmp_path, "accounts: {acme: {sf_territory: T1}}\naccounts: {}\n")
+    with pytest.raises(ConfigError, match=r"accounts\.yaml"):
+        _load_account_names(tmp_path)
 
 
 # ---------------------------------------------------------------------------
@@ -173,65 +179,88 @@ def test_load_account_names_returns_empty_for_unusable_shapes(tmp_path: Path, bo
         {},
         {"globex": {"sf_territory": "T1", "sf_territory_id": "0MI000000000001AAA"}},
         {"globex": {"keywords": ["Globex"]}},
-        {"globex": None},
-        {"globex": "a-string"},
     ],
-    ids=["no-accounts", "already-resolved", "no-territory", "null-account", "scalar-account"],
+    ids=["no-accounts", "already-resolved", "no-territory"],
 )
 def test_resolve_missing_territory_ids_opens_no_connection_when_nothing_needs_resolving(
-    accounts: dict,
+    accounts: dict[str, dict[str, object]],
+    tmp_path: Path,
 ) -> None:
     """The early return must happen before any Salesforce connection is opened.
 
     This runs on every `--source sf` invocation, so a client opened here would
     be a live round trip on every run for a fully-resolved workspace.
     """
+    _write_accounts(tmp_path, yaml.safe_dump({"accounts": accounts}))
     with (
-        patch(_ACCOUNTS_CONFIG, return_value={"accounts": accounts}),
         patch(_SF_CLIENT) as mock_client,
         patch(_RESOLVE_IDS) as mock_resolve,
-        patch(_SET_TERRITORY_ID) as mock_set,
+        patch(_SET_TERRITORY_ID, wraps=set_sf_territory_id_for_account) as mock_set,
     ):
-        result = _resolve_missing_territory_ids("sid-123", "https://example.my.salesforce.com")
+        _resolve_missing_territory_ids(
+            "sid-123",
+            "https://example.my.salesforce.com",
+            data_root=tmp_path,
+            accounts_snapshot=deepcopy(_quota_accounts(tmp_path)),
+        )
 
-    assert result is None
     mock_client.assert_not_called()
     mock_resolve.assert_not_called()
     mock_set.assert_not_called()
 
 
-def test_resolve_missing_territory_ids_persists_each_resolved_id(capsys: pytest.CaptureFixture[str]) -> None:
-    """Resolved IDs are written back to accounts.yaml and reported on stderr."""
-    accounts = {
+def test_resolve_missing_territory_ids_persists_each_resolved_id(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """Resolved IDs are written back without leaking them to CLI output."""
+    accounts: dict[str, dict[str, object]] = {
         "globex": {"sf_territory": "FSI_SOUTH_TERR03", "keywords": ["Globex Corp"]},
         "acme-corp": {"sf_territory": "MFG_WEST_TERR01"},
     }
+    _write_accounts(tmp_path, yaml.safe_dump({"accounts": accounts}))
     with (
-        patch(_ACCOUNTS_CONFIG, return_value={"accounts": accounts}),
         patch(_SF_CLIENT),
         patch(_RESOLVE_IDS, return_value={"globex": "0MI000000000001AAA", "acme-corp": "0MI000000000002AAA"}),
-        patch(_SET_TERRITORY_ID) as mock_set,
+        patch(_SET_TERRITORY_ID, wraps=set_sf_territory_id_for_account) as mock_set,
     ):
-        _resolve_missing_territory_ids("sid-123", "https://example.my.salesforce.com")
+        result = _resolve_missing_territory_ids(
+            "sid-123",
+            "https://example.my.salesforce.com",
+            data_root=tmp_path,
+            accounts_snapshot=deepcopy(_quota_accounts(tmp_path)),
+        )
 
     persisted = {call.args for call in mock_set.call_args_list}
     assert persisted == {("globex", "0MI000000000001AAA"), ("acme-corp", "0MI000000000002AAA")}
+    assert result["globex"]["sf_territory_id"] == "0MI000000000001AAA"
+    assert result["acme-corp"]["sf_territory_id"] == "0MI000000000002AAA"
+    for call in mock_set.call_args_list:
+        assert call.kwargs["workspace_root"] == tmp_path
+        assert call.kwargs["expected_account"] == accounts[call.args[0]]
+        assert call.kwargs["expected_account"] is not accounts[call.args[0]]
+    globex_snapshot = mock_set.call_args_list[0].kwargs["expected_account"]
+    assert globex_snapshot["keywords"] is not accounts["globex"]["keywords"]
 
     captured = capsys.readouterr()
-    assert "0MI000000000001AAA" in captured.err
-    assert captured.out == "", "diagnostics must go to stderr so --json stdout stays machine-readable"
+    assert captured.err == ""
+    assert captured.out == ""
 
 
-def test_resolve_missing_territory_ids_passes_the_search_term_and_developer_name() -> None:
+def test_resolve_missing_territory_ids_passes_the_search_term_and_developer_name(tmp_path: Path) -> None:
     """Each account is resolved by (search term, DeveloperName), not by slug."""
     accounts = {"globex-corp": {"sf_territory": "FSI_SOUTH_TERR03", "keywords": ["Globex Corp"]}}
+    _write_accounts(tmp_path, yaml.safe_dump({"accounts": accounts}))
     with (
-        patch(_ACCOUNTS_CONFIG, return_value={"accounts": accounts}),
         patch(_SF_CLIENT),
         patch(_RESOLVE_IDS, return_value={}) as mock_resolve,
-        patch(_SET_TERRITORY_ID),
+        patch(_SET_TERRITORY_ID, wraps=set_sf_territory_id_for_account),
     ):
-        _resolve_missing_territory_ids("sid-123", "https://example.my.salesforce.com")
+        _resolve_missing_territory_ids(
+            "sid-123",
+            "https://example.my.salesforce.com",
+            data_root=tmp_path,
+            accounts_snapshot=deepcopy(_quota_accounts(tmp_path)),
+        )
 
     requested = mock_resolve.call_args.args[1]
     request = requested["globex-corp"]
@@ -240,7 +269,7 @@ def test_resolve_missing_territory_ids_passes_the_search_term_and_developer_name
     assert request.gsg_id is None
 
 
-def test_resolve_missing_territory_ids_treats_blank_gsg_identity_as_absent() -> None:
+def test_resolve_missing_territory_ids_treats_blank_gsg_identity_as_absent(tmp_path: Path) -> None:
     """Whitespace-only account identity must preserve the unscoped compatibility query."""
     accounts = {
         "globex-corp": {
@@ -248,13 +277,18 @@ def test_resolve_missing_territory_ids_treats_blank_gsg_identity_as_absent() -> 
             "sf_gsg_id": "   ",
         }
     }
+    _write_accounts(tmp_path, yaml.safe_dump({"accounts": accounts}))
     with (
-        patch(_ACCOUNTS_CONFIG, return_value={"accounts": accounts}),
         patch(_SF_CLIENT),
         patch(_RESOLVE_IDS, return_value={}) as mock_resolve,
-        patch(_SET_TERRITORY_ID),
+        patch(_SET_TERRITORY_ID, wraps=set_sf_territory_id_for_account),
     ):
-        _resolve_missing_territory_ids("sid-123", "https://example.my.salesforce.com")
+        _resolve_missing_territory_ids(
+            "sid-123",
+            "https://example.my.salesforce.com",
+            data_root=tmp_path,
+            accounts_snapshot=deepcopy(_quota_accounts(tmp_path)),
+        )
 
     requested = mock_resolve.call_args.args[1]
     assert requested["globex-corp"].gsg_id is None
@@ -262,21 +296,28 @@ def test_resolve_missing_territory_ids_treats_blank_gsg_identity_as_absent() -> 
 
 def test_resolve_missing_territory_ids_warns_about_unresolved_accounts(
     caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
 ) -> None:
-    """An account SF could not match is warned about rather than silently skipped."""
+    """Unresolved accounts are counted without exposing account identities."""
     accounts = {
         "globex": {"sf_territory": "FSI_SOUTH_TERR03"},
         "ghost-account": {"sf_territory": "NO_SUCH_TERR"},
     }
+    _write_accounts(tmp_path, yaml.safe_dump({"accounts": accounts}))
     with (
-        patch(_ACCOUNTS_CONFIG, return_value={"accounts": accounts}),
         patch(_SF_CLIENT),
         patch(_RESOLVE_IDS, return_value={"globex": "0MI000000000001AAA"}),
-        patch(_SET_TERRITORY_ID),
+        patch(_SET_TERRITORY_ID, wraps=set_sf_territory_id_for_account),
         caplog.at_level("WARNING"),
     ):
-        _resolve_missing_territory_ids("sid-123", "https://example.my.salesforce.com")
+        _resolve_missing_territory_ids(
+            "sid-123",
+            "https://example.my.salesforce.com",
+            data_root=tmp_path,
+            accounts_snapshot=deepcopy(_quota_accounts(tmp_path)),
+        )
 
-    assert "ghost-account" in caplog.text
-    assert "NO_SUCH_TERR" in caplog.text
-    assert "globex" not in caplog.text.replace("ghost-account", ""), "a resolved account must not be warned about"
+    assert "Could not resolve territory IDs for 1 configured account(s)" in caplog.text
+    assert "ghost-account" not in caplog.text
+    assert "NO_SUCH_TERR" not in caplog.text
+    assert "globex" not in caplog.text

@@ -10,11 +10,14 @@ from functools import cache
 from pathlib import Path
 from typing import TypeVar
 
-import yaml
 from pydantic import ValidationError as _PydanticValidationError
 
 from fieldkit.config._schema import _FieldkitConfig
 from fieldkit.errors import FieldkitError
+from fieldkit.util.strict_yaml import StrictYAMLError, load_strict_yaml
+from fieldkit.util.text_snapshot import read_text_snapshot
+
+MAX_CONFIG_UPDATE_BYTES = 1024 * 1024
 
 
 def _default_config_dir() -> Path:
@@ -55,6 +58,23 @@ class ConfigError(FieldkitError):
     """Raised for all configuration failures (missing file, bad YAML, missing keys)."""
 
 
+def read_config_mapping_for_update(path: Path) -> dict[str, object]:
+    """Read existing operator YAML without converting failures into empty state."""
+    try:
+        text = read_text_snapshot(path, max_bytes=MAX_CONFIG_UPDATE_BYTES).content
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError):
+        raise ConfigError("Existing configuration could not be read") from None
+    try:
+        data = load_strict_yaml(text)
+    except StrictYAMLError:
+        raise ConfigError("Existing configuration contains invalid YAML") from None
+    if not isinstance(data, dict) or any(not isinstance(key, str) for key in data):
+        raise ConfigError("Existing configuration must contain a string-keyed YAML mapping")
+    return {key: value for key, value in data.items() if isinstance(key, str)}
+
+
 def _read_config_dict(path: Path) -> dict[str, object] | None:
     """Read and parse a YAML config file at an explicit path into a dict, or None on any failure.
 
@@ -63,13 +83,13 @@ def _read_config_dict(path: Path) -> dict[str, object] | None:
     caller-supplied (possibly test-patched) path — without the cached,
     validated default-path resolution that `_load_raw_config()` performs.
     """
-    if not path.exists():
-        return None
     try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError):
+        data = load_strict_yaml(read_text_snapshot(path, max_bytes=MAX_CONFIG_UPDATE_BYTES).content)
+    except (OSError, ValueError):
         return None
-    return data if isinstance(data, dict) else None
+    if not isinstance(data, dict) or any(not isinstance(key, str) for key in data):
+        return None
+    return {key: value for key, value in data.items() if isinstance(key, str)}
 
 
 def _has_stable_directory_ancestor(path: Path) -> bool:
@@ -114,29 +134,25 @@ def _load_raw_config_uncached(*, strict: bool) -> dict[str, object] | None:
     translate every user config read or parse failure into ``ConfigError``.
     """
     try:
-        raw_text = CONFIG_PATH.read_text(encoding="utf-8")
-    except FileNotFoundError as exc:
+        raw_text = read_text_snapshot(CONFIG_PATH, max_bytes=MAX_CONFIG_UPDATE_BYTES).content
+    except FileNotFoundError:
         if not strict or _has_stable_directory_ancestor(CONFIG_PATH):
             return None
-        raise ConfigError(f"Could not read config file {CONFIG_PATH}: {exc}") from exc
-    except OSError as exc:
+        raise ConfigError("Could not read config file") from None
+    except (OSError, ValueError):
         if strict:
-            raise ConfigError(f"Could not read config file {CONFIG_PATH}: {exc}") from exc
+            raise ConfigError("Could not read config file") from None
         return None
-    except UnicodeError as exc:
-        if strict:
-            raise ConfigError(f"Could not read config file {CONFIG_PATH}: {exc}") from exc
-        raise
 
     try:
-        data = yaml.safe_load(raw_text)
-    except yaml.YAMLError as exc:
+        data = load_strict_yaml(raw_text)
+    except StrictYAMLError:
         if strict:
-            raise ConfigError(f"Config file {CONFIG_PATH} contains invalid YAML (Invalid YAML): {exc}") from exc
+            raise ConfigError("Config file contains invalid YAML (Invalid YAML)") from None
         return None
-    if not isinstance(data, dict):
+    if not isinstance(data, dict) or any(not isinstance(key, str) for key in data):
         if strict:
-            raise ConfigError(f"Config file {CONFIG_PATH} must contain a YAML mapping, got {type(data).__name__}")
+            raise ConfigError("Config file must contain a YAML mapping with string keys")
         return None
     # implementation note: type-check known fields via Pydantic. Catches bad values (e.g.
     # fieldkit_home: 123) before they reach domain logic. Catches only
@@ -145,8 +161,16 @@ def _load_raw_config_uncached(*, strict: bool) -> dict[str, object] | None:
     try:
         _FieldkitConfig.model_validate(data)
     except _PydanticValidationError as exc:
-        raise ConfigError(f"Config file {CONFIG_PATH} has invalid values: {exc}") from exc
-    return data
+        fields = sorted(
+            {
+                error["loc"][0]
+                for error in exc.errors()
+                if error["loc"] and error["loc"][0] in _FieldkitConfig.model_fields
+            }
+        )
+        detail = f" for {', '.join(fields)}" if fields else ""
+        raise ConfigError(f"Config file has invalid values{detail}") from None
+    return {key: value for key, value in data.items() if isinstance(key, str)}
 
 
 @_config_cache

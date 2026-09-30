@@ -20,10 +20,11 @@
     "roles": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["preparer", "approver", "incident"],
+      "required": ["preparer", "approver", "approver_login", "incident"],
       "properties": {
         "preparer": {"type": "string", "minLength": 1},
         "approver": {"type": "string", "minLength": 1},
+        "approver_login": {"type": "string", "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$"},
         "incident": {"type": "string", "minLength": 1}
       }
     },

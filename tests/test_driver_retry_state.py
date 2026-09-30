@@ -17,7 +17,9 @@ def test_reserve_attempt_seeds_from_highest_github_label_and_exhausts(tmp_path: 
 
     assert reservation.allowed is True
     assert reservation.attempt == 3
-    completion = complete_attempt("owner/repo", 42, succeeded=False, outcome="failed", data_root=tmp_path)
+    completion = complete_attempt(
+        "owner/repo", 42, succeeded=False, outcome="failed", failure_code="agent-failed", data_root=tmp_path
+    )
     assert completion.phase == "exhausted"
     denied = reserve_attempt("owner/repo", 42, [], data_root=tmp_path)
     assert denied.allowed is False
@@ -28,11 +30,56 @@ def test_reserve_attempt_uses_local_history_after_initial_seed(tmp_path: Path) -
     from fieldkit.driver.retry_state import complete_attempt, reserve_attempt
 
     first = reserve_attempt("owner/repo", 42, ["attempt:1"], data_root=tmp_path)
-    complete_attempt("owner/repo", 42, succeeded=False, outcome="failed", data_root=tmp_path)
+    complete_attempt(
+        "owner/repo", 42, succeeded=False, outcome="failed", failure_code="agent-failed", data_root=tmp_path
+    )
     second = reserve_attempt("owner/repo", 42, ["attempt:0"], data_root=tmp_path)
 
     assert first.attempt == 2
     assert second.attempt == 3
+
+
+def test_retry_receipt_is_local_typed_and_bound_to_source_revision(tmp_path: Path) -> None:
+    from fieldkit.driver.retry_state import complete_attempt, reserve_attempt
+
+    revision = "a" * 40
+    first = reserve_attempt("owner/repo", 42, [], source_revision=revision, data_root=tmp_path)
+    assert first.receipt is None
+    complete_attempt(
+        "owner/repo",
+        42,
+        succeeded=False,
+        outcome="raw child output must not become prompt authority",
+        failure_code="agent-failed",
+        data_root=tmp_path,
+    )
+
+    retry = reserve_attempt("owner/repo", 42, [], source_revision=revision, data_root=tmp_path)
+    moved = reserve_attempt("owner/repo", 43, [], source_revision="b" * 40, data_root=tmp_path)
+
+    assert retry.receipt is not None
+    assert retry.receipt.failure_code == "agent-failed"
+    assert retry.receipt.source_revision == revision
+    assert "raw child" not in repr(retry.receipt)
+    assert moved.receipt is None
+
+
+def test_retry_receipt_is_not_reused_after_source_revision_changes(tmp_path: Path) -> None:
+    from fieldkit.driver.retry_state import complete_attempt, reserve_attempt
+
+    reserve_attempt("owner/repo", 42, [], source_revision="a" * 40, data_root=tmp_path)
+    complete_attempt(
+        "owner/repo",
+        42,
+        succeeded=False,
+        outcome="failed",
+        failure_code="verification-failed",
+        data_root=tmp_path,
+    )
+
+    retry = reserve_attempt("owner/repo", 42, [], source_revision="b" * 40, data_root=tmp_path)
+
+    assert retry.receipt is None
 
 
 def test_check_eligibility_denies_malformed_or_unwritable_state(tmp_path: Path) -> None:
@@ -77,7 +124,9 @@ def test_reset_retry_records_audit_and_refuses_active_running_entry(tmp_path: Pa
     assert refused.reset is False
     assert "active driver" in refused.detail
 
-    complete_attempt("owner/repo", 42, succeeded=False, outcome="failed", data_root=tmp_path)
+    complete_attempt(
+        "owner/repo", 42, succeeded=False, outcome="failed", failure_code="agent-failed", data_root=tmp_path
+    )
     reset = reset_retry("owner/repo", 42, "operator review", data_root=tmp_path)
     state = json.loads((tmp_path / "driver" / "retry-state.json").read_text(encoding="utf-8"))
 

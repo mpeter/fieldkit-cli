@@ -8,7 +8,7 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from fieldkit.commands.pipeline.collect import collect_pursuit_health
+from fieldkit.pipeline.collect import collect_pursuit_health
 from fieldkit.pursuit.enums import Stage
 from fieldkit.pursuit.io import load_pursuit, write_frontmatter
 from fieldkit.pursuit.models import PursuitFrontmatter

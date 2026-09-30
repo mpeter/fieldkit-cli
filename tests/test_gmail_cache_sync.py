@@ -1,8 +1,6 @@
-"""Tests for pure functions in tools/gmail_cache/sync.py.
+"""Tests for pure Gmail cache decoding, persistence, and retry helpers.
 
-Excludes all OAuth / live Gmail API functions (get_gmail_service, list_messages,
-incremental_sync, main). Tests cover:
-- db_init: schema creation, WAL mode, idempotency
+Excludes OAuth and live Gmail API calls. Tests cover:
 - _sync_get / _sync_set: key-value state helpers
 - _decode_b64url: base64url decoding with padding edge cases
 - _extract_parts: MIME tree walking (plain, html, attachments, nested multipart)
@@ -16,7 +14,6 @@ import base64
 import json
 import logging
 import sqlite3
-from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -26,19 +23,20 @@ pytestmark = pytest.mark.unit
 
 # Import functions under test directly — avoid importing module-level code that
 # calls get_salesforce_org_url() etc. by importing the specific names.
-from fieldkit.gmail.batch import BatchFetchResult, SyncSummary  # noqa: E402
-from fieldkit.gmail.sync_engine import (  # noqa: E402
-    _api_call_with_retry,
-    _process_label_changes,
-    _sync_get,
-    _sync_set,
-    db_init,
-)
+from fieldkit.gmail.batch import BatchFetchResult  # noqa: E402
+from fieldkit.gmail.retry import _api_call_with_retry  # noqa: E402
+from fieldkit.gmail.sync_engine import _process_label_changes  # noqa: E402
 from fieldkit.gmail.sync_store import (  # noqa: E402
     _decode_b64url,
     _extract_parts,
     fetch_messages_batch,
     insert_batch,
+)
+from fieldkit.gmail.sync_store import (  # noqa: E402
+    sync_get as _sync_get,
+)
+from fieldkit.gmail.sync_store import (  # noqa: E402
+    sync_set as _sync_set,
 )
 
 # ---------------------------------------------------------------------------
@@ -48,8 +46,6 @@ from fieldkit.gmail.sync_store import (  # noqa: E402
 
 def _in_memory_db() -> sqlite3.Connection:
     """Return an in-memory DB initialised with the gmail_cache schema."""
-    # We need to create the full schema without touching the filesystem.
-    # Use a temp-path db_init call via tmp_path fixture or build schema inline.
     schema = """
     CREATE TABLE IF NOT EXISTS threads (
         thread_id TEXT PRIMARY KEY,
@@ -122,52 +118,6 @@ def _make_message(
         "snippet": "plain text...",
         "attachments": attachments or [],
     }
-
-
-# ---------------------------------------------------------------------------
-# db_init
-# ---------------------------------------------------------------------------
-
-
-# ── TestDbInit (flattened) ──────────────────────────────────────────────────
-
-
-def test_db_init_creates_file(tmp_path: Path) -> None:
-    db_path = tmp_path / "gmail.db"
-    conn = db_init(db_path)
-    conn.close()
-    assert db_path.exists()
-
-
-def test_db_init_creates_parent_dirs(tmp_path: Path) -> None:
-    db_path = tmp_path / "nested" / "dir" / "gmail.db"
-    conn = db_init(db_path)
-    conn.close()
-    assert db_path.exists()
-
-
-def test_db_init_tables_created(tmp_path: Path) -> None:
-    conn = db_init(tmp_path / "gmail.db")
-    tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
-    conn.close()
-    for expected in ("messages", "threads", "sync_state"):
-        assert expected in tables, f"missing table: {expected}"
-
-
-def test_db_init_returns_connection(tmp_path: Path) -> None:
-    conn = db_init(tmp_path / "gmail.db")
-    assert isinstance(conn, sqlite3.Connection)
-    conn.close()
-
-
-def test_db_init_idempotent_on_existing_db(tmp_path: Path) -> None:
-    """Calling db_init twice doesn't raise (CREATE TABLE IF NOT EXISTS)."""
-    db_path = tmp_path / "gmail.db"
-    conn = db_init(db_path)
-    conn.close()
-    conn2 = db_init(db_path)
-    assert conn2 is not None
-    conn2.close()
 
 
 # ---------------------------------------------------------------------------
@@ -554,196 +504,6 @@ def test_api_call_with_retry_sleeps_between_retries() -> None:
         _api_call_with_retry(fn, context="test")
     mock_sleep.assert_called_once()
     assert mock_sleep.call_args[0][0] > 0  # slept for positive duration
-
-
-# ---------------------------------------------------------------------------
-# incremental_sync — historyId absent warning (T07 regression)
-# ---------------------------------------------------------------------------
-
-
-# ── TestIncrementalSyncHistoryIdAbsent (flattened) ──────────────────────────
-
-
-def _incremental_sync_make_db(start_id: str = "99000") -> sqlite3.Connection:
-    conn = _in_memory_db()
-    _sync_set(conn, "last_history_id", start_id)
-    _sync_set(conn, "initial_sync_complete", "true")
-    conn.commit()
-    return conn
-
-
-def _incremental_sync_make_service(history_pages: list[Any]) -> MagicMock:
-    """Build a mock Gmail service where history().list().execute() returns pages."""
-    service = MagicMock()
-    # Chain: service.users().history().list(**kw).execute() → page
-    history_list = MagicMock()
-    history_list.execute = MagicMock(side_effect=history_pages)
-    # history().list() must return same mock each call (keyword args vary)
-    service.users.return_value.history.return_value.list.return_value = history_list
-    return service
-
-
-def test_incremental_sync_no_history_id_in_response_does_not_update_last_history_id() -> None:
-    """When all history.list pages omit historyId, last_history_id is unchanged."""
-    from fieldkit.gmail.sync_engine import incremental_sync
-
-    conn = _incremental_sync_make_db("99000")
-    # history.list returns one page with history records but no 'historyId'
-    service = _incremental_sync_make_service([{"history": []}])  # no 'historyId' key
-
-    # Patch getProfile to avoid real network call
-    service.users.return_value.getProfile.return_value.execute.return_value = {}
-
-    with patch("fieldkit.gmail.sync_engine._api_call_with_retry", side_effect=lambda fn, **kw: fn()):
-        result = incremental_sync(service, conn)
-
-    assert result == SyncSummary()
-    # last_history_id must be unchanged
-    assert _sync_get(conn, "last_history_id") == "99000"
-
-
-def test_incremental_sync_no_history_id_emits_warning_log(caplog: pytest.LogCaptureFixture) -> None:
-    """When historyId absent, a warning is logged mentioning start_history_id."""
-    import logging
-
-    from fieldkit.gmail.sync_engine import incremental_sync
-
-    conn = _incremental_sync_make_db("88000")
-    service = _incremental_sync_make_service([{"history": []}])
-    service.users.return_value.getProfile.return_value.execute.return_value = {}
-
-    with (
-        caplog.at_level(logging.WARNING, logger="fieldkit.gmail.sync_engine"),
-        patch("fieldkit.gmail.sync_engine._api_call_with_retry", side_effect=lambda fn, **kw: fn()),
-    ):
-        result = incremental_sync(service, conn)
-
-    assert result == SyncSummary()
-    warning_msgs = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
-    assert any("historyId was absent" in m for m in warning_msgs), (
-        f"Expected 'historyId was absent' warning; got: {warning_msgs}"
-    )
-
-
-def test_incremental_sync_missing_history_id_retains_checkpoint() -> None:
-    """A profile snapshot cannot replace the final processed history response."""
-    from fieldkit.gmail.sync_engine import incremental_sync
-
-    conn = _incremental_sync_make_db("77000")
-    service = _incremental_sync_make_service([{"history": []}])
-    service.users.return_value.getProfile.return_value.execute.return_value = {"historyId": "99999"}
-
-    with patch("fieldkit.gmail.sync_engine._api_call_with_retry", side_effect=lambda fn, **kw: fn()):
-        result = incremental_sync(service, conn)
-
-    assert result == SyncSummary()
-    assert _sync_get(conn, "last_history_id") == "77000"
-    service.users.return_value.getProfile.assert_not_called()
-
-
-def test_incremental_sync_missing_history_id_logs_retry_warning(caplog: pytest.LogCaptureFixture) -> None:
-    """An absent response boundary retains state and explains that the next run retries."""
-    import logging
-
-    from fieldkit.gmail.sync_engine import incremental_sync
-
-    conn = _incremental_sync_make_db("66000")
-    service = _incremental_sync_make_service([{"history": []}])
-    service.users.return_value.getProfile.return_value.execute.side_effect = RuntimeError("network error")
-
-    with (
-        caplog.at_level(logging.WARNING, logger="fieldkit.gmail.sync_engine"),
-        patch("fieldkit.gmail.sync_engine._api_call_with_retry", side_effect=lambda fn, **kw: fn()),
-    ):
-        result = incremental_sync(service, conn)
-
-    assert result == SyncSummary()
-    assert _sync_get(conn, "last_history_id") == "66000"
-    warning_msgs = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
-    assert any("historyId was absent" in m for m in warning_msgs), f"Expected retry warning; got: {warning_msgs}"
-    service.users.return_value.getProfile.assert_not_called()
-
-
-def test_incremental_sync_http_404_clears_both_state_keys() -> None:
-    """HTTP 404 from history.list clears last_history_id AND initial_sync_complete (012).
-
-    The handler at sync.py:665-675 sets both to None on 404. Previously only
-    last_history_id was asserted, leaving initial_sync_complete untested.
-    """
-    from googleapiclient.errors import HttpError
-
-    from fieldkit.gmail.sync_engine import incremental_sync
-
-    conn = _incremental_sync_make_db("55000")
-
-    mock_resp = MagicMock()
-    mock_resp.status = 404
-    mock_resp.reason = "Gone"
-    err = HttpError(resp=mock_resp, content=b"History expired")
-
-    service = _incremental_sync_make_service([err])
-    service.users.return_value.history.return_value.list.return_value.execute.side_effect = [err]
-
-    with patch("fieldkit.gmail.sync_engine._api_call_with_retry", side_effect=lambda fn, **kw: fn()):
-        result = incremental_sync(service, conn)
-
-    assert result == SyncSummary()
-    assert _sync_get(conn, "last_history_id") is None, "last_history_id must be cleared on 404"
-    assert _sync_get(conn, "initial_sync_complete") is None, (
-        "initial_sync_complete must also be cleared on 404 (for full resync trigger)"
-    )
-
-
-def test_incremental_sync_added_messages_inserts_rows() -> None:
-    """incremental_sync inserts messages into the DB when messagesAdded payload arrives (012).
-
-    Patches fetch_messages_batch to return a pre-built message dict (bypassing
-    the complex batch HTTP request mock), then asserts insert_batch wrote to the
-    messages table. Confirms the DB-write contract of incremental_sync.
-    """
-    from fieldkit.gmail.sync_engine import incremental_sync
-
-    conn = _incremental_sync_make_db("44000")
-
-    # Pre-built structured dict as returned by _make_message_dict / fetch_messages_batch
-    import json
-
-    structured_msg = {
-        "message_id": "msg001",
-        "thread_id": "thr001",
-        "from_addr": "alice@example.com",  # pii-guard: ignore
-        "to_addr": "bob@your-org.example.com",
-        "cc_addr": "",
-        "date_str": "2024-03-15",
-        "date_epoch": 1710460800,
-        "subject": "Test Subject",
-        "body_plain": "Hello",
-        "body_html": "",
-        "snippet": "Hello",
-        "size_bytes": 5,
-        "labels": json.dumps(["INBOX"]),
-        "attachments": [],
-    }
-    history_page = {
-        "history": [{"messagesAdded": [{"message": {"id": "msg001", "labelIds": ["INBOX"]}}]}],
-        "historyId": "44001",
-    }
-
-    service = _incremental_sync_make_service([history_page])
-
-    with (
-        patch("fieldkit.gmail.sync_engine._api_call_with_retry", side_effect=lambda fn, **kw: fn()),
-        patch(
-            "fieldkit.gmail.sync_engine.fetch_messages_batch",
-            return_value=BatchFetchResult(messages=[structured_msg]),
-        ),
-    ):
-        result = incremental_sync(service, conn)
-
-    assert result == SyncSummary(added=1)
-    row_count = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
-    assert row_count >= 1, f"Expected at least 1 row in messages table after messagesAdded sync, got {row_count}"
-    assert _sync_get(conn, "last_history_id") == "44001"
 
 
 # ---------------------------------------------------------------------------

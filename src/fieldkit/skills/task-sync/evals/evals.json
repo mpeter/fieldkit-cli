@@ -2,47 +2,79 @@
   "skill_name": "task-sync",
   "static_checks": [
     {
-      "id": "gws_cli",
+      "id": "assisted_not_automatic",
       "type": "contains",
-      "pattern": "gws tasks",
-      "message": "Must use the gws CLI for Google Tasks (operator ruling 2026-07-17; MCP hits a reauth loop)"
+      "pattern": "one-command bidirectional sync",
+      "message": "The workflow must disclose that full reconciliation is assisted"
     },
     {
-      "id": "no_mcp",
+      "id": "preview_first_cli",
+      "type": "contains_all",
+      "patterns": [
+        "fieldkit gtask create",
+        "fieldkit gtask complete",
+        "Preview is the default"
+      ],
+      "message": "Remote mutations must use the shipped preview-first CLI"
+    },
+    {
+      "id": "bounded_pull",
+      "type": "contains_all",
+      "patterns": [
+        "--page-all --page-limit 100",
+        "30-second process",
+        "A partial pull is not authoritative"
+      ],
+      "message": "Remote reads must be complete, bounded, and fail closed"
+    },
+    {
+      "id": "separate_approval",
       "type": "contains",
-      "pattern": "never MCP",
-      "message": "Must state that the Google Tasks MCP route is not used"
+      "pattern": "approval for remote and local writes",
+      "message": "A sync request must not silently authorize either write boundary"
     },
     {
       "id": "managed_region",
-      "type": "contains",
-      "pattern": "TASKS.md",
-      "message": "Must reconcile the TASKS.md managed region"
+      "type": "contains_all",
+      "patterns": [
+        "<!-- task-sync:start -->",
+        "<!-- task-sync:end -->",
+        "change content outside"
+      ],
+      "message": "Only the exact marked region may be regenerated"
     },
     {
-      "id": "google_wins",
+      "id": "read_back",
       "type": "contains",
-      "pattern": "Google wins",
-      "message": "Google Tasks is the source of truth on any conflict"
-    },
-    {
-      "id": "anchors",
-      "type": "contains",
-      "pattern": "gtask:",
-      "message": "Must carry gtask id anchors as line identity"
+      "pattern": "Read back Google Tasks after every confirmed remote write",
+      "message": "Confirmed writes require same-run remote read-back"
     }
   ],
   "evals": [
     {
       "id": 0,
-      "prompt": "sync my tasks — I completed two things on my phone this morning",
-      "expected_behavior": "Pulls the fieldkit list via gws (showCompleted), pushes anchor-less promoted lines and local [x] completions first, then regenerates the managed region from the pulled list with Google winning",
+      "prompt": "Sync my tasks. I completed two things on my phone this morning.",
+      "expected_behavior": "Builds a bounded complete snapshot and exact two-part plan, then waits for separate remote-write and local-write confirmations; it uses shipped preview-first mutation commands and verifies remote read-back before an approved local replacement.",
       "assertions": [
-        "Uses the gws CLI (never the Google Tasks MCP route) and resolves the fieldkit list id at session start",
-        "Pushes promoted (anchor-less) managed lines and local completions to Google before regenerating",
-        "Regenerates the managed region from the pulled list — Google wins on conflict; mobile completions render as done, mobile deletions drop the line",
-        "Never deletes a Google task and never touches the backlog region below the marker",
-        "Reports a 3-6 line delta summary instead of dumping the whole list"
+        "Verifies the intended gws identity and resolves exactly one list named fieldkit",
+        "Rejects failed, partial, malformed, duplicate-id, or suspect empty pulls without changing either side",
+        "Asks the operator to classify a new mobile task whose notes do not identify Today or Active, and does not import unrelated completed history",
+        "Shows the complete remote plan and local diff before requesting separate confirmations",
+        "Uses fieldkit gtask create or complete previews for remote mutations and requires --confirm to write",
+        "Reads remote state back after writes and preserves all content outside the task-sync markers",
+        "Keeps shared diagnostics bounded and free of authentication output and customer task content",
+        "Reports partial or unresolved outcomes as non-passing instead of claiming synchronization"
+      ]
+    },
+    {
+      "id": 1,
+      "prompt": "Sync tasks, but only show me what would change.",
+      "expected_behavior": "Performs authenticated bounded reads and emits remote and local previews without applying any mutation.",
+      "assertions": [
+        "Does not pass --confirm to any fieldkit gtask command",
+        "Does not modify TASKS.md",
+        "Does not use raw gws insert, patch, or delete operations",
+        "Labels unresolved metadata and incomplete reads instead of inventing a diff"
       ]
     }
   ]

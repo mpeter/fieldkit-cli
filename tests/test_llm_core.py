@@ -1,10 +1,9 @@
 """Tests for fieldkit.llm.core — region resolution, timeout, and retry (historic regression, historic regression).
 
-All tests run with NO_LLM=1 or mock litellm so no real API calls are made.
+All tests run with FIELDKIT_NO_LLM=1 or mock litellm so no real API calls are made.
 """
 
 import os
-from typing import ClassVar
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -127,7 +126,7 @@ def test_synthesize_timeout_timeout_exception_propagates_as_llmerror() -> None:
     from fieldkit.llm.core import synthesize
 
     mock_completion = MagicMock(side_effect=Exception("timeout"))
-    # Clear NO_LLM so synthesize() doesn't stub out, then mock litellm
+    # Clear FIELDKIT_NO_LLM so synthesize() doesn't stub out, then mock litellm
     env_without_no_llm = hermetic_env()
     with (
         patch.dict(os.environ, env_without_no_llm, clear=True),
@@ -139,6 +138,22 @@ def test_synthesize_timeout_timeout_exception_propagates_as_llmerror() -> None:
     assert exc_info.value.category == "general"
 
 
+def test_synthesize_rejects_response_without_choices() -> None:
+    """An unexpected streaming or malformed response is not successful synthesis."""
+    from fieldkit.errors import LLMError
+    from fieldkit.llm.core import synthesize
+
+    with (
+        patch.dict(os.environ, hermetic_env(), clear=True),
+        patch("litellm.completion", return_value=object()) as completion,
+        pytest.raises(LLMError, match="Expected a non-streaming completion response") as exc_info,
+    ):
+        synthesize("test prompt", model="vertex_ai/test-model")
+
+    assert exc_info.value.category == "general"
+    completion.assert_called_once()
+
+
 # ---------------------------------------------------------------------------
 # Retry behaviour: synthesize() retries on transient errors (T037)
 # ---------------------------------------------------------------------------
@@ -146,7 +161,7 @@ def test_synthesize_timeout_timeout_exception_propagates_as_llmerror() -> None:
 
 # ── TestSynthesizeRetry (flattened) ─────────────────────────────────────────
 
-_SYNTHESIZE_RETRY__ENV_NO_LLM_CLEARED: ClassVar[dict[str, str]] = {
+_SYNTHESIZE_RETRY__ENV_NO_LLM_CLEARED: dict[str, str] = {
     **hermetic_env(),
 }
 
@@ -221,7 +236,7 @@ def test_synthesize_retry_auth_error_not_retried() -> None:
 
 # ── TestSynthesizePromptGuard (flattened) ───────────────────────────────────
 
-_SYNTHESIZE_PROMPT_GUARD__ENV_NO_LLM_CLEARED: ClassVar[dict[str, str]] = {
+_SYNTHESIZE_PROMPT_GUARD__ENV_NO_LLM_CLEARED: dict[str, str] = {
     **hermetic_env(),
 }
 

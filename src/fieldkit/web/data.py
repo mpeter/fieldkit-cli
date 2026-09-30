@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
+from fieldkit.autonomy.status import SourceObservation, observe_admission, observe_driver
 from fieldkit.companion.feed import WATCHER_FRESHNESS_WINDOW
 from fieldkit.companion.outbox import list_proposals as list_outbox_proposals
 from fieldkit.companion.outbox import load_proposal as load_outbox_proposal
@@ -457,27 +458,22 @@ class DataSource:
             "Review pending companion proposals.",
         )
 
-    def _latest_admission_decision(self) -> dict[str, Any] | None:
-        if self.data_dir is None:
-            return None
-        try:
-            ledger = json.loads((self.data_dir / "driver" / "developer-admission.json").read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return None
-        decisions = ledger.get("decisions", []) if isinstance(ledger, dict) else []
-        if not isinstance(decisions, list):
-            return None
-        for decision in reversed(decisions):
-            if isinstance(decision, dict):
-                return decision
-        return None
-
     def _developer_operation(self) -> OperationStage:
-        admission = self._latest_admission_decision()
+        unconfigured = SourceObservation("missing", "Runtime data directory is not configured.")
+        observation = observe_admission(self.data_dir) if self.data_dir is not None else unconfigured
+        if observation.state == "malformed":
+            return OperationStage(
+                "developer",
+                "error",
+                observation.detail,
+                observation.observed_at,
+                "Inspect the local admission record before another dispatch.",
+            )
+        admission = observation.values
         if admission is not None and admission.get("allowed") is False:
             reason = str(admission.get("reason_code", "unknown"))
             detail = str(admission.get("detail", "Developer admission was denied."))
-            updated_at = admission.get("ts") if isinstance(admission.get("ts"), str) else None
+            updated_at = observation.observed_at
             if reason == "lease-held":
                 return OperationStage("developer", "ok", f"Developer lease is in use: {detail}", updated_at, "")
             if reason == "daily-run-limit-reached":
@@ -495,13 +491,8 @@ class DataSource:
                 updated_at,
                 "Review the developer admission policy before another dispatch.",
             )
-        try:
-            driver_data = self.cli_json(["driver", "status", "--json"])
-        except WebDataError as exc:
-            return OperationStage("developer", "error", str(exc), None, "Run fieldkit driver status.")
-        driver_items = driver_data.get("items", []) if isinstance(driver_data, dict) else []
-        latest_driver = driver_items[0] if driver_items and isinstance(driver_items[0], dict) else None
-        if latest_driver is None:
+        driver = observe_driver(self.data_dir) if self.data_dir is not None else unconfigured
+        if driver.state == "missing":
             return OperationStage(
                 "developer",
                 "missing",
@@ -509,8 +500,17 @@ class DataSource:
                 None,
                 "Review the admission policy before enabling a workflow.",
             )
+        if driver.state != "available" or driver.values is None:
+            return OperationStage(
+                "developer",
+                "error",
+                driver.detail,
+                driver.observed_at,
+                "Inspect the local driver status record before another dispatch.",
+            )
+        latest_driver = driver.values
         outcome = str(latest_driver.get("outcome", "unknown"))
-        updated_at = latest_driver.get("ts") if isinstance(latest_driver.get("ts"), str) else None
+        updated_at = driver.observed_at
         if outcome == "failed":
             return OperationStage(
                 "developer",
@@ -519,14 +519,14 @@ class DataSource:
                 updated_at,
                 "Review the recorded driver failure before another dispatch.",
             )
-        if admission is not None and admission.get("allowed") is True:
+        # The observer validates the decision, and every denial returned above.
+        if admission is not None:
             admission_reason = str(admission.get("reason_code", "admitted"))
-            admission_updated_at = admission.get("ts") if isinstance(admission.get("ts"), str) else updated_at
             return OperationStage(
                 "developer",
                 "ok",
                 f"Latest developer admission: {admission_reason}. Latest driver outcome: {outcome}.",
-                admission_updated_at,
+                observation.observed_at,
                 "",
             )
         return OperationStage("developer", "ok", f"Latest driver outcome: {outcome}.", updated_at, "")

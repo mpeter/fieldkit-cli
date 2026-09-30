@@ -4,7 +4,7 @@ import pytest
 
 from fieldkit.companion.decide import ProposedAction, propose_for
 from fieldkit.companion.feed import AttentionItem
-from fieldkit.companion.gate import is_allowed
+from fieldkit.companion.gate import NO_ACT_POLICY, is_allowed
 from fieldkit.companion.mapping import ALERT_SKILL_MAP, WATCHER_SEVERITY_MAP
 
 pytestmark = pytest.mark.unit
@@ -62,8 +62,8 @@ def test_deterministic_command_is_always_read_only() -> None:
     """Safety invariant: the emitted command passes the gate at the lowest tier."""
     account_action = propose_for(_item())
     watcher_action = propose_for(_item(source="run-status/account-health", account=None, suggested_skill=None))
-    assert is_allowed(list(account_action.command_argv or []), "read", []) is True
-    assert is_allowed(list(watcher_action.command_argv or []), "read", []) is True
+    assert is_allowed(list(account_action.command_argv or []), "read", NO_ACT_POLICY) is True
+    assert is_allowed(list(watcher_action.command_argv or []), "read", NO_ACT_POLICY) is True
 
 
 @pytest.mark.parametrize("skill", sorted(set(ALERT_SKILL_MAP.values())))

@@ -15,10 +15,12 @@ from fieldkit.commands.pursuit.audit import (
     audit_file,
     check_yaml_duplicates,
     check_yaml_duplicates_directory,
+    pursuit_paths,
 )
 from fieldkit.errors import FrontmatterStalenessError
 from fieldkit.pursuit.gate_criteria import ALLOWED_GATE_STATUSES
-from fieldkit.pursuit.io import parse_frontmatter_fallback
+from fieldkit.pursuit.io import _pursuit_lock, parse_frontmatter_fallback
+from fieldkit.util.atomic import PathLockTimeoutError
 
 pytestmark = pytest.mark.unit
 
@@ -405,6 +407,17 @@ def test_apply_fixes_refuses_conflicting_canonical_and_legacy_fields(tmp_path: P
     assert path.read_text(encoding="utf-8") == original
 
 
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_apply_fixes_refuses_duplicate_legacy_keys_identically(tmp_path: Path, dry_run: bool) -> None:
+    original = "---\nstage: discover\nsf-opportunity-id: 006A\nsf-opportunity-id: 006B\n---\nBody\n"
+    path = _make_file(tmp_path, original)
+
+    with pytest.raises(ValueError, match="Duplicate YAML keys found"):
+        apply_fixes(path, dry_run=dry_run)
+
+    assert path.read_text(encoding="utf-8") == original
+
+
 def test_apply_fixes_collapses_equal_canonical_and_legacy_fields(tmp_path: Path) -> None:
     path = _make_file(
         tmp_path,
@@ -415,8 +428,31 @@ def test_apply_fixes_collapses_equal_canonical_and_legacy_fields(tmp_path: Path)
     frontmatter, _ = parse_frontmatter_fallback(path.read_text(encoding="utf-8"))
 
     assert result.renames == 1
+    assert frontmatter is not None
     assert frontmatter["sf_opportunity_id"] == "006SAME"
     assert "sf-opportunity-id" not in frontmatter
+
+
+def test_apply_fixes_repairs_unchanged_crlf_source(tmp_path: Path) -> None:
+    path = tmp_path / "crlf.md"
+    path.write_bytes(b"---\r\nstage: discover\r\nsf-opportunity-id: 006OLD\r\n---\r\nBody\r\n")
+
+    result = apply_fixes(path)
+
+    updated = path.read_bytes()
+    assert result.renames == 1
+    assert b"sf_opportunity_id: 006OLD" in updated
+    assert b"sf-opportunity-id" not in updated
+
+
+def test_apply_fixes_rejects_oversized_source_before_planning(tmp_path: Path) -> None:
+    path = tmp_path / "oversized.md"
+    path.write_bytes(b"---\nsf-opportunity-id: 006OLD\n---\n" + b"x" * 4_000_000)
+
+    with pytest.raises(ValueError, match="Cannot read stable regular text file"):
+        apply_fixes(path)
+
+    assert path.stat().st_size > 4_000_000
 
 
 def test_apply_fixes_refuses_write_when_file_changes_during_read(
@@ -427,20 +463,78 @@ def test_apply_fixes_refuses_write_when_file_changes_during_read(
     original = original_read_text(path, encoding="utf-8")
     concurrent = original + "Concurrent note\n"
 
-    def mutate_then_return_original(self: Path, *args: object, **kwargs: object) -> str:
+    def mutate_then_return_original(
+        self: Path,
+        encoding: str | None = None,
+        errors: str | None = None,
+    ) -> str:
         if self == path:
             self.write_text(concurrent, encoding="utf-8")
             current_ns = self.stat().st_mtime_ns
             os.utime(self, ns=(current_ns + 1_000_000_000, current_ns + 1_000_000_000))
             return original
-        return original_read_text(self, *args, **kwargs)
+        return original_read_text(self, encoding=encoding, errors=errors)
 
     monkeypatch.setattr(Path, "read_text", mutate_then_return_original)
 
-    with pytest.raises(FrontmatterStalenessError, match="modified since last read"):
+    with pytest.raises(FrontmatterStalenessError, match="changed after frontmatter validation"):
         apply_fixes(path)
 
     assert original_read_text(path, encoding="utf-8") == concurrent
+
+
+def test_apply_fixes_refuses_same_mtime_content_replacement(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = _make_file(tmp_path, "---\nstage: discover\nsf-opportunity-id: 006OLD\n---\nOriginal body\n")
+    original_info = path.stat()
+    concurrent = "---\nstage: discover\nsf-opportunity-id: 006NEW\n---\nConcurrent body\n"
+    from fieldkit.commands.pursuit import audit as audit_module
+
+    original_render = audit_module.__dict__["render_frontmatter_raw"]
+
+    def render_then_replace(*args: object, **kwargs: object) -> str:
+        rendered: str = original_render(*args, **kwargs)
+        path.write_text(concurrent, encoding="utf-8")
+        os.utime(path, ns=(original_info.st_atime_ns, original_info.st_mtime_ns))
+        return rendered
+
+    monkeypatch.setattr(audit_module, "render_frontmatter_raw", render_then_replace)
+
+    with pytest.raises(FrontmatterStalenessError, match="changed after frontmatter validation"):
+        apply_fixes(path)
+
+    assert path.read_text(encoding="utf-8") == concurrent
+
+
+def test_apply_fixes_refuses_invalid_canonical_frontmatter_without_writing(tmp_path: Path) -> None:
+    content = "---\nsf-stage: x\nk: ---\n- item\n---\nbody\n"
+    path = _make_file(tmp_path, content)
+
+    with pytest.raises(ValueError, match="Invalid pursuit frontmatter"):
+        apply_fixes(path)
+
+    assert path.read_text(encoding="utf-8") == content
+
+
+def test_apply_fixes_uses_writer_parser_for_dash_prefixed_key(tmp_path: Path) -> None:
+    path = _make_file(tmp_path, "---\nsf-stage: x\n---foo: bar\n---\nbody\n")
+
+    result = apply_fixes(path)
+
+    assert result.renames == 1
+    updated = path.read_text(encoding="utf-8")
+    frontmatter, body = parse_frontmatter_fallback(updated)
+    assert frontmatter == {"---foo": "bar", "sf_stage": "x"}
+    assert body == "\nbody\n"
+    assert updated.count("---foo") == 1
+
+
+def test_apply_fixes_uses_bounded_canonical_lock(tmp_path: Path) -> None:
+    path = _make_file(tmp_path, "---\nsf-stage: x\n---\nbody\n")
+
+    with _pursuit_lock(path), pytest.raises(PathLockTimeoutError, match="Timed out acquiring path lock"):
+        apply_fixes(path, lock_timeout_seconds=0)
+
+    assert "sf-stage: x" in path.read_text(encoding="utf-8")
 
 
 def test_apply_fixes_removes_legacy_hyphen_form(tmp_path: Path) -> None:
@@ -481,6 +575,7 @@ def test_apply_fixes_canonicalizes_former_meddpicc_in_same_atomic_write(tmp_path
 
     frontmatter, _ = parse_frontmatter_fallback(p.read_text(encoding="utf-8"))
     assert fix_result.renames >= 1
+    assert frontmatter is not None
     assert "meddpicc" not in frontmatter
     assert frontmatter["legacy_meddpicc"]["schema_version"] == 1
     assert frontmatter["legacy_meddpicc"]["status"] == "historical"
@@ -601,7 +696,59 @@ def test_audit_file_reports_unreadable_file(tmp_path: Path, monkeypatch: pytest.
     monkeypatch.setattr(Path, "read_text", raise_oserror)
     result = audit_file(path, today=date(2026, 6, 1))
 
-    assert result.parse_error == "Cannot read file: simulated read failure"
+    assert result.parse_error == "Cannot read pursuit file"
+
+
+def test_audit_file_records_non_utf8_as_parse_error(tmp_path: Path) -> None:
+    path = tmp_path / "private-customer.md"
+    path.write_bytes(b"---\nstage: discover\n---\n\xff")
+
+    result = audit_file(path, today=date(2026, 6, 1))
+
+    assert result.parse_error == "Cannot read pursuit file"
+    assert str(path) not in result.parse_error
+
+
+def test_audit_file_list_gate_result_is_a_finding_not_a_crash(tmp_path: Path) -> None:
+    content = VALID_FRONTMATTER.replace("gate-result: pass", "gate-result: [pass]")
+    result = audit_file(_make_file(tmp_path, content), today=date(2026, 6, 1))
+
+    assert any("invalid `gate-result`" in finding.message for finding in result.findings)
+
+
+def test_audit_file_complex_yaml_key_is_a_parse_error(tmp_path: Path) -> None:
+    path = _make_file(tmp_path, "---\n? [private, key]\n: value\n---\nbody\n")
+
+    result = audit_file(path, today=date(2026, 6, 1))
+
+    assert result.parse_error == "Invalid YAML frontmatter"
+
+
+def test_pursuit_paths_skips_stray_regular_account_file(tmp_path: Path) -> None:
+    accounts = tmp_path / "accounts"
+    accounts.mkdir()
+    (accounts / "notes.txt").write_text("not an account", encoding="utf-8")
+
+    assert pursuit_paths(tmp_path) == []
+
+
+def test_pursuit_paths_rejects_unfiltered_symlinked_account(tmp_path: Path) -> None:
+    accounts = tmp_path / "accounts"
+    accounts.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (accounts / "acme").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="redirects its authorized destination"):
+        pursuit_paths(tmp_path)
+
+
+def test_check_yaml_complex_key_is_per_file_parse_error(tmp_path: Path) -> None:
+    path = _make_file(tmp_path, "---\n? [private, key]\n: value\n---\nbody\n")
+
+    result = check_yaml_duplicates(path)
+
+    assert result.parse_error == "Invalid YAML frontmatter"
 
 
 def test_check_yaml_duplicates_no_frontmatter(tmp_path: Path) -> None:
@@ -835,7 +982,8 @@ def test_bug026_overwrite_warning_warns_when_report_already_exists(tmp_path: Pat
     from fieldkit.commands.pursuit.audit_cmd import cli as audit_cli
 
     _bug026_overwrite_warning_setup_accounts(tmp_path)
-    report_path = tmp_path / "report.md"
+    report_path = tmp_path / "accounts" / ".audit" / "report.md"
+    report_path.parent.mkdir()
     # Pre-create the report file so it already exists
     report_path.write_text("old content", encoding="utf-8")
 
@@ -862,7 +1010,8 @@ def test_bug026_overwrite_warning_no_warning_when_report_is_new(tmp_path: Path) 
     from fieldkit.commands.pursuit.audit_cmd import cli as audit_cli
 
     _bug026_overwrite_warning_setup_accounts(tmp_path)
-    report_path = tmp_path / "new-report.md"
+    report_path = tmp_path / "accounts" / ".audit" / "new-report.md"
+    report_path.parent.mkdir()
     # Ensure the file does NOT exist
     assert not report_path.exists()
 
@@ -947,7 +1096,8 @@ def test_audit_writes_report_file(tmp_path: Path) -> None:
     from fieldkit.commands.pursuit.audit_cmd import cli as audit_cli
 
     _setup_compliant_accounts(tmp_path)
-    report_path = tmp_path / "report.md"
+    report_path = tmp_path / "accounts" / ".audit" / "report.md"
+    report_path.parent.mkdir()
 
     with patch("fieldkit.commands.pursuit.audit_cmd._data_root", return_value=tmp_path):
         runner = CliRunner()

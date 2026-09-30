@@ -4,6 +4,7 @@ from pathlib import Path
 
 import check_workflow_security
 import pytest
+import yaml
 
 pytestmark = pytest.mark.unit
 
@@ -695,6 +696,20 @@ def test_repository_workflows_satisfy_public_policy() -> None:
 
     assert report.ok is True
     assert report.scanned_workflows >= 5
+
+
+def test_behavioral_smoke_uses_canonical_offline_switch() -> None:
+    """The behavioral CI smoke must not lose isolation when aliases are removed."""
+    path = check_workflow_security.REPO_ROOT / ".github" / "workflows" / "ci.yml"
+    workflow = yaml.load(path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+    assert isinstance(workflow, dict)
+    runs = [
+        step["run"]
+        for job in workflow["jobs"].values()
+        for step in job.get("steps", [])
+        if "run" in step and "fieldkit skill eval --behavioral --all" in step["run"]
+    ]
+    assert runs == ["FIELDKIT_NO_LLM=1 uv run fieldkit skill eval --behavioral --all"]
 
 
 def test_repository_pii_workflow_executes_only_trusted_standard_library_handler() -> None:

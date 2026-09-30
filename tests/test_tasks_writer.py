@@ -3,7 +3,7 @@
 Covers all FileSystemWrite and ReturnValue side effects:
   - Insert MY_TASK under ## Active
   - Insert WAITING_ON under ## Waiting On
-  - Idempotency (duplicate detection by text[:60] substring)
+  - Idempotency (duplicate detection by source-position provenance)
   - Missing-section fallback (creates ## Active / ## Waiting On at EOF)
   - File creation when tasks_path does not exist
   - Early return (no I/O) when classified_items is empty
@@ -12,7 +12,9 @@ Covers all FileSystemWrite and ReturnValue side effects:
 
 import pytest
 
+from fieldkit.config import get_fieldkit_data
 from fieldkit.tasks.classifier import ClassifiedItem, ItemClass
+from fieldkit.tasks.effects import TaskEffect
 from fieldkit.tasks.writer import append_to_tasks
 
 # ---------------------------------------------------------------------------
@@ -46,13 +48,14 @@ def _waiting_on(text: str, owner: str = "Alice Customer", pursuit_label: str = P
     )
 
 
-def _call(tasks_path, items):
+def _call(tasks_path, items, *, source_id="source-1"):
     """Thin wrapper so tests don't repeat keyword args."""
     return append_to_tasks(
-        items,
+        [TaskEffect(source_id, position, item) for position, item in enumerate(items)],
         tasks_path,
         meeting_date=MEETING_DATE,
         meeting_title=MEETING_TITLE,
+        runtime_root=get_fieldkit_data(),
     )
 
 
@@ -111,13 +114,11 @@ def test_skips_duplicate_items(tmp_path):
 
     content_after_first = tasks_file.read_text(encoding="utf-8")
 
-    # Second call — item text[:60] is already in the file; should be skipped
+    # Second call — source-position marker is already in the file; should be skipped
     second_result = _call(tasks_file, [item])
     assert second_result == (0, 0)
 
-    # File content must be byte-for-byte identical to post-first-call content.
-    # NOTE: the file IS rewritten (write_text is called unconditionally after the
-    # early-return guard); we assert content equality, not that write was skipped.
+    # A duplicate leaves the existing file content unchanged.
     content_after_second = tasks_file.read_text(encoding="utf-8")
     assert content_after_second == content_after_first
 
@@ -305,7 +306,7 @@ def test_fallback_active_section_idempotent_on_second_call(tmp_path):
     result1 = _call(tasks_file, [item])
     assert result1 == (1, 0)
 
-    # Second call: item text[:60] already in file → skipped
+    # Second call: source-position marker already in file → skipped
     result2 = _call(tasks_file, [item])
     assert result2 == (0, 0)
 
@@ -327,7 +328,7 @@ def test_waiting_on_fallback_section_not_duplicated(tmp_path):
     assert result1 == (0, 1)
 
     # Second call with a different item — should find the ## Waiting On section now
-    result2 = _call(tasks_file, [item2])
+    result2 = _call(tasks_file, [item2], source_id="source-2")
     assert result2 == (0, 1)
 
     content = tasks_file.read_text(encoding="utf-8")

@@ -1,68 +1,60 @@
-# AGENTS.md — Watcher Infrastructure (`watch/`)
+# fieldkit watcher contributor guide
 
-Shared runtime infrastructure for all fieldkit watchers: outcome model, run-status persistence, dedup, and path helpers.
+Watchers share run-status reporting, alert deduplication, and persistence helpers.
+Keep watcher-specific scanning and alert decisions in the relevant domain module.
 
-## Outcome Model
+## Status and persistence
 
-Three outcomes — only `fatal` is a pipeline failure:
+Use `fieldkit.watch.status` to report and inspect outcomes rather than parsing
+stdout. Read the reported `outcome` together with `records_checked` and `failures`.
+The shared classifier reports `ok` only with zero failures, `partial` when some
+records were checked and failures remain, and `fatal` when failures occurred
+before any record was checked. Preserve `partial` and `fatal` outcomes through
+callers rather than reporting unconditional success.
 
-- `ok` — all records processed, zero failures. Watcher ran cleanly.
-- `partial` — some records processed, some failures. Output was still produced. **`partial` is not a failure** — it means the watcher ran but some items had errors (e.g., one account's API call failed). Retry may help.
-- `fatal` — zero records processed. The pipeline did not run meaningfully (e.g., config missing, auth failure before any work started).
+Run status lives in the configured workspace's `watchers` directory.
+`write_run_status()` uses `locked_json_update()` and returns `written`, `skipped`
+for a dry run, or `failed` when persistence raises `OSError`, `TypeError`, or
+`ValueError`. Those failures produce a fixed warning rather than propagate.
+Inspect the returned result when persistence is part of the watcher's success
+contract; `failed` must remain nonpassing. This is a contributor requirement,
+not proof that every existing caller already checks the result. A missing or
+stale status entry is not proof of a successful current run.
 
-Outcomes are written to `<fieldkit_home>/watchers/watcher-run-status.json` atomically (tmp rename). Agents and orchestrators MUST classify by outcome, not by stdout parsing.
+Use each watcher's state helpers for alert-suppression state. The shared
+`fieldkit.watch.state.merge_state()` applies a scan's delta under a lock so a
+concurrent scan does not replace unrelated keys. Do not replace this with an
+unlocked read-modify-write.
 
-## State File Contract
+`fieldkit.watch.dedup.alert_block_exists()` checks for a case-sensitive heading
+prefix. No matching heading means only that the helper found no previous block;
+the watcher's eligibility checks still determine whether to produce an alert.
 
-- Each watcher writes a JSON state file to track what it has already alerted on.
-- Dedup is done by `dedup.alert_block_exists()`: scans the alerts markdown file for a `## <heading_prefix>` line. First run always produces alerts (no prior state).
-- **GOTCHA:** The `detected_transition_date` sentinel in `pursuit-stalls` is written on first detection and **never updated**. It records when the stall was first noticed, not the current date. Do not overwrite it on subsequent runs — that would destroy the stall age signal.
-- State files are in `<fieldkit_home>/watchers/`. Do not read or write them directly — use the watcher's own state helpers.
+## Pursuit transition dates
 
-## Account Skip Signal
+`apply_detected_transition_date()` owns the pursuit-stall transition sentinel.
+It bridges a detected stage change while frontmatter has not caught up, preserves
+the detected date on subsequent unchanged-stage scans, and bounds its lifetime.
+Do not reset the date on every scan: that would continually reset the stall age.
+Stage changes, updated frontmatter, malformed dates, and expiration are handled
+by that helper and its stage-change tests, not by a second implementation.
 
-**GOTCHA:** `internal: true` in `accounts.yaml` causes the account to be skipped by the `backstory-health` watcher. This is intentional for internal accounts that have no external Backstory signal. Check for this flag before adding new accounts to watcher scope.
+## Account selection
 
-## Environment Inheritance (systemd)
+The Backstory health watcher skips accounts with `internal: true` in account
+configuration. Preserve this filter when changing account selection; those
+accounts are deliberately outside its external-signal checks.
 
-Verified on this machine (Fedora 43, systemd user services):
+## Paths and tests
 
-- **Inherited automatically** via `systemctl --user set-environment`:
-  - `GOOGLE_APPLICATION_CREDENTIALS` ✅
-  - `GOOGLE_CLOUD_PROJECT` ✅
-  - `ANTHROPIC_VERTEX_PROJECT_ID` ✅
-  - `gcloud` binary in PATH ✅
-  - `mcpjungle` at `http://localhost:8080` reachable ✅
+Resolve watcher storage through the configured workspace helpers, not the
+checkout or a maintainer's service layout. Tests patch helpers where the watcher
+imports them. `get_watchers_dir()` participates in `clear_config_caches()`;
+watcher-local cached path accessors must also join the autouse isolation fixture.
 
-- **NOT inherited** — must be in `EnvironmentFile=` for any watcher that needs them:
-  - `BRAVE_API_KEY`
-  - `TAVILY_API_KEY`
-  - `SLACK_MCP_*`
-  - `WORKSPACE_MCP_CREDENTIALS_DIR`
+Use UTC dates for date-based status and deduplication decisions. A local-calendar
+date can change those decisions across machines near midnight.
 
-Recommended pattern: `EnvironmentFile=/home/<user>/work/fieldkit/.env` in the systemd service unit.
-
-## Test Patching Gotcha (L01)
-
-**GOTCHA:** When patching config path helpers in watcher tests, patch the **module-level binding** where the function is imported, not where it is defined.
-
-```python
-# WRONG — patches the definition site, not the call site
-with patch("fieldkit.config._loader.get_fieldkit_data", ...):
-
-# CORRECT — patches the binding in the watcher module
-with patch("fieldkit.watch.pursuit_stalls.get_fieldkit_data", ...):
-with patch("fieldkit.watch.morning_brief.get_watchers_dir", ...):
-```
-
-This applies to `get_fieldkit_data`, `get_fieldkit_home`, and any other config helper imported at module top level. The `@cache` decorator on some helpers means the first call wins — patch before any call is made.
-
-## Path Helpers
-
-All 8 watcher leaf modules import `get_watchers_dir()` from `fieldkit.config` (implementation change). It is `@_config_cache`-decorated and already cleared by `clear_config_caches()`. Tests patch the import-site binding `fieldkit.watch.<mod>.get_watchers_dir`.
-
-## Timezone-Aware Date (historic regression)
-
-**CONSTRAINT:** Never use `date.today()` in watcher code. Use `datetime.now(tz=UTC).date()` instead. `date.today()` is timezone-naive and returns different dates depending on the server's local clock — on UTC systems run overnight it disagrees with wall-clock date for the user's timezone.
-
-All watcher files were migrated in Spec 023 (historic regression). If you see `date.today()` anywhere in `src/fieldkit/`, it is a regression to fix.
+Scheduled processes need their own validated configuration and credentials.
+Do not infer a service's environment or integration availability from an
+interactive shell or from another contributor's machine.

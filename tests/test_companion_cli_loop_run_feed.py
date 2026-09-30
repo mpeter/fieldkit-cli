@@ -168,7 +168,7 @@ def test_run_no_command_exits_3_and_never_calls_run_action() -> None:
         result = CliRunner().invoke(cli, ["run"], catch_exceptions=False)
 
     assert result.exit_code == 3
-    assert "no command given" in result.stderr
+    assert "separator" in result.stderr
     assert mock_run_action.call_count == 0
 
 
@@ -185,7 +185,7 @@ def test_run_denied_exits_3_and_suppresses_stdout() -> None:
         result = CliRunner().invoke(cli, ["run", "--item-id", "abc", "--", "pursuit", "health"], catch_exceptions=False)
 
     assert result.exit_code == 3
-    assert "denied: pursuit health" in result.stderr
+    assert 'denied: ["pursuit", "health"]' in result.stderr
     assert "should not appear" not in result.output
 
 
@@ -204,12 +204,13 @@ def test_run_success_prints_stdout_exits_zero_and_forwards_item_id() -> None:
 
 
 @pytest.mark.unit
-def test_run_stderr_and_nonzero_exit_code_propagate() -> None:
-    action_result = ActionResult(argv=["false"], exit_code=5, denied=False, stdout="", stderr="boom")
+@pytest.mark.parametrize("child_exit, expected_exit", [(1, 1), (2, 2), (3, 3), (5, 3)])
+def test_run_stderr_and_nonzero_exit_code_propagate(child_exit: int, expected_exit: int) -> None:
+    action_result = ActionResult(argv=["false"], exit_code=child_exit, denied=False, stdout="", stderr="boom")
     with patch("fieldkit.companion.runner.run_action", return_value=action_result):
         result = CliRunner().invoke(cli, ["run", "--", "false"], catch_exceptions=False)
 
-    assert result.exit_code == 5
+    assert result.exit_code == expected_exit
     assert result.stdout == ""
     assert "boom" in result.stderr
 

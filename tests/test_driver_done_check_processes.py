@@ -1,7 +1,6 @@
 """Process and boundary tests for independent done-check execution."""
 
 import json
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -208,10 +207,12 @@ def test_python_check_retains_trusted_virtual_environment(tmp_path: Path) -> Non
 
 
 def test_git_authentication_failure_remains_typed(tmp_path: Path) -> None:
-    failure = subprocess.CompletedProcess([], 1, "", "fatal: Authentication failed")
+    from fieldkit.util.bounded_process import BoundedProcessResult
+
+    failure = BoundedProcessResult(1, "", "fatal: Authentication failed")
     with (
-        patch("fieldkit.driver.done_check_executor.subprocess.run", return_value=failure),
-        pytest.raises(AuthError, match="Authentication failed"),
+        patch("fieldkit.driver.done_check_executor.run_bounded_process", return_value=failure),
+        pytest.raises(AuthError, match="authentication failed"),
     ):
         verifier_git(tmp_path, "fetch", "origin", "a" * 40)
 
@@ -405,6 +406,33 @@ def test_timeout_terminates_process_group_descendants(tmp_path: Path) -> None:
         time.sleep(0.05)
     assert result.status == "timeout"
     assert not process_state.exists() or process_state.read_text().split()[2] == "Z"
+
+
+def test_completed_check_cleans_owned_group_before_reaping(tmp_path: Path) -> None:
+    repo, work_order, _ = _repository(
+        tmp_path,
+        "    - id: success\n      argv: [python, tests/success.py]\n",
+    )
+    (repo / "tests").mkdir()
+    (repo / "tests" / "success.py").write_text("print('ok')\n", encoding="utf-8")
+    _git(repo, "add", "tests/success.py")
+    _git(repo, "commit", "-m", "test: add successful check")
+    snapshot = _snapshot(repo, work_order, tmp_path)
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+
+    with patch("fieldkit.driver.done_check_executor._terminate", wraps=executor._terminate) as terminate:
+        result = _run_check(
+            snapshot,
+            snapshot.contract.checks[0],
+            repo,
+            artifacts,
+            deadline=time.monotonic() + 5,
+            attempt_bytes=[0],
+        )
+
+    assert result.status == "passed"
+    terminate.assert_called_once()
 
 
 def test_open_descendant_pipe_is_killed_after_leader_exits(tmp_path: Path) -> None:

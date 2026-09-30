@@ -12,13 +12,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from fieldkit.commands.pipeline.quota import _collect_pursuits_for_quota
 from fieldkit.commands.pursuit.forecast import compute_forecast
 from fieldkit.commands.sf.account import (
     _build_account_write_payload,
     _enrich_contract_type,
 )
-from fieldkit.sf.client import SFAPIError, SFAuthError
+from fieldkit.pipeline.quota import _collect_pursuits_for_quota
+from fieldkit.sf.errors import SFAPIError, SFAuthError
 
 pytestmark = pytest.mark.unit
 
@@ -86,8 +86,8 @@ def _quota_fm(*, contract_type: str) -> MagicMock:
 
 def _collect_one(fm: MagicMock) -> list[dict[str, object]]:
     with (
-        patch("fieldkit.commands.pipeline.quota.iterate_pursuits", return_value=[Path("/fake/deal.md")]),
-        patch("fieldkit.commands.pipeline.quota.load_pursuit", return_value=(fm, "", 0.0)),
+        patch("fieldkit.pipeline.quota.iterate_pursuits", return_value=[Path("/fake/deal.md")]),
+        patch("fieldkit.pipeline.quota.load_pursuit", return_value=(fm, "", 0.0)),
     ):
         return _collect_pursuits_for_quota(Path("/fake/data"))
 

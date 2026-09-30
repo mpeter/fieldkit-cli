@@ -1,5 +1,6 @@
 """Tests for fieldkit.commands.sf.account — account dashboard command."""
 
+import json
 import pathlib
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -8,7 +9,6 @@ import pytest
 from click.testing import CliRunner
 
 from fieldkit.commands.sf.account import (
-    _SF_ID_RE,
     _build_account_write_payload,
     _collect_local_opp_ids,
     _fmt_currency,
@@ -18,9 +18,19 @@ from fieldkit.commands.sf.account import (
     cli,
     run_account,
 )
-from fieldkit.sf.client import SFAPIError, SFNotFoundError
+from fieldkit.config import ConfigError
+from fieldkit.errors import FieldkitError
+from fieldkit.sf.client import SFDirectClient
+from fieldkit.sf.errors import SFAPIError, SFNotFoundError
+from fieldkit.sf.opportunities import is_opportunity_id
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.fixture(autouse=True)
+def canonical_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("fieldkit.commands.sf.account.get_fieldkit_home", lambda: tmp_path)
+
 
 # ── _fmt_currency ─────────────────────────────────────────────────────────────
 
@@ -141,8 +151,9 @@ def test_no_session_exits_2() -> None:
     assert result.exit_code == 2
 
 
-def test_no_write_skips_write_account() -> None:
-    """--no-write should print dashboard without calling do_write_account."""
+@pytest.mark.parametrize("preview_flag", ["--no-write", "--dry-run"])
+def test_preview_flag_skips_write_account(preview_flag: str, tmp_path: Path) -> None:
+    """Both public preview spellings use the same no-write implementation."""
     sample_acct = {
         "Id": "001TEST",
         "Name": "Test Corp",
@@ -178,17 +189,18 @@ def test_no_write_skips_write_account() -> None:
                 "accounts": {"acme-bank": {"keywords": ["acme-bank"], "pursuit_dir": "accounts/acme-bank/pursuits"}}
             },
         ),
-        patch("fieldkit.commands.sf.account.get_fieldkit_home", return_value=__import__("pathlib").Path("/tmp/fake")),
+        patch("fieldkit.commands.sf.account.get_fieldkit_home", return_value=tmp_path),
         patch("fieldkit.sf.client.SFDirectClient"),
         patch("fieldkit.commands.sf.account._resolve_sf_account_id", return_value="001TEST"),
         patch("fieldkit.commands.sf.account._fetch_account_record", return_value=sample_acct),
         patch("fieldkit.commands.sf.account._fetch_live_opportunities", return_value=sample_opps),
-        patch("fieldkit.commands.sf.sync.do_write_account") as mock_write,
+        patch("fieldkit.commands.sf.account.sync_account") as mock_write,
     ):
-        result = runner.invoke(cli, ["acme-bank", "--no-write"])
+        result = runner.invoke(cli, ["acme-bank", preview_flag])
 
     assert result.exit_code == 0
-    mock_write.assert_not_called()
+    mock_write.assert_called_once()
+    assert mock_write.call_args.kwargs["dry_run"] is True
     assert "Test Corp" in result.output
     assert "$500,000" in result.output
 
@@ -200,33 +212,33 @@ def test_no_write_skips_write_account() -> None:
 
 
 def test_accepts_15_char_alphanumeric() -> None:
-    assert _SF_ID_RE.fullmatch("006Qs000001abcd") is not None
+    assert is_opportunity_id("006Qs000001abcd")
 
 
 def test_accepts_18_char_alphanumeric() -> None:
-    assert _SF_ID_RE.fullmatch("006Qs000001abcdABC") is not None
+    assert is_opportunity_id("006Qs000001abcdABC")
 
 
 def test_rejects_needs_lookup() -> None:
-    assert _SF_ID_RE.fullmatch("NEEDS-LOOKUP") is None
+    assert not is_opportunity_id("NEEDS-LOOKUP")
 
 
 def test_rejects_tbd() -> None:
-    assert _SF_ID_RE.fullmatch("TBD") is None
+    assert not is_opportunity_id("TBD")
 
 
 def test_rejects_id_with_hyphen() -> None:
     # Hyphens are not alphanumeric — must be rejected
-    assert _SF_ID_RE.fullmatch("006-invalid-id") is None
+    assert not is_opportunity_id("006-invalid-id")
 
 
 def test_rejects_empty_string() -> None:
-    assert _SF_ID_RE.fullmatch("") is None
+    assert not is_opportunity_id("")
 
 
 def test_rejects_17_chars() -> None:
     # Neither 15 nor 18 chars — must be rejected
-    assert _SF_ID_RE.fullmatch("006Qs000001abcd1") is None
+    assert not is_opportunity_id("006Qs000001abcd1")
 
 
 # ── _resolve_sf_account_id placeholder guard ──────────────────────────────────
@@ -265,11 +277,9 @@ def test_placeholder_does_not_call_fetch_record(tmp_path: Path, capsys: pytest.C
     with (
         patch("fieldkit.commands.sf.account.get_accounts_config", return_value=accounts_cfg),
         patch("fieldkit.commands.sf.account.get_fieldkit_home", return_value=tmp_path),
+        pytest.raises(FieldkitError, match="identity is invalid"),
     ):
-        result = _resolve_sf_account_id("acme", mock_client, "https://sf.example.com")
-
-    # Must return None — no valid SF ID was found
-    assert result is None
+        _resolve_sf_account_id("acme", mock_client, "https://sf.example.com")
     # Must NOT have called fetch_record with the placeholder
     mock_client.fetch_record.assert_not_called()
 
@@ -295,12 +305,11 @@ def test_placeholder_emits_warning(tmp_path: Path, capsys: pytest.CaptureFixture
     with (
         patch("fieldkit.commands.sf.account.get_accounts_config", return_value=accounts_cfg),
         patch("fieldkit.commands.sf.account.get_fieldkit_home", return_value=tmp_path),
+        pytest.raises(FieldkitError, match="identity is invalid"),
     ):
         _resolve_sf_account_id("acme", mock_client, "https://sf.example.com")
 
-    captured = capsys.readouterr()
-    assert "WARNING" in captured.err
-    assert "NEEDS-LOOKUP" in captured.err
+    mock_client.fetch_record.assert_not_called()
 
 
 def test_null_opp_id_is_silently_skipped(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -321,7 +330,6 @@ def test_null_opp_id_is_silently_skipped(tmp_path: Path, capsys: pytest.CaptureF
         patch("fieldkit.commands.sf.account.get_fieldkit_home", return_value=tmp_path),
     ):
         result = _resolve_sf_account_id("acme", mock_client, "https://sf.example.com")
-
     assert result is None
     mock_client.fetch_record.assert_not_called()
     captured = capsys.readouterr()
@@ -361,7 +369,7 @@ def test_valid_sf_id_calls_sosl_search(tmp_path: Path) -> None:
 
 
 def test_no_sf_record_skips_write_and_warns(tmp_path: pathlib.Path, capsys: pytest.CaptureFixture) -> None:  # type: ignore[type-arg]
-    """When SF account lookup returns None, account.md is NOT written and a warning is logged."""
+    """A completed no-match exits 3 and never writes account.md."""
     acct_slug = "acme"
     with (
         patch("fieldkit.commands.sf.account.get_sf_session_id", return_value="fakesid"),
@@ -382,18 +390,76 @@ def test_no_sf_record_skips_write_and_warns(tmp_path: pathlib.Path, capsys: pyte
         patch("fieldkit.sf.client.SFDirectClient"),
         # Key mock: SF account lookup returns None (account not found)
         patch("fieldkit.commands.sf.account._resolve_sf_account_id", return_value=None),
-        patch("fieldkit.commands.sf.sync.do_write_account") as mock_write,
+        patch("fieldkit.commands.sf.account.sync_account") as mock_write,
     ):
         exit_code = run_account(acct_slug, write=True)
 
-    # Must return 0 (graceful skip, not an error)
-    assert exit_code == 0
+    assert exit_code == 3
     # Must NOT write frontmatter — that would overwrite correct data with None values
     mock_write.assert_not_called()
-    # Must emit a warning to stderr so operators can diagnose the skip
     captured = capsys.readouterr()
-    assert "no SF account record found" in captured.err
-    assert acct_slug in captured.err
+    assert "Salesforce account record was not found" in captured.err
+    assert acct_slug not in captured.err
+
+
+def test_json_no_sf_record_is_non_success_and_skips_dependent_reads_and_writes() -> None:
+    """JSON must not report ok when the primary account lookup found no record."""
+    runner = CliRunner()
+    with (
+        patch("fieldkit.commands.sf.account.get_account_names", return_value=["acme"]),
+        patch("fieldkit.commands.sf.account.get_sf_session_id", return_value="fake-sid"),
+        patch("fieldkit.commands.sf.account.get_sf_rest_base_url", return_value="https://sf.example.com"),
+        patch("fieldkit.commands.sf.account._sf_direct.SFDirectClient"),
+        patch("fieldkit.commands.sf.account._resolve_sf_account_id", return_value=None),
+        patch("fieldkit.commands.sf.account._fetch_live_opportunities") as mock_fetch_opportunities,
+        patch("fieldkit.commands.sf.account.sync_account") as mock_write,
+    ):
+        result = runner.invoke(cli, ["acme", "--json"])
+
+    assert result.exit_code == 3
+    assert json.loads(result.output) == {
+        "status": "error",
+        "error": "Salesforce account record was not found.",
+    }
+    mock_fetch_opportunities.assert_not_called()
+    mock_write.assert_not_called()
+
+
+def test_data_root_failure_uses_bounded_diagnostic(capsys: pytest.CaptureFixture[str]) -> None:
+    """Configuration failures must not print raw private paths or exceptions."""
+    with (
+        patch("fieldkit.commands.sf.account.get_account_names", return_value=["acme"]),
+        patch("fieldkit.commands.sf.account.get_accounts_config", return_value={"accounts": {"acme": {}}}),
+        patch("fieldkit.commands.sf.account.get_sf_session_id", return_value="fake-sid"),
+        patch("fieldkit.commands.sf.account.get_sf_rest_base_url", return_value="https://sf.example.com"),
+        patch(
+            "fieldkit.commands.sf.account.get_fieldkit_home",
+            side_effect=ConfigError("private path: /fictional-private/operator/customer-data"),
+        ),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        run_account("acme", write=False)
+
+    assert exc_info.value.code == 3
+    captured = capsys.readouterr()
+    assert "workspace configuration is invalid" in captured.err
+    assert "/fictional-private/operator/customer-data" not in captured.err
+
+
+def test_net_acv_provider_failure_uses_bounded_diagnostic(capsys: pytest.CaptureFixture[str]) -> None:
+    """Optional net-ACV degradation keeps record IDs and provider text private."""
+    from fieldkit.commands.sf.account import _fetch_net_acv
+
+    mock_client = MagicMock()
+    mock_client.fetch_record.side_effect = SFAPIError("private path: /fictional-private/operator/customer-data")
+
+    result = _fetch_net_acv("006PRIVATE1234567", mock_client)
+
+    assert result is None
+    captured = capsys.readouterr()
+    assert "Salesforce net ACV read failed" in captured.err
+    assert "006PRIVATE1234567" not in captured.err
+    assert "/fictional-private/operator/customer-data" not in captured.err
 
 
 def test_primary_opportunity_failure_does_not_write_account(tmp_path: Path) -> None:
@@ -408,11 +474,11 @@ def test_primary_opportunity_failure_does_not_write_account(tmp_path: Path) -> N
         patch("fieldkit.commands.sf.account._resolve_sf_account_id", return_value="001ACCOUNT000001"),
         patch("fieldkit.commands.sf.account._fetch_account_record", return_value={"Id": "001ACCOUNT000001"}),
         patch("fieldkit.commands.sf.account._fetch_live_opportunities", side_effect=SFAPIError("network timeout")),
-        patch("fieldkit.commands.sf.sync.do_write_account") as mock_write,
-        pytest.raises(SFAPIError, match="network timeout"),
+        patch("fieldkit.commands.sf.account.sync_account") as mock_write,
     ):
-        run_account("acme", write=True)
+        result = run_account("acme", write=True)
 
+    assert result == 1
     mock_write.assert_not_called()
 
 
@@ -423,45 +489,57 @@ def test_primary_opportunity_failure_does_not_write_account(tmp_path: Path) -> N
 
 
 def test_collect_local_opp_ids_returns_empty_frozenset_when_dir_missing(tmp_path: Path) -> None:
-    result = _collect_local_opp_ids(tmp_path / "nonexistent")
+
+    directory = tmp_path / "accounts" / "acme" / "pursuits"
+    directory.mkdir(parents=True)
+    result = _collect_local_opp_ids(tmp_path / "accounts" / "missing" / "pursuits")
     assert result == frozenset()
 
 
 def test_collect_local_opp_ids_collects_ids_from_pursuit_files(tmp_path: Path) -> None:
-    tmp_path.mkdir(parents=True, exist_ok=True)
-    (tmp_path / "deal-a.md").write_text(
+
+    directory = tmp_path / "accounts" / "acme" / "pursuits"
+    directory.mkdir(parents=True)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "deal-a.md").write_text(
         "---\nsf_opportunity_id: 006ABC000000001AAA\nstage: discover\n---\n",
         encoding="utf-8",
     )
-    (tmp_path / "deal-b.md").write_text(
+    (directory / "deal-b.md").write_text(
         "---\nsf_opportunity_id: 006ABC000000002AAA\nstage: propose\n---\n",
         encoding="utf-8",
     )
-    result = _collect_local_opp_ids(tmp_path)
+    result = _collect_local_opp_ids(directory)
     assert "006ABC000000001AAA" in result
     assert "006ABC000000002AAA" in result
 
 
 def test_collect_local_opp_ids_skips_gmail_intel_and_template(tmp_path: Path) -> None:
-    tmp_path.mkdir(parents=True, exist_ok=True)
-    (tmp_path / "gmail-intel.md").write_text(
+
+    directory = tmp_path / "accounts" / "acme" / "pursuits"
+    directory.mkdir(parents=True)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "gmail-intel.md").write_text(
         "---\nsf_opportunity_id: 006SKIP000000001AAA\n---\n",
         encoding="utf-8",
     )
-    (tmp_path / "template.md").write_text(
+    (directory / "template.md").write_text(
         "---\nsf_opportunity_id: 006SKIP000000002AAA\n---\n",
         encoding="utf-8",
     )
-    result = _collect_local_opp_ids(tmp_path)
+    result = _collect_local_opp_ids(directory)
     assert "006SKIP000000001AAA" not in result
     assert "006SKIP000000002AAA" not in result
 
 
 def test_collect_local_opp_ids_ignores_files_without_frontmatter(tmp_path: Path) -> None:
-    tmp_path.mkdir(parents=True, exist_ok=True)
-    (tmp_path / "no-fm.md").write_text("# Just a heading\nNo frontmatter here.\n", encoding="utf-8")
-    result = _collect_local_opp_ids(tmp_path)
-    assert result == frozenset()
+
+    directory = tmp_path / "accounts" / "acme" / "pursuits"
+    directory.mkdir(parents=True)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "no-fm.md").write_text("# Just a heading\nNo frontmatter here.\n", encoding="utf-8")
+    with pytest.raises(FieldkitError, match="frontmatter"):
+        _collect_local_opp_ids(directory)
 
 
 # ── TestPrintPipelineSectionUnmatchedTag (flattened) ─────────────────────────────────────────────
@@ -541,8 +619,11 @@ def _write_malformed_print_local_pursuits(d: Path, name: str, stage: str) -> Non
 def test_print_local_pursuits_active_pursuit_appears_in_active_list(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    _write_pursuit_print_local_pursuits(tmp_path, "deal-a.md", "discover")
-    _print_local_pursuits(tmp_path)
+
+    directory = tmp_path / "accounts" / "acme" / "pursuits"
+    directory.mkdir(parents=True)
+    _write_pursuit_print_local_pursuits(directory, "deal-a.md", "discover")
+    _print_local_pursuits(directory)
     out = capsys.readouterr().out
     assert "deal-a.md" in out
     assert "1 active" in out
@@ -551,8 +632,11 @@ def test_print_local_pursuits_active_pursuit_appears_in_active_list(
 def test_print_local_pursuits_closed_lost_not_counted_as_active(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    _write_pursuit_print_local_pursuits(tmp_path, "deal-closed.md", "closed-lost")
-    _print_local_pursuits(tmp_path)
+
+    directory = tmp_path / "accounts" / "acme" / "pursuits"
+    directory.mkdir(parents=True)
+    _write_pursuit_print_local_pursuits(directory, "deal-closed.md", "closed-lost")
+    _print_local_pursuits(directory)
     out = capsys.readouterr().out
     # closed-lost must NOT appear in active count
     assert "0 active" in out
@@ -562,20 +646,25 @@ def test_print_local_pursuits_closed_lost_not_counted_as_active(
 def test_print_local_pursuits_malformed_frontmatter_does_not_classify_as_active(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+
+    directory = tmp_path / "accounts" / "acme" / "pursuits"
+    directory.mkdir(parents=True)
     # Malformed file: extract_frontmatter_text returns None → stage="" → active
     # This is acceptable (unknown stage → active bucket) but must NOT crash.
-    _write_malformed_print_local_pursuits(tmp_path, "malformed.md", "closed-lost")
-    _print_local_pursuits(tmp_path)
-    out = capsys.readouterr().out
-    # Should not raise; output must contain the header line
-    assert "Local Pursuits" in out
+    _write_malformed_print_local_pursuits(directory, "malformed.md", "closed-lost")
+    with pytest.raises(FieldkitError, match="frontmatter"):
+        _print_local_pursuits(directory)
+    assert capsys.readouterr().out == ""
 
 
 def test_print_local_pursuits_closed_won_not_counted_as_active(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    _write_pursuit_print_local_pursuits(tmp_path, "won.md", "closed-won")
-    _print_local_pursuits(tmp_path)
+
+    directory = tmp_path / "accounts" / "acme" / "pursuits"
+    directory.mkdir(parents=True)
+    _write_pursuit_print_local_pursuits(directory, "won.md", "closed-won")
+    _print_local_pursuits(directory)
     out = capsys.readouterr().out
     assert "0 active" in out
     assert "1 closed" in out
@@ -584,9 +673,12 @@ def test_print_local_pursuits_closed_won_not_counted_as_active(
 def test_print_local_pursuits_skips_template_and_gmail_intel(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    (tmp_path / "template.md").write_text("---\nstage: discover\n---\n", encoding="utf-8")
-    (tmp_path / "gmail-intel.md").write_text("---\nstage: discover\n---\n", encoding="utf-8")
-    _print_local_pursuits(tmp_path)
+
+    directory = tmp_path / "accounts" / "acme" / "pursuits"
+    directory.mkdir(parents=True)
+    (directory / "template.md").write_text("---\nstage: discover\n---\n", encoding="utf-8")
+    (directory / "gmail-intel.md").write_text("---\nstage: discover\n---\n", encoding="utf-8")
+    _print_local_pursuits(directory)
     out = capsys.readouterr().out
     assert "0 active" in out
 
@@ -733,8 +825,8 @@ def test_returns_none_when_account_info_not_dict(tmp_path: Path) -> None:
     assert result is None
 
 
-def test_returns_none_when_get_fieldkit_home_raises(tmp_path: Path) -> None:
-    """Returns None when get_fieldkit_home raises (no config file)."""
+def test_account_resolution_data_root_failure_propagates(tmp_path: Path) -> None:
+    """A data-root failure must remain distinguishable from a completed no-match."""
     mock_client = MagicMock()
     mock_client.resolve_account_id_by_keywords.return_value = None
 
@@ -743,11 +835,55 @@ def test_returns_none_when_get_fieldkit_home_raises(tmp_path: Path) -> None:
             "fieldkit.commands.sf.account.get_accounts_config",
             return_value=_accounts_cfg_resolve_sf_account_id_branch_coverage([]),
         ),
-        patch("fieldkit.commands.sf.account.get_fieldkit_home", side_effect=Exception("no config")),
+        patch("fieldkit.commands.sf.account.get_fieldkit_home", side_effect=OSError("private path")),
+        pytest.raises(OSError, match="private path"),
     ):
-        result = _resolve_sf_account_id("acme", mock_client, "https://sf.example.com")
+        _resolve_sf_account_id("acme", mock_client, "https://sf.example.com")
 
-    assert result is None
+
+def test_account_fallback_read_failure_is_partial_and_never_writes(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A failed fallback scan is retryable and does not masquerade as no-match."""
+    with (
+        patch("fieldkit.commands.sf.account.get_account_names", return_value=["acme"]),
+        patch("fieldkit.commands.sf.account.get_accounts_config", return_value={"accounts": {"acme": {}}}),
+        patch("fieldkit.commands.sf.account.get_sf_session_id", return_value="fake-sid"),
+        patch("fieldkit.commands.sf.account.get_sf_rest_base_url", return_value="https://sf.example.com"),
+        patch("fieldkit.commands.sf.account.get_fieldkit_home", side_effect=[tmp_path, OSError("/private/root")]),
+        patch("fieldkit.commands.sf.account._sf_direct.SFDirectClient"),
+        patch("fieldkit.commands.sf.account.sync_account") as mock_write,
+    ):
+        result = run_account("acme", write=True)
+
+    assert result == 1
+    mock_write.assert_not_called()
+    captured = capsys.readouterr()
+    assert "local pursuit scan failed" in captured.err.lower()
+    assert "/private/root" not in captured.err
+
+
+def test_malformed_pursuit_yaml_is_partial_and_never_writes(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    pursuit_dir = tmp_path / "accounts" / "acme" / "pursuits"
+    pursuit_dir.mkdir(parents=True)
+    (pursuit_dir / "broken.md").write_text("---\nsf_opportunity_id: [private-invalid\n---\nBody.\n", encoding="utf-8")
+    config = {"accounts": {"acme": {"keywords": [], "pursuit_dir": "accounts/acme/pursuits"}}}
+    with (
+        patch("fieldkit.commands.sf.account.get_account_names", return_value=["acme"]),
+        patch("fieldkit.commands.sf.account.get_accounts_config", return_value=config),
+        patch("fieldkit.commands.sf.account.get_sf_session_id", return_value="fake-sid"),
+        patch("fieldkit.commands.sf.account.get_sf_rest_base_url", return_value="https://sf.example.com"),
+        patch("fieldkit.commands.sf.account.get_fieldkit_home", return_value=tmp_path),
+        patch("fieldkit.commands.sf.account._sf_direct.SFDirectClient"),
+        patch("fieldkit.commands.sf.account.sync_account") as mock_write,
+    ):
+        result = run_account("acme", write=True)
+
+    assert result == 3
+    mock_write.assert_not_called()
+    captured = capsys.readouterr()
+    assert "local pursuit metadata is invalid" in captured.err.lower()
+    assert "private-invalid" not in captured.err
 
 
 def test_returns_none_when_pursuit_dir_missing(tmp_path: Path) -> None:
@@ -770,7 +906,7 @@ def test_returns_none_when_pursuit_dir_missing(tmp_path: Path) -> None:
 
 def test_sfautherror_on_sosl_search_propagates(tmp_path: Path) -> None:
     """implementation note: SFAuthError from sosl_search propagates (not caught in batch loop)."""
-    from fieldkit.sf.client import SFAuthError
+    from fieldkit.sf.errors import SFAuthError
 
     pursuit_dir = tmp_path / "accounts" / "acme" / "pursuits"
     pursuit_dir.mkdir(parents=True)
@@ -795,9 +931,9 @@ def test_sfautherror_on_sosl_search_propagates(tmp_path: Path) -> None:
         _resolve_sf_account_id("acme", mock_client, "https://sf.example.com")
 
 
-def test_sfapierror_on_sosl_search_returns_none(tmp_path: Path) -> None:
-    """implementation note: SFAPIError from sosl_search is caught; returns None."""
-    from fieldkit.sf.client import SFAPIError
+def test_sfapierror_on_sosl_search_propagates(tmp_path: Path) -> None:
+    """Provider failure must not become a successful no-match result."""
+    from fieldkit.sf.errors import SFAPIError
 
     pursuit_dir = tmp_path / "accounts" / "acme" / "pursuits"
     pursuit_dir.mkdir(parents=True)
@@ -817,10 +953,9 @@ def test_sfapierror_on_sosl_search_returns_none(tmp_path: Path) -> None:
             return_value=_accounts_cfg_resolve_sf_account_id_branch_coverage([]),
         ),
         patch("fieldkit.commands.sf.account.get_fieldkit_home", return_value=tmp_path),
+        pytest.raises(SFAPIError, match="network error"),
     ):
-        result = _resolve_sf_account_id("acme", mock_client, "https://sf.example.com")
-
-    assert result is None
+        _resolve_sf_account_id("acme", mock_client, "https://sf.example.com")
 
 
 def test_sosl_returns_id_without_file_scan(tmp_path: Path) -> None:
@@ -880,7 +1015,7 @@ def _accounts_cfg_sf_auth_error_handling() -> dict:
         "accounts": {
             "acme": {
                 "keywords": ["Acme Corp"],
-                "domains": ["acme-corp.com"],
+                "domains": ["acme-corp.example.com"],
                 "pursuit_dir": "accounts/acme/pursuits",
             }
         }
@@ -899,7 +1034,7 @@ def test_sfautherror_exits_2(tmp_path: Path) -> None:
     already-imported module object so the lazy import picks up the mock.
     """
     import fieldkit.sf.client as _sf_client
-    from fieldkit.sf.client import SFAuthError
+    from fieldkit.sf.errors import SFAuthError
 
     with (
         patch("fieldkit.commands.sf.account.get_account_names", return_value=["acme"]),
@@ -921,7 +1056,7 @@ def test_sfautherror_cli_shows_actionable_message(tmp_path: Path) -> None:
     catches the exception and surfaces it; we assert the message content.
     """
     import fieldkit.sf.client as _sf_client
-    from fieldkit.sf.client import SFAuthError
+    from fieldkit.sf.errors import SFAuthError
 
     runner = CliRunner()
     with (
@@ -960,28 +1095,101 @@ def test_fetch_account_record_successful_fetch_returns_record() -> None:
 
     mock_client = MagicMock()
     mock_client.fetch_sobject.return_value = {"Id": "001abc", "Name": "Acme"}
-    result = _fetch_account_record("001abc", mock_client, "https://sf.example.com")
+    result = _fetch_account_record("001abc", mock_client)
     assert result == {"Id": "001abc", "Name": "Acme"}
 
 
-def test_fetch_account_record_not_found_returns_none() -> None:
-    """SFNotFoundError → returns None."""
+def test_fetch_account_record_not_found_propagates() -> None:
+    """SFNotFoundError remains distinguishable from a successful empty result."""
     from fieldkit.commands.sf.account import _fetch_account_record
 
     mock_client = MagicMock()
     mock_client.fetch_sobject.side_effect = SFNotFoundError("404")
-    result = _fetch_account_record("001missing", mock_client, "https://sf.example.com")
-    assert result is None
+    with pytest.raises(SFNotFoundError, match="404"):
+        _fetch_account_record("001missing", mock_client)
 
 
-def test_fetch_account_record_api_error_returns_none() -> None:
-    """SFAPIError → returns None."""
+def test_fetch_account_record_api_error_propagates() -> None:
+    """Retryable provider errors remain distinguishable from absent data."""
     from fieldkit.commands.sf.account import _fetch_account_record
 
     mock_client = MagicMock()
     mock_client.fetch_sobject.side_effect = SFAPIError("500 Internal Server Error")
-    result = _fetch_account_record("001err", mock_client, "https://sf.example.com")
-    assert result is None
+    with pytest.raises(SFAPIError, match="500 Internal Server Error"):
+        _fetch_account_record("001err", mock_client)
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_exit"),
+    [(SFNotFoundError("404"), 3), (SFAPIError("timeout"), 1)],
+)
+def test_primary_account_read_failure_never_writes(tmp_path: Path, failure: Exception, expected_exit: int) -> None:
+    with (
+        patch("fieldkit.commands.sf.account.get_account_names", return_value=["acme"]),
+        patch("fieldkit.commands.sf.account.get_accounts_config", return_value=_accounts_cfg_sf_auth_error_handling()),
+        patch("fieldkit.commands.sf.account.get_sf_session_id", return_value="fake-sid"),
+        patch("fieldkit.commands.sf.account.get_sf_rest_base_url", return_value="https://sf.example.com"),
+        patch("fieldkit.commands.sf.account.get_fieldkit_home", return_value=tmp_path),
+        patch("fieldkit.commands.sf.account._sf_direct.SFDirectClient"),
+        patch("fieldkit.commands.sf.account._resolve_sf_account_id", return_value="001ACCOUNT000001"),
+        patch("fieldkit.commands.sf.account._fetch_account_record", side_effect=failure),
+        patch("fieldkit.commands.sf.account._fetch_live_opportunities") as mock_fetch_opps,
+        patch("fieldkit.commands.sf.account.sync_account") as mock_write,
+    ):
+        result = run_account("acme", write=True)
+
+    assert result == expected_exit
+    mock_fetch_opps.assert_not_called()
+    mock_write.assert_not_called()
+
+
+def test_account_resolution_provider_failure_is_partial_and_never_writes(tmp_path: Path) -> None:
+    with (
+        patch("fieldkit.commands.sf.account.get_account_names", return_value=["acme"]),
+        patch("fieldkit.commands.sf.account.get_accounts_config", return_value=_accounts_cfg_sf_auth_error_handling()),
+        patch("fieldkit.commands.sf.account.get_sf_session_id", return_value="fake-sid"),
+        patch("fieldkit.commands.sf.account.get_sf_rest_base_url", return_value="https://sf.example.com"),
+        patch("fieldkit.commands.sf.account.get_fieldkit_home", return_value=tmp_path),
+        patch("fieldkit.commands.sf.account._sf_direct.SFDirectClient"),
+        patch("fieldkit.commands.sf.account._resolve_sf_account_id", side_effect=SFAPIError("timeout")),
+        patch("fieldkit.commands.sf.account._fetch_account_record") as mock_fetch_record,
+        patch("fieldkit.commands.sf.account._fetch_live_opportunities") as mock_fetch_opps,
+        patch("fieldkit.commands.sf.account.sync_account") as mock_write,
+    ):
+        result = run_account("acme", write=True)
+
+    assert result == 1
+    mock_fetch_record.assert_not_called()
+    mock_fetch_opps.assert_not_called()
+    mock_write.assert_not_called()
+
+
+def test_malformed_sosl_collection_is_partial_and_never_writes(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    response = MagicMock(status_code=200, headers={"content-type": "application/json"})
+    response.json.return_value = {"searchRecords": ["private-provider-member"]}
+    http_client = MagicMock()
+    http_client.request.return_value = response
+    direct_client = SFDirectClient(session_id="fake-sid", base_url="https://sf.example.com")
+    config = {"accounts": {"acme": {"keywords": ["Acme"], "pursuit_dir": "accounts/acme/pursuits"}}}
+    with (
+        patch("fieldkit.commands.sf.account.get_account_names", return_value=["acme"]),
+        patch("fieldkit.commands.sf.account.get_accounts_config", return_value=config),
+        patch("fieldkit.commands.sf.account.get_sf_session_id", return_value="fake-sid"),
+        patch("fieldkit.commands.sf.account.get_sf_rest_base_url", return_value="https://sf.example.com"),
+        patch("fieldkit.commands.sf.account.get_fieldkit_home", return_value=tmp_path),
+        patch("fieldkit.commands.sf.account._sf_direct.SFDirectClient", return_value=direct_client),
+        patch("fieldkit.sf.client.httpx.Client", return_value=http_client),
+        patch("fieldkit.commands.sf.account.sync_account") as mock_write,
+    ):
+        result = run_account("acme", write=True)
+
+    assert result == 1
+    mock_write.assert_not_called()
+    captured = capsys.readouterr()
+    assert "Salesforce account read failed" in captured.err
+    assert "private-provider-member" not in captured.err
 
 
 # ── TestFetchLiveOpportunities (flattened) ─────────────────────────────────────────────

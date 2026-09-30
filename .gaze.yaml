@@ -1,22 +1,13 @@
-# gaze-py configuration for fieldkit
-# Docs: https://github.com/unbound-force/gaze-py
-#
-# Which command reads what (gaze-py 0.8.1):
-#   classification.thresholds -> `gazepy quality` (+ `gazepy report`)
-#   scoring                   -> `gazepy report` / GazeCRAP only. NOT the `crap`
-#                                gate: `gazepy crap`'s --crap-threshold CLI default
-#                                (15.0) unconditionally overrides scoring.crap_threshold.
-#   doc_scan                  -> `gazepy report` only (see `make gaze-report`).
-# The `crap` regression gate (make quality / CI) is driven by .gaze/baseline.json
-# and --max-crapload, not by this file.
+# Gaze configuration for fieldkit. Makefile owns the executable gate commands.
+# Classification and documentation scanning inform scored analysis; documentation
+# exclusions below do not remove Python modules from the analyzed source scope.
+# The crap command's CLI defaults override its configured scoring thresholds.
+# Regression, absolute CRAPload, and contract-coverage gates run separately.
 
 classification:
   thresholds:
-    # Effect-classification confidence [0-100] for the "contractual" label, read by
-    # `gazepy quality`. INDEPENDENT of the --min-contract-coverage gate and of the
-    # test->function pairing confidence (see docs/subtleties/gaze_subtleties.md).
-    # gaze-py default is 80; 75 deliberately widens the contractual set (larger
-    # coverage denominator).
+    # Effect-classification confidence [0-100], independent of test pairing
+    # confidence and the minimum contract-coverage percentage gate.
     contractual: 75
     # Maximum confidence score (exclusive) for "incidental" label.
     incidental: 50
@@ -39,10 +30,8 @@ classification:
       - "build/**"
 
 scoring:
-  # NOTE: `gazepy crap` ignores these (its --crap-threshold CLI default 15.0 wins);
-  # they apply to `gazepy report`'s CRAP/GazeCRAP computation only. Kept at 15.0 to
-  # match the crap gate's effective threshold so `make gaze-report` reports consistently.
+  # Report scoring policy. The crap CLI supplies its own threshold defaults.
   crap_threshold: 15.0
 
-  # GazeCRAP threshold (O1 — enforcement deferred until contract-coverage ships).
+  # GazeCRAP classification is distinct from the contract-coverage gate.
   gaze_crap_threshold: 15.0

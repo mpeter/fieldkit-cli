@@ -1,8 +1,7 @@
-"""Extended unit tests for src/fieldkit/commands/gmail/query.py.
+"""Extended unit tests for the Gmail query adapter.
 
-Targets the 148 uncovered lines (65% → target ≥ 75%) by exercising:
+Exercises:
   - _chunk_list: empty list, single chunk, multi-chunk
-  - _ensure_schema: duplicate column silently ignored, other errors re-raised
   - _normalize_date: RFC 2822 formats, empty string, unparseable
   - build_date_clause: since only, before only, both, neither
   - date_to_epoch: happy path, is_before flag, invalid date
@@ -10,7 +9,6 @@ Targets the 148 uncovered lines (65% → target ≥ 75%) by exercising:
   - print_results: empty rows, rows with last_date, rows with updated_at
   - _strip_quoted: strips quoted lines, collapses blank runs
   - _champion_signal_label: all three thresholds
-  - _extract_email_addr: bare email, Name <email> format
   - _is_noise: internal domain, noise regex match, clean external
   - _format_blindspots_table: with results, unknown last_epoch
   - query_champion_signals: empty DB (no people matched)
@@ -73,7 +71,7 @@ def _make_db() -> sqlite3.Connection:
 
 def test_chunk_list_empty_produces_one_empty_chunk() -> None:
     """_chunk_list([]) produces [[] ] — one empty chunk for zero-result callers."""
-    from fieldkit.commands.gmail.query import _chunk_list
+    from fieldkit.gmail.query_domain import _chunk_list
 
     result = _chunk_list([], 50)
     assert result == [[]], "Empty list must produce one empty chunk"
@@ -81,7 +79,7 @@ def test_chunk_list_empty_produces_one_empty_chunk() -> None:
 
 def test_chunk_list_single_chunk() -> None:
     """_chunk_list with fewer items than size returns one chunk."""
-    from fieldkit.commands.gmail.query import _chunk_list
+    from fieldkit.gmail.query_domain import _chunk_list
 
     result = _chunk_list(["a", "b", "c"], 10)
     assert result == [["a", "b", "c"]]
@@ -89,39 +87,10 @@ def test_chunk_list_single_chunk() -> None:
 
 def test_chunk_list_multi_chunk() -> None:
     """_chunk_list splits into multiple chunks of the given size."""
-    from fieldkit.commands.gmail.query import _chunk_list
+    from fieldkit.gmail.query_domain import _chunk_list
 
-    result = _chunk_list(list(range(7)), 3)
-    assert result == [[0, 1, 2], [3, 4, 5], [6]]  # type: ignore[comparison-overlap]
-
-
-# ---------------------------------------------------------------------------
-# _ensure_schema — duplicate column silently ignored, other errors re-raised
-# ---------------------------------------------------------------------------
-
-
-def test_ensure_schema_silently_ignores_duplicate_column() -> None:
-    """_ensure_schema does not raise when body_plain column already exists."""
-    from fieldkit.commands.gmail.query import _ensure_schema
-
-    conn = sqlite3.connect(":memory:")
-    conn.execute("CREATE TABLE messages (id INTEGER PRIMARY KEY, body_plain TEXT)")
-    conn.commit()
-
-    # Should not raise — duplicate column is silently ignored
-    _ensure_schema(conn)
-    conn.close()
-
-
-def test_ensure_schema_reraises_non_duplicate_errors() -> None:
-    """_ensure_schema re-raises OperationalError that is not 'duplicate column'."""
-    from fieldkit.commands.gmail.query import _ensure_schema
-
-    conn = sqlite3.connect(":memory:")
-    # No messages table at all — ALTER TABLE will fail with a different error
-    with pytest.raises(sqlite3.OperationalError, match=r"no such table: messages"):
-        _ensure_schema(conn)
-    conn.close()
+    result = _chunk_list([str(value) for value in range(7)], 3)
+    assert result == [["0", "1", "2"], ["3", "4", "5"], ["6"]]
 
 
 # ---------------------------------------------------------------------------
@@ -131,14 +100,14 @@ def test_ensure_schema_reraises_non_duplicate_errors() -> None:
 
 def test_normalize_date_empty_string_returns_empty() -> None:
     """_normalize_date returns '' for empty input."""
-    from fieldkit.commands.gmail.query import _normalize_date
+    from fieldkit.gmail.query_domain import _normalize_date
 
     assert _normalize_date("") == ""
 
 
 def test_normalize_date_iso_prefix_fast_path() -> None:
     """_normalize_date returns first 10 chars for ISO-formatted dates."""
-    from fieldkit.commands.gmail.query import _normalize_date
+    from fieldkit.gmail.query_domain import _normalize_date
 
     assert _normalize_date("2025-06-01T12:00:00Z") == "2025-06-01"
     assert _normalize_date("2025-06-01") == "2025-06-01"
@@ -146,7 +115,7 @@ def test_normalize_date_iso_prefix_fast_path() -> None:
 
 def test_normalize_date_rfc2822_format() -> None:
     """_normalize_date parses RFC 2822 date strings."""
-    from fieldkit.commands.gmail.query import _normalize_date
+    from fieldkit.gmail.query_domain import _normalize_date
 
     result = _normalize_date("Wed, 01 Jan 2025 12:00:00 +0000")
     assert result == "2025-01-01"
@@ -154,7 +123,7 @@ def test_normalize_date_rfc2822_format() -> None:
 
 def test_normalize_date_unparseable_returns_empty() -> None:
     """_normalize_date returns '' for strings that cannot be parsed."""
-    from fieldkit.commands.gmail.query import _normalize_date
+    from fieldkit.gmail.query_domain import _normalize_date
 
     result = _normalize_date("not a date at all")
     assert result == ""
@@ -162,7 +131,7 @@ def test_normalize_date_unparseable_returns_empty() -> None:
 
 def test_normalize_date_strips_parenthesized_timezone() -> None:
     """_normalize_date strips trailing (GMT) annotations before parsing."""
-    from fieldkit.commands.gmail.query import _normalize_date
+    from fieldkit.gmail.query_domain import _normalize_date
 
     result = _normalize_date("01 Jan 2025 12:00:00 +0000 (GMT)")
     assert result == "2025-01-01"
@@ -175,7 +144,7 @@ def test_normalize_date_strips_parenthesized_timezone() -> None:
 
 def test_build_date_clause_since_only() -> None:
     """build_date_clause with since only returns correct fragment and params."""
-    from fieldkit.commands.gmail.query import build_date_clause
+    from fieldkit.gmail.query_domain import build_date_clause
 
     fragment, params = build_date_clause(since=1000, before=None)
     assert "date_epoch >= ?" in fragment
@@ -184,7 +153,7 @@ def test_build_date_clause_since_only() -> None:
 
 def test_build_date_clause_before_only() -> None:
     """build_date_clause with before only returns correct fragment and params."""
-    from fieldkit.commands.gmail.query import build_date_clause
+    from fieldkit.gmail.query_domain import build_date_clause
 
     fragment, params = build_date_clause(since=None, before=2000)
     assert "date_epoch < ?" in fragment
@@ -193,7 +162,7 @@ def test_build_date_clause_before_only() -> None:
 
 def test_build_date_clause_both() -> None:
     """build_date_clause with both since and before returns both conditions."""
-    from fieldkit.commands.gmail.query import build_date_clause
+    from fieldkit.gmail.query_domain import build_date_clause
 
     fragment, params = build_date_clause(since=1000, before=2000)
     assert "date_epoch >= ?" in fragment
@@ -203,7 +172,7 @@ def test_build_date_clause_both() -> None:
 
 def test_build_date_clause_neither() -> None:
     """build_date_clause with neither returns empty fragment and empty params."""
-    from fieldkit.commands.gmail.query import build_date_clause
+    from fieldkit.gmail.query_domain import build_date_clause
 
     fragment, params = build_date_clause(since=None, before=None)
     assert fragment == ""
@@ -217,7 +186,7 @@ def test_build_date_clause_neither() -> None:
 
 def test_date_to_epoch_happy_path() -> None:
     """date_to_epoch converts YYYY-MM-DD to a positive integer epoch."""
-    from fieldkit.commands.gmail.query import date_to_epoch
+    from fieldkit.gmail.query_domain import date_to_epoch
 
     epoch = date_to_epoch("2025-01-01")
     assert isinstance(epoch, int)
@@ -226,7 +195,7 @@ def test_date_to_epoch_happy_path() -> None:
 
 def test_date_to_epoch_is_before_adds_one_day() -> None:
     """date_to_epoch with is_before=True adds 86400 seconds."""
-    from fieldkit.commands.gmail.query import date_to_epoch
+    from fieldkit.gmail.query_domain import date_to_epoch
 
     epoch_normal = date_to_epoch("2025-06-01", is_before=False)
     epoch_before = date_to_epoch("2025-06-01", is_before=True)
@@ -235,7 +204,7 @@ def test_date_to_epoch_is_before_adds_one_day() -> None:
 
 def test_date_to_epoch_invalid_raises_value_error() -> None:
     """date_to_epoch raises ValueError for invalid date strings."""
-    from fieldkit.commands.gmail.query import date_to_epoch
+    from fieldkit.gmail.query_domain import date_to_epoch
 
     with pytest.raises(ValueError, match=r"does not match format"):
         date_to_epoch("not-a-date")
@@ -376,42 +345,16 @@ def test_champion_signal_label_reactive() -> None:
 
 
 # ---------------------------------------------------------------------------
-# _extract_email_addr
-# ---------------------------------------------------------------------------
-
-
-def test_extract_email_addr_bare_email() -> None:
-    """_extract_email_addr returns lowercased bare email as-is."""
-    from fieldkit.commands.gmail.query import _extract_email_addr
-
-    assert _extract_email_addr("Alice@Example.COM") == "alice@example.com"  # pii-guard: ignore
-
-
-def test_extract_email_addr_name_angle_format() -> None:
-    """_extract_email_addr extracts email from 'Name <email>' format."""
-    from fieldkit.commands.gmail.query import _extract_email_addr
-
-    assert _extract_email_addr("Alice Smith <alice@example.com>") == "alice@example.com"  # pii-guard: ignore
-
-
-def test_extract_email_addr_strips_whitespace() -> None:
-    """_extract_email_addr strips leading/trailing whitespace."""
-    from fieldkit.commands.gmail.query import _extract_email_addr
-
-    assert _extract_email_addr("  alice@example.com  ") == "alice@example.com"  # pii-guard: ignore
-
-
-# ---------------------------------------------------------------------------
 # _is_noise
 # ---------------------------------------------------------------------------
 
 
 def test_is_noise_internal_domain_returns_true() -> None:
     """_is_noise returns True for known internal domains."""
-    from fieldkit.commands.gmail.query import _is_noise
+    from fieldkit.gmail.query_domain import _is_noise
 
     with patch(
-        "fieldkit.commands.gmail.query._internal_blind_domains",
+        "fieldkit.gmail.query_domain._internal_blind_domains",
         return_value={"internal-corp.example.com", "external.example.com"},
     ):
         assert _is_noise("user@internal-corp.example.com") is True
@@ -420,23 +363,23 @@ def test_is_noise_internal_domain_returns_true() -> None:
 
 def test_is_noise_external_domain_returns_false() -> None:
     """_is_noise returns False for external, non-noise domains."""
-    from fieldkit.commands.gmail.query import _is_noise
+    from fieldkit.gmail.query_domain import _is_noise
 
     with (
-        patch("fieldkit.commands.gmail.query._internal_blind_domains", return_value={"internal-corp.example.com"}),
-        patch("fieldkit.commands.gmail.query.NOISE_REGEX") as mock_noise,
+        patch("fieldkit.gmail.query_domain._internal_blind_domains", return_value={"internal-corp.example.com"}),
+        patch("fieldkit.gmail.query_domain.NOISE_REGEX") as mock_noise,
     ):
         mock_noise.search.return_value = None
-        assert _is_noise("alice@acme-corp.com") is False
+        assert _is_noise("alice@acme-corp.example.com") is False
 
 
 def test_is_noise_noise_regex_match_returns_true() -> None:
     """_is_noise returns True when NOISE_REGEX matches the email."""
-    from fieldkit.commands.gmail.query import _is_noise
+    from fieldkit.gmail.query_domain import _is_noise
 
     with (
-        patch("fieldkit.commands.gmail.query._internal_blind_domains", return_value=set()),
-        patch("fieldkit.commands.gmail.query.NOISE_REGEX") as mock_noise,
+        patch("fieldkit.gmail.query_domain._internal_blind_domains", return_value=set()),
+        patch("fieldkit.gmail.query_domain.NOISE_REGEX") as mock_noise,
     ):
         mock_noise.search.return_value = True  # truthy match
         assert _is_noise("noreply@notifications.example.com") is True
@@ -454,14 +397,14 @@ def test_format_blindspots_table_with_results(capsys: pytest.CaptureFixture[str]
     from fieldkit.commands.gmail.query import _format_blindspots_table
 
     results = [
-        {"email": "alice@acme-corp.com", "name": "Alice Smith", "msgs": 5, "days": 3},
-        {"email": "bob@acme-corp.com", "name": "Bob Jones", "msgs": 2, "days": 9999},
+        {"email": "alice@acme-corp.example.com", "name": "Alice Smith", "msgs": 5, "days": 3},
+        {"email": "bob@acme-corp.example.com", "name": "Bob Jones", "msgs": 2, "days": 9999},
     ]
     with patch("fieldkit.commands.gmail.query.console", Console(width=200, force_terminal=False)):
         _format_blindspots_table(results)
 
     captured = capsys.readouterr()
-    assert "alice@acme-corp.com" in captured.out
+    assert "alice@acme-corp.example.com" in captured.out
     assert "3d ago" in captured.out
     assert "unknown" in captured.out  # days=9999 → "unknown"
 
@@ -473,40 +416,58 @@ def test_format_blindspots_table_with_results(capsys: pytest.CaptureFixture[str]
 
 def test_build_addr_stats_filters_noise_addresses() -> None:
     """_build_addr_stats excludes noise addresses from the stats."""
-    from fieldkit.commands.gmail.query import _build_addr_stats
+    from fieldkit.gmail.query_domain import _build_addr_stats
 
     FakeRow = namedtuple("FakeRow", ["from_addr", "to_addr", "date_epoch"])
 
     rows = [
-        FakeRow("alice@acme-corp.com", "noreply@automation.example.com", 1000),
-        FakeRow("alice@acme-corp.com", "bob@acme-corp.com", 2000),
+        FakeRow("alice@acme-corp.example.com", "noreply@automation.example.com", 1000),
+        FakeRow("alice@acme-corp.example.com", "bob@acme-corp.example.com", 2000),
     ]
 
     def mock_is_noise(email: str) -> bool:
         return "automation.example.com" in email or "noreply" in email
 
-    with patch("fieldkit.commands.gmail.query._is_noise", side_effect=mock_is_noise):
+    with patch("fieldkit.gmail.query_domain._is_noise", side_effect=mock_is_noise):
         stats = _build_addr_stats(rows)
 
-    assert "alice@acme-corp.com" in stats
+    assert "alice@acme-corp.example.com" in stats
     assert "noreply@automation.example.com" not in stats
-    assert "bob@acme-corp.com" in stats
+    assert "bob@acme-corp.example.com" in stats
 
 
 def test_build_addr_stats_skips_empty_email() -> None:
     """_build_addr_stats skips rows where email extraction yields empty string."""
-    from fieldkit.commands.gmail.query import _build_addr_stats
+    from fieldkit.gmail.query_domain import _build_addr_stats
 
     FakeRow = namedtuple("FakeRow", ["from_addr", "to_addr", "date_epoch"])
 
     rows = [
         FakeRow("", None, 1000),  # empty from_addr, None to_addr
-        FakeRow("alice@acme-corp.com", "", 2000),
+        FakeRow("alice@acme-corp.example.com", "", 2000),
     ]
 
-    with patch("fieldkit.commands.gmail.query._is_noise", return_value=False):
+    with patch("fieldkit.gmail.query_domain._is_noise", return_value=False):
         stats = _build_addr_stats(rows)
 
-    assert "alice@acme-corp.com" in stats
+    assert "alice@acme-corp.example.com" in stats
     # Empty email should not appear
     assert "" not in stats
+
+
+def test_build_addr_stats_uses_canonical_group_and_comment_parsing() -> None:
+    from fieldkit.gmail.query_domain import _build_addr_stats
+
+    FakeRow = namedtuple("FakeRow", ["from_addr", "to_addr", "date_epoch"])
+    rows = [
+        FakeRow(
+            "alice@example.com (Alice)",
+            'Group: "Doe, Jane" <jane@example.com>, bob@example.com;',
+            1000,
+        )
+    ]
+
+    with patch("fieldkit.gmail.query_domain._is_noise", return_value=False):
+        stats = _build_addr_stats(rows)
+
+    assert set(stats) == {"alice@example.com", "jane@example.com", "bob@example.com"}

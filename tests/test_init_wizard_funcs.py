@@ -5,7 +5,6 @@ crap-reduction OpenSpec change.  All tests are isolated: no real git,
 no real filesystem outside tmp_path, no real subprocess calls.
 """
 
-import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -17,9 +16,7 @@ import fieldkit.commands.init.wizard as wizard
 import fieldkit.config as fieldkit_config
 from fieldkit.commands.init.answers import InitInputs, account_key, load_answers
 from fieldkit.commands.init.cli import cli as setup_cli
-from fieldkit.commands.init.scaffold import write_judgment_configs
 from fieldkit.commands.init.wizard import (
-    _compute_fieldkit_root,
     _load_existing_identity,
     _prompt,
     _wizard_confirm,
@@ -71,10 +68,10 @@ def test_wizard_write_config_merges_existing_keys(tmp_path: Path, monkeypatch: p
     monkeypatch.setattr(fieldkit_config, "CONFIG_PATH", config_path)
     monkeypatch.setattr(fieldkit_config, "__file__", str(tmp_path / "fieldkit" / "config" / "__init__.py"))
 
-    # Also patch _compute_fieldkit_root so no git subprocess is needed.
+    # Keep source discovery within the fixture's selected tree.
     fake_root = tmp_path / "fake-repo"
     fake_root.mkdir()
-    monkeypatch.setattr(wizard, "_compute_fieldkit_root", lambda: fake_root)
+    monkeypatch.setattr(wizard, "discover_source_checkout", lambda _module: fake_root)
 
     _wizard_write_config(
         data_dir=data_dir,
@@ -82,7 +79,6 @@ def test_wizard_write_config_merges_existing_keys(tmp_path: Path, monkeypatch: p
         email="test@example.com",  # pii-guard: ignore
         role="AE",
         company="Acme",
-        gcp_project="",
     )
 
     result = yaml.safe_load(config_path.read_text(encoding="utf-8"))
@@ -107,7 +103,7 @@ def test_wizard_write_config_creates_when_absent(tmp_path: Path, monkeypatch: py
 
     fake_root = tmp_path / "fake-repo"
     fake_root.mkdir()
-    monkeypatch.setattr(wizard, "_compute_fieldkit_root", lambda: fake_root)
+    monkeypatch.setattr(wizard, "discover_source_checkout", lambda _module: fake_root)
 
     _wizard_write_config(
         data_dir=data_dir,
@@ -115,7 +111,6 @@ def test_wizard_write_config_creates_when_absent(tmp_path: Path, monkeypatch: py
         email="new@example.com",  # pii-guard: ignore
         role="",
         company="",
-        gcp_project="",
     )
 
     assert config_path.exists(), "config.yaml must be created when absent"
@@ -123,26 +118,18 @@ def test_wizard_write_config_creates_when_absent(tmp_path: Path, monkeypatch: py
     assert result.get("fieldkit_home") == str(data_dir)
 
 
-def test_wizard_write_config_replaces_malformed_existing_yaml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A malformed prior config cannot prevent the wizard from writing a usable replacement."""
+def test_wizard_write_config_preserves_malformed_existing_yaml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Invalid operator configuration requires repair rather than implicit replacement."""
     config_path = tmp_path / "config.yaml"
     data_dir = tmp_path / "fieldkit-data"
     config_path.write_text("invalid: [yaml\n", encoding="utf-8")
     monkeypatch.setattr(fieldkit_config, "CONFIG_PATH", config_path)
-    monkeypatch.setattr(wizard, "_compute_fieldkit_root", lambda: tmp_path / "fieldkit-cli")
+    monkeypatch.setattr(wizard, "discover_source_checkout", lambda _module: tmp_path / "fieldkit-cli")
 
-    _wizard_write_config(
-        data_dir=data_dir,
-        name="Test User",
-        email="test@example.com",  # pii-guard: ignore
-        role="AE",
-        company="Acme",
-        gcp_project="",
-    )
+    with pytest.raises(fieldkit_config.ConfigError, match="invalid YAML"):
+        _wizard_write_config(data_dir, "Test User", "test@example.com", "AE", "Acme")
 
-    result = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    assert result["fieldkit_home"] == str(data_dir)
-    assert result["name"] == "Test User"
+    assert config_path.read_text(encoding="utf-8") == "invalid: [yaml\n"
 
 
 # ---------------------------------------------------------------------------
@@ -183,30 +170,6 @@ def test_load_existing_identity_returns_parsed_dict(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 6. _compute_fieldkit_root — mocked subprocess, finds pyproject.toml
-# ---------------------------------------------------------------------------
-
-
-def test_compute_fieldkit_root_finds_pyproject_toml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """_compute_fieldkit_root returns the git root when pyproject.toml is present there."""
-    # Create a fake repo root with pyproject.toml so the candidate check passes.
-    fake_root = tmp_path / "fake-repo"
-    fake_root.mkdir()
-    (fake_root / "pyproject.toml").write_text("[project]\nname = 'fake'\n", encoding="utf-8")
-
-    # Mock subprocess.run to return our fake_root as the git toplevel.
-    mock_result = MagicMock()
-    mock_result.returncode = 0
-    mock_result.stdout = str(fake_root) + "\n"
-
-    with patch("fieldkit.commands.init.wizard.subprocess.run", return_value=mock_result) as mock_run:
-        result = _compute_fieldkit_root()
-
-    mock_run.assert_called_once()
-    assert result == fake_root.resolve(), f"Expected {fake_root.resolve()}, got {result}"
-
-
-# ---------------------------------------------------------------------------
 # 7. _prompt — returns default when user enters empty string
 # ---------------------------------------------------------------------------
 
@@ -238,7 +201,6 @@ def test_wizard_confirm_returns_true(monkeypatch: pytest.MonkeyPatch, tmp_path: 
         salesforce_user_id="005abc",
         account_names=["Acme Corp"],
         data_dir=tmp_path / "data",
-        gcp_project="my-project",
         oauth_id="",
     )
     assert result is True
@@ -262,7 +224,6 @@ def test_wizard_confirm_returns_false(monkeypatch: pytest.MonkeyPatch, tmp_path:
         salesforce_user_id="",
         account_names=[],
         data_dir=tmp_path / "data",
-        gcp_project="",
         oauth_id="",
     )
     assert result is False
@@ -282,12 +243,28 @@ def test_wizard_post_setup_emits_summary(capsys: pytest.CaptureFixture[str], mon
     mock_result.stderr = ""
 
     with patch("fieldkit.commands.init.wizard.subprocess.run", return_value=mock_result):
-        _wizard_post_setup(oauth_id="", gcp_project="my-gcp-project")
+        _wizard_post_setup(oauth_id="")
 
     captured = capsys.readouterr()
     assert captured.out.strip(), "stdout must be non-empty after _wizard_post_setup"
     assert "Add github_repo" in captured.out
     assert "Setup complete" in captured.out, "Must print setup-complete message"
+
+
+def test_wizard_post_setup_starts_with_offline_commands(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(fieldkit_config, "CONFIG_PATH", tmp_path / "config.yaml")
+
+    result = _wizard_post_setup(oauth_id="", install_skills=False)
+
+    assert result is None
+    output = capsys.readouterr().out
+    assert "fieldkit doctor" in output
+    assert "fieldkit skill list" in output
+    assert "Run 'fieldkit gmail sync'" not in output
+    assert "Run 'fieldkit brief generate'" not in output
+    assert "dev repo" not in output
 
 
 def test_wizard_post_setup_only_advertises_issue_board_when_repo_is_configured(
@@ -299,9 +276,54 @@ def test_wizard_post_setup_only_advertises_issue_board_when_repo_is_configured(
     mock_result = MagicMock(returncode=0, stdout="", stderr="")
 
     with patch("fieldkit.commands.init.wizard.subprocess.run", return_value=mock_result):
-        _wizard_post_setup(oauth_id="", gcp_project="")
+        _wizard_post_setup(oauth_id="")
 
     assert "Run 'fieldkit issue board'" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("kind", ["duplicate", "symlink", "invalid_utf8"])
+def test_github_guidance_rejects_unsafe_configuration_without_payloads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+    kind: str,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    marker = "fictional-private-config-marker"
+    if kind == "duplicate":
+        config_path.write_text(f"github_repo: {marker}\ngithub_repo: example/project\n", encoding="utf-8")
+    elif kind == "symlink":
+        target = tmp_path / marker
+        target.write_text("github_repo: example/project\n", encoding="utf-8")
+        config_path.symlink_to(target)
+    else:
+        config_path.write_bytes(marker.encode() + b"\xff")
+    monkeypatch.setattr(fieldkit_config, "CONFIG_PATH", config_path)
+    caplog.set_level("DEBUG", logger="fieldkit.commands.init.wizard")
+
+    result = wizard._render_github_guidance()
+
+    assert result is None
+    output = capsys.readouterr().out
+    assert "Add github_repo" in output
+    assert "Run 'fieldkit issue board'" not in output
+    assert marker not in output + caplog.text
+    assert all(record.exc_info is None for record in caplog.records)
+
+
+@pytest.mark.parametrize("repo", ["[example/project]", "7"])
+def test_github_guidance_does_not_advertise_non_string_repository(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], repo: str
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(f"github_repo: {repo}\n", encoding="utf-8")
+    monkeypatch.setattr(fieldkit_config, "CONFIG_PATH", config_path)
+
+    result = wizard._render_github_guidance()
+
+    assert result is None
+    assert "Add github_repo" in capsys.readouterr().out
 
 
 # ---------------------------------------------------------------------------
@@ -319,7 +341,7 @@ def test_wizard_post_setup_emits_shadowbot_hint_when_id_set(
     mock_result.stderr = ""
 
     with patch("fieldkit.commands.init.wizard.subprocess.run", return_value=mock_result):
-        _wizard_post_setup(oauth_id="", gcp_project="", shadowbot_assistant_id="asst-xyz")
+        _wizard_post_setup(oauth_id="", shadowbot_assistant_id="asst-xyz")
 
     captured = capsys.readouterr()
     assert "auth shadowbot" in captured.out, "shadowbot auth hint must appear when assistant_id is set"
@@ -340,7 +362,7 @@ def test_wizard_write_config_writes_shadowbot_block(tmp_path: Path, monkeypatch:
 
     fake_root = tmp_path / "fake-repo"
     fake_root.mkdir()
-    monkeypatch.setattr(wizard, "_compute_fieldkit_root", lambda: fake_root)
+    monkeypatch.setattr(wizard, "discover_source_checkout", lambda _module: fake_root)
 
     _wizard_write_config(
         data_dir=data_dir,
@@ -348,7 +370,6 @@ def test_wizard_write_config_writes_shadowbot_block(tmp_path: Path, monkeypatch:
         email="test@example.com",  # pii-guard: ignore
         role="AE",
         company="Acme",
-        gcp_project="",
         shadowbot_assistant_id="asst-abc123",
     )
 
@@ -374,7 +395,7 @@ def test_wizard_write_config_no_shadowbot_block_when_empty(tmp_path: Path, monke
 
     fake_root = tmp_path / "fake-repo"
     fake_root.mkdir()
-    monkeypatch.setattr(wizard, "_compute_fieldkit_root", lambda: fake_root)
+    monkeypatch.setattr(wizard, "discover_source_checkout", lambda _module: fake_root)
 
     _wizard_write_config(
         data_dir=data_dir,
@@ -382,7 +403,6 @@ def test_wizard_write_config_no_shadowbot_block_when_empty(tmp_path: Path, monke
         email="test@example.com",  # pii-guard: ignore
         role="AE",
         company="Acme",
-        gcp_project="",
         shadowbot_assistant_id="",
     )
 
@@ -419,7 +439,7 @@ def test_wizard_write_config_merges_existing_shadowbot_keys(tmp_path: Path, monk
 
     fake_root = tmp_path / "fake-repo"
     fake_root.mkdir()
-    monkeypatch.setattr(wizard, "_compute_fieldkit_root", lambda: fake_root)
+    monkeypatch.setattr(wizard, "discover_source_checkout", lambda _module: fake_root)
 
     _wizard_write_config(
         data_dir=data_dir,
@@ -427,7 +447,6 @@ def test_wizard_write_config_merges_existing_shadowbot_keys(tmp_path: Path, monk
         email="test@example.com",  # pii-guard: ignore
         role="AE",
         company="Acme",
-        gcp_project="",
         shadowbot_assistant_id="new-asst-id",
     )
 
@@ -458,7 +477,6 @@ def test_wizard_prompt_inputs_rejects_invalid_assistant_id(
             "",  # salesforce_user_id (optional)
             "",  # account_names (empty list ok)
             "~/fieldkit-workspace",  # data_dir
-            "",  # gcp_project (optional)
             "",  # oauth_id (optional)
             "bad id with spaces",  # shadowbot assistant_id — INVALID
             "valid-asst-id",  # shadowbot assistant_id — valid on retry
@@ -490,7 +508,7 @@ def test_wizard_post_setup_no_shadowbot_hint_when_id_absent(
     mock_result.stderr = ""
 
     with patch("fieldkit.commands.init.wizard.subprocess.run", return_value=mock_result):
-        _wizard_post_setup(oauth_id="", gcp_project="")
+        _wizard_post_setup(oauth_id="")
 
     captured = capsys.readouterr()
     assert "auth shadowbot" not in captured.out, "shadowbot auth hint must NOT appear when assistant_id is empty"
@@ -506,7 +524,7 @@ def test_setup_cli_bare_invocation_runs_wizard() -> None:
     with patch("fieldkit.commands.init.cli._run_wizard", return_value=0) as mock_wizard:
         result = CliRunner().invoke(setup_cli, [], catch_exceptions=False)
 
-    mock_wizard.assert_called_once_with(None)
+    mock_wizard.assert_called_once_with(None, dry_run=False)
     assert result.exit_code == 0
 
 
@@ -518,35 +536,42 @@ def test_setup_cli_bare_invocation_propagates_wizard_failure() -> None:
     assert result.exit_code == 1
 
 
-def test_write_judgment_configs_creates_exact_empty_schemas(tmp_path: Path) -> None:
-    result = write_judgment_configs(tmp_path)
-
-    assert result is None
-    results = {
-        path.name: json.loads(path.read_text(encoding="utf-8")) for path in sorted((tmp_path / "config").glob("*.json"))
-    }
-    assert results == {
-        "clocks.json": {"clocks": []},
-        "engines.json": {"engines": []},
-        "people.json": {"people": []},
-        "watchlist.json": {"opportunities": []},
-    }
-
-
-def test_write_judgment_configs_preserves_existing_bytes_and_fills_missing(tmp_path: Path) -> None:
-    config_dir = tmp_path / "config"
-    config_dir.mkdir()
+def test_minimal_initialization_preserves_existing_operator_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    config_dir = workspace / "config"
+    config_dir.mkdir(parents=True)
     people_path = config_dir / "people.json"
     original = b'{"people":[{"name":"Example Person"}]}\n'
     people_path.write_bytes(original)
+    monkeypatch.setattr(fieldkit_config, "CONFIG_PATH", tmp_path / "global" / "config.yaml")
 
-    result = write_judgment_configs(tmp_path)
+    result = CliRunner().invoke(setup_cli, ["--minimal", str(workspace)], catch_exceptions=False)
 
-    assert result is None
+    assert result.exit_code == 0
     assert people_path.read_bytes() == original
-    assert (config_dir / "clocks.json").exists()
-    assert (config_dir / "engines.json").exists()
-    assert (config_dir / "watchlist.json").exists()
+    assert sorted(path.name for path in config_dir.glob("*.json")) == ["people.json"]
+
+
+def test_minimal_initialization_preserves_unknown_config_without_writing_retired_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    config_path = tmp_path / "global" / "config.yaml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        yaml.safe_dump({"custom": {"enabled": True}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(fieldkit_config, "CONFIG_PATH", config_path)
+
+    result = CliRunner().invoke(setup_cli, ["--minimal", str(workspace)], catch_exceptions=False)
+
+    assert result.exit_code == 0
+    written = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert written["custom"] == {"enabled": True}
+    assert "gcp_project" not in written
 
 
 def test_load_answers_returns_typed_values_and_defaults(tmp_path: Path) -> None:
@@ -578,7 +603,6 @@ def test_load_answers_returns_typed_values_and_defaults(tmp_path: Path) -> None:
         salesforce_user_id="",
         data_dir=data_dir.resolve(),
         account_names=("Acme Corp",),
-        gcp_project="",
         oauth_id="client-id",
         oauth_secret="client-secret",
         shadowbot_assistant_id="assistant.one",
@@ -637,17 +661,7 @@ def test_answers_cli_passes_path_without_reading_stdin(tmp_path: Path, monkeypat
         result = CliRunner().invoke(setup_cli, ["--answers", str(answers_path)], catch_exceptions=False)
 
     assert result.exit_code == 0
-    mock_wizard.assert_called_once_with(answers_path.resolve())
-
-
-def test_answers_option_is_rejected_with_init_subcommand(tmp_path: Path) -> None:
-    answers_path = tmp_path / "answers.yaml"
-    answers_path.write_text("{}\n", encoding="utf-8")
-
-    result = CliRunner().invoke(setup_cli, ["--answers", str(answers_path), "migrate"])
-
-    assert result.exit_code != 0
-    assert "cannot be used with an init subcommand" in result.output
+    mock_wizard.assert_called_once_with(answers_path.resolve(), dry_run=False)
 
 
 def test_answers_cli_initializes_complete_workspace_without_stdin(
@@ -669,7 +683,7 @@ def test_answers_cli_initializes_complete_workspace_without_stdin(
     )
     monkeypatch.setattr("builtins.input", lambda _: pytest.fail("answers mode read stdin"))
     monkeypatch.setattr(fieldkit_config, "CONFIG_PATH", config_path)
-    monkeypatch.setattr(wizard, "_compute_fieldkit_root", lambda: tmp_path / "repo")
+    monkeypatch.setattr(wizard, "discover_source_checkout", lambda _module: tmp_path / "repo")
 
     with patch("fieldkit.commands.init.wizard._wizard_post_setup") as mock_post_setup:
         result = CliRunner().invoke(setup_cli, ["--answers", str(answers_path)], catch_exceptions=False)
@@ -679,11 +693,8 @@ def test_answers_cli_initializes_complete_workspace_without_stdin(
         yaml.safe_load((data_dir / "config" / "identity.yaml").read_text(encoding="utf-8"))["identity"]["name"]
         == "Example User"
     )
-    assert json.loads((data_dir / "config" / "clocks.json").read_text(encoding="utf-8")) == {"clocks": []}
-    assert json.loads((data_dir / "config" / "engines.json").read_text(encoding="utf-8")) == {"engines": []}
-    assert json.loads((data_dir / "config" / "people.json").read_text(encoding="utf-8")) == {"people": []}
-    assert json.loads((data_dir / "config" / "watchlist.json").read_text(encoding="utf-8")) == {"opportunities": []}
-    mock_post_setup.assert_called_once_with("", "", "", install_skills=False)
+    assert not list((data_dir / "config").glob("*.json"))
+    mock_post_setup.assert_called_once_with("", "", install_skills=False)
 
 
 def test_invalid_answers_exit_three_before_any_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -712,6 +723,34 @@ def test_invalid_answers_exit_three_before_any_write(tmp_path: Path, monkeypatch
     assert not config_path.exists()
 
 
+def test_retired_gcp_project_answer_exits_three_before_any_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from fieldkit.__main__ import main
+
+    answers_path = tmp_path / "answers.yaml"
+    data_dir = tmp_path / "workspace"
+    config_path = tmp_path / "global" / "config.yaml"
+    answers_path.write_text(
+        yaml.safe_dump(
+            {
+                "name": "Example User",
+                "email": "user@example.com",  # pii-guard: ignore
+                "data_dir": str(data_dir),
+                "gcp_project": "retired-project",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(fieldkit_config, "CONFIG_PATH", config_path)
+
+    result = main(["init", "--answers", str(answers_path)])
+
+    assert result == 3
+    assert not data_dir.exists()
+    assert not config_path.exists()
+
+
 def test_minimal_cli_creates_only_generic_offline_scaffolding(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     workspace = tmp_path / "workspace"
     config_path = tmp_path / "global" / "config.yaml"
@@ -721,6 +760,7 @@ def test_minimal_cli_creates_only_generic_offline_scaffolding(tmp_path: Path, mo
     result = CliRunner().invoke(setup_cli, ["--minimal", str(workspace)], catch_exceptions=False)
 
     assert result.exit_code == 0
+    assert not list((workspace / "config").glob("*.json"))
     assert "First success: fieldkit skill list" in result.output
     config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert config == {

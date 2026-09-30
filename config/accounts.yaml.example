@@ -32,6 +32,8 @@ accounts:
     sf_territory: FSI_REGION_TERR01
     # Minimum message count to surface in blindspot reports
     blindspots_min_messages: 20
+    # Minimum active pursuits for the pipeline review's Pursuit Coverage check (default: 1)
+    pursuit_coverage_threshold: 1
     # Days to look back for blindspot email scan (default: 14)
     # NOTE: 'blindspot_days' is accepted for backward compat but has no effect;
     #       use blindspots_min_messages + gmail sync date range instead.

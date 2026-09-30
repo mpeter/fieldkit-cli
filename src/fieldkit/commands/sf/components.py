@@ -9,9 +9,9 @@ from rich.table import Table
 
 from fieldkit.cli_exit import cli_main
 from fieldkit.config import get_sf_rest_base_url, get_sf_session_id
-from fieldkit.errors import FieldkitError
-from fieldkit.sf.client import SFAuthError, SFDirectClient, SFNotFoundError
+from fieldkit.sf.client import SFDirectClient
 from fieldkit.sf.components import BUCKET_ORDER, Bucket, ComponentLine, fetch_opp_component_lines, sort_component_lines
+from fieldkit.sf.errors import SFAuthError, SFNotFoundError
 from fieldkit.sf.opportunities import resolve_opportunity_reference
 
 _BUCKET_LABELS: dict[Bucket, str] = {
@@ -59,12 +59,9 @@ def cli(opportunity: str, as_json: bool) -> None:
         if not session_id or not base_url:
             raise SFAuthError("Salesforce authentication is not configured; run 'fieldkit auth sf'")
         with SFDirectClient(session_id=session_id, base_url=base_url) as client:
-            try:
-                opp_id = resolve_opportunity_reference(client, opportunity)
-            except SFNotFoundError:
-                raise FieldkitError(f"Opportunity {opportunity!r} was not found") from None
+            opp_id = resolve_opportunity_reference(client, opportunity)
             if opp_id is None:
-                raise FieldkitError(f"Opportunity {opportunity!r} was not found")
+                raise SFNotFoundError("Salesforce record not found.")
             lines = sort_component_lines(fetch_opp_component_lines(client, opp_id))
         if as_json:
             click.echo(json.dumps(lines, indent=2, sort_keys=True))

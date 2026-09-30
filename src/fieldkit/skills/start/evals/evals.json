@@ -2,40 +2,68 @@
   "skill_name": "start",
   "static_checks": [
     {
-      "id": "creates_tasks_md",
-      "type": "contains",
-      "pattern": "TASKS.md",
-      "message": "Must create/load TASKS.md"
+      "id": "installed_cli",
+      "type": "contains_all",
+      "patterns": [
+        "fieldkit --version",
+        "fieldkit init --help"
+      ],
+      "message": "Start checks the installed command before claiming initialization"
     },
     {
-      "id": "reads_accounts",
-      "type": "contains",
-      "pattern": "account.md",
-      "message": "Must read account files (accounts/<account>/account.md) directly"
+      "id": "offline_first_success",
+      "type": "contains_all",
+      "patterns": [
+        "fieldkit init --minimal PATH",
+        "fieldkit skill list",
+        "does **not**"
+      ],
+      "message": "Minimal init and skill discovery are an offline first success with accurate outputs"
     },
     {
-      "id": "gmail_sync",
-      "type": "contains",
-      "pattern": "fieldkit gmail sync",
-      "message": "Must suggest gmail sync (not uv run python)"
+      "id": "optional_state",
+      "type": "contains_all",
+      "patterns": [
+        "TASKS.md",
+        "optional workspace",
+        "separately approved"
+      ],
+      "message": "Task, memory, and Google state are optional"
     },
     {
-      "id": "backstory",
+      "id": "no_auto_sync",
       "type": "contains",
-      "pattern": "fieldkit-sales",
-      "message": "Must pull Backstory signals"
+      "pattern": "Never run `fieldkit gmail sync` simply because the workspace is",
+      "message": "A new workspace does not authorize live Gmail sync"
+    },
+    {
+      "id": "no_private_backstory",
+      "type": "not_contains",
+      "pattern": "Backstory",
+      "message": "First use does not require private account intelligence"
     }
   ],
   "evals": [
     {
       "id": 0,
-      "prompt": "/start",
-      "expected_behavior": "Creates TASKS.md, loads all account/pursuit context, bootstraps working memory",
+      "prompt": "/start; I just installed fieldkit and want to try it without a Google or Salesforce account",
+      "expected_behavior": "Verifies the installed command, asks for a workspace path, offers minimal init, and proves offline skill discovery without demanding integrations.",
       "assertions": [
-        "Creates or loads TASKS.md",
-        "Reads account.md for each configured account",
-        "Enumerates all pursuit files and loads key metadata",
-        "The main workflow steps reference 'fieldkit gmail sync' (Step 6) as the gmail sync command"
+        "Does not assume a repository checkout",
+        "Asks for an absolute workspace path and approval before initializing",
+        "Explains that minimal init creates no account, task file, lesson memory, or credential",
+        "Runs fieldkit skill list after successful initialization",
+        "Does not run Gmail sync or require Backstory"
+      ]
+    },
+    {
+      "id": 1,
+      "prompt": "/start in an existing configured workspace",
+      "expected_behavior": "Inspects the configured workspace, preserves existing state, and offers optional next actions.",
+      "assertions": [
+        "Does not recreate or overwrite task and memory files automatically",
+        "Reads only account or pursuit context relevant to the current request",
+        "Reports optional integration status honestly"
       ]
     }
   ]

@@ -105,7 +105,7 @@ HEALTH_CHECKS: tuple[HealthCheck, ...] = (
     HealthCheck(
         "skill-eval-behavioral",
         ("uv", "run", "fieldkit", "skill", "eval", "--behavioral", "--all"),
-        env=(("NO_LLM", "1"),),
+        env=(("FIELDKIT_NO_LLM", "1"),),
         optional=True,
     ),
 )

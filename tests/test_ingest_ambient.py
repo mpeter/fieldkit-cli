@@ -217,7 +217,7 @@ def test_discover_cli_dry_run_hides_transcript_text_and_excludes_latest(
 def test_discover_cli_rejects_latest_override_for_other_pipeline() -> None:
     result = CliRunner().invoke(discover_cli, ["--pipeline", "transcript-ingest", "--include-latest"])
 
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     assert "only valid for ambient-transcript-ingest" in result.output
 
 
@@ -290,7 +290,9 @@ def test_process_ambiguous_route_defers_and_restores_pending(tmp_path: Path, mon
     conn, source_id = _registered_ambient_source(tmp_path, ["customer discussion " * 10])
     monkeypatch.setattr(
         "fieldkit.ingest.ambient_pipeline.route_by_content",
-        lambda _content: RouteResult(accounts=["acme-corp", "beta-co"], confidence=Confidence.LOW, is_internal=False),
+        lambda _content, *, data_root: RouteResult(
+            accounts=["acme-corp", "beta-co"], confidence=Confidence.LOW, is_internal=False
+        ),
     )
 
     result = process_ambient_source(conn, source_id=source_id, fieldkit_home=tmp_path, pipeline_version="0.1.0")
@@ -301,13 +303,91 @@ def test_process_ambiguous_route_defers_and_restores_pending(tmp_path: Path, mon
     conn.close()
 
 
+@pytest.mark.parametrize("retryable", [False, True])
+def test_routing_failure_restores_claim_without_provider_or_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, retryable: bool
+) -> None:
+    from unittest.mock import patch
+
+    from fieldkit.config import ConfigError
+    from fieldkit.errors import RoutingReadRetryableError
+
+    conn, source_id = _registered_ambient_source(tmp_path, ["customer discussion " * 10])
+    failure = RoutingReadRetryableError("Cannot inspect pursuits") if retryable else ConfigError("Invalid pursuit path")
+    with (
+        patch("fieldkit.ingest.ambient_pipeline.route_by_content", side_effect=failure),
+        patch("fieldkit.ingest.ambient_pipeline.stage1_clean") as provider,
+        patch("fieldkit.ingest.ambient_pipeline._atomic_write") as writer,
+    ):
+        if retryable:
+            result = process_ambient_source(conn, source_id=source_id, fieldkit_home=tmp_path, pipeline_version="0.1.0")
+            assert result.status == "deferred"
+            assert result.reason == "Cannot inspect pursuits"
+        else:
+            with pytest.raises(ConfigError, match="Invalid pursuit path") as caught:
+                process_ambient_source(conn, source_id=source_id, fieldkit_home=tmp_path, pipeline_version="0.1.0")
+            assert caught.value is failure
+    assert conn.execute("SELECT status FROM sources WHERE source_id = ?", (source_id,)).fetchone()[0] == (
+        "pending" if retryable else "failed"
+    )
+    assert conn.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0] == 0
+    provider.assert_not_called()
+    writer.assert_not_called()
+    conn.close()
+
+
+def test_ambient_routing_uses_selected_workspace_not_configured_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from fieldkit.config import clear_config_caches
+    from fieldkit.ingest.pipeline import TranscriptMeta
+
+    selected = tmp_path / "selected"
+    configured = tmp_path / "configured"
+    for root, account, pursuit in ((selected, "acme", "selected-planning"), (configured, "wrong", "outside-planning")):
+        config = root / "config"
+        config.mkdir(parents=True)
+        (config / "accounts.yaml").write_text(
+            f"accounts:\n  {account}:\n    keywords: [phoenix]\n    pursuit_dir: accounts/{account}/pursuits\n",
+            encoding="utf-8",
+        )
+        path = root / "accounts" / account / "pursuits" / f"{pursuit}.md"
+        path.parent.mkdir(parents=True)
+        path.write_text("# Phoenix\n", encoding="utf-8")
+    config_path = tmp_path / "fieldkit.yaml"
+    config_path.write_text(f"fieldkit_home: {configured}\n", encoding="utf-8")
+    monkeypatch.setattr("fieldkit.config._loader.CONFIG_PATH", config_path)
+    clear_config_caches()
+    conn, source_id = _registered_ambient_source(selected, ["phoenix discussion " * 10])
+    with (
+        patch(
+            "fieldkit.ingest.ambient_pipeline.stage1_clean", return_value=SimpleNamespace(text="Fictional discussion")
+        ),
+        patch("fieldkit.ingest.ambient_pipeline.stage2_extract", return_value=TranscriptMeta(key_topics=["phoenix"])),
+    ):
+        result = process_ambient_source(conn, source_id=source_id, fieldkit_home=selected, pipeline_version="0.1.0")
+    assert result.status == "processed"
+    assert result.content_path is not None
+    note = Path(result.content_path).read_text(encoding="utf-8")
+    assert Path(result.content_path).is_relative_to(selected / "accounts" / "acme")
+    assert "selected-planning" in note
+    assert "outside-planning" not in note
+    assert list(configured.glob("accounts/*/meetings/*.md")) == []
+    conn.close()
+
+
 def test_process_single_account_writes_ambient_provenance_note(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     conn, source_id = _registered_ambient_source(tmp_path, ["customer discussion " * 10])
     monkeypatch.setattr(
         "fieldkit.ingest.ambient_pipeline.route_by_content",
-        lambda _content: RouteResult(accounts=["acme-corp"], confidence=Confidence.LOW, is_internal=False),
+        lambda _content, *, data_root: RouteResult(
+            accounts=["acme-corp"], confidence=Confidence.LOW, is_internal=False
+        ),
     )
-    monkeypatch.setenv("NO_LLM", "1")
+    monkeypatch.setenv("FIELDKIT_NO_LLM", "1")
 
     result = process_ambient_source(conn, source_id=source_id, fieldkit_home=tmp_path, pipeline_version="0.1.0")
 
@@ -429,7 +509,9 @@ def test_llm_failure_marks_source_failed_instead_of_leaving_claim(
     conn, source_id = _registered_ambient_source(tmp_path, ["customer discussion " * 10])
     monkeypatch.setattr(
         "fieldkit.ingest.ambient_pipeline.route_by_content",
-        lambda _content: RouteResult(accounts=["acme-corp"], confidence=Confidence.LOW, is_internal=False),
+        lambda _content, *, data_root: RouteResult(
+            accounts=["acme-corp"], confidence=Confidence.LOW, is_internal=False
+        ),
     )
     monkeypatch.setattr(
         "fieldkit.ingest.ambient_pipeline.stage1_clean",
@@ -447,7 +529,9 @@ def test_llm_rate_limit_defers_source_for_retry(tmp_path: Path, monkeypatch: pyt
     conn, source_id = _registered_ambient_source(tmp_path, ["customer discussion " * 10])
     monkeypatch.setattr(
         "fieldkit.ingest.ambient_pipeline.route_by_content",
-        lambda _content: RouteResult(accounts=["acme-corp"], confidence=Confidence.LOW, is_internal=False),
+        lambda _content, *, data_root: RouteResult(
+            accounts=["acme-corp"], confidence=Confidence.LOW, is_internal=False
+        ),
     )
     monkeypatch.setattr(
         "fieldkit.ingest.ambient_pipeline.stage1_clean",
@@ -465,7 +549,9 @@ def test_llm_auth_failure_propagates_to_global_exit_mapper(tmp_path: Path, monke
     conn, source_id = _registered_ambient_source(tmp_path, ["customer discussion " * 10])
     monkeypatch.setattr(
         "fieldkit.ingest.ambient_pipeline.route_by_content",
-        lambda _content: RouteResult(accounts=["acme-corp"], confidence=Confidence.LOW, is_internal=False),
+        lambda _content, *, data_root: RouteResult(
+            accounts=["acme-corp"], confidence=Confidence.LOW, is_internal=False
+        ),
     )
     monkeypatch.setattr(
         "fieldkit.ingest.ambient_pipeline.stage1_clean",
@@ -483,9 +569,11 @@ def test_failed_atomic_write_removes_plaintext_temporary_file(tmp_path: Path, mo
     conn, source_id = _registered_ambient_source(tmp_path, ["customer discussion " * 10])
     monkeypatch.setattr(
         "fieldkit.ingest.ambient_pipeline.route_by_content",
-        lambda _content: RouteResult(accounts=["acme-corp"], confidence=Confidence.LOW, is_internal=False),
+        lambda _content, *, data_root: RouteResult(
+            accounts=["acme-corp"], confidence=Confidence.LOW, is_internal=False
+        ),
     )
-    monkeypatch.setenv("NO_LLM", "1")
+    monkeypatch.setenv("FIELDKIT_NO_LLM", "1")
     monkeypatch.setattr(Path, "replace", lambda _self, _target: (_ for _ in ()).throw(OSError("disk full")))
 
     result = process_ambient_source(conn, source_id=source_id, fieldkit_home=tmp_path, pipeline_version="0.1.0")

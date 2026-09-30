@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 
 from fieldkit.commands.gmail import apply_intel as _apply_intel
+from fieldkit.gmail.publication import GMAIL_QUERY_READY_KEY, apply_gmail_page, initialize_gmail_publication
+from fieldkit.sqlite_publication import SQLiteMutationConnection
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_PATH = REPO_ROOT / "src" / "fieldkit" / "gmail" / "schema.sql"
@@ -130,102 +132,107 @@ def pipeline_db(tmp_path):
     """
     db_path = tmp_path / "pipeline_test.db"
 
-    conn = sqlite3.connect(str(db_path))
-    conn.executescript(SCHEMA_PATH.read_text())
+    initialize_gmail_publication(db_path)
 
-    # 3 threads
-    conn.executemany(
-        "INSERT INTO threads (thread_id, subject, snippet, message_count) VALUES (?, ?, ?, ?)",
-        [
-            ("thread001", "Acme Bank OpenShift Kickoff", "Kick off discussion", 0),
-            ("thread002", "Acme Bank Migration Timeline", "Following up on timeline", 0),
-            ("thread003", "Acme Bank Q2 Review", "Quarterly review agenda", 0),
-        ],
-    )
+    def seed(conn: SQLiteMutationConnection) -> None:
 
-    # 1 label row
-    conn.execute(
-        "INSERT INTO labels (label_id, label_name) VALUES (?, ?)",
-        ("LABEL_BANK", "ref/acme-bank"),
-    )
+        # 3 threads
+        conn.executemany(
+            "INSERT INTO threads (thread_id, subject, snippet, message_count) VALUES (?, ?, ?, ?)",
+            [
+                ("thread001", "Acme Bank OpenShift Kickoff", "Kick off discussion", 0),
+                ("thread002", "Acme Bank Migration Timeline", "Following up on timeline", 0),
+                ("thread003", "Acme Bank Q2 Review", "Quarterly review agenda", 0),
+            ],
+        )
 
-    # 5 messages with labels JSON column populated
-    conn.executemany(
-        """INSERT INTO messages
+        # 1 label row
+        conn.execute(
+            "INSERT INTO labels (label_id, label_name) VALUES (?, ?)",
+            ("LABEL_BANK", "ref/acme-bank"),
+        )
+
+        # 5 messages with labels JSON column populated
+        conn.executemany(
+            """INSERT INTO messages
            (message_id, thread_id, from_addr, to_addr, cc_addr, subject, date_str, date_epoch, labels)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        [
-            (
-                "msg001",
-                "thread001",
-                "jane.smith@acmebank.example.com",
-                "user@example.com",
-                "",
-                "Acme Bank OpenShift Kickoff",
-                "2026-01-03",
-                TEST_EPOCH,
-                '["LABEL_BANK"]',
-            ),
-            (
-                "msg002",
-                "thread001",
-                "user@example.com",
-                "jane.smith@acmebank.example.com",
-                "",
-                "Re: Acme Bank OpenShift Kickoff",
-                "2026-01-04",
-                TEST_EPOCH + 86_400,
-                '["LABEL_BANK"]',
-            ),
-            (
-                "msg003",
-                "thread002",
-                "bob.jones@acme-bank.example.com",
-                "user@example.com",
-                "",
-                "Acme Bank Migration Timeline",
-                "2026-01-05",
-                TEST_EPOCH + 172_800,
-                '["LABEL_BANK"]',
-            ),
-            (
-                "msg004",
-                "thread002",
-                "user@example.com",
-                "bob.jones@acme-bank.example.com",
-                "",
-                "Re: Acme Bank Migration Timeline",
-                "2026-01-06",
-                TEST_EPOCH + 259_200,
-                '["LABEL_BANK"]',
-            ),
-            (
-                "msg005",
-                "thread003",
-                "alice.chen@acmebank.example.com",
-                "user@example.com",
-                "",
-                "Acme Bank Q2 Review",
-                "2026-01-07",
-                TEST_EPOCH + 345_600,
-                '["LABEL_BANK"]',
-            ),
-        ],
-    )
+            [
+                (
+                    "msg001",
+                    "thread001",
+                    "jane.smith@acmebank.example.com",
+                    "user@example.com",
+                    "",
+                    "Acme Bank OpenShift Kickoff",
+                    "2026-01-03",
+                    TEST_EPOCH,
+                    '["LABEL_BANK"]',
+                ),
+                (
+                    "msg002",
+                    "thread001",
+                    "user@example.com",
+                    "jane.smith@acmebank.example.com",
+                    "",
+                    "Re: Acme Bank OpenShift Kickoff",
+                    "2026-01-04",
+                    TEST_EPOCH + 86_400,
+                    '["LABEL_BANK"]',
+                ),
+                (
+                    "msg003",
+                    "thread002",
+                    "bob.jones@acme-bank.example.com",
+                    "user@example.com",
+                    "",
+                    "Acme Bank Migration Timeline",
+                    "2026-01-05",
+                    TEST_EPOCH + 172_800,
+                    '["LABEL_BANK"]',
+                ),
+                (
+                    "msg004",
+                    "thread002",
+                    "user@example.com",
+                    "bob.jones@acme-bank.example.com",
+                    "",
+                    "Re: Acme Bank Migration Timeline",
+                    "2026-01-06",
+                    TEST_EPOCH + 259_200,
+                    '["LABEL_BANK"]',
+                ),
+                (
+                    "msg005",
+                    "thread003",
+                    "alice.chen@acmebank.example.com",
+                    "user@example.com",
+                    "",
+                    "Acme Bank Q2 Review",
+                    "2026-01-07",
+                    TEST_EPOCH + 345_600,
+                    '["LABEL_BANK"]',
+                ),
+            ],
+        )
 
-    # 3 people rows — acme-bank-domain emails; no thread_accounts rows seeded
-    conn.executemany(
-        """INSERT INTO people (email, display_name, message_count, thread_count, domain, account)
+        # 3 people rows — acme-bank-domain emails; no thread_accounts rows seeded
+        conn.executemany(
+            """INSERT INTO people (email, display_name, message_count, thread_count, domain, account)
            VALUES (?, ?, ?, ?, ?, ?)""",
-        [
-            ("jane.smith@acmebank.example.com", "Jane Smith", 2, 2, "acmebank.example.com", "acme-bank"),
-            ("bob.jones@acme-bank.example.com", "Bob Jones", 2, 1, "acme-bank.example.com", "acme-bank"),
-            ("alice.chen@acmebank.example.com", "Alice Chen", 1, 1, "acmebank.example.com", "acme-bank"),
-        ],
-    )
+            [
+                ("jane.smith@acmebank.example.com", "Jane Smith", 2, 2, "acmebank.example.com", "acme-bank"),
+                ("bob.jones@acme-bank.example.com", "Bob Jones", 2, 1, "acme-bank.example.com", "acme-bank"),
+                ("alice.chen@acmebank.example.com", "Alice Chen", 1, 1, "acmebank.example.com", "acme-bank"),
+            ],
+        )
 
-    conn.commit()
-    conn.close()
+        conn.execute(
+            "INSERT OR REPLACE INTO sync_state(key, value) VALUES (?, 'true')",
+            (GMAIL_QUERY_READY_KEY,),
+        )
+
+    apply_gmail_page(db_path, seed)
 
     return db_path
 
@@ -240,85 +247,90 @@ def account_tags_db(tmp_path):
     """
     db_path = tmp_path / "account_tags_test.db"
 
-    conn = sqlite3.connect(str(db_path))
-    conn.executescript(SCHEMA_PATH.read_text())
+    initialize_gmail_publication(db_path)
 
-    # 4 threads
-    conn.executemany(
-        "INSERT INTO threads (thread_id, subject, snippet, message_count) VALUES (?, ?, ?, ?)",
-        [
-            ("thread001", "Acme Bank kickoff", "Let's kick off", 0),
-            ("thread002", "Acme Bank follow-up", "Following up", 0),
-            ("thread003", "Keep thread", "Saved for later", 0),
-            ("thread004", "Global Pay intro", "Hello Global Pay team", 0),
-        ],
-    )
+    def seed(conn: SQLiteMutationConnection) -> None:
 
-    # 3 labels: ref/acme-bank, ref/global-pay, ref/keep
-    conn.executemany(
-        "INSERT INTO labels (label_id, label_name) VALUES (?, ?)",
-        [
-            ("LABEL_BANK", "ref/acme-bank"),
-            ("LABEL_GPAY", "ref/global-pay"),
-            ("LABEL_KEEP", "ref/keep"),
-        ],
-    )
+        # 4 threads
+        conn.executemany(
+            "INSERT INTO threads (thread_id, subject, snippet, message_count) VALUES (?, ?, ?, ?)",
+            [
+                ("thread001", "Acme Bank kickoff", "Let's kick off", 0),
+                ("thread002", "Acme Bank follow-up", "Following up", 0),
+                ("thread003", "Keep thread", "Saved for later", 0),
+                ("thread004", "Global Pay intro", "Hello Global Pay team", 0),
+            ],
+        )
 
-    # 4 messages with labels JSON arrays
-    conn.executemany(
-        """INSERT INTO messages
+        # 3 labels: ref/acme-bank, ref/global-pay, ref/keep
+        conn.executemany(
+            "INSERT INTO labels (label_id, label_name) VALUES (?, ?)",
+            [
+                ("LABEL_BANK", "ref/acme-bank"),
+                ("LABEL_GPAY", "ref/global-pay"),
+                ("LABEL_KEEP", "ref/keep"),
+            ],
+        )
+
+        # 4 messages with labels JSON arrays
+        conn.executemany(
+            """INSERT INTO messages
            (message_id, thread_id, from_addr, to_addr, cc_addr, subject, date_str, date_epoch, labels)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        [
-            (
-                "msg001",
-                "thread001",
-                "a@acme-bank.example.com",
-                "user@example.com",
-                "",
-                "Acme Bank kickoff",
-                "2026-01-03",
-                TEST_EPOCH,
-                '["LABEL_BANK"]',
-            ),
-            (
-                "msg002",
-                "thread002",
-                "b@acme-bank.example.com",
-                "user@example.com",
-                "",
-                "Acme Bank follow-up",
-                "2026-01-04",
-                TEST_EPOCH + 86_400,
-                '["LABEL_BANK"]',
-            ),
-            (
-                "msg003",
-                "thread003",
-                "c@example.com",
-                "user@example.com",
-                "",
-                "Keep thread",
-                "2026-01-05",
-                TEST_EPOCH + 172_800,
-                '["LABEL_KEEP"]',
-            ),
-            (
-                "msg004",
-                "thread004",
-                "d@globalpay.example.com",
-                "user@example.com",
-                "",
-                "Global Pay intro",
-                "2026-01-06",
-                TEST_EPOCH + 259_200,
-                '["LABEL_GPAY"]',
-            ),
-        ],
-    )
+            [
+                (
+                    "msg001",
+                    "thread001",
+                    "a@acme-bank.example.com",
+                    "user@example.com",
+                    "",
+                    "Acme Bank kickoff",
+                    "2026-01-03",
+                    TEST_EPOCH,
+                    '["LABEL_BANK"]',
+                ),
+                (
+                    "msg002",
+                    "thread002",
+                    "b@acme-bank.example.com",
+                    "user@example.com",
+                    "",
+                    "Acme Bank follow-up",
+                    "2026-01-04",
+                    TEST_EPOCH + 86_400,
+                    '["LABEL_BANK"]',
+                ),
+                (
+                    "msg003",
+                    "thread003",
+                    "c@example.com",
+                    "user@example.com",
+                    "",
+                    "Keep thread",
+                    "2026-01-05",
+                    TEST_EPOCH + 172_800,
+                    '["LABEL_KEEP"]',
+                ),
+                (
+                    "msg004",
+                    "thread004",
+                    "d@globalpay.example.com",
+                    "user@example.com",
+                    "",
+                    "Global Pay intro",
+                    "2026-01-06",
+                    TEST_EPOCH + 259_200,
+                    '["LABEL_GPAY"]',
+                ),
+            ],
+        )
 
-    conn.commit()
-    conn.close()
+        conn.execute(
+            "INSERT OR REPLACE INTO sync_state(key, value) VALUES (?, 'true')",
+            (GMAIL_QUERY_READY_KEY,),
+        )
+
+    apply_gmail_page(db_path, seed)
 
     return db_path
 

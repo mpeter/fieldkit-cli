@@ -342,8 +342,6 @@ def test_operations_prioritizes_auth_failure_and_exposes_pending_proposals(sourc
     def cli(args: list[str]) -> Any:
         if args == ["watch", "status", "--json"]:
             return {"items": [{"watcher": "slack-threads", "outcome": "ok", "last_run": "2026-08-01T10:00:00Z"}]}
-        if args == ["driver", "status", "--json"]:
-            return {"items": [{"outcome": "skipped", "ts": "2026-08-16T10:00:00Z", "error": "cap reached"}]}
         raise WebDataError(f"unexpected CLI call: {args}")
 
     source.cli_json = cli
@@ -369,8 +367,6 @@ def test_operations_treats_completed_partial_watcher_run_as_healthy(source: Data
     def cli(args: list[str]) -> Any:
         if args == ["watch", "status", "--json"]:
             return {"items": [{"watcher": "morning-brief", "outcome": "partial", "last_run": "2026-08-16T07:00:00Z"}]}
-        if args == ["driver", "status", "--json"]:
-            return {"items": []}
         raise WebDataError(f"unexpected CLI call: {args}")
 
     source.cli_json = cli
@@ -379,6 +375,20 @@ def test_operations_treats_completed_partial_watcher_run_as_healthy(source: Data
 
     assert stages["watchers"]["status"] == "ok"
     assert stages["watchers"]["detail"] == "Watcher data is current."
+
+
+def test_watcher_operation_reports_failed_run_before_freshness(source: DataSource) -> None:
+    source.now = lambda: datetime(2026, 8, 16, 8, tzinfo=UTC)
+    source.cli_json = lambda args: {
+        "items": [{"watcher": "morning-brief", "outcome": "failed", "last_run": "2026-08-01T07:00:00Z"}]
+    }
+
+    result = source._watcher_operation()
+
+    assert result.status == "error"
+    assert result.detail == "1 watcher run(s) need investigation."
+    assert result.updated_at == "2026-08-01T07:00:00Z"
+    assert result.action == "Inspect fieldkit watch logs, then run fieldkit watch run --all."
 
 
 def test_operations_treats_an_unexpected_doctor_payload_as_an_error(source: DataSource) -> None:
@@ -466,7 +476,9 @@ def test_operations_uses_released_admission_as_the_latest_developer_freshness(so
         '"detail":"developer lease released","ts":"2026-08-16T10:00:00Z"}]}',
         encoding="utf-8",
     )
-    source.cli_json = lambda args: {"items": [{"outcome": "skipped", "ts": "2026-08-13T21:06:55Z"}]}
+    driver_status = source.data_dir / "logs" / "driver" / "driver-run-status.json"
+    driver_status.parent.mkdir(parents=True)
+    driver_status.write_text('{"runs": [{"outcome": "skipped", "ts": "2026-08-13T21:06:55Z"}]}', encoding="utf-8")
 
     stages = {stage["name"]: stage for stage in source.operations()["stages"]}
 

@@ -5,7 +5,7 @@ from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
-from fieldkit.sf.client import SFAPIError
+from fieldkit.sf.errors import SFAPIError
 
 PopulationState = Literal["observed-populated", "observed-null", "not-sampled"]
 

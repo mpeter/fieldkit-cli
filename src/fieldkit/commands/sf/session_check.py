@@ -19,7 +19,6 @@ auth depth as real SFDirectClient calls, so a passing check_sf_session() now
 means what it says.
 """
 
-import json
 import logging
 import time
 
@@ -28,14 +27,11 @@ import httpx
 
 from fieldkit.cli_exit import EXIT_AUTH, EXIT_SUCCESS
 from fieldkit.config import TIMEOUT_SF_SESSION_CHECK, get_cookie_file
-from fieldkit.sf.client import reauth_hint_message as _reauth_hint
+from fieldkit.config.salesforce_cookie import read_salesforce_cookie
+from fieldkit.sf.client import API_VERSION
+from fieldkit.sf.errors import reauth_hint_message as _reauth_hint
 
 log = logging.getLogger(__name__)
-
-# historic regression: must match fieldkit.sf.client._API_VERSION. Kept as a separate
-# local constant (not a cross-module import of a private name) since this is
-# the only other place an API version is hardcoded for a raw probe request.
-_PROBE_API_VERSION = "v59.0"
 
 
 def check_sf_session() -> tuple[bool, str]:
@@ -50,43 +46,27 @@ def check_sf_session() -> tuple[bool, str]:
     Returns (True, message) if 200, (False, message) if expired/missing.
     """
     cookie_file = get_cookie_file()
-    if not cookie_file.exists():
-        return False, f"Cookie file not found: {cookie_file}"
-
     try:
-        data = json.loads(cookie_file.read_text(encoding="utf-8"))
-        cookies = data.get("cookies", [])
-    except Exception as exc:  # noqa: BLE001
-        return False, f"Failed to read cookie file: {exc}"
-
-    # Find the sid cookie — used as Bearer token (matching SFDirectClient)
-    sid_cookie = next(
-        (c for c in cookies if c.get("name") == "sid" and "my.salesforce.com" in c.get("domain", "")),
-        None,
-    )
+        sid_cookie = read_salesforce_cookie(cookie_file)
+    except FileNotFoundError:
+        return False, f"Cookie file not found; {_reauth_hint()}"
+    except (ValueError, OSError):
+        return False, f"Failed to read cookie file; {_reauth_hint()}"
     if not sid_cookie:
         return False, "No 'sid' cookie found in cookie file (need domain: *.my.salesforce.com)"
 
-    sid = sid_cookie.get("value", "")
-    if not sid:
-        return (
-            False,
-            f"SF sid cookie has no value — {_reauth_hint()}",
-        )
-
-    cookie_domain = sid_cookie.get("domain", "").lstrip(".")
-    sf_base = f"https://{cookie_domain}"
+    sf_base = f"https://{sid_cookie.domain}"
 
     for attempt in range(2):
         try:
             resp = httpx.get(
-                f"{sf_base}/services/data/{_PROBE_API_VERSION}/sobjects/Account/describe",
-                headers={"Authorization": f"Bearer {sid}"},
+                f"{sf_base}/services/data/{API_VERSION}/sobjects/Account/describe",
+                headers={"Authorization": f"Bearer {sid_cookie.sid}"},
                 follow_redirects=False,
                 timeout=TIMEOUT_SF_SESSION_CHECK,
             )
             if resp.status_code == 200:
-                return True, f"instance: {cookie_domain}"
+                return True, "Salesforce API session is active."
             elif resp.status_code in (401, 403):
                 return (
                     False,
@@ -98,14 +78,17 @@ def check_sf_session() -> tuple[bool, str]:
                     f"SF session expired (redirect to login) — {_reauth_hint()}",
                 )
             else:
-                return False, f"Unexpected response {resp.status_code} from {sf_base}"
-        except httpx.RequestError as exc:
+                return (
+                    False,
+                    f"Unexpected response HTTP {resp.status_code}; check Salesforce availability and permissions.",
+                )
+        except httpx.RequestError:
             if attempt == 0:
                 # implementation note: simple two-attempt retry; tenacity not needed here.
-                log.debug("Network error on attempt 1, retrying: %s", exc)
+                log.debug("Network error on attempt 1; retrying Salesforce session check.")
                 time.sleep(1)
                 continue
-            return False, f"Network error checking SF session: {exc}"
+            return False, "Network error checking SF session; check connectivity and retry."
     # unreachable, but satisfies mypy
     return False, "Network error checking SF session: exhausted retries"
 

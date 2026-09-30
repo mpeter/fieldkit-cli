@@ -32,8 +32,14 @@ from fieldkit.commands.gmail.query import cli as query_cli
 from fieldkit.commands.health.cli import cli as health_cli
 from fieldkit.commands.shadowbot.cli import cli as shadowbot_cli
 from fieldkit.commands.web.cli import cli as web_cli
-from fieldkit.health.runner import HealthRunResult
+from fieldkit.gmail.publication import (
+    GMAIL_QUERY_READY_KEY,
+    apply_gmail_page,
+    initialize_gmail_publication,
+)
+from fieldkit.health.runner import HealthOutcome, HealthRunResult
 from fieldkit.shadowbot.client import ShadowbotResponse
+from fieldkit.sqlite_publication import SQLiteMutationConnection
 
 pytestmark = pytest.mark.unit
 
@@ -80,7 +86,7 @@ def _make_gmail_db() -> sqlite3.Connection:
     )
     conn.execute(
         "INSERT INTO people (person_id, email, display_name) VALUES (?, ?, ?)",
-        ("alice@acme-corp.com", "alice@acme-corp.com", "Alice Smith"),
+        ("alice@acme-corp.example.com", "alice@acme-corp.example.com", "Alice Smith"),
     )
     conn.execute(
         "INSERT INTO messages (msg_id, thread_id, subject, from_addr, to_addr, cc_addr, date_str, date_epoch,"
@@ -89,7 +95,7 @@ def _make_gmail_db() -> sqlite3.Connection:
             str(uuid.uuid4()),
             "t-001",
             "Renewal pricing",
-            "alice@acme-corp.com",
+            "alice@acme-corp.example.com",
             "rep@example.com",
             "",
             "2023-11-14",
@@ -125,7 +131,7 @@ def test_gmail_query_json_emits_one_document(name: str, args: list[str], key: st
     """Every `gmail query` subcommand emits a single parseable document under --json."""
     db = _make_gmail_db()
 
-    with patch("fieldkit.commands.gmail.query.connect", return_value=db):
+    with patch("fieldkit.commands.gmail.query.query_domain.connect", return_value=db):
         result = CliRunner().invoke(query_cli, [*args, "--db", str(tmp_path / "fake.db"), "--json"])
 
     assert result.exit_code == 0, result.output
@@ -139,7 +145,7 @@ def test_gmail_query_json_absent_emits_no_json(name: str, args: list[str], key: 
     """Without --json the subcommands still render prose, not a document."""
     db = _make_gmail_db()
 
-    with patch("fieldkit.commands.gmail.query.connect", return_value=db):
+    with patch("fieldkit.commands.gmail.query.query_domain.connect", return_value=db):
         result = CliRunner().invoke(query_cli, [*args, "--db", str(tmp_path / "fake.db")])
 
     assert result.exit_code == 0, result.output
@@ -151,7 +157,7 @@ def test_gmail_query_person_json_no_match_is_an_empty_document(tmp_path: Path) -
     """A name that matches nobody yields count 0, not a bare prose line."""
     db = _make_gmail_db()
 
-    with patch("fieldkit.commands.gmail.query.connect", return_value=db):
+    with patch("fieldkit.commands.gmail.query.query_domain.connect", return_value=db):
         result = CliRunner().invoke(query_cli, ["person", "Nobody At All", "--db", str(tmp_path / "x.db"), "--json"])
 
     assert result.exit_code == 0, result.output
@@ -165,7 +171,7 @@ def test_gmail_query_filters_carry_the_parsed_epoch(tmp_path: Path) -> None:
     """--since reaches the document as the epoch the query actually ran with."""
     db = _make_gmail_db()
 
-    with patch("fieldkit.commands.gmail.query.connect", return_value=db):
+    with patch("fieldkit.commands.gmail.query.query_domain.connect", return_value=db):
         result = CliRunner().invoke(
             query_cli,
             ["threads", "Renewal", "--db", str(tmp_path / "x.db"), "--since", "2023-01-01", "--json"],
@@ -182,21 +188,31 @@ def test_gmail_query_filters_carry_the_parsed_epoch(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _tagging_db(tmp_path: Path) -> Path:
-    """Write a gmail.db on disk with one ref/* labelled message."""
+def _tagging_db(tmp_path: Path, *, include_label: bool = True) -> Path:
+    """Publish a ready Gmail cache with an optional ref/* labelled message."""
     db_path = tmp_path / "gmail.db"
-    conn = sqlite3.connect(str(db_path))
-    conn.executescript(
-        """
-        CREATE TABLE messages (msg_id TEXT PRIMARY KEY, thread_id TEXT, labels TEXT);
-        CREATE TABLE labels (label_id TEXT PRIMARY KEY, label_name TEXT);
-        CREATE TABLE thread_accounts (thread_id TEXT, account TEXT, PRIMARY KEY (thread_id, account));
-        """
-    )
-    conn.execute("INSERT INTO labels (label_id, label_name) VALUES ('L1', 'ref/acme-corp')")
-    conn.execute("INSERT INTO messages (msg_id, thread_id, labels) VALUES ('m1', 't-001', '[\"L1\"]')")
-    conn.commit()
-    conn.close()
+    initialize_gmail_publication(db_path)
+
+    def seed(connection: SQLiteMutationConnection) -> None:
+        connection.execute(
+            "INSERT INTO threads(thread_id, subject, message_count) VALUES (?, ?, ?)",
+            ("t-001", "Fictional planning", 1),
+        )
+        if include_label:
+            connection.execute(
+                "INSERT INTO labels(label_id, label_name) VALUES (?, ?)",
+                ("L1", "ref/acme-corp"),
+            )
+            connection.execute(
+                "INSERT INTO messages(message_id, thread_id, labels) VALUES (?, ?, ?)",
+                ("m1", "t-001", '["L1"]'),
+            )
+        connection.execute(
+            "INSERT OR REPLACE INTO sync_state(key, value) VALUES (?, 'true')",
+            (GMAIL_QUERY_READY_KEY,),
+        )
+
+    apply_gmail_page(db_path, seed)
     return db_path
 
 
@@ -226,17 +242,7 @@ def test_gmail_account_tags_prose_is_unchanged(tmp_path: Path) -> None:
 
 def test_gmail_account_tags_json_with_no_labels_is_an_empty_document(tmp_path: Path) -> None:
     """No ref/* labels yields an empty document rather than the prose notice."""
-    db_path = tmp_path / "empty.db"
-    conn = sqlite3.connect(str(db_path))
-    conn.executescript(
-        """
-        CREATE TABLE messages (msg_id TEXT PRIMARY KEY, thread_id TEXT, labels TEXT);
-        CREATE TABLE labels (label_id TEXT PRIMARY KEY, label_name TEXT);
-        CREATE TABLE thread_accounts (thread_id TEXT, account TEXT, PRIMARY KEY (thread_id, account));
-        """
-    )
-    conn.commit()
-    conn.close()
+    db_path = _tagging_db(tmp_path, include_label=False)
 
     result = CliRunner().invoke(account_tags_cli, ["--db", str(db_path), "--json"])
 
@@ -251,46 +257,62 @@ def test_gmail_account_tags_json_with_no_labels_is_an_empty_document(tmp_path: P
 # ---------------------------------------------------------------------------
 
 
-def _backstory_env(tmp_path: Path) -> tuple[Path, Path]:
-    """Build an accounts.yaml and a people-bearing gmail.db under *tmp_path*."""
-    home = tmp_path / "home"
-    (home / "config").mkdir(parents=True)
-    (home / "config" / "accounts.yaml").write_text(
-        "accounts:\n  acme-corp:\n    domains: [acme-corp.com]\n    blindspots_min_messages: 2\n",
-        encoding="utf-8",
+def _backstory_env(tmp_path: Path) -> tuple[dict[str, object], Path]:
+    """Build a configured, ready published Gmail cache under *tmp_path*."""
+    from fieldkit.gmail.publication import (
+        GMAIL_QUERY_READY_KEY,
+        apply_gmail_page,
+        initialize_gmail_publication,
     )
+    from fieldkit.sqlite_publication import SQLiteMutationConnection
 
+    config: dict[str, object] = {
+        "accounts": {
+            "acme-corp": {
+                "domains": ["acme-corp.example.com"],
+                "blindspots_min_messages": 2,
+            }
+        }
+    }
     db_path = tmp_path / "gmail.db"
-    conn = sqlite3.connect(str(db_path))
-    conn.executescript(
-        """
-        CREATE TABLE people (
-            email TEXT PRIMARY KEY,
-            display_name TEXT,
-            message_count INTEGER,
-            thread_count INTEGER,
-            meeting_count INTEGER,
-            slack_message_count INTEGER,
-            last_seen TEXT,
-            is_internal INTEGER,
-            account TEXT
-        );
-        """
-    )
-    conn.execute(
-        "INSERT INTO people VALUES ('alice@acme-corp.com', 'Alice Smith', 9, 4, 1, 0, '2023-11-14', 0, 'acme-corp')"
-    )
-    conn.commit()
-    conn.close()
-    return home, db_path
+    initialize_gmail_publication(db_path)
+
+    def seed(connection: SQLiteMutationConnection) -> None:
+        connection.execute(
+            """
+            INSERT INTO people (
+                email, display_name, message_count, thread_count, meeting_count,
+                slack_message_count, last_seen, is_internal, account, domain
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "alice@acme-corp.example.com",
+                "Alice Smith",
+                9,
+                4,
+                1,
+                0,
+                "2023-11-14",
+                0,
+                "acme-corp",
+                "acme-corp.example.com",
+            ),
+        )
+        connection.execute(
+            "INSERT OR REPLACE INTO sync_state(key, value) VALUES (?, 'true')",
+            (GMAIL_QUERY_READY_KEY,),
+        )
+
+    apply_gmail_page(db_path, seed)
+    return config, db_path
 
 
 def test_gmail_backstory_gap_json_lists_gap_contacts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """backstory-gap emits one item per gap contact, tagged with its account."""
     from fieldkit.commands.gmail import backstory_gap
 
-    home, db_path = _backstory_env(tmp_path)
-    monkeypatch.setattr(backstory_gap, "_config_path", lambda: home / "config" / "accounts.yaml")
+    config, db_path = _backstory_env(tmp_path)
+    monkeypatch.setattr(backstory_gap, "get_accounts_config", lambda *, strict: config)
 
     result = CliRunner().invoke(backstory_gap.cli, ["--db", str(db_path), "--json"])
 
@@ -298,7 +320,7 @@ def test_gmail_backstory_gap_json_lists_gap_contacts(tmp_path: Path, monkeypatch
     payload = json.loads(result.stdout)
     assert payload["count"] == 1
     assert payload["items"][0]["account"] == "acme-corp"
-    assert payload["items"][0]["email"] == "alice@acme-corp.com"
+    assert payload["items"][0]["email"] == "alice@acme-corp.example.com"
     assert payload["items"][0]["min_messages"] == 2
 
 
@@ -308,8 +330,8 @@ def test_gmail_backstory_gap_json_records_the_applied_threshold(
     """An explicit --min-messages appears both as the filter and on each item."""
     from fieldkit.commands.gmail import backstory_gap
 
-    home, db_path = _backstory_env(tmp_path)
-    monkeypatch.setattr(backstory_gap, "_config_path", lambda: home / "config" / "accounts.yaml")
+    config, db_path = _backstory_env(tmp_path)
+    monkeypatch.setattr(backstory_gap, "get_accounts_config", lambda *, strict: config)
 
     result = CliRunner().invoke(backstory_gap.cli, ["--db", str(db_path), "--min-messages", "5", "--json"])
 
@@ -319,18 +341,19 @@ def test_gmail_backstory_gap_json_records_the_applied_threshold(
     assert payload["items"][0]["min_messages"] == 5
 
 
-def test_gmail_backstory_gap_prose_is_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Without --json the markdown report still renders."""
+def test_gmail_backstory_gap_prose_states_review_boundary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without --json the bounded report states that CRM was not compared."""
     from fieldkit.commands.gmail import backstory_gap
 
-    home, db_path = _backstory_env(tmp_path)
-    monkeypatch.setattr(backstory_gap, "_config_path", lambda: home / "config" / "accounts.yaml")
+    config, db_path = _backstory_env(tmp_path)
+    monkeypatch.setattr(backstory_gap, "get_accounts_config", lambda *, strict: config)
 
     result = CliRunner().invoke(backstory_gap.cli, ["--db", str(db_path)])
 
     assert result.exit_code == 0, result.output
-    assert "# Backstory Gap Report" in result.output
-    assert "**Total gap contacts across all accounts: 1**" in result.output
+    assert "# CRM Review Candidate Report" in result.output
+    assert "CRM comparison was not performed" in result.output
+    assert "**Total CRM-review candidates: 1**" in result.output
 
 
 # ---------------------------------------------------------------------------
@@ -347,6 +370,7 @@ def _driver_result(outcome: str = "ok", error: str = "") -> SimpleNamespace:
         elapsed_seconds=12.5,
         spend_note="spend: $0.10",
         error=error,
+        candidates=(),
     )
 
 
@@ -455,7 +479,7 @@ def test_driver_status_json_reports_an_unreadable_status_file(tmp_path: Path) ->
 # ---------------------------------------------------------------------------
 
 
-def _health_result(outcome: str = "ok") -> HealthRunResult:
+def _health_result(outcome: HealthOutcome = "ok") -> HealthRunResult:
     return HealthRunResult(
         outcome=outcome,
         checks_run=4,

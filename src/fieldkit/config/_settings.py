@@ -6,8 +6,8 @@ from fieldkit.config import _loader
 
 
 def llm_disabled() -> bool:
-    """Return whether either supported environment flag disables LLM calls."""
-    return bool(os.environ.get("FIELDKIT_NO_LLM") or os.environ.get("NO_LLM"))
+    """Return whether the canonical environment flag disables LLM calls."""
+    return bool(os.environ.get("FIELDKIT_NO_LLM"))
 
 
 def get_driver_max_concurrent() -> int:

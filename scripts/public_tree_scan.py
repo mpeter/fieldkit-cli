@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -12,15 +13,25 @@ import tempfile
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path, PurePosixPath
+from typing import TYPE_CHECKING, Literal
 
-if __package__:
-    from scripts import check_artifacts, check_public_identity, export_public_tree, public_tree_artifacts
+if TYPE_CHECKING or __package__:
+    from scripts import (
+        check_artifacts,
+        check_public_identity,
+        export_public_tree,
+        public_history_source,
+        public_tree_artifacts,
+        release_approval_archive,
+    )
     from scripts.json_policy import reject_duplicate_json_keys
 else:
     import check_artifacts
     import check_public_identity
     import export_public_tree
+    import public_history_source
     import public_tree_artifacts
+    import release_approval_archive
     from json_policy import reject_duplicate_json_keys
 
 POLICY_PATH = Path("docs/release-readiness/public-tree-scan-policy.json")
@@ -151,7 +162,7 @@ class ScanReport:
 
 
 def _bind_artifact_evidence(
-    manifest: export_public_tree.ExportManifest,
+    manifest: export_public_tree.ExportManifest | public_history_source.PublicHistorySource,
     artifacts: tuple[public_tree_artifacts.ArtifactEvidence, ...],
     validation: check_artifacts.ValidationReport | None,
 ) -> None:
@@ -169,6 +180,59 @@ def _bind_artifact_evidence(
     observed = {(artifact.kind, artifact.name): artifact.sha256 for artifact in artifacts}
     if len(expected) != len(validation.artifacts) or expected != observed:
         raise ValueError("artifact validation identities do not match the scanned artifacts")
+
+
+@dataclass(frozen=True)
+class PublicHistoryScanReport(ScanReport):
+    """Scan version 2 separates current descendant identity from its approved root."""
+
+    source_kind: Literal["public-history"]
+    anchor: public_history_source.ApprovedCutoverAnchor
+    source_sha256: str
+
+
+def _scan_source(
+    repo: Path,
+    destination: Path,
+    manifest_path: Path,
+    export_policy_path: Path,
+    *,
+    source_kind: Literal["initial-export", "public-history"],
+    expected_anchor: public_history_source.ApprovedCutoverAnchor | None,
+    cutover_record: bytes | None,
+) -> export_public_tree.ExportManifest | public_history_source.PublicHistorySource:
+    if source_kind == "initial-export":
+        if expected_anchor is not None or cutover_record is not None:
+            raise ValueError("initial export does not accept public history trust inputs")
+        return export_public_tree.verify_export(repo, destination, manifest_path, export_policy_path)
+    if source_kind != "public-history" or expected_anchor is None or cutover_record is None:
+        raise ValueError("public history scan requires an independently approved anchor and exact record")
+    source = public_history_source.load_source(
+        manifest_path, expected_anchor=expected_anchor, cutover_record=cutover_record
+    )
+    if export_policy_path.absolute() != (repo / source.policy_path).absolute():
+        raise ValueError("public history scan policy path differs from the source contract")
+    return public_history_source.verify_source(
+        repo, source, destination, expected_anchor=expected_anchor, cutover_record=cutover_record
+    )
+
+
+def _source_document(destination: Path, entry: export_public_tree.TreeEntry) -> bytes:
+    """Capture each verified source file again without an unbounded path reread."""
+    path = destination / entry.path
+    try:
+        parent_fd = release_approval_archive._open_real_directory(path.parent, create=False)
+        try:
+            data, info = export_public_tree._read_file_at(parent_fd, path.name)
+            export_public_tree._require_parent_binding(path.parent, parent_fd)
+        finally:
+            os.close(parent_fd)
+    except OSError as error:
+        raise ValueError("public scan cannot read stable source entry") from error
+    mode = "100755" if info.st_mode & 0o111 else "100644"
+    if _git_blob_oid(data) != entry.oid or mode != entry.mode:
+        raise ValueError(f"verified export object mismatch after capture: {entry.path}")
+    return data
 
 
 def _object(value: object, subject: str) -> dict[str, object]:
@@ -299,7 +363,7 @@ def _load_policy(data: bytes, today: date) -> ScanPolicy:
             {"expires_on"},
             subject,
         )
-        allowance = BinaryAllowance(
+        binary_allowance = BinaryAllowance(
             _exact_path(entry["path"], f"{subject} path"),
             _string(entry["blob_oid"], f"{subject} blob_oid"),
             _string(entry["sha256"], f"{subject} sha256"),
@@ -309,9 +373,9 @@ def _load_policy(data: bytes, today: date) -> ScanPolicy:
             _string(entry["rationale"], f"{subject} rationale"),
             _optional_date(entry.get("expires_on"), f"{subject} expires_on"),
         )
-        if allowance.expires_on is not None and allowance.expires_on < today:
-            raise ValueError(f"{POLICY_PATH}: expired binary allowance {allowance.path}")
-        binary_allowance_list.append(allowance)
+        if binary_allowance.expires_on is not None and binary_allowance.expires_on < today:
+            raise ValueError(f"{POLICY_PATH}: expired binary allowance {binary_allowance.path}")
+        binary_allowance_list.append(binary_allowance)
     binary_allowances = tuple(binary_allowance_list)
     binary_paths = {allowance.path for allowance in binary_allowances}
     if len(binary_paths) != len(binary_allowances):
@@ -434,15 +498,29 @@ def scan_public_tree(
     today: date | None = None,
     artifacts: tuple[Path, ...] = (),
     artifact_validation: check_artifacts.ValidationReport | None = None,
+    source_kind: Literal["initial-export", "public-history"] = "initial-export",
+    expected_anchor: public_history_source.ApprovedCutoverAnchor | None = None,
+    cutover_record: bytes | None = None,
 ) -> ScanReport:
-    """Verify and scan every included entry in one public export."""
-    manifest = export_public_tree.verify_export(repo, destination, manifest_path, export_policy_path)
-    entries = {entry.path: entry for entry in manifest.included}
+    """Verify every source entry and artifact; successor trust is caller supplied."""
+    manifest = _scan_source(
+        repo,
+        destination,
+        manifest_path,
+        export_policy_path,
+        source_kind=source_kind,
+        expected_anchor=expected_anchor,
+        cutover_record=cutover_record,
+    )
+    entries = {
+        entry.path: entry
+        for entry in (
+            manifest.included if isinstance(manifest, export_public_tree.ExportManifest) else manifest.entries
+        )
+    }
     documents: dict[str, bytes] = {}
     for path, entry in sorted(entries.items()):
-        data = (destination / path).read_bytes()
-        if _git_blob_oid(data) != entry.oid:
-            raise ValueError(f"verified export object mismatch after capture: {path}")
+        data = _source_document(destination, entry)
         documents[path] = data
     scan_policy_relative = POLICY_PATH.as_posix()
     identity_policy_relative = IDENTITY_POLICY_PATH.as_posix()
@@ -507,10 +585,10 @@ def scan_public_tree(
         for line_number, line in enumerate(text.splitlines(), start=1):
             for rule in policy.text_rules:
                 for match in rule.pattern.finditer(line):
-                    allowance = text_allowances.get((rule.rule_id, policy_path))
-                    allowed = allowance is not None and any(
+                    text_allowance = text_allowances.get((rule.rule_id, policy_path))
+                    allowed = text_allowance is not None and any(
                         candidate.start() <= match.start() and candidate.end() >= match.end()
-                        for candidate in allowance.pattern.finditer(line)
+                        for candidate in text_allowance.pattern.finditer(line)
                     )
                     if allowed:
                         classified_matches += 1
@@ -532,12 +610,16 @@ def scan_public_tree(
     if set(text_allowances) != used_text_allowances:
         raise ValueError(f"{POLICY_PATH}: unused text allowance")
 
-    return ScanReport(
-        schema_version=1,
+    report = ScanReport(
+        schema_version=1 if isinstance(manifest, export_public_tree.ExportManifest) else 2,
         source_commit=manifest.source_commit,
         source_tree=manifest.source_tree,
-        exported_tree=manifest.exported_tree,
-        expected_repository=manifest.expected_repository,
+        exported_tree=manifest.exported_tree
+        if isinstance(manifest, export_public_tree.ExportManifest)
+        else manifest.source_tree,
+        expected_repository=manifest.expected_repository
+        if isinstance(manifest, export_public_tree.ExportManifest)
+        else manifest.repository,
         planned_tag=manifest.planned_tag,
         export_policy_oid=manifest.policy_oid,
         export_policy_sha256=manifest.policy_sha256,
@@ -555,3 +637,50 @@ def scan_public_tree(
         artifacts=tuple(artifact_results),
         findings=tuple(sorted(set(findings), key=lambda finding: (finding.path, finding.line or 0, finding.rule_id))),
     )
+    if isinstance(manifest, public_history_source.PublicHistorySource):
+        if (
+            _scan_source(
+                repo,
+                destination,
+                manifest_path,
+                export_policy_path,
+                source_kind=source_kind,
+                expected_anchor=expected_anchor,
+                cutover_record=cutover_record,
+            )
+            != manifest
+        ):
+            raise ValueError("public history source changed during content observation")
+        if expected_anchor is None or cutover_record is None:
+            raise ValueError("public history scan requires an independently approved anchor and exact record")
+        return PublicHistoryScanReport(
+            schema_version=report.schema_version,
+            source_commit=report.source_commit,
+            source_tree=report.source_tree,
+            exported_tree=report.exported_tree,
+            expected_repository=report.expected_repository,
+            planned_tag=report.planned_tag,
+            export_policy_oid=report.export_policy_oid,
+            export_policy_sha256=report.export_policy_sha256,
+            scan_policy_oid=report.scan_policy_oid,
+            scan_policy_sha256=report.scan_policy_sha256,
+            identity_policy_oid=report.identity_policy_oid,
+            identity_policy_sha256=report.identity_policy_sha256,
+            scanned_entries=report.scanned_entries,
+            scanned_artifact_entries=report.scanned_artifact_entries,
+            scanned_text_entries=report.scanned_text_entries,
+            approved_binary_entries=report.approved_binary_entries,
+            classified_matches=report.classified_matches,
+            gitleaks_version=report.gitleaks_version,
+            gitleaks_findings=report.gitleaks_findings,
+            artifacts=report.artifacts,
+            findings=report.findings,
+            source_kind=public_history_source.SOURCE_KIND,
+            anchor=manifest.anchor,
+            source_sha256=hashlib.sha256(
+                public_history_source.source_bytes(
+                    manifest, expected_anchor=expected_anchor, cutover_record=cutover_record
+                )
+            ).hexdigest(),
+        )
+    return report

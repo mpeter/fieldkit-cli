@@ -1,21 +1,26 @@
 """Contract tests for bounded PR validation and complete post-merge enforcement."""
 
-import json
 import re
-import signal
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
 import yaml
 
-from fieldkit.config import TIMEOUT_HEALTH_GATE
-from scripts import quality_stage
+from scripts import check_documentation_contract, quality_plan
 
 pytestmark = pytest.mark.unit
 
 _ROOT = Path(__file__).resolve().parent.parent
+
+
+def test_ci_change_filter_uses_canonical_prose_classifier() -> None:
+    """Shipped Markdown must not bypass CI through a blanket extension allowlist."""
+    workflow = yaml.safe_load((_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
+    step = next(step for step in workflow["jobs"]["changes"]["steps"] if step.get("id") == "filter")
+    assert step["run"].strip() == (
+        'python3 scripts/semantic_python_changes.py --base "$BASE_SHA" --candidate "$HEAD_SHA" >> "$GITHUB_OUTPUT"'
+    )
+    assert "continue-on-error" not in step
 
 
 def _recipe(name: str, next_heading: str) -> str:
@@ -25,34 +30,51 @@ def _recipe(name: str, next_heading: str) -> str:
 
 def test_quality_uses_impact_selected_serial_tests() -> None:
     """Bounded validation must select impacted tests without a partial coverage claim."""
-    recipe = _recipe("quality", "# quality-full")
+    plan = quality_plan.build_plan("pr", repo=_ROOT, quality_base="a" * 40)
+    impact = next(stage for stage in plan.stages if stage.label == "impact-pytest")
 
-    assert '--tach --tach-base "$(QUALITY_BASE)" -q -n 0' in recipe
-    assert "--skip-when-docs-only" in recipe
-    assert "--cov" not in recipe
-    assert "tests/test_quality_contract.py" in recipe
+    assert impact.commands[0].argv == (
+        "uv",
+        "run",
+        "python",
+        "scripts/run_impact_tests.py",
+        "--base",
+        "a" * 40,
+    )
+    assert impact.skip_policy == "prose-only"
+    assert all("--cov" not in command.argv for stage in plan.stages for command in stage.commands)
+    quality_contract = next(stage for stage in plan.stages if stage.label == "quality-contract")
+    assert quality_contract.commands[0].argv == (
+        "uv",
+        "run",
+        "pytest",
+        "tests/test_quality_contract.py",
+        "-q",
+        "-n",
+        "0",
+    )
 
 
 def test_quality_full_retains_all_current_enforcement_commands() -> None:
     """The deferred full gate retains every former quality command and threshold."""
-    recipe = _recipe("quality-full", "# coverage.json")
+    plan = quality_plan.build_plan("full", repo=_ROOT)
+    commands = {stage.label: stage.commands for stage in plan.stages}
 
-    assert "uv run ruff check ." in recipe
-    assert "uv run ruff format --check ." in recipe
-    assert "uv run mypy src/fieldkit/ hooks/*.py --no-error-summary" in recipe
-    assert "uvx tach check" in recipe
-    assert "scripts/check_dependency_profiles.py" in recipe
-    assert "scripts/check_public_identity.py" in recipe
-    assert "scripts/check_workflow_security.py" in recipe
-    assert "scripts/release_workflow_policy.py" in recipe
-    assert "scripts/check_supply_chain_policy.py policy" in recipe
-    assert "scripts/check_release.py policy" in recipe
-    assert "--cov-report=json:coverage.json" in recipe
-    assert "--baseline .gaze/baseline.json" in recipe
-    assert "--max-crapload 67" in recipe
-    assert "--min-contract-coverage 50" in recipe
-    assert "scripts/check_flag_contract.py" in recipe
-    assert "scripts/agentready_assess.py agentready==2.49.0" in recipe
+    assert commands["ruff-check"][0].argv == ("uv", "run", "ruff", "check", ".")
+    assert commands["ruff-format"][0].argv == ("uv", "run", "ruff", "format", "--check", ".")
+    assert commands["tach"][0].argv == ("uv", "run", "--locked", "tach", "check")
+    assert commands["dependency-profiles"][0].argv[-1] == "scripts/check_dependency_profiles.py"
+    assert commands["public-identity"][0].argv[-1] == "scripts/check_public_identity.py"
+    assert commands["workflow-security"][0].argv[-1] == "scripts/check_workflow_security.py"
+    assert commands["release-workflow-policy"][0].argv[-1] == "scripts/release_workflow_policy.py"
+    assert commands["supply-chain-policy"][0].argv[-2:] == ("scripts/check_supply_chain_policy.py", "policy")
+    assert commands["release-policy"][0].argv[-2:] == ("scripts/check_release.py", "policy")
+    assert "--cov-report=json:coverage.json" in commands["pytest-coverage"][0].argv
+    assert "--baseline" in commands["gazepy-baseline"][0].argv
+    assert commands["gazepy-ceiling"][0].argv[-2:] == ("--max-crapload", "67")
+    assert commands["gazepy-contract-coverage"][0].argv[-2:] == ("--min-contract-coverage", "50")
+    assert commands["flag-contract"][0].argv[-1] == "scripts/check_flag_contract.py"
+    assert commands["agentready-assess"][0].argv[-1] == "agentready==2.49.0"
 
 
 def test_broad_pytest_targets_use_bounded_overridable_worker_count() -> None:
@@ -62,32 +84,34 @@ def test_broad_pytest_targets_use_bounded_overridable_worker_count() -> None:
     assert "PYTEST_XDIST_WORKERS ?= 4" in makefile
     assert "-n $(PYTEST_XDIST_WORKERS)" in _recipe("verify", "# test")
     assert "-n $(PYTEST_XDIST_WORKERS)" in _recipe("test", "# lint")
-    assert "-n $(PYTEST_XDIST_WORKERS)" in _recipe("quality-full", "# coverage.json")
+    assert '--workers "$(PYTEST_XDIST_WORKERS)"' in _recipe("quality-full", "# coverage.json")
+    plan = quality_plan.build_plan("full", repo=_ROOT, workers=4)
+    assert next(stage for stage in plan.stages if stage.label == "pytest-coverage").commands[0].argv[-1] == "4"
     assert "-n auto" not in makefile
 
 
-def test_quality_recipes_run_each_stage_through_timing_runner() -> None:
-    """Both recipes must publish timing evidence without changing their stage argv."""
+def test_quality_recipes_are_thin_wrappers_around_the_fixed_plan_owner() -> None:
+    """Make remains contributor UI and does not implement either quality tier."""
     makefile = (_ROOT / "Makefile").read_text(encoding="utf-8")
     quality_recipe = _recipe("quality", "# quality-full")
     full_recipe = _recipe("quality-full", "# coverage.json")
 
-    assert "scripts/quality_stage.py" in makefile
-    assert " --full-enforcement $(2) -- " in makefile
-    assert quality_recipe.count("$(call RUN_QUALITY_STAGE") == 17
-    assert full_recipe.count("$(call RUN_FULL_QUALITY_STAGE") == 31
-    assert '--quality-base "$(QUALITY_BASE)"' in quality_recipe
-    assert "scripts/sync_claude_dir.py --check" in quality_recipe
-    assert "scripts/check_dependency_profiles.py" in quality_recipe
-    assert "scripts/check_compatibility_policy.py" in quality_recipe
-    assert "scripts/check_public_identity.py" in quality_recipe
-    assert "make public-tree-safety" in quality_recipe
-    assert "scripts/check_workflow_security.py" in quality_recipe
-    assert "scripts/release_workflow_policy.py" in quality_recipe
-    assert "scripts/check_supply_chain_policy.py policy" in quality_recipe
-    assert "make docs-site" in quality_recipe
-    assert "scripts/check_release.py policy" in quality_recipe
-    assert "--env NO_LLM=1" in full_recipe
+    assert "RUN_QUALITY_STAGE" not in makefile
+    assert "RUN_FULL_QUALITY_STAGE" not in makefile
+    assert "scripts/quality_gate.py run --tier pr" in quality_recipe
+    assert '--base "$(QUALITY_BASE)"' in quality_recipe
+    assert "--receipt reports/quality-pr.json" in quality_recipe
+    assert "scripts/quality_gate.py run --tier full" in full_recipe
+    assert "--receipt reports/quality-full.json" in full_recipe
+    assert "scripts/check_agent_instruction_surface.py" not in makefile
+
+
+@pytest.mark.parametrize("tier", ["pr", "full"])
+def test_architecture_gate_uses_locked_project_tool(tier: quality_plan.Tier) -> None:
+    plan = quality_plan.build_plan(tier, repo=_ROOT, quality_base="a" * 40 if tier == "pr" else None)
+    command = next(stage for stage in plan.stages if stage.label == "tach").commands[0].argv
+
+    assert command == ("uv", "run", "--locked", "tach", "check")
 
 
 def test_public_contributor_targets_use_locked_environment_and_canonical_gate() -> None:
@@ -102,10 +126,26 @@ def test_public_contributor_targets_use_locked_environment_and_canonical_gate() 
     assert "post_commit" not in contributor_recipe
     assert "pr-check: quality" in makefile
     assert "docs-site:\n\tuv run python scripts/check_documentation_contract.py" in makefile
-    assert "docs-examples:\n\tuv run python scripts/check_documentation_examples.py" in makefile
+    assert "docs-examples:\n\tuv run python -m scripts.check_documentation_examples" in makefile
     assert "\t$(MAKE) docs-examples" in makefile
     assert "\tuv run mkdocs build --strict --site-dir build/site" in makefile
     assert "scripts/check_public_docs.py build/site" in makefile
+
+
+def test_contributor_gate_resolves_fetched_base_to_required_immutable_revision() -> None:
+    """The documented local gate supplies a SHA, not an unsupported ref name."""
+    blocks = check_documentation_contract.fenced_blocks(_ROOT / "CONTRIBUTING.md")
+    gate = next(block for block in blocks if "make pr-check" in block.body)
+
+    assert gate.language == "console"
+    assert gate.body == 'git fetch upstream main\nQUALITY_BASE="$(git rev-parse upstream/main)" make pr-check\n'
+    with pytest.raises(ValueError, match="full 40-character hexadecimal revision"):
+        quality_plan.build_plan("pr", repo=_ROOT, quality_base="upstream/main")
+    resolved_revision = "a" * 40
+    plan = quality_plan.build_plan("pr", repo=_ROOT, quality_base=resolved_revision)
+    assert plan.quality_base == resolved_revision
+    impact = next(stage for stage in plan.stages if stage.label == "impact-pytest")
+    assert impact.commands[0].argv[-1] == resolved_revision
 
 
 def test_hosted_public_tree_scans_install_the_pinned_scanner_on_path() -> None:
@@ -119,190 +159,34 @@ def test_hosted_public_tree_scans_install_the_pinned_scanner_on_path() -> None:
     assert 'echo "$RUNNER_TEMP" >> "$GITHUB_PATH"' in release
 
 
-@pytest.mark.parametrize(
-    ("arguments", "expected_timeout"),
-    [
-        (["--label", "fast", "--", "true"], quality_stage.QUALITY_STAGE_TIMEOUT),
-        (["--label", "full", "--full-enforcement", "--", "true"], TIMEOUT_HEALTH_GATE),
-    ],
-)
-def test_quality_stage_uses_the_selected_stage_timeout(
-    arguments: list[str], expected_timeout: int, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Fast validation cannot inherit the long full-enforcement timeout."""
-    captured: dict[str, object] = {}
-
-    class _Process:
-        pid = 123
-        returncode = 0
-
-        def communicate(self, *, timeout: int | None = None) -> tuple[str, str]:
-            captured["timeout"] = timeout
-            return "", ""
-
-    def _popen(*args: object, **kwargs: object) -> _Process:
-        captured.update(kwargs)
-        return _Process()
-
-    monkeypatch.setattr(quality_stage.subprocess, "Popen", _popen)
-    monkeypatch.setattr(quality_stage, "_revision", lambda: "test-revision")
-
-    result = quality_stage.main(arguments)
-
-    assert result == 0
-    assert captured["timeout"] == expected_timeout
-
-
-def test_quality_stage_allows_impact_tests_to_finish_within_two_minutes() -> None:
-    """The bounded developer gate retains the operator-approved 120-second ceiling."""
-    assert quality_stage.QUALITY_STAGE_TIMEOUT == 120
-
-
-def test_quality_stage_records_docs_only_impact_skip(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """A docs-only Python change skips only the impact-test subprocess."""
-    monkeypatch.setattr(quality_stage, "_revision", lambda: "candidate")
-    monkeypatch.setattr(quality_stage, "has_semantic_python_changes", lambda *_: False)
-
-    def _popen(*args: object, **kwargs: object) -> None:
-        raise AssertionError("docs-only skip must not start the impact-test subprocess")
-
-    monkeypatch.setattr(quality_stage.subprocess, "Popen", _popen)
-
-    result = quality_stage.main(
-        ["--label", "impact-pytest", "--quality-base", "base", "--skip-when-docs-only", "--", "pytest"]
-    )
-
-    record = json.loads(capsys.readouterr().out.splitlines()[-1])
-    assert result == 0
-    assert record["status"] == "skipped-docs-only"
-    assert record["revision"] == {"head": "candidate", "quality_base": "base"}
-
-
-def test_quality_stage_timeout_retains_byte_output_and_kills_process_group(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """Timeouts kill the new process group and preserve partial byte diagnostics."""
-    kill_calls: list[tuple[int, signal.Signals]] = []
-
-    class _Process:
-        pid = 456
-
-        def __init__(self) -> None:
-            self._timed_out = False
-
-        def communicate(self, *, timeout: int | None = None) -> tuple[str, str]:
-            if not self._timed_out:
-                self._timed_out = True
-                raise subprocess.TimeoutExpired(
-                    ["stage"], timeout or 0, output=b"partial stdout\n", stderr=b"partial stderr\n"
-                )
-            return "", ""
-
-    captured: dict[str, object] = {}
-
-    def _popen(*args: object, **kwargs: object) -> _Process:
-        captured.update(kwargs)
-        return _Process()
-
-    def _killpg(process_group: int, sig: signal.Signals) -> None:
-        kill_calls.append((process_group, sig))
-
-    monkeypatch.setattr(quality_stage.subprocess, "Popen", _popen)
-    monkeypatch.setattr(quality_stage.os, "killpg", _killpg)
-    monkeypatch.setattr(quality_stage, "_revision", lambda: "test-revision")
-
-    result = quality_stage.main(["--label", "timeout", "--", "stage"])
-
-    captured_output = capsys.readouterr()
-    record = json.loads(captured_output.out.splitlines()[-1])
-    assert result == 124
-    assert captured["start_new_session"] is True
-    assert kill_calls == [(456, signal.SIGKILL)]
-    assert "[quality:timeout:stdout] partial stdout" in captured_output.out
-    assert "[quality:timeout:stderr] partial stderr" in captured_output.err
-    assert record["exit_status"] == 124
-
-
-def test_quality_stage_records_timing_provenance_and_labelled_diagnostics() -> None:
-    """A successful stage exposes replayed output and its machine-readable record."""
-    script = _ROOT / "scripts" / "quality_stage.py"
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(script),
-            "--label",
-            "demo",
-            "--",
-            sys.executable,
-            "-c",
-            "import sys; print('standard output'); print('standard error', file=sys.stderr)",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-    record = json.loads(result.stdout.splitlines()[-1])
-    assert result.returncode == 0
-    assert "[quality:demo:stdout] standard output" in result.stdout
-    assert "[quality:demo:stderr] standard error" in result.stderr
-    assert record["stage"] == "demo"
-    assert record["argv"] == [
-        sys.executable,
-        "-c",
-        "import sys; print('standard output'); print('standard error', file=sys.stderr)",
-    ]
-    assert record["elapsed_seconds"] >= 0
-    assert record["exit_status"] == 0
-    assert record["revision"]["head"] is not None
-
-
-def test_quality_stage_reports_failing_command_output_and_status() -> None:
-    """A failure still publishes the complete labelled diagnostic evidence."""
-    script = _ROOT / "scripts" / "quality_stage.py"
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(script),
-            "--label",
-            "failure",
-            "--",
-            sys.executable,
-            "-c",
-            "import sys; print('failed', file=sys.stderr); sys.exit(3)",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-    record = json.loads(result.stdout)
-    assert result.returncode == 3
-    assert "[quality:failure:stderr] failed" in result.stderr
-    assert record["exit_status"] == 3
-
-
 def test_pr_ci_uses_impact_tests_and_preserves_required_contexts() -> None:
     """The required PR contexts stay stable while test selection becomes bounded."""
     workflow = (_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 
     for context in ("Lint (ruff)", "Test (pytest)", "Skillsaw (skill lint)", "AgentReady score gate"):
         assert f"name: {context}" in workflow
-    assert '--tach --tach-base "$BASE_SHA" --tach-head "$HEAD_SHA" -q -n 0' in workflow
+    assert "scripts/quality_gate.py run --tier impact" in workflow
+    assert '--base "$BASE_SHA" --head "$HEAD_SHA" --workers 4' in workflow
+    assert "--github-output reports/pytest-github-output" in workflow
+    assert "--receipt reports/quality-impact.json" in workflow
+    assert 'cat reports/pytest-github-output >> "$GITHUB_OUTPUT"' in workflow
+    assert '--scope "$TEST_SCOPE"' in workflow
+    assert "TEST_SCOPE: ${{ steps.pytest.outputs.test_scope }}" in workflow
     assert "scripts/check_dependency_profiles.py" in workflow
     assert "scripts/check_public_identity.py" in workflow
     assert "scripts/check_workflow_security.py" in workflow
     assert "scripts/check_supply_chain_policy.py policy" in workflow
-    assert "make docs-site" in workflow
+    for command in (
+        "uv run python scripts/check_documentation_contract.py",
+        "uv run python -m scripts.check_documentation_examples",
+        "uv run mkdocs build --strict --site-dir build/site",
+        "uv run python scripts/check_public_docs.py build/site",
+    ):
+        assert command in workflow
     docs_step = workflow.split("- name: Validate public documentation", maxsplit=1)[1].split("\n      - ", maxsplit=1)[
         0
     ]
     assert "if:" not in docs_step
-    policy_arm = "docs/documentation-contract.json|docs/release-readiness/*.json) code=true ;;"
-    docs_arm = "docs/*|openspec/*|.opencode/*|.specify/*|*.md) ;;"
-    assert workflow.index(policy_arm) < workflow.index(docs_arm)
     public_identity_step = workflow.split("- name: Enforce public identity policy", maxsplit=1)[1].split(
         "\n      - ", maxsplit=1
     )[0]
@@ -415,7 +299,9 @@ def test_ci_artifacts_are_revision_named_bounded_and_fail_closed() -> None:
 
     assert "scripts/ci_evidence.py coverage" in full
     assert "reports/coverage-summary.json" in full
+    assert "reports/quality-full.json" in full
     assert "coverage-full-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}" in full
+    assert "quality-full-receipt-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}" in full
     assert full.count("if-no-files-found: error") == full.count("actions/upload-artifact@")
     assert full.count("retention-days:") == full.count("actions/upload-artifact@")
 
@@ -455,15 +341,36 @@ def test_workflow_cancellation_groups_are_ref_or_pull_request_specific() -> None
     assert "group: ${{ github.workflow }}-${{ github.ref }}" in full
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "RELEASING.md",
+        "ROADMAP.md",
+        "THREAT_MODEL.md",
+        ".github/PULL_REQUEST_TEMPLATE.md",
+        "src/README.md",
+        "src/fieldkit/ingest/AGENTS.md",
+        "src/fieldkit/commands/gmail/README.md",
+        "src/fieldkit/skills/start/SKILL.md",
+        "docs/concepts.md",
+    ],
+)
+def test_markdown_link_check_selects_public_prose(path: str) -> None:
+    configuration = yaml.safe_load((_ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8"))
+    hook = next(
+        hook for repo in configuration["repos"] for hook in repo["hooks"] if hook["id"] == "markdown-link-check"
+    )
+    result = re.search(hook["files"], path)
+    assert result is not None
+
+
 def test_markdown_link_check_covers_agent_content_and_required_pr_context() -> None:
     """Relative Markdown links are checked locally and on every pull request."""
     pre_commit = (_ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8")
-    makefile = (_ROOT / "Makefile").read_text(encoding="utf-8")
     workflow = (_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     scope = (
-        r"files: ^((AGENTS|CHANGELOG|CONTRIBUTING|GOVERNANCE|README|SECURITY|SUPPORT)\.md|"
-        r"docs/.*\.md|\.opencode/(agents|commands|skills)/.*\.md|\.claude/(agents|commands)/.*\.md|"
-        r"src/fieldkit/skills/.*\.md)$"
+        r"files: ^([^/]+\.md|\.github/.*\.md|"
+        r"docs/.*\.md|src/.*\.md)$"
     )
     command = "uvx pre-commit==4.6.1 run markdown-link-check --all-files"
     fast_checks = workflow.split("  fast-checks:\n", maxsplit=1)[1].split("\n  test:\n", maxsplit=1)[0]
@@ -474,7 +381,14 @@ def test_markdown_link_check_covers_agent_content_and_required_pr_context() -> N
     install_step = fast_checks.split("- name: Install dependencies", maxsplit=1)[1].split("\n      - ", maxsplit=1)[0]
 
     assert scope in pre_commit
-    assert makefile.count(command) == 2
+    plan = quality_plan.build_plan("pr", repo=_ROOT, quality_base="a" * 40)
+    assert next(stage for stage in plan.stages if stage.label == "markdown-links").commands[0].argv == (
+        "uvx",
+        "pre-commit==4.6.1",
+        "run",
+        "markdown-link-check",
+        "--all-files",
+    )
     assert command in link_step
     assert "if:" not in setup_step
     assert "if:" not in link_step
@@ -489,6 +403,8 @@ def test_full_enforcement_runs_on_schedule_and_dispatch() -> None:
     assert "push:" not in workflow
     assert "schedule:" in workflow
     assert "workflow_dispatch:" in workflow
-    assert "make quality-full" in workflow
+    assert "scripts/quality_gate.py run --tier full --workers 4" in workflow
+    assert "--receipt reports/quality-full.json" in workflow
+    assert "make quality-full" not in workflow
     assert "name: coverage-full-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}" in workflow
     assert "name: agentready-report-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}" in workflow

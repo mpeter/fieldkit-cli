@@ -9,16 +9,19 @@ from fieldkit.config._accounts import get_internal_domains as get_internal_domai
 from fieldkit.config._accounts import get_salesforce_org_url as get_salesforce_org_url
 from fieldkit.config._accounts import get_sf_territory_ids_from_accounts as get_sf_territory_ids_from_accounts
 from fieldkit.config._accounts import get_territory_account_map as get_territory_account_map
+from fieldkit.config._accounts import require_accounts_snapshot as require_accounts_snapshot
 from fieldkit.config._accounts import set_sf_territory_id_for_account as set_sf_territory_id_for_account
 from fieldkit.config._integrations import GOOGLE_OAUTH_SCOPES as GOOGLE_OAUTH_SCOPES
 from fieldkit.config._integrations import IntegrationConfigurationState as IntegrationConfigurationState
+from fieldkit.config._integrations import McpEndpointName as McpEndpointName
 from fieldkit.config._integrations import get_cookie_file as get_cookie_file
 from fieldkit.config._integrations import get_google_token_path as get_google_token_path
 from fieldkit.config._integrations import get_integration_configuration_state as get_integration_configuration_state
-from fieldkit.config._integrations import get_mcp_gateway_base as get_mcp_gateway_base
+from fieldkit.config._integrations import get_mcp_endpoint as get_mcp_endpoint
 from fieldkit.config._integrations import get_mcp_gateway_url as get_mcp_gateway_url
 from fieldkit.config._integrations import get_sf_rest_base_url as get_sf_rest_base_url
 from fieldkit.config._integrations import get_sf_session_id as get_sf_session_id
+from fieldkit.config._integrations import resolve_oauth_credentials as resolve_oauth_credentials
 from fieldkit.config._loader import (
     CONFIG_PATH as CONFIG_PATH,
 )
@@ -97,6 +100,7 @@ __all__ = [
     "TIMEOUT_SHADOWBOT_QUERY",
     "ConfigError",
     "IntegrationConfigurationState",
+    "McpEndpointName",
     "build_domain_account_map",
     "clear_config_caches",
     "get_account_ids",
@@ -119,7 +123,7 @@ __all__ = [
     "get_integration_configuration_state",
     "get_internal_domains",
     "get_llm_model",
-    "get_mcp_gateway_base",
+    "get_mcp_endpoint",
     "get_mcp_gateway_url",
     "get_pipeline_quota",
     "get_salesforce_org_url",
@@ -139,6 +143,8 @@ __all__ = [
     "get_user_name",
     "get_watchers_dir",
     "llm_disabled",
+    "require_accounts_snapshot",
+    "resolve_oauth_credentials",
     "set_sf_territory_id_for_account",
     "write_pipeline_quota",
 ]

@@ -1,4 +1,4 @@
-"""fieldkit.driver — Autonomous brief-execution driver loop.
+"""fieldkit.driver — autonomous prompt-execution driver loop.
 
 Picks the oldest GitHub issue labeled ``agent-ready``, loads the brief file
 it points to from the repo, and runs a headless OpenCode session to execute

@@ -60,6 +60,25 @@ def test_records_are_frozen() -> None:
 
 
 @pytest.mark.parametrize(
+    ("checks", "extra"),
+    [
+        ("    - id: check\n      argv: [pytest, -q]\n", "  fictional-sensitive-marker: value\n"),
+        ("    - id: check\n      argv: [pytest, -q]\n      fictional-sensitive-marker: value\n", ""),
+        ("    - id: check\n      argv: [pytest, '${fictional-sensitive-marker}']\n", ""),
+        ("    - id: check\n      argv: ['/private/fictional-sensitive-marker', -q]\n", ""),
+        ("    - id: check\n      argv: [uv, run, fictional-sensitive-marker]\n", ""),
+    ],
+    ids=["contract-key", "check-key", "argument", "executable", "leaf-executable"],
+)
+def test_semantic_errors_do_not_reflect_external_payload(checks: str, extra: str) -> None:
+    with pytest.raises(DoneCheckError) as caught:
+        parse_done_checks(_document(checks, contract_extra=extra))
+
+    assert "fictional-sensitive-marker" not in str(caught.value)
+    assert "/private/" not in str(caught.value)
+
+
+@pytest.mark.parametrize(
     ("argv", "normalized"),
     [
         ("[pytest, -q]", ("pytest", "-q")),
@@ -167,6 +186,13 @@ def test_rejects_duplicate_ids() -> None:
 def test_rejects_duplicate_yaml_keys() -> None:
     with pytest.raises(DoneCheckError, match="duplicate YAML key"):
         parse_done_checks(_document("    - id: check\n      argv: [pytest]\n      argv: [ruff]\n"))
+
+
+def test_rejects_invalid_yaml_without_reflecting_payload() -> None:
+    with pytest.raises(DoneCheckError, match="invalid YAML frontmatter") as caught:
+        parse_done_checks("---\nprivate-token: [fictional-sensitive-value\n---\n")
+
+    assert "fictional-sensitive-value" not in str(caught.value)
 
 
 @pytest.mark.parametrize("version", ["2", "true", '"1"', "1.0"])

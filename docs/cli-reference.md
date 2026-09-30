@@ -9,8 +9,13 @@ generated_by: scripts/generate_cli_docs.py
 
 > **Derived document — generated exhaust, not a system of record.** Verify facts against the sources listed in `derived_from`.
 
-> Auto-generated 2026-09-20 from `fieldkit --help`. Do not edit manually.
+> Generated from the registered CLI command tree. Do not edit manually.
 > Re-generate: `uv run python scripts/generate_cli_docs.py`
+
+For setup and workflows, see the [user guide](user-guide.md),
+[Salesforce authentication](guides/salesforce-auth.md),
+[ShadowBot authentication](guides/shadowbot-auth.md), and
+[pipeline workflow](guides/pipeline-workflow.md).
 
 ## Quick reference
 
@@ -18,7 +23,7 @@ generated_by: scripts/generate_cli_docs.py
 |---|---|
 | `fieldkit auth` | `backstory`, `google`, `sf`, `shadowbot` |
 | `fieldkit sf` | `account`, `components`, `frontmatter`, `listview`, `meddpicc`, `opportunity`, `quote`, `reconcile`, `schema`, `session-check`, `set-field`, `set-next-steps`, `update-closeplan` |
-| `fieldkit gmail` | `account-tags`, `backstory-gap`, `decay`, `enrich-pursuits`, `query`, `sync` |
+| `fieldkit gmail` | `account-tags`, `backstory-gap`, `decay`, `enrich-pursuits`, `import-cache`, `query`, `sync` |
 | `fieldkit pursuit` | `advance`, `archive`, `audit`, `create`, `forecast`, `health`, `projects`, `rename`, `repair-dates` |
 | `fieldkit shadowbot` | `query` |
 | `fieldkit watch` | `logs`, `run`, `status` |
@@ -26,17 +31,20 @@ generated_by: scripts/generate_cli_docs.py
 | `fieldkit sync` |  |
 | `fieldkit issue` | `board`, `close`, `create`, `edit`, `fix`, `link`, `list`, `note`, `plan`, `reopen`, `show`, `sync-milestone` |
 | `fieldkit skill` | `eval`, `install`, `list`, `show`, `variables` |
-| `fieldkit init` | `migrate` |
+| `fieldkit init` |  |
 | `fieldkit brief` | `generate`, `open` |
 | `fieldkit pipeline` | `open`, `quota` |
 | `fieldkit version` |  |
+| `fieldkit autonomy` | `status` |
 | `fieldkit commands` |  |
 | `fieldkit companion` | `allowed`, `feed`, `loop`, `prune`, `reconcile-invalid`, `run` |
 | `fieldkit completion` |  |
 | `fieldkit contact` | `enrich`, `find`, `list`, `report` |
 | `fieldkit doctor` | `gmail`, `google`, `sf`, `shadowbot` |
+| `fieldkit driver` | `admit`, `list`, `retry`, `run`, `status` |
 | `fieldkit golive` |  |
 | `fieldkit gtask` | `complete`, `create` |
+| `fieldkit health` | `run`, `status` |
 | `fieldkit meeting` | `link`, `list`, `note`, `open` |
 | `fieldkit web` | `serve`, `token` |
 
@@ -148,20 +156,13 @@ Commands:
   meddpicc          Read the ClosePlan/TSPC MEDDPICC scorecard for an...
   opportunity       Fetch and sync a single Salesforce opportunity to a...
   quote             Read a CPQ Quote and its quote lines.
-  reconcile         Rewrite Key Fields table in a pursuit file from...
+  reconcile         Rewrite Key Fields from strict pursuit frontmatter...
   schema            Render safe metadata and observed population for...
   session-check     Check whether the Salesforce session cookie is still...
   set-field         Write an approved field on a Salesforce record.
   set-next-steps    Write the Next Steps field on a Salesforce Opportunity.
   update-closeplan  Preview or confirm guarded native ClosePlan question...
 ```
-
-
-> **Auth:** Salesforce uses the `sid` session cookie.
-> - Authenticate: `fieldkit auth sf` (or use `--sid-file PATH` for an owner-only secret file)
-> - Get `sid`: Chrome DevTools → Application → Cookies → your configured `my.salesforce.com` host
-> - Check validity: `fieldkit sf session-check`
-> - `set-next-steps` and `set-field` are **dry-run by default** — pass `--confirm` to write.
 
 ### `fieldkit sf account`
 
@@ -170,17 +171,17 @@ Usage: fieldkit sf account [OPTIONS] ACCOUNT_NAME
 
   Fetch and display the Salesforce account dashboard.
 
-  ACCOUNT_NAME must match a key in accounts.yaml (e.g. acme, globalpay,
-  midwestins).
+  ACCOUNT_NAME must match a key in accounts.yaml (e.g. acme-corp).
 
   Fetches: account metadata (owner, segment, industry), open services pipeline
   with consulting/training splits per opportunity, and aggregate ACV totals.
   Writes results to accounts/<name>/account.md.
 
 Options:
-  --no-write  Print dashboard without updating account.md.
-  --json      Machine-readable JSON output (suppresses human dashboard).
-  -h, --help  Show this message and exit.
+  --no-write, --dry-run  Print dashboard without updating cache or account.md.
+  --json                 Machine-readable JSON output (suppresses human
+                         dashboard).
+  -h, --help             Show this message and exit.
 ```
 
 ### `fieldkit sf components`
@@ -224,9 +225,9 @@ Usage: fieldkit sf listview [OPTIONS] [TARGET]
 
   Fetch and display Salesforce list view records.
 
-  TARGET is an account name (e.g. global-pay, acme-bank, shield-ins). Use
-  --all to sync all accounts (default when no TARGET given). --territory
-  overrides TARGET by resolving the sf_territory value to an account name.
+  TARGET is a configured account slug (e.g. acme-corp). Use --all to sync all
+  accounts (default when no TARGET given). --territory overrides TARGET by
+  resolving the sf_territory value to an account name.
 
   Exit codes:   0 — sync completed without errors   1 — partial failure (some
   accounts had errors)   2 — auth failure
@@ -237,6 +238,8 @@ Options:
                          accounts.yaml). Resolves to the matching account.
   --json                 Emit JSON summary to stdout.
   --quiet                Suppress [sf-listview-sync] progress lines.
+  --dry-run              Read and match Salesforce opportunities without
+                         writing cache or frontmatter.
   --services-only        Qualify services opportunities from CPQ component
                          lines, including TAM.
   --limit INTEGER RANGE  Maximum candidates per services scan (default: 50).
@@ -285,9 +288,10 @@ Usage: fieldkit sf opportunity [OPTIONS] OPP_ID [PURSUIT_FILE]
   criteria, main competitor).
 
 Options:
-  --no-write  Print summary without updating frontmatter.
-  --json      Machine-readable JSON output (suppresses human table).
-  -h, --help  Show this message and exit.
+  --no-write, --dry-run  Print summary without updating cache or frontmatter.
+  --json                 Machine-readable JSON output (suppresses human
+                         table).
+  -h, --help             Show this message and exit.
 ```
 
 ### `fieldkit sf quote`
@@ -314,10 +318,11 @@ Options:
 ```
 Usage: fieldkit sf reconcile [OPTIONS] PURSUIT_FILE
 
-  Rewrite Key Fields table in a pursuit file from frontmatter values.
+  Rewrite Key Fields from strict pursuit frontmatter under its publication
+  lock.
 
 Options:
-  --dry-run   Preview what would be changed without writing any files.
+  --dry-run   Preview changes without writing any files.
   --json      Emit the reconcile outcome as JSON.
   -h, --help  Show this message and exit.
 ```
@@ -441,6 +446,7 @@ Commands:
   backstory-gap    Find account context gaps
   decay            Report stale Gmail relationships
   enrich-pursuits  Enrich pursuits from the local Gmail cache
+  import-cache     Import a legacy cache into managed storage
   query            Query the local Gmail cache
   sync             Synchronize Gmail through Google OAuth
 ```
@@ -466,41 +472,46 @@ Options:
 ```
 Usage: fieldkit gmail backstory-gap [OPTIONS]
 
-  Backstory gap report — contacts visible in Gmail/Calendar/Slack but not in
-  Backstory/CRM.
+  Find Gmail contacts that require a separate CRM comparison.
 
 Options:
-  --account TEXT          Restrict to a single account key (e.g. global-pay,
-                          acme-bank, shield-ins). Default: all accounts.
-  --min-messages INTEGER  Minimum message count threshold. Defaults to
-                          blindspots_min_messages from config/accounts.yaml
-                          per account.
-  --db TEXT               Path to gmail.db  [default: (dynamic)]
-  --json                  Machine-readable JSON output.
-  -h, --help              Show this message and exit.
+  --account SLUG                Restrict to one configured account key.
+  --min-messages INTEGER RANGE  Minimum message count. Defaults to the
+                                configured per-account threshold.  [x>=0]
+  --limit INTEGER RANGE         Maximum candidates across all selected
+                                accounts.  [default: 50; 1<=x<=500]
+  --db TEXT                     Path to the managed Gmail cache.  [default:
+                                (dynamic)]
+  --json                        Machine-readable JSON output.
+  -h, --help                    Show this message and exit.
 ```
 
 ### `fieldkit gmail decay`
 
 ```
-Usage: fieldkit gmail decay [OPTIONS] [ACCOUNT]
+Usage: fieldkit gmail decay [OPTIONS]
 
-  Relationship decay report — last contact per external person per account.
+  Report contact recency from the ready published Gmail cache.
 
 Options:
-  -a, --account TEXT      Account slug (preferred over positional argument).
-  --days INTEGER          Days-silent threshold to flag as stale (default: 90)
-  --all                   Show all contacts, not just stale ones
-  --domain TEXT           Restrict to contacts at this domain (e.g.
-                          globalpay.com)
-  --min-messages INTEGER  Only show contacts with at least N messages
-                          (default: 1)
-  --limit INTEGER         Cap results to N contacts (default: unlimited)
-  --max-age-days INTEGER  Exclude contacts silent for more than N days (0 = no
-                          cutoff).  [default: 365]
-  --db TEXT               Path to gmail.db  [default: (dynamic)]
-  --json                  Emit the decay report as JSON.
-  -h, --help              Show this message and exit.
+  -a, --account SLUG            Configured account slug.  [required]
+  --days INTEGER RANGE          Days-silent threshold to flag as stale.
+                                [default: 90; 0<=x<=36500]
+  --all                         Show recent and stale contacts in selected
+                                account threads.
+  --domain TEXT                 Restrict contacts to one email domain, for
+                                example acme-corp.example.com.
+  --min-messages INTEGER RANGE  Minimum account-thread messages per contact.
+                                [default: 1; x>=0]
+  --limit INTEGER RANGE         Maximum contacts to return.  [default: 50;
+                                1<=x<=500]
+  --max-age-days INTEGER RANGE  Exclude contacts silent longer than this (0
+                                disables the cutoff).  [default: 365;
+                                0<=x<=36500]
+  --db TEXT                     Path to the managed Gmail cache.  [default:
+                                (<data/gmail.db>)]
+  --json                        Emit the decay report as JSON.
+  -h, --help                    Show this message and exit.
 ```
 
 ### `fieldkit gmail enrich-pursuits`
@@ -514,6 +525,28 @@ Options:
   --account TEXT  Scope to a single account slug.
   --json          Emit enrichment outcomes as JSON.
   -h, --help      Show this message and exit.
+```
+
+### `fieldkit gmail import-cache`
+
+```
+Usage: fieldkit gmail import-cache [OPTIONS]
+
+  Import a supported legacy cache into a fresh managed Gmail database.
+
+  The source is never changed or adopted in place. Unknown schemas, missing
+  Gmail tables, changing inputs, and an existing target fail closed.
+
+  Exit codes: 0 success; 1 resource or active-state failure; 3 invalid or
+  unverified cache data.
+
+Options:
+  --source FILE  Existing legacy Gmail cache to read without modifying.
+                 [required]
+  --db FILE      Fresh managed Gmail database path to create.  [required]
+  --dry-run      Validate the complete import without creating managed data.
+  --json         Emit the import result as JSON.
+  -h, --help     Show this message and exit.
 ```
 
 ### `fieldkit gmail query`
@@ -815,8 +848,8 @@ Options:
                       fields, legacy fields).
   --dry-run           Preview --fix corrections without writing pursuit files
                       or reports.
-  -o, --output TEXT   Write report to this path (default: <data-
-                      root>/accounts/.audit/pursuit-compliance-YYYY-MM-DD.md).
+  -o, --output TEXT   Write beneath <data-root>/accounts/.audit/ (default:
+                      pursuit-compliance-YYYY-MM-DD.md).
   --check-yaml        Scan pursuit files for duplicate YAML frontmatter keys.
                       Exits 1 if any found.
   --json              Machine-readable JSON output (suppresses table and
@@ -832,8 +865,7 @@ Usage: fieldkit pursuit create [OPTIONS]
   Scaffold a new pursuit file with compliant frontmatter.
 
 Options:
-  -a, --account TEXT  Account directory name (e.g. acme, globalpay).
-                      [required]
+  -a, --account TEXT  Account directory name (e.g. acme-corp).  [required]
   -n, --name TEXT     Pursuit name or slug (will be slugified: 'New Deal' →
                       'new-deal').  [required]
   -t, --title TEXT    Human-readable title (defaults to slugified name).
@@ -999,14 +1031,6 @@ Commands:
   query  Send a prompt to ShadowBot and stream the response.
 ```
 
-
-> **Auth:** ShadowBot uses silent Chrome-cookie OIDC auth (Linux; requires `fieldkit-cli[chrome-auth]`).
-> - **Primary:** Chrome Default profile must be logged into your configured ShadowBot host.
-> - **Fallback (Linux/SSH/headless):** `fieldkit auth shadowbot --refresh-token-file PATH`
->   Get JWT: Chrome DevTools → Network → filter `openid-connect/token` → Response → `refresh_token`
-> - **Config override:** `shadowbot.chrome_cookies_path` in `~/.config/fieldkit/config.yaml`
-> - **Session expiry:** determined by the configured identity provider; recover by logging in again.
-
 ### `fieldkit shadowbot query`
 
 ```
@@ -1041,7 +1065,7 @@ Options:
 
 Commands:
   logs    Show recent watcher log files.
-  run     Run a single watcher by NAME, or all watchers with --all.
+  run     Run one watcher by NAME, or the configured aggregate set with...
   status  Show each watcher's last-run outcome and timestamp.
 ```
 
@@ -1067,10 +1091,11 @@ Options:
 ```
 Usage: fieldkit watch run [OPTIONS] [COMMAND] [ARGS]...
 
-  Run a single watcher by NAME, or all watchers with --all.
+  Run one watcher by NAME, or the configured aggregate set with --all.
 
 Options:
-  --all             Run all watchers in sequence and write the morning brief.
+  --all             Run local and configured optional watchers, then write the
+                    morning brief.
   --dry-run         (--all only) Pass --dry-run to each watcher; no files are
                     written.
   --install-cron    (--all only) Install a crontab entry that runs 'fieldkit
@@ -1081,6 +1106,7 @@ Options:
                     (bypass once-per-day guard).
   --allow-partial   (--all only) Exit 0 after a completed partial pass; fatal
                     failures still fail.
+  --slack           (--all only) Include the optional Slack thread watcher.
   -h, --help        Show this message and exit.
 
 Commands:
@@ -1349,7 +1375,7 @@ Options:
   --dry-run               Preview what would be registered without modifying
                           pipeline.db.
   --limit N               Maximum number of Gmail messages to scan (most-
-                          recent first).
+                          recent first).  [x>=1]
   --include-latest        Include the newest ambient session, for use after
                           the recorder has stopped.
   -a, --account TEXT      Limit discovery to a single account slug.
@@ -1363,6 +1389,25 @@ Options:
 Usage: fieldkit ingest promote [OPTIONS] [MEETING_FILE]
 
   Interactively promote meeting action items to TASKS.md.
+
+  Meeting notes need a stable, unique source_id and a list of action_items.
+  For manually authored notes, choose an ID using letters, digits,
+  underscores, hyphens, or colons (at most 256 characters); never reuse it for
+  another note. Keep action-item order and source_id unchanged while retrying
+  promotion.
+
+  Task provenance comments preserve edited tasks on identical retries. Keep
+  those comments when editing or checking off a task. Conflicting decisions
+  and matching unmarked legacy tasks are refused, not overwritten. To keep an
+  existing task, rerun and skip that action item; edit the existing task by
+  hand while retaining its provenance instead of promoting a replacement.
+
+  Exit 1 means TASKS.md is missing or busy, or no meeting input was selected.
+  Create the task file, select a meeting file or --recent N, or wait for the
+  other writer as directed. Exit 3 means invalid metadata or ambiguous
+  provenance; correct the note or restore its original provenance from your
+  backup before retrying. Earlier confirmed items may already have been saved
+  when a later item fails.
 
   Review each action item from a processed meeting note and choose:
 
@@ -1394,8 +1439,8 @@ Usage: fieldkit ingest reprocess [OPTIONS]
   directory once routing decided, so --account recovers the scope from the
   stored content path.
 
-  Exit codes: 0 success; 1 pipeline/version guard; 3 invalid selectors or
-  account slug.
+  Exit codes: 0 success; 1 partial failure, interruption, or pipeline/version
+  guard; 3 invalid selectors or account slug.
 
 Options:
   --pipeline PIPELINE_ID  Pipeline ID to reprocess (e.g. transcript-ingest).
@@ -1465,7 +1510,7 @@ Options:
   --pipeline PIPELINE_ID  Pipeline ID to run (e.g. transcript-ingest).
                           [required]
   --dry-run               Preview what would run without writing anything.
-  --limit N               Maximum number of sources to process.
+  --limit N               Maximum number of sources to process.  [x>=1]
   --interactive           Prompt y/n/q for each source before processing.
   --json                  Emit ordered batch outcomes as JSON.
   -h, --help              Show this message and exit.
@@ -1494,26 +1539,28 @@ Usage: fieldkit sync [OPTIONS]
 
   Run the full fieldkit data pipeline in the correct order.
 
-  Executes all data refresh steps idempotently: gmail sync, ingest, watchers.
-  Step failures are non-fatal — the pipeline continues and a summary is
-  printed at the end.
+  Executes selected gmail, ingest, and watcher workflows. Ordinary step
+  failures are non-fatal — the pipeline continues and prints a summary.
 
-  Use --verbose to show the last 100 lines of each subprocess stream after its
+  Use --verbose to show a bounded tail of each subprocess stream after its
   summary line, enabling in-terminal failure diagnosis without re-running
   individual watchers or flooding the terminal.
 
   Exit codes:   0 — all steps succeeded (or --dry-run)   1 — one or more steps
-  failed
+  failed   2 — a step requires authentication or user action   3 — a step
+  rejected invalid data or usage
 
 Options:
   --quick             Skip gmail sync phase (use cached data); run ingest +
                       watchers only.
   --sf                Include Salesforce listview sync (weekly mode).
+  --slack             Include the optional Slack thread watcher.
   --dry-run           Show what would run without executing any steps.
   -a, --account NAME  Scope gmail and watcher steps to one account.
-  --verbose           Print the last 100 lines of subprocess stdout/stderr
-                      after each step's summary line. Useful for diagnosing
-                      failures without re-running individual watchers.
+  --verbose           Print up to the last 100 lines and 16,384 characters of
+                      each subprocess stdout/stderr stream after each step's
+                      summary line. Useful for diagnosing failures without re-
+                      running individual watchers.
   --json              Emit the per-step results as JSON.
   -h, --help          Show this message and exit.
 ```
@@ -1591,7 +1638,7 @@ Options:
   --severity [low|medium|high|critical]
                                   Severity level (bugs) or impact
                                   (enhancements).  [default: medium]
-  --module TEXT                   Affected module (sf, gmail, ingest, etc.).
+  --module [auth|brief|cli|companion|config|contact|docs|doctor|driver|enrich|gmail|health|hooks|ingest|init|issue|lib|meeting|other|pipeline|pursuit|sf|shadowbot|skill|sync|version|watch|web]
                                   [default: other]
   --source TEXT                   Who raised this (agent name, user, etc.).
                                   [default: unknown]
@@ -1610,7 +1657,8 @@ Options:
   --title TEXT                    New title.
   --body TEXT                     Replace body text.
   --severity [low|medium|high|critical]
-  --module TEXT                   Affected module.
+  --module [auth|brief|cli|companion|config|contact|docs|doctor|driver|enrich|gmail|health|hooks|ingest|init|issue|lib|meeting|other|pipeline|pursuit|sf|shadowbot|skill|sync|version|watch|web]
+                                  Affected module.
   --json                          Machine-readable JSON output.
   -h, --help                      Show this message and exit.
 ```
@@ -1866,33 +1914,13 @@ Usage: fieldkit init [OPTIONS] [COMMAND] [ARGS]...
   First-run configuration wizard. Safe to re-run to update settings.
 
 Options:
-  --answers FILE  Initialize without prompts using answers from a YAML file.
+  --answers PATH  Initialize without prompts using answers from a YAML file.
   --minimal PATH  Create a generic offline workspace at PATH without prompts
                   or integrations.
+  --dry-run       Validate non-interactive initialization without writing
+                  files.
+  --json          Emit a payload-free non-interactive result as JSON.
   -h, --help      Show this message and exit.
-
-Commands:
-  migrate  Rename deprecated 'data_repo' config key to 'fieldkit_home'.
-```
-
-### `fieldkit init migrate`
-
-```
-Usage: fieldkit init migrate [OPTIONS]
-
-  Rename deprecated 'data_repo' config key to 'fieldkit_home'.
-
-  Reads ~/.config/fieldkit/config.yaml. If the deprecated 'data_repo' key
-  exists and 'fieldkit_home' is absent, renames it in-place.
-
-  A backup is saved as config.yaml.bak before any modification.
-
-  Exit codes:   0 — migration done (or already migrated)   1 — config file not
-  found or not writable
-
-Options:
-  --json      Emit the migration outcome as JSON.
-  -h, --help  Show this message and exit.
 ```
 
 ## `fieldkit brief`
@@ -1953,6 +1981,7 @@ Usage: fieldkit brief open [OPTIONS]
 
 Options:
   --json      Emit the selected brief as JSON.
+  --no-open   Select the report without launching a viewer.
   -h, --help  Show this message and exit.
 ```
 
@@ -1967,7 +1996,7 @@ Usage: fieldkit pipeline [OPTIONS] [COMMAND] [ARGS]...
   pipeline open' to re-open the most recent saved review. Use 'fieldkit
   pipeline quota' to show the quota gap summary.
 
-  The --no-llm flag skips LLM synthesis and works when placed anywhere:
+  The --no-llm group flag skips LLM synthesis during report generation:
     fieldkit pipeline --no-llm
     fieldkit pipeline open  (--no-llm not applicable to subcommands)
 
@@ -1995,6 +2024,7 @@ Usage: fieldkit pipeline open [OPTIONS]
 Options:
   --json              Emit the selected pipeline review as JSON.
   -a, --account SLUG  Open the newest review for one account.
+  --no-open           Select the report without launching a viewer.
   -h, --help          Show this message and exit.
 ```
 
@@ -2045,6 +2075,32 @@ Options:
   -f, --features  Show active capabilities.
   --json          Machine-readable JSON output.
   -h, --help      Show this message and exit.
+```
+
+## `fieldkit autonomy`
+
+```
+Usage: fieldkit autonomy [OPTIONS] COMMAND [ARGS]...
+
+  Read-only evidence about fieldkit autonomous operation.
+
+Options:
+  -h, --help  Show this message and exit.
+
+Commands:
+  status  Summarize health, driver, admission, and spend evidence without...
+```
+
+### `fieldkit autonomy status`
+
+```
+Usage: fieldkit autonomy status [OPTIONS]
+
+  Summarize health, driver, admission, and spend evidence without acting.
+
+Options:
+  --json      Emit one machine-readable JSON document.
+  -h, --help  Show this message and exit.
 ```
 
 ## `fieldkit commands`
@@ -2102,9 +2158,9 @@ Usage: fieldkit companion allowed [OPTIONS] [COMMAND]...
 
   Exit 0 = permitted; exit 3 = denied (EXIT_DATA — denial is permanent, so
   exit 1 'retry may help' would mislead orchestrators). A malformed
-  act_allowlist entry is also a denial: it is checked here before the per-
-  invocation question, so a typo'd or non-previewable allowlist entry is
-  caught the first time anyone asks what's permitted, not silently at
+  act_allowlist entry at act tier is also a denial: it is checked here before
+  the per-invocation question, so a typo'd or non-previewable allowlist entry
+  is caught the first time anyone asks what's permitted, not silently at
   execution time.
 
   --json goes before the ``--`` separator; anything after ``--`` belongs to
@@ -2153,8 +2209,8 @@ Usage: fieldkit companion loop [OPTIONS]
   ``companion.tier`` (read/propose/act); ``--tier`` can only LOWER it. At
   propose tier, writes one companion-outbox proposal per item without running
   its candidate command. At act tier, the candidate still must pass the exact
-  configured allowlist before execution. Read tier and ``NO_LLM=1`` retain
-  deterministic behavior.
+  configured allowlist before execution. Read tier and ``FIELDKIT_NO_LLM=1``
+  retain deterministic behavior.
 
   Exit codes: 0 — success; 1 — partial (a best-effort context read failed); 3
   — malformed feed input or an invalid/escalating --tier.
@@ -2331,15 +2387,15 @@ Usage: fieldkit doctor [OPTIONS] [COMMAND] [ARGS]...
 
   Check the health of every configured service, or a single one.
 
-  Exits 0 when enabled services are healthy, 2 for auth, and 3 for invalid
-  configuration.
+  Exits 0 when enabled services are healthy, 1 for retryable failures, 2 for
+  auth, and 3 for invalid data or configuration.
 
 Options:
   --json      Emit results as JSON.
   -h, --help  Show this message and exit.
 
 Commands:
-  gmail      Check the local gmail.db cache for integrity.
+  gmail      Check readability and required tables in the local gmail.db...
   google     Check Google OAuth credential health (gmail + docs + drive).
   sf         Check Salesforce session health.
   shadowbot  Check ShadowBot OIDC token health.
@@ -2350,9 +2406,10 @@ Commands:
 ```
 Usage: fieldkit doctor gmail [OPTIONS]
 
-  Check the local gmail.db cache for integrity.
+  Check readability and required tables in the local gmail.db cache.
 
-  Exits 0 when the database is reachable and structurally sound, 2 otherwise.
+  Exits 0 when healthy, 1 when an active writer makes the check retryable, and
+  3 for invalid or unverified cache data.
 
 Options:
   --db PATH   Path to gmail.db (defaults to the configured Gmail database).
@@ -2367,8 +2424,8 @@ Usage: fieldkit doctor google [OPTIONS]
 
   Check Google OAuth credential health (gmail + docs + drive).
 
-  Exits 0 when the token is valid or was refreshed, 2 when not configured or
-  expired.
+  Exits 0 when healthy, 1 for retryable provider failures, 2 for
+  authentication, and 3 for invalid or unsafe local token data.
 
 Options:
   --json      Emit result as JSON.
@@ -2402,6 +2459,124 @@ Usage: fieldkit doctor shadowbot [OPTIONS]
 Options:
   --json      Emit result as JSON.
   -h, --help  Show this message and exit.
+```
+
+## `fieldkit driver`
+
+```
+Usage: fieldkit driver [OPTIONS] COMMAND [ARGS]...
+
+  Autonomous prompt-execution driver loop.
+
+Options:
+  -h, --help  Show this message and exit.
+
+Commands:
+  admit   Acquire or release the global developer-schedule admission lease.
+  list    List all open agent-ready issues.
+  retry   Inspect or reset local driver retry reservations.
+  run     Pick a bounded batch of agent-ready issues and execute their...
+  status  Show recent driver run results.
+```
+
+### `fieldkit driver admit`
+
+```
+Usage: fieldkit driver admit [OPTIONS]
+
+  Acquire or release the global developer-schedule admission lease.
+
+Options:
+  --job TEXT  Scheduled developer job requesting the global admission lease.
+              [required]
+  --release   Release this job's admission lease.
+  --json      Machine-readable JSON output.
+  -h, --help  Show this message and exit.
+```
+
+### `fieldkit driver list`
+
+```
+Usage: fieldkit driver list [OPTIONS]
+
+  List all open agent-ready issues.
+
+Options:
+  --json      Machine-readable JSON output.
+  -h, --help  Show this message and exit.
+```
+
+### `fieldkit driver retry`
+
+```
+Usage: fieldkit driver retry [OPTIONS] COMMAND [ARGS]...
+
+  Inspect or reset local driver retry reservations.
+
+Options:
+  -h, --help  Show this message and exit.
+
+Commands:
+  reset   Reset a non-running local retry entry with an audit reason.
+  status  Show local retry state without contacting GitHub.
+```
+
+#### `fieldkit driver retry reset`
+
+```
+Usage: fieldkit driver retry reset [OPTIONS]
+
+  Reset a non-running local retry entry with an audit reason.
+
+Options:
+  --issue INTEGER RANGE  GitHub issue number to reset.  [x>=1; required]
+  --reason TEXT          Audit reason for resetting local retry state.
+                         [required]
+  --dry-run              Report the reset without modifying local retry state.
+  --json                 Emit the reset outcome as JSON.
+  -h, --help             Show this message and exit.
+```
+
+#### `fieldkit driver retry status`
+
+```
+Usage: fieldkit driver retry status [OPTIONS]
+
+  Show local retry state without contacting GitHub.
+
+Options:
+  --json      Machine-readable JSON output.
+  -h, --help  Show this message and exit.
+```
+
+### `fieldkit driver run`
+
+```
+Usage: fieldkit driver run [OPTIONS]
+
+  Pick a bounded batch of agent-ready issues and execute their prompts.
+
+  Exits 0 on success or an empty queue. Exits 1 on a blocked, uncertain, or
+  failed run.
+
+Options:
+  --dry-run   Log actions without executing label changes, git operations, or
+              OpenCode.
+  --json      Machine-readable JSON output.
+  -h, --help  Show this message and exit.
+```
+
+### `fieldkit driver status`
+
+```
+Usage: fieldkit driver status [OPTIONS]
+
+  Show recent driver run results.
+
+Options:
+  --limit INTEGER  Number of recent runs to show.  [default: 10]
+  --json           Machine-readable JSON output.
+  -h, --help       Show this message and exit.
 ```
 
 ## `fieldkit golive`
@@ -2465,6 +2640,52 @@ Options:
   -h, --help                Show this message and exit.
 ```
 
+## `fieldkit health`
+
+```
+Usage: fieldkit health [OPTIONS] COMMAND [ARGS]...
+
+  Nightly repo-health sensor — senses regressions on main, files issues.
+
+Options:
+  -h, --help  Show this message and exit.
+
+Commands:
+  run     Run the gate bundle against origin/main and file new regressions.
+  status  Show recent health-run results from health-run-status.json.
+```
+
+### `fieldkit health run`
+
+```
+Usage: fieldkit health run [OPTIONS]
+
+  Run the gate bundle against origin/main and file new regressions.
+
+  Exits 0 when every check executed (gate failures are sensed regressions, not
+  runner failures). Filing authentication exits 2, uncertain or invalid filing
+  data exits 3, and other partial/fatal outcomes exit 1.
+
+Options:
+  --dry-run   Sense and classify without filing issues or persisting run
+              status.
+  --json      Machine-readable JSON output.
+  -h, --help  Show this message and exit.
+```
+
+### `fieldkit health status`
+
+```
+Usage: fieldkit health status [OPTIONS]
+
+  Show recent health-run results from health-run-status.json.
+
+Options:
+  --limit INTEGER  Number of recent runs to show.  [default: 10]
+  --json           Machine-readable JSON output.
+  -h, --help       Show this message and exit.
+```
+
 ## `fieldkit meeting`
 
 ```
@@ -2476,10 +2697,10 @@ Options:
   -h, --help  Show this message and exit.
 
 Commands:
-  link  Create a Pursuit Workbook GDoc and write its ID to frontmatter.
-  list  List all pursuits that have a linked Pursuit Workbook.
-  note  Add a meeting note as a new tab in the Pursuit Workbook.
-  open  Open the linked Pursuit Workbook in the default browser.
+  link  Create and link a Google pursuit workbook
+  list  List locally recorded workbook links
+  note  Add a note to a Google pursuit workbook
+  open  Open a linked Google pursuit workbook
 ```
 
 ### `fieldkit meeting link`
@@ -2595,57 +2816,4 @@ Usage: fieldkit web token [OPTIONS]
 Options:
   --json      Machine-readable JSON output.
   -h, --help  Show this message and exit.
-```
-
----
-
-## Common patterns
-
-### Update SF Next Steps
-```bash
-fieldkit sf set-next-steps <OPP_ID> "Next steps text here" --confirm
-```
-
-### Write any other approved SF field
-```bash
-fieldkit sf set-field --list-fields          # see what's allowed
-fieldkit sf set-field <OPP_ID> Next_Steps__c "text" --confirm
-fieldkit sf set-field <QUOTE_ID> Approval_Comments__c "justification" --sobject SBQQ__Quote__c --confirm
-```
-
-### Refresh SF auth
-```bash
-# 1. Get sid from Chrome DevTools → your my.salesforce.com host → Cookies → sid
-fieldkit auth sf
-fieldkit sf session-check
-```
-
-### Refresh ShadowBot auth
-```bash
-# Primary: Chrome Default profile must be logged into your configured ShadowBot host
-fieldkit auth shadowbot   # checks auth status; auto-refreshes via Chrome cookies (Linux)
-
-# Fallback (SSH/headless/macOS): inject refresh token from DevTools
-# Chrome DevTools → Network → filter openid-connect/token → Response → refresh_token
-fieldkit auth shadowbot --refresh-token-file PATH
-fieldkit shadowbot query 'test query'
-```
-
-### Daily data refresh
-```bash
-fieldkit gmail sync
-fieldkit gmail account-tags
-fieldkit gmail enrich-pursuits
-fieldkit sf listview
-fieldkit watch run backstory-health
-fieldkit watch run pursuit-stalls
-fieldkit watch run slack-threads
-fieldkit brief generate
-```
-
-### Pipeline review
-```bash
-fieldkit pursuit health
-fieldkit pursuit forecast
-fieldkit pursuit audit
 ```

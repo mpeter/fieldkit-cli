@@ -11,7 +11,7 @@ import pytest
 from click.testing import CliRunner
 
 from fieldkit.commands.issue.cli import cli
-from fieldkit.commands.issue.gh_store import GHIssue
+from fieldkit.issue import GHIssue
 
 pytestmark = pytest.mark.unit
 
@@ -112,7 +112,7 @@ def test_create_creates_issue_and_prints_id() -> None:
 
 
 @pytest.mark.unit
-def test_create_unknown_module_exits_1() -> None:
+def test_create_unknown_module_is_click_usage_error() -> None:
     runner = _runner()
     store = _mock_store()
 
@@ -133,7 +133,7 @@ def test_create_unknown_module_exits_1() -> None:
             ],
         )
 
-    assert result.exit_code == 1
+    assert result.exit_code == 2
 
 
 @pytest.mark.parametrize("module", ["companion", "config", "contact", "driver", "health", "meeting", "web"])
@@ -252,7 +252,7 @@ def test_close_fixed_issue_succeeds() -> None:
 
 
 @pytest.mark.unit
-def test_close_open_without_skip_verify_exits_1() -> None:
+def test_close_open_without_skip_verify_is_data_error() -> None:
     runner = _runner()
     issue = _make_issue("historic regression", status="open")
     store = _mock_store(find_return=issue)
@@ -260,7 +260,7 @@ def test_close_open_without_skip_verify_exits_1() -> None:
     with patch("fieldkit.commands.issue.cli._store", return_value=store):
         result = runner.invoke(cli, ["close", "historic regression"])
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
 
 
 @pytest.mark.unit
@@ -352,7 +352,7 @@ def test_fix_open_issue_calls_mark_fixed() -> None:
 
 
 @pytest.mark.unit
-def test_fix_already_closed_exits_1() -> None:
+def test_fix_closed_repairs_missing_fixed_label() -> None:
     runner = _runner()
     issue = _make_issue("historic regression", status="closed")
     store = _mock_store(find_return=issue)
@@ -360,8 +360,8 @@ def test_fix_already_closed_exits_1() -> None:
     with patch("fieldkit.commands.issue.cli._store", return_value=store):
         result = runner.invoke(cli, ["fix", "historic regression"])
 
-    assert result.exit_code == 1
-    store.mark_fixed.assert_not_called()
+    assert result.exit_code == 0
+    store.mark_fixed.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -383,7 +383,7 @@ def test_plan_open_issue() -> None:
 
 
 @pytest.mark.unit
-def test_plan_already_planned_exits_1() -> None:
+def test_plan_already_planned_is_idempotent() -> None:
     runner = _runner()
     issue = _make_issue("historic regression", status="planned")
     store = _mock_store(find_return=issue)
@@ -391,7 +391,8 @@ def test_plan_already_planned_exits_1() -> None:
     with patch("fieldkit.commands.issue.cli._store", return_value=store):
         result = runner.invoke(cli, ["plan", "historic regression"])
 
-    assert result.exit_code == 1
+    assert result.exit_code == 0
+    store.update_status.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -445,7 +446,7 @@ def test_edit_title_calls_store_edit() -> None:
 
 
 @pytest.mark.unit
-def test_edit_unknown_module_exits_1() -> None:
+def test_edit_unknown_module_is_click_usage_error() -> None:
     runner = _runner()
     issue = _make_issue("historic regression")
     store = _mock_store(find_return=issue)
@@ -453,7 +454,7 @@ def test_edit_unknown_module_exits_1() -> None:
     with patch("fieldkit.commands.issue.cli._store", return_value=store):
         result = runner.invoke(cli, ["edit", "historic regression", "--module", "badmodule"])
 
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     store.edit.assert_not_called()
 
 

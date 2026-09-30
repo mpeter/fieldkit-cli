@@ -1,7 +1,7 @@
 """Tests for fieldkit.commands.sf.opportunity — single-opportunity sync."""
 
+import json
 from pathlib import Path
-from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -15,6 +15,8 @@ from fieldkit.commands.sf.opportunity import (
     cli,
     run_opportunity,
 )
+from fieldkit.sf.errors import SFAPIError, SFAuthError
+from fieldkit.sf.types import DealSplitRecord, OpportunitySObject
 from tests.conftest import OPP_GPAY
 
 pytestmark = pytest.mark.unit
@@ -55,7 +57,7 @@ def test_fmt_currency_return_type_is_always_str() -> None:
 # ── TestBuildWritePayload (flattened) ───────────────────────────────────────
 
 
-def _build_write_payload_sample_rec() -> dict:
+def _build_write_payload_sample_rec() -> OpportunitySObject:
     return {
         "Id": "006TESTID",
         "Name": "Test Opportunity",
@@ -177,8 +179,9 @@ def test_build_write_payload_opportunity_number_omitted_when_field_not_fetched()
 # ── TestOpportunityCli (flattened) ──────────────────────────────────────────
 
 
-def test_run_opportunity_no_write_flag_skips_write(tmp_path: Path) -> None:
-    """--no-write prints summary without calling do_write_opp."""
+@pytest.mark.parametrize("preview_flag", ["--no-write", "--dry-run"])
+def test_run_opportunity_preview_flag_skips_write(tmp_path: Path, preview_flag: str) -> None:
+    """Both public preview spellings use the same no-write implementation."""
     sample_rec = {
         "Id": "006ABC",
         "Name": "Test Opp",
@@ -209,11 +212,11 @@ def test_run_opportunity_no_write_flag_skips_write(tmp_path: Path) -> None:
         # the live API. See the conftest _block_outbound_network guard.
         patch("fieldkit.commands.sf.opportunity._fetch_deal_splits", return_value=[]),
         patch("fieldkit.commands.sf.opportunity._fetch_contract_type", return_value="standard"),
-        patch("fieldkit.commands.sf.sync.do_write_opp") as mock_write,
+        patch("fieldkit.commands.sf.opportunity.sync_opportunity") as mock_write,
     ):
-        result = runner.invoke(cli, [OPP_GPAY, "--no-write"])
+        result = runner.invoke(cli, [OPP_GPAY, preview_flag])
 
-    assert result.exit_code == 0
+    assert result.exit_code == 3
     mock_write.assert_not_called()
     assert "Test Opp" in result.output
 
@@ -252,7 +255,7 @@ def test_run_opportunity_output_shows_services_splits(tmp_path: Path) -> None:
     ):
         result = runner.invoke(cli, [OPP_GPAY, "--no-write"])
 
-    assert result.exit_code == 0
+    assert result.exit_code == 3
     assert "$400,000" in result.output  # consulting
     assert "$100,000" in result.output  # training
     assert "MEDDPICC" in result.output
@@ -285,31 +288,87 @@ def test_fetch_deal_splits_returns_splits_from_client() -> None:
     assert result == splits_data
 
 
-def test_fetch_deal_splits_returns_empty_on_no_sid() -> None:
-    with patch("fieldkit.commands.sf.opportunity.get_sf_session_id", return_value=None):
-        assert _fetch_deal_splits("006ABC") == []
+def test_fetch_deal_splits_no_sid_is_auth_failure() -> None:
+    with (
+        patch("fieldkit.commands.sf.opportunity.get_sf_session_id", return_value=None),
+        pytest.raises(SFAuthError, match="authentication is not configured"),
+    ):
+        _fetch_deal_splits("006ABC")
 
 
-def test_fetch_deal_splits_returns_empty_on_sfapierror() -> None:
-    from fieldkit.sf.client import SFAPIError
+def test_fetch_deal_splits_no_base_url_is_auth_failure() -> None:
+    with (
+        patch("fieldkit.commands.sf.opportunity.get_sf_session_id", return_value="fake-sid"),
+        patch("fieldkit.commands.sf.opportunity.get_sf_rest_base_url", return_value=None),
+        pytest.raises(SFAuthError, match="base URL is not configured"),
+    ):
+        _fetch_deal_splits("006ABC")
 
+
+def test_fetch_deal_splits_sfapierror_propagates() -> None:
     p1, p2 = _fetch_deal_splits_base_patches()
     with p1, p2, patch("fieldkit.sf.client.SFDirectClient") as mock_cls:
         mock_client = mock_cls.return_value.__enter__.return_value
         mock_client.fetch_deal_splits.side_effect = SFAPIError("timeout")
-        result = _fetch_deal_splits("006ABC")
-    assert result == []
+        with pytest.raises(SFAPIError, match="timeout"):
+            _fetch_deal_splits("006ABC")
 
 
-def test_fetch_deal_splits_returns_empty_on_sfautherror() -> None:
-    from fieldkit.sf.client import SFAuthError
-
+def test_fetch_deal_splits_sfautherror_propagates() -> None:
     p1, p2 = _fetch_deal_splits_base_patches()
     with p1, p2, patch("fieldkit.sf.client.SFDirectClient") as mock_cls:
         mock_client = mock_cls.return_value.__enter__.return_value
         mock_client.fetch_deal_splits.side_effect = SFAuthError("expired")
-        result = _fetch_deal_splits("006ABC")
-    assert result == []
+        with pytest.raises(SFAuthError, match="expired"):
+            _fetch_deal_splits("006ABC")
+
+
+def test_run_opportunity_split_failure_is_partial_and_never_writes() -> None:
+    with (
+        patch("fieldkit.commands.sf.opportunity._fetch_opportunity", return_value=_build_write_payload_sample_rec()),
+        patch("fieldkit.commands.sf.opportunity._fetch_deal_splits", side_effect=SFAPIError("timeout")),
+        patch("fieldkit.commands.sf.opportunity._resolve_pursuit_file") as mock_resolve,
+        patch("fieldkit.commands.sf.opportunity.sync_opportunity") as mock_write,
+    ):
+        result = run_opportunity(OPP_GPAY, "accounts/acme-corp/pursuits/renewal.md", write=True)
+
+    assert result == 1
+    mock_resolve.assert_not_called()
+    mock_write.assert_not_called()
+
+
+def test_json_split_failure_exits_partial_with_non_success_payload() -> None:
+    runner = CliRunner()
+    with (
+        patch("fieldkit.commands.sf.opportunity._fetch_opportunity", return_value=_build_write_payload_sample_rec()),
+        patch("fieldkit.commands.sf.opportunity._fetch_deal_splits", side_effect=SFAPIError("timeout")),
+        patch("fieldkit.commands.sf.opportunity._fetch_contract_type") as mock_contract_type,
+        patch("fieldkit.commands.sf.opportunity.sync_opportunity") as mock_write,
+    ):
+        result = runner.invoke(cli, [OPP_GPAY, "--json"])
+
+    assert result.exit_code == 1
+    assert json.loads(result.stdout) == {
+        "status": "partial",
+        "error": "Salesforce deal splits unavailable; retry may help.",
+    }
+    mock_contract_type.assert_not_called()
+    mock_write.assert_not_called()
+
+
+def test_json_split_auth_failure_propagates_and_never_writes() -> None:
+    runner = CliRunner()
+    with (
+        patch("fieldkit.commands.sf.opportunity._fetch_opportunity", return_value=_build_write_payload_sample_rec()),
+        patch("fieldkit.commands.sf.opportunity._fetch_deal_splits", side_effect=SFAuthError("expired")),
+        patch("fieldkit.commands.sf.opportunity._fetch_contract_type") as mock_contract_type,
+        patch("fieldkit.commands.sf.opportunity.sync_opportunity") as mock_write,
+    ):
+        result = runner.invoke(cli, [OPP_GPAY, "--json"])
+
+    assert isinstance(result.exception, SFAuthError)
+    mock_contract_type.assert_not_called()
+    mock_write.assert_not_called()
 
 
 # ── _print_summary splits section ────────────────────────────────────────────
@@ -318,7 +377,7 @@ def test_fetch_deal_splits_returns_empty_on_sfautherror() -> None:
 # ── TestPrintSummarySplits (flattened) ──────────────────────────────────────
 
 
-def _print_summary_minimal_rec() -> dict:
+def _print_summary_minimal_rec() -> OpportunitySObject:
     return {
         "Id": "006X",
         "Name": "Test Opp",
@@ -343,7 +402,7 @@ def _print_summary_minimal_rec() -> dict:
 
 
 def test_print_summary_splits_section_shown_when_present(capsys: pytest.CaptureFixture) -> None:
-    splits = [
+    splits: list[DealSplitRecord] = [
         {"offering_group": "Ansible Automation Platform", "services_pct": 50.0},
         {"offering_group": "Example Enterprise Linux", "services_pct": 50.0},
     ]
@@ -409,7 +468,7 @@ def test_run_opportunity_cli_shows_splits() -> None:
     ):
         result = runner.invoke(cli, [OPP_GPAY, "--no-write"])
 
-    assert result.exit_code == 0
+    assert result.exit_code == 3
     assert "Deal Splits" in result.output
     assert "Ansible Automation Platform" in result.output
     assert "60%" in result.output
@@ -425,7 +484,7 @@ def test_run_opportunity_cli_omits_splits_when_empty() -> None:
     ):
         result = runner.invoke(cli, [OPP_GPAY, "--no-write"])
 
-    assert result.exit_code == 0
+    assert result.exit_code == 3
     assert "Deal Splits" not in result.output
 
 
@@ -443,9 +502,10 @@ def test_run_opportunity_run_opportunity_placeholder_warns(placeholder: str, cap
     ):
         result = run_opportunity(placeholder, None, write=False)
 
-    assert result == 0
+    assert result == 3
     mock_fetch.assert_not_called()
     assert "placeholder" in caplog.text.lower() or "invalid" in caplog.text.lower()
+    assert repr(placeholder) not in caplog.text
 
 
 # ── TestRunOpportunityFormatGuard (flattened) ───────────────────────────────
@@ -461,7 +521,8 @@ def test_run_opportunity_run_opportunity_short_id_warns(bad_id: str, caplog: pyt
 
     assert result == 3, f"Expected exit code 3 for malformed ID {bad_id!r}, got {result}"
     mock_fetch.assert_not_called()
-    assert "valid salesforce id" in caplog.text.lower() or "not a valid" in caplog.text.lower()
+    assert "invalid" in caplog.text.lower()
+    assert bad_id not in caplog.text
 
 
 def test_run_opportunity_run_opportunity_valid_15char_proceeds() -> None:
@@ -552,7 +613,7 @@ def test_bug031_untracked_opp_exit_code_untracked_opp_prints_clear_error_message
 
     captured = capsys.readouterr()
     assert "not tracked" in captured.err.lower() or "no matching pursuit" in captured.err.lower()
-    assert _BUG031_UNTRACKED_OPP_EXIT_CODE__VALID_OPP_ID in captured.err
+    assert _BUG031_UNTRACKED_OPP_EXIT_CODE__VALID_OPP_ID not in captured.err
 
 
 def test_bug031_untracked_opp_exit_code_untracked_opp_no_write_returns_0() -> None:
@@ -567,7 +628,7 @@ def test_bug031_untracked_opp_exit_code_untracked_opp_no_write_returns_0() -> No
     ):
         result = run_opportunity(_BUG031_UNTRACKED_OPP_EXIT_CODE__VALID_OPP_ID, None, write=False)
 
-    assert result == 0, "No-write mode should still return 0 even for untracked opps"
+    assert result == 3, "Preview must report the same missing pursuit as live sync"
 
 
 # ── Phase 8 addition (task 8.6) ───────────────────────────────────────────────
@@ -576,7 +637,7 @@ def test_bug031_untracked_opp_exit_code_untracked_opp_no_write_returns_0() -> No
 # ── TestPrintSummaryHandlesNoneAmounts (flattened) ──────────────────────────
 
 
-def _print_summary_none_amounts_rec() -> dict:
+def _print_summary_none_amounts_rec() -> OpportunitySObject:
     return {
         "Id": "006NULL000000000AA",
         "Name": "Null Amounts Opp",
@@ -616,8 +677,8 @@ def test_print_summary_print_summary_handles_none_amounts(capsys: pytest.Capture
 # ── TestPrintSummaryBranchCoverage (flattened) ──────────────────────────────
 
 
-def _print_summary_base_rec(**overrides: Any) -> dict:
-    rec: dict = {
+def _print_summary_base_rec(overrides: OpportunitySObject | None = None) -> OpportunitySObject:
+    rec: OpportunitySObject = {
         "Id": "006TEST000000001",
         "Name": "Test Opportunity",
         "StageName": "Propose",
@@ -638,13 +699,14 @@ def _print_summary_base_rec(**overrides: Any) -> dict:
         "Closed_Lost_Reason__c": None,
         "Account": {"Id": "001A", "Name": "Acme Corp", "Industry": "Technology"},
     }
-    rec.update(overrides)
+    if overrides:
+        rec.update(overrides)
     return rec
 
 
 def test_print_summary_closed_lost_reason_printed_when_present(capsys: pytest.CaptureFixture[str]) -> None:
     """Closed_Lost_Reason__c is printed when non-None."""
-    rec = _print_summary_base_rec(**{"Closed_Lost_Reason__c": "Budget cut"})
+    rec = _print_summary_base_rec({"Closed_Lost_Reason__c": "Budget cut"})
     _print_summary(rec, None)
     out = capsys.readouterr().out
     assert "Budget cut" in out
@@ -686,7 +748,7 @@ def test_print_summary_identify_pain_shown_when_set(capsys: pytest.CaptureFixtur
 
 def test_print_summary_fallback_to_customer_pain_point(capsys: pytest.CaptureFixture[str]) -> None:
     """Customer_Pain_Point__c is used when Identify_Pain_Long__c is None."""
-    rec = _print_summary_base_rec(**{"Identify_Pain_Long__c": None, "Customer_Pain_Point__c": "Slow deploys"})
+    rec = _print_summary_base_rec({"Identify_Pain_Long__c": None, "Customer_Pain_Point__c": "Slow deploys"})
     _print_summary(rec, None)
     out = capsys.readouterr().out
     assert "Slow deploys" in out
@@ -694,7 +756,7 @@ def test_print_summary_fallback_to_customer_pain_point(capsys: pytest.CaptureFix
 
 def test_print_summary_not_set_shown_for_missing_pain(capsys: pytest.CaptureFixture[str]) -> None:
     """'(not set)' is shown when both pain fields are None."""
-    rec = _print_summary_base_rec(**{"Identify_Pain_Long__c": None, "Customer_Pain_Point__c": None})
+    rec = _print_summary_base_rec({"Identify_Pain_Long__c": None, "Customer_Pain_Point__c": None})
     _print_summary(rec, None)
     out = capsys.readouterr().out
     assert "(not set)" in out
@@ -702,7 +764,7 @@ def test_print_summary_not_set_shown_for_missing_pain(capsys: pytest.CaptureFixt
 
 def test_print_summary_next_steps_not_set_when_none(capsys: pytest.CaptureFixture[str]) -> None:
     """'(not set)' is shown for Next_Steps__c when None."""
-    rec = _print_summary_base_rec(**{"Next_Steps__c": None})
+    rec = _print_summary_base_rec({"Next_Steps__c": None})
     _print_summary(rec, None)
     out = capsys.readouterr().out
     assert "(not set)" in out
@@ -711,7 +773,7 @@ def test_print_summary_next_steps_not_set_when_none(capsys: pytest.CaptureFixtur
 def test_print_summary_deal_splits_column_width_adapts_to_longest_label(capsys: pytest.CaptureFixture[str]) -> None:
     """Deal splits column width adapts to the longest offering_group label."""
     rec = _print_summary_base_rec()
-    splits = [
+    splits: list[DealSplitRecord] = [
         {"offering_group": "Short", "services_pct": 30.0},
         {"offering_group": "A Very Long Offering Group Name", "services_pct": 70.0},
     ]
@@ -724,7 +786,7 @@ def test_print_summary_deal_splits_column_width_adapts_to_longest_label(capsys: 
 
 def test_print_summary_owner_none_does_not_crash(capsys: pytest.CaptureFixture[str]) -> None:
     """_print_summary handles Owner=None without raising."""
-    rec = _print_summary_base_rec(**{"Owner": None})
+    rec = _print_summary_base_rec({"Owner": None})
     _print_summary(rec, None)  # must not raise
     out = capsys.readouterr().out
     assert "Test Opportunity" in out
@@ -732,7 +794,7 @@ def test_print_summary_owner_none_does_not_crash(capsys: pytest.CaptureFixture[s
 
 def test_print_summary_account_none_does_not_crash(capsys: pytest.CaptureFixture[str]) -> None:
     """_print_summary handles Account=None without raising."""
-    rec = _print_summary_base_rec(**{"Account": None})
+    rec = _print_summary_base_rec({"Account": None})
     _print_summary(rec, None)  # must not raise
     out = capsys.readouterr().out
     assert "Test Opportunity" in out
@@ -774,7 +836,7 @@ def test_fetch_opportunity_fetch_opportunity_sfautherror_exits_2() -> None:
     when running via `python -m fieldkit`. Unit tests assert the exception propagates.
     """
     from fieldkit.commands.sf.opportunity import _fetch_opportunity
-    from fieldkit.sf.client import SFAuthError
+    from fieldkit.sf.errors import SFAuthError
 
     with (
         patch("fieldkit.commands.sf.opportunity.get_sf_session_id", return_value="fakesid"),
@@ -786,10 +848,12 @@ def test_fetch_opportunity_fetch_opportunity_sfautherror_exits_2() -> None:
         _fetch_opportunity("006ABC123456789")
 
 
-def test_fetch_opportunity_fetch_opportunity_sfnotfounderror_exits_3() -> None:
+def test_fetch_opportunity_fetch_opportunity_sfnotfounderror_exits_3(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     """_fetch_opportunity exits 3 on SFNotFoundError."""
     from fieldkit.commands.sf.opportunity import _fetch_opportunity
-    from fieldkit.sf.client import SFNotFoundError
+    from fieldkit.sf.errors import SFNotFoundError
 
     with (
         patch("fieldkit.commands.sf.opportunity.get_sf_session_id", return_value="fakesid"),
@@ -800,12 +864,15 @@ def test_fetch_opportunity_fetch_opportunity_sfnotfounderror_exits_3() -> None:
         mock_cls.return_value.__enter__.return_value.fetch_record.side_effect = SFNotFoundError("not found")
         _fetch_opportunity("006ABC123456789")
     assert exc_info.value.code == 3
+    captured = capsys.readouterr()
+    assert "Salesforce opportunity was not found" in captured.err
+    assert "006ABC123456789" not in captured.err
 
 
-def test_fetch_opportunity_fetch_opportunity_sfapierror_exits_1() -> None:
+def test_fetch_opportunity_fetch_opportunity_sfapierror_exits_1(capsys: pytest.CaptureFixture[str]) -> None:
     """_fetch_opportunity exits 1 on SFAPIError."""
     from fieldkit.commands.sf.opportunity import _fetch_opportunity
-    from fieldkit.sf.client import SFAPIError
+    from fieldkit.sf.errors import SFAPIError
 
     with (
         patch("fieldkit.commands.sf.opportunity.get_sf_session_id", return_value="fakesid"),
@@ -813,18 +880,43 @@ def test_fetch_opportunity_fetch_opportunity_sfapierror_exits_1() -> None:
         patch("fieldkit.sf.client.SFDirectClient") as mock_cls,
         pytest.raises(SystemExit) as exc_info,
     ):
-        mock_cls.return_value.__enter__.return_value.fetch_record.side_effect = SFAPIError("timeout")
+        mock_cls.return_value.__enter__.return_value.fetch_record.side_effect = SFAPIError(
+            "provider leaked /fictional-private/customer/customer-record.json"
+        )
         _fetch_opportunity("006ABC123456789")
     assert exc_info.value.code == 1
+    captured = capsys.readouterr()
+    assert "Salesforce opportunity read failed" in captured.err
+    assert "/fictional-private/customer/customer-record.json" not in captured.err
 
 
-def test_fetch_opportunity_resolve_pursuit_file_returns_none_when_get_fieldkit_home_raises() -> None:
-    """_resolve_pursuit_file returns None when get_fieldkit_home raises."""
+def test_fetch_opportunity_resolve_pursuit_file_propagates_data_root_failure() -> None:
+    """A data-root failure must remain distinguishable from an untracked record."""
     from fieldkit.commands.sf.opportunity import _resolve_pursuit_file
 
-    with patch("fieldkit.commands.sf.opportunity.get_fieldkit_home", side_effect=Exception("no config")):
-        result = _resolve_pursuit_file("006ABC123456789")
-    assert result is None
+    with (
+        patch("fieldkit.commands.sf.opportunity.find_pursuit", side_effect=OSError("no config")),
+        pytest.raises(OSError, match="no config"),
+    ):
+        _resolve_pursuit_file("006ABC123456789")
+
+
+@pytest.mark.parametrize("write", [False, True])
+def test_run_opportunity_pursuit_resolution_failure_is_partial(write: bool, capsys: pytest.CaptureFixture[str]) -> None:
+    """A failed local lookup is retryable in preview and write modes."""
+    with (
+        patch("fieldkit.commands.sf.opportunity._fetch_opportunity", return_value=_build_write_payload_sample_rec()),
+        patch("fieldkit.commands.sf.opportunity._fetch_deal_splits", return_value=[]),
+        patch("fieldkit.commands.sf.opportunity._resolve_pursuit_file", side_effect=OSError("/private/root")),
+        patch("fieldkit.commands.sf.opportunity.sync_opportunity") as mock_write,
+    ):
+        result = run_opportunity(OPP_GPAY, None, write=write)
+
+    assert result == 1
+    mock_write.assert_not_called()
+    captured = capsys.readouterr()
+    assert "local pursuit lookup failed" in captured.err.lower()
+    assert "/private/root" not in captured.err
 
 
 def test_fetch_opportunity_resolve_pursuit_file_returns_none_when_no_pursuit_dir() -> None:
@@ -832,9 +924,9 @@ def test_fetch_opportunity_resolve_pursuit_file_returns_none_when_no_pursuit_dir
     from fieldkit.commands.sf.opportunity import _resolve_pursuit_file
 
     with (
-        patch("fieldkit.commands.sf.opportunity.get_fieldkit_home", return_value=Path("/tmp")),
+        patch("fieldkit.sf.sync.get_fieldkit_home", return_value=Path("/tmp")),
         patch(
-            "fieldkit.commands.sf.opportunity.get_accounts_config",
+            "fieldkit.sf.sync.get_accounts_config",
             return_value={"accounts": {"acme": {"no_pursuit_dir": True}}},
         ),
     ):
@@ -882,7 +974,7 @@ def test_fetch_opportunity_run_opportunity_writes_when_pursuit_file_found(tmp_pa
         # SFAuthError (HTTP 401). A test whose result depends on whether the operator
         # happens to hold credentials is not testing what it claims to.
         patch("fieldkit.commands.sf.opportunity._fetch_contract_type", return_value="standard"),
-        patch("fieldkit.commands.sf.sync.do_write_opp") as mock_write,
+        patch("fieldkit.commands.sf.opportunity.sync_opportunity") as mock_write,
     ):
         result = run_opportunity("006GPAY00000000AAA", pursuit_file, write=True)
 

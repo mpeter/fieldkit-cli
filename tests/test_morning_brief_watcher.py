@@ -3,12 +3,15 @@
 No MCP calls, no network, no real filesystem access beyond tmp_path.
 """
 
+from collections.abc import Callable, Iterator
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, NotRequired, TypedDict, Unpack
 from unittest.mock import patch
 
 import pytest
+
+from fieldkit.watch._morning_brief_types import SourceNotReady
 
 # ---------------------------------------------------------------------------
 # Import helpers
@@ -22,6 +25,31 @@ from fieldkit.watch.morning_brief_collect import (
 from fieldkit.watch.morning_brief_render import _fmt_time, render_brief
 
 pytestmark = pytest.mark.unit
+
+
+class _RenderArguments(TypedDict):
+    target_date: date
+    meetings: list[dict[str, Any]] | SourceNotReady | str
+    backstory_alerts: list[str] | SourceNotReady | str
+    pursuit_stall_alerts: list[str] | SourceNotReady | str
+    slack_alerts: list[str] | SourceNotReady | str
+    pipeline_review_md: str
+    elapsed_seconds: float
+    quota_collector: Callable[[Path], list[dict[str, object]]]
+    degraded_sources: NotRequired[list[tuple[str, str]] | None]
+
+
+class _RenderOverrides(TypedDict, total=False):
+    target_date: date
+    meetings: list[dict[str, Any]] | SourceNotReady | str
+    backstory_alerts: list[str] | SourceNotReady | str
+    pursuit_stall_alerts: list[str] | SourceNotReady | str
+    slack_alerts: list[str] | SourceNotReady | str
+    pipeline_review_md: str
+    elapsed_seconds: float
+    quota_collector: Callable[[Path], list[dict[str, object]]]
+    degraded_sources: list[tuple[str, str]] | None
+
 
 # ===========================================================================
 # extract_today_alerts
@@ -227,7 +255,7 @@ def test_multiple_at_signs_uses_last() -> None:
 
 
 def test_returns_set() -> None:
-    config: dict = {"internal_domains": ["internal.example.com", "ibm.com"]}  # pii-guard: ignore
+    config: dict[str, object] = {"internal_domains": ["internal.example.com", "ibm.com"]}  # pii-guard: ignore
     domains = _parse_internal_domains(config)
     assert isinstance(domains, set)
     assert "internal.example.com" in domains  # pii-guard: ignore
@@ -281,13 +309,13 @@ def test_unparseable_returns_as_is() -> None:
 _TARGET_DATE_render_brief = date(2026, 5, 27)
 
 
-def _patch_fieldkit_home_render_brief(tmp_path: Path) -> None:
+def _patch_fieldkit_home_render_brief(tmp_path: Path) -> Iterator[None]:
     with patch("fieldkit.watch.morning_brief_render.get_fieldkit_home", return_value=tmp_path):
         yield
 
 
-def _render_render_brief(**overrides) -> str:
-    defaults = {
+def _render_render_brief(**overrides: Unpack[_RenderOverrides]) -> str:
+    defaults: _RenderArguments = {
         "target_date": _TARGET_DATE_render_brief,
         "meetings": [],
         "backstory_alerts": [],
@@ -328,6 +356,10 @@ def test_source_failure_calendar_log_level(caplog: pytest.LogCaptureFixture) -> 
     from fieldkit.watch.morning_brief import _collect_calendar_meetings
 
     with (
+        patch(
+            "fieldkit.watch.morning_brief.get_mcp_endpoint",
+            return_value="https://gateway.example.com/calendar",
+        ),
         patch("fieldkit.watch.morning_brief.MCPSession") as mock_session_cls,
         caplog.at_level(logging.DEBUG, logger="fieldkit.watch"),
     ):
@@ -340,18 +372,38 @@ def test_source_failure_calendar_log_level(caplog: pytest.LogCaptureFixture) -> 
             user_email="user@example.com",  # pii-guard: ignore
         )
 
-    # historic regression + Constitution VIII: return value shows exception type, NOT raw message.
+    # The user-facing result is fixed vocabulary and contains no provider text.
     assert isinstance(result, str)
-    assert "RuntimeError" in result
+    assert "provider failure" in result
     assert "Calendar unavailable" in result
     # Raw internal error text must NOT appear (Constitution VIII)
     assert "connection timeout" not in result
 
-    # historic regression: error is logged at WARNING level (was DEBUG before fix).
+    # The warning remains actionable without retaining provider details.
     warning_records = [r for r in caplog.records if r.levelno >= logging.WARNING and "fieldkit.watch" in r.name]
-    assert any("connection timeout" in r.getMessage() for r in warning_records), (
-        "historic regression: full error detail must appear at WARNING level in logs"
-    )
+    assert any("provider request failed" in r.getMessage() for r in warning_records)
+    assert all("connection timeout" not in r.getMessage() for r in warning_records)
+
+
+def test_calendar_preview_does_not_read_config_or_open_provider() -> None:
+    from fieldkit.watch._morning_brief_types import SourceNotReady
+    from fieldkit.watch.morning_brief import _collect_calendar_meetings
+
+    with (
+        patch("fieldkit.watch.morning_brief.get_mcp_endpoint") as endpoint,
+        patch("fieldkit.watch.morning_brief.MCPSession") as session,
+    ):
+        result = _collect_calendar_meetings(
+            target_date=date(2026, 5, 27),
+            internal_domains=set(),
+            user_email="user@example.com",  # pii-guard: ignore
+            enabled=False,
+        )
+
+    assert isinstance(result, SourceNotReady)
+    assert "not run" in result.message
+    endpoint.assert_not_called()
+    session.assert_not_called()
 
 
 def test_source_failure_slack() -> None:
@@ -397,7 +449,7 @@ def test_meeting_entry_rendered() -> None:
 # ── TestCollectPipelineReview (flattened) ─────────────────────────────────────────────
 
 
-def _patch_fieldkit_home_collect_pipeline_review(tmp_path: Path) -> None:
+def _patch_fieldkit_home_collect_pipeline_review(tmp_path: Path) -> Iterator[None]:
     with (
         patch("fieldkit.watch.morning_brief_render.get_fieldkit_home", return_value=tmp_path),
         patch("fieldkit.watch.morning_brief.get_fieldkit_home", return_value=tmp_path),
@@ -405,8 +457,8 @@ def _patch_fieldkit_home_collect_pipeline_review(tmp_path: Path) -> None:
         yield
 
 
-def _render_collect_pipeline_review(**overrides) -> str:
-    defaults = {
+def _render_collect_pipeline_review(**overrides: Unpack[_RenderOverrides]) -> str:
+    defaults: _RenderArguments = {
         "target_date": date(2026, 5, 27),
         "meetings": [],
         "backstory_alerts": [],
@@ -424,19 +476,19 @@ def test_collect_pipeline_review_returns_pipeline_review_string() -> None:
     """When collect_all_pursuit_data succeeds, returns a non-empty string."""
     from unittest.mock import patch
 
-    from fieldkit.commands.brief.generate import _collect_pipeline_review  # stays in commands layer (tach boundary)
+    from fieldkit.brief.merged import _collect_pipeline_review
 
-    mock_rows: list = []
-    mock_signals: list = []
-    mock_blindspots: list = []
+    mock_rows: list[dict[str, object]] = []
+    mock_signals: list[dict[str, object]] = []
+    mock_blindspots: list[dict[str, object]] = []
 
     with (
         patch(
-            "fieldkit.commands.brief.generate.collect_all_pursuit_data",
+            "fieldkit.brief.merged.collect_all_pursuit_data",
             return_value=(mock_rows, mock_signals, mock_blindspots),
         ) as mock_collect,
         patch(
-            "fieldkit.commands.brief.generate._render_pipeline_full_brief",
+            "fieldkit.brief.merged.render_full_brief",
             return_value="# Pipeline Review\n\n_No active pursuits._",
         ) as mock_render,
     ):
@@ -457,15 +509,15 @@ def test_collect_pipeline_review_dry_run_sets_no_llm_true() -> None:
     """dry_run=True must propagate as no_llm=True to avoid LLM calls."""
     from unittest.mock import patch
 
-    from fieldkit.commands.brief.generate import _collect_pipeline_review  # stays in commands layer (tach boundary)
+    from fieldkit.brief.merged import _collect_pipeline_review
 
     with (
         patch(
-            "fieldkit.commands.brief.generate.collect_all_pursuit_data",
+            "fieldkit.brief.merged.collect_all_pursuit_data",
             return_value=([], [], []),
         ),
         patch(
-            "fieldkit.commands.brief.generate._render_pipeline_full_brief",
+            "fieldkit.brief.merged.render_full_brief",
             return_value="ok",
         ) as mock_render,
     ):
@@ -478,16 +530,17 @@ def test_collect_pipeline_review_returns_error_string_on_failure() -> None:
     """On exception, returns a string containing '[Pipeline Review] unavailable'."""
     from unittest.mock import patch
 
-    from fieldkit.commands.brief.generate import _collect_pipeline_review  # stays in commands layer (tach boundary)
+    from fieldkit.brief.merged import _collect_pipeline_review
 
     with patch(
-        "fieldkit.commands.brief.generate.collect_all_pursuit_data",
+        "fieldkit.brief.merged.collect_all_pursuit_data",
         side_effect=RuntimeError("disk not found"),
     ):
         result = _collect_pipeline_review(no_llm=True)
 
     assert "[Pipeline Review] unavailable" in result
-    assert "disk not found" in result
+    assert "disk not found" not in result
+    assert "fieldkit doctor" in result
 
 
 def test_collect_pipeline_review_pipeline_review_md_included_in_brief() -> None:
@@ -539,7 +592,7 @@ def test_returns_empty_when_nothing_set() -> None:
 def test_all_healthy() -> None:
     from fieldkit.watch.morning_brief_render import _collect_degraded_sources
 
-    sources = {
+    sources: dict[str, list[Any] | SourceNotReady | str] = {
         "calendar": [{"title": "Standup"}],
         "backstory": ["alert1"],
         "slack": [],
@@ -551,7 +604,7 @@ def test_all_healthy() -> None:
 def test_some_failed() -> None:
     from fieldkit.watch.morning_brief_render import _collect_degraded_sources
 
-    sources = {
+    sources: dict[str, list[Any] | SourceNotReady | str] = {
         "calendar": "_unavailable: connection timeout_",
         "backstory": ["alert1"],
         "slack": "_unavailable: file not found_",
@@ -567,7 +620,7 @@ def test_some_failed() -> None:
 def test_reason_extracted_from_unavailable_prefix() -> None:
     from fieldkit.watch.morning_brief_render import _collect_degraded_sources
 
-    sources = {"calendar": "_unavailable: MCP timeout_"}
+    sources: dict[str, list[Any] | SourceNotReady | str] = {"calendar": "_unavailable: MCP timeout_"}
     result = _collect_degraded_sources(sources)
     assert result == [("calendar", "MCP timeout")]
 
@@ -575,7 +628,7 @@ def test_reason_extracted_from_unavailable_prefix() -> None:
 def test_plain_error_string_used_as_reason() -> None:
     from fieldkit.watch.morning_brief_render import _collect_degraded_sources
 
-    sources = {"backstory": "some generic error"}
+    sources: dict[str, list[Any] | SourceNotReady | str] = {"backstory": "some generic error"}
     result = _collect_degraded_sources(sources)
     assert len(result) == 1
     label, reason = result[0]
@@ -629,13 +682,13 @@ def test_with_failures_contains_each_label() -> None:
 _TARGET_DATE_render_brief_degraded_section = date(2026, 5, 27)
 
 
-def _patch_fieldkit_home_render_brief_degraded_section(tmp_path: Path) -> None:
+def _patch_fieldkit_home_render_brief_degraded_section(tmp_path: Path) -> Iterator[None]:
     with patch("fieldkit.watch.morning_brief_render.get_fieldkit_home", return_value=tmp_path):
         yield
 
 
-def _render_render_brief_degraded_section(**overrides) -> str:
-    defaults = {
+def _render_render_brief_degraded_section(**overrides: Unpack[_RenderOverrides]) -> str:
+    defaults: _RenderArguments = {
         "target_date": _TARGET_DATE_render_brief_degraded_section,
         "meetings": [],
         "backstory_alerts": [],
@@ -748,6 +801,7 @@ def test_none_string_sanitized(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     )
     p = _write_pursuit_extract_pursuit_summary_next_steps(tmp_path, "None")
     result = extract_pursuit_summary(p)
+    assert result is not None
     assert result["next_steps"] == "", f"Expected empty string, got: {result['next_steps']!r}"
 
 
@@ -760,6 +814,7 @@ def test_null_string_sanitized(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     )
     p = _write_pursuit_extract_pursuit_summary_next_steps(tmp_path, "null")
     result = extract_pursuit_summary(p)
+    assert result is not None
     assert result["next_steps"] == "", f"Expected empty string, got: {result['next_steps']!r}"
 
 
@@ -772,6 +827,7 @@ def test_real_next_steps_preserved(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     )
     p = _write_pursuit_extract_pursuit_summary_next_steps(tmp_path, "Follow up with champion")
     result = extract_pursuit_summary(p)
+    assert result is not None
     assert result["next_steps"] == "Follow up with champion"
 
 
@@ -957,7 +1013,7 @@ _PIPELINE_ERROR_PREFIX_bug033_pipeline_review_degraded_detection = "[Pipeline Re
 def _make_sources_bug033_pipeline_review_degraded_detection(
     pipeline_result: str,
     pipeline_failed: bool,
-) -> dict[str, list | str]:
+) -> dict[str, list[Any] | SourceNotReady | str]:
     """Build the all_sources dict as morning_brief.py does after the fix."""
     return {
         "calendar": [],
@@ -1007,12 +1063,21 @@ def test_write_brief_to_disk_success_not_counted_as_failure(tmp_path: Path) -> N
     from fieldkit.watch.morning_brief import _write_brief_to_disk
 
     # Simulate the sentinel list [] passed for a successful pipeline review
-    sources: list = [[], [], [], [], [], [], []]  # 7 sources, all healthy (lists)
+    sources: list[list[str] | str | SourceNotReady | list[dict[str, Any]] | list[dict[str, str]]] = [
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+    ]
 
-    captured_kwargs: dict = {}
+    captured_kwargs: dict[str, object] = {}
 
-    def _fake_write_run_status(**kwargs: object) -> None:
+    def _fake_write_run_status(**kwargs: object) -> str:
         captured_kwargs.update(kwargs)
+        return "written"
 
     watchers_dir = tmp_path / "watchers"
     watchers_dir.mkdir()
@@ -1021,7 +1086,7 @@ def test_write_brief_to_disk_success_not_counted_as_failure(tmp_path: Path) -> N
         _patch("fieldkit.watch.morning_brief.get_watchers_dir", return_value=watchers_dir),
         _patch("fieldkit.watch.morning_brief.write_run_status", side_effect=_fake_write_run_status),
     ):
-        exit_code = _write_brief_to_disk(
+        result = _write_brief_to_disk(
             "# Brief\n\nContent.\n",
             date(2026, 6, 10),
             1.23,
@@ -1029,7 +1094,8 @@ def test_write_brief_to_disk_success_not_counted_as_failure(tmp_path: Path) -> N
             dry_run=False,
         )
 
-    assert exit_code == 0
+    assert result.written is True
+    assert result.run.exit_code == 0
     assert captured_kwargs.get("failures") == 0, (
         f"Expected 0 source failures for all-healthy sources, got: {captured_kwargs.get('failures')}"
     )
@@ -1044,12 +1110,21 @@ def test_write_brief_to_disk_error_counted_as_failure(tmp_path: Path) -> None:
 
     # Simulate the error string passed for a failed pipeline review
     error_msg = "[Pipeline Review] unavailable: data root not configured"
-    sources: list = [[], [], [], [], [], [], error_msg]  # last entry is the error string
+    sources: list[list[str] | str | SourceNotReady | list[dict[str, Any]] | list[dict[str, str]]] = [
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        error_msg,
+    ]
 
-    captured_kwargs: dict = {}
+    captured_kwargs: dict[str, object] = {}
 
-    def _fake_write_run_status(**kwargs: object) -> None:
+    def _fake_write_run_status(**kwargs: object) -> str:
         captured_kwargs.update(kwargs)
+        return "written"
 
     watchers_dir = tmp_path / "watchers"
     watchers_dir.mkdir()
@@ -1058,7 +1133,7 @@ def test_write_brief_to_disk_error_counted_as_failure(tmp_path: Path) -> None:
         _patch("fieldkit.watch.morning_brief.get_watchers_dir", return_value=watchers_dir),
         _patch("fieldkit.watch.morning_brief.write_run_status", side_effect=_fake_write_run_status),
     ):
-        exit_code = _write_brief_to_disk(
+        result = _write_brief_to_disk(
             "# Brief\n\nContent.\n",
             date(2026, 6, 10),
             1.23,
@@ -1066,7 +1141,8 @@ def test_write_brief_to_disk_error_counted_as_failure(tmp_path: Path) -> None:
             dry_run=False,
         )
 
-    assert exit_code == 0
+    assert result.written is True
+    assert result.run.exit_code == 1
     assert captured_kwargs.get("failures") == 1, (
         f"Expected 1 source failure for failed pipeline review, got: {captured_kwargs.get('failures')}"
     )
@@ -1087,28 +1163,26 @@ def test_write_brief_to_disk_error_counted_as_failure(tmp_path: Path) -> None:
 def test_empty_body_returns_empty_dicts_without_raising() -> None:
     """_post() returns ({}, {}) when the response body is empty.
 
-    implementation note: MCPSession now uses httpx.Client internally; patching at the
-    instance level via monkeypatching self._http.post.
+    The mock transport exercises the same streamed-response path used in production.
     """
-    from unittest.mock import MagicMock
-
     import httpx
 
-    from fieldkit.watch.morning_brief_mcp import MCPSession
+    from fieldkit.watch.mcp import MCPSession
 
-    session = MCPSession(base_url="http://127.0.0.1:8080/v0/groups/fieldkit-calendar/mcp")
+    session = MCPSession(base_url="https://gateway.example.com/calendar/mcp")
 
-    mock_resp = MagicMock(spec=httpx.Response)
-    mock_resp.raise_for_status = MagicMock()
-    mock_resp.headers = {}
-    mock_resp.text = ""  # empty body
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"", request=request)
 
-    session._http.post = MagicMock(return_value=mock_resp)  # type: ignore[method-assign]
-
-    result = session._post(
-        {"jsonrpc": "2.0", "method": "test", "params": {}},
-        session_id=None,
-    )
+    session._runner.run(session._http.aclose())
+    session._http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    try:
+        result = session._post(
+            {"jsonrpc": "2.0", "method": "test", "params": {}},
+            session_id=None,
+        )
+    finally:
+        session.close()
 
     assert result == ({}, {}), f"Expected ({{}}, {{}}) for empty body, got: {result!r}"
 
@@ -1255,8 +1329,8 @@ def test_word_twice_in_both_accounts_surfaces(tmp_path: Path, monkeypatch: pytes
 # ── TestParseCalendarResultWarningLog (flattened) ─────────────────────────────────────────────
 
 
-def test_non_json_logs_warning_with_300_char_sample(caplog: pytest.LogCaptureFixture) -> None:
-    """When _parse_calendar_result receives non-JSON, WARNING is logged with ≤300 chars."""
+def test_non_json_logs_only_bounded_shape_metadata(caplog: pytest.LogCaptureFixture) -> None:
+    """Unsupported provider text is not copied into diagnostics."""
     import logging
 
     from fieldkit.watch.morning_brief_collect import _parse_calendar_result
@@ -1273,21 +1347,19 @@ def test_non_json_logs_warning_with_300_char_sample(caplog: pytest.LogCaptureFix
     warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
     assert warning_records, "Expected at least one WARNING log record"
     log_msg = warning_records[0].getMessage()
-    assert "non-JSON response" in log_msg, f"Expected 'non-JSON response' in log: {log_msg!r}"
-    # The logged sample must be at most 300 chars (the format string embeds the truncated value)
-    # Extract the sample portion after the prefix
-    sample_start = log_msg.find("first 300 chars:")
-    if sample_start != -1:
-        sample = log_msg[sample_start + len("first 300 chars:") :].strip()
-        assert len(sample) <= 300, f"Log sample exceeds 300 chars: {len(sample)}"
+    assert "unsupported text response" in log_msg
+    assert str(len(long_response)) in log_msg
+    assert long_response[:40] not in log_msg
 
 
-def test_non_json_raises_runtime_error_with_operator_guidance() -> None:
-    """RuntimeError message directs operator to check logs."""
+def test_non_json_raises_payload_free_runtime_error() -> None:
+    """RuntimeError does not direct operators to raw provider content."""
     from fieldkit.watch.morning_brief_collect import _parse_calendar_result
 
-    with pytest.raises(RuntimeError, match="check logs"):
+    with pytest.raises(RuntimeError, match="non-JSON text response") as exc_info:
         _parse_calendar_result("not valid json")
+
+    assert "not valid json" not in str(exc_info.value)
 
 
 # ===========================================================================
@@ -1417,7 +1489,7 @@ def test_render_project_health_section_returns_empty_on_no_projects(tmp_path: Pa
 @pytest.mark.unit
 def test_call_tool_raises_when_not_initialized() -> None:
     """MCPSession.call_tool raises RuntimeError when initialize() has not been called."""
-    from fieldkit.watch.morning_brief_mcp import MCPSession
+    from fieldkit.watch.mcp import MCPSession
 
     session = MCPSession("http://127.0.0.1:9999/mcp")
     # No initialize() call — _session_id is None
@@ -1509,7 +1581,7 @@ def test_event_with_external_attendee_still_included() -> None:
 
     event = {
         "summary": "Deal review",
-        "attendees": [{"email": "buyer@acme-corp.com"}],
+        "attendees": [{"email": "buyer@acme-corp.example.com"}],
         "start": {"dateTime": "2026-06-24T14:00:00Z"},
         "end": {"dateTime": "2026-06-24T14:30:00Z"},
     }
@@ -1522,7 +1594,7 @@ def test_event_with_external_attendee_still_included() -> None:
     )
     assert len(result) == 1
     assert result[0]["title"] == "Deal review"
-    assert "buyer@acme-corp.com" in result[0]["external_attendees"]
+    assert "buyer@acme-corp.example.com" in result[0]["external_attendees"]
 
 
 # ===========================================================================
@@ -1551,7 +1623,7 @@ def test_source_not_ready_not_counted_in_source_failures(tmp_path: Path) -> None
     # Simulate: calendar healthy (list), backstory healthy (list),
     # pursuit stalls healthy (list), slack/contract/draft not ready (SourceNotReady),
     # pipeline review healthy (empty list sentinel).
-    sources: list = [
+    sources: list[list[str] | str | SourceNotReady | list[dict[str, Any]] | list[dict[str, str]]] = [
         [],  # calendar
         [],  # backstory
         [],  # pursuit stalls
@@ -1561,10 +1633,11 @@ def test_source_not_ready_not_counted_in_source_failures(tmp_path: Path) -> None
         [],  # pipeline review (healthy sentinel)
     ]
 
-    captured_kwargs: dict = {}
+    captured_kwargs: dict[str, object] = {}
 
-    def _fake_write_run_status(**kwargs: object) -> None:
+    def _fake_write_run_status(**kwargs: object) -> str:
         captured_kwargs.update(kwargs)
+        return "written"
 
     watchers_dir = tmp_path / "watchers"
     watchers_dir.mkdir()
@@ -1573,7 +1646,7 @@ def test_source_not_ready_not_counted_in_source_failures(tmp_path: Path) -> None
         _patch("fieldkit.watch.morning_brief.get_watchers_dir", return_value=watchers_dir),
         _patch("fieldkit.watch.morning_brief.write_run_status", side_effect=_fake_write_run_status),
     ):
-        exit_code = _write_brief_to_disk(
+        result = _write_brief_to_disk(
             "# Brief\n\nContent.\n",
             date(2026, 6, 24),
             0.5,
@@ -1581,7 +1654,8 @@ def test_source_not_ready_not_counted_in_source_failures(tmp_path: Path) -> None
             dry_run=False,
         )
 
-    assert exit_code == 0
+    assert result.written is True
+    assert result.run.exit_code == 0
     assert captured_kwargs.get("failures") == 0, (
         f"implementation note: SourceNotReady must not inflate source_failures, got: {captured_kwargs.get('failures')}"
     )
@@ -1596,7 +1670,7 @@ def test_source_not_ready_excluded_from_degraded_sources() -> None:
     from fieldkit.watch._morning_brief_types import SourceNotReady
     from fieldkit.watch.morning_brief_render import _collect_degraded_sources
 
-    sources = {
+    sources: dict[str, list[Any] | SourceNotReady | str] = {
         "calendar": [],
         "backstory": [],
         "slack": SourceNotReady("_No Slack thread data yet._"),
@@ -1690,7 +1764,7 @@ def test_fresh_install_no_optional_files_outcome_is_ok(tmp_path: Path) -> None:
     assert isinstance(draft_result, SourceNotReady)
 
     # Simulate _write_brief_to_disk with all healthy + 3 SourceNotReady optional sources
-    sources: list = [
+    sources: list[list[str] | str | SourceNotReady | list[dict[str, Any]] | list[dict[str, str]]] = [
         [],  # calendar (healthy)
         [],  # backstory (healthy)
         [],  # pursuit stalls (healthy)
@@ -1700,16 +1774,17 @@ def test_fresh_install_no_optional_files_outcome_is_ok(tmp_path: Path) -> None:
         [],  # pipeline review (healthy sentinel)
     ]
 
-    captured_kwargs: dict = {}
+    captured_kwargs: dict[str, object] = {}
 
-    def _fake_write_run_status(**kwargs: object) -> None:
+    def _fake_write_run_status(**kwargs: object) -> str:
         captured_kwargs.update(kwargs)
+        return "written"
 
     with (
         _patch("fieldkit.watch.morning_brief.get_watchers_dir", return_value=watchers_dir),
         _patch("fieldkit.watch.morning_brief.write_run_status", side_effect=_fake_write_run_status),
     ):
-        exit_code = _write_brief_to_disk(
+        result = _write_brief_to_disk(
             "# Brief\n\nContent.\n",
             target_date,
             0.3,
@@ -1717,7 +1792,8 @@ def test_fresh_install_no_optional_files_outcome_is_ok(tmp_path: Path) -> None:
             dry_run=False,
         )
 
-    assert exit_code == 0
+    assert result.written is True
+    assert result.run.exit_code == 0
     assert captured_kwargs.get("failures") == 0, (
         f"implementation note: fresh install must have 0 source_failures, got: {captured_kwargs.get('failures')}"
     )

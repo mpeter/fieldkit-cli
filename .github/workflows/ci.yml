@@ -20,8 +20,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Detect whether any file outside the doc-only globs changed. The globs mirror
-  # the former paths-ignore list. Output `code=true` means run the real checks.
+  # Share the local gate's explicit prose policy; shipped Markdown is code.
+  # Output `code=true` means run the real checks, including on inventory failure.
   changes:
     name: Detect code changes
     runs-on: ubuntu-latest
@@ -36,18 +36,9 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          code=false
-          while IFS= read -r f; do
-            [ -z "$f" ] && continue
-            case "$f" in
-              docs/documentation-contract.json|docs/release-readiness/*.json) code=true ;;
-              docs/*|openspec/*|.opencode/*|.specify/*|*.md) ;;
-              *) code=true ;;
-            esac
-          done < <(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
-          echo "code=$code" >> "$GITHUB_OUTPUT"
-          echo "Non-doc files changed: $code"
+        run: >-
+          python3 scripts/semantic_python_changes.py --base "$BASE_SHA"
+          --candidate "$HEAD_SHA" >> "$GITHUB_OUTPUT"
 
   # Scan every commit message in the PR range for PII. Runs even on
   # doc-only PRs — a real account slug in a commit message lands on main
@@ -106,7 +97,7 @@ jobs:
           "$binary" version
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
       - name: Enforce full public-tree safety
-        run: make public-tree-safety
+        run: uv run python scripts/check_public_tree_safety.py --repo .
       - name: Enforce public identity policy
         run: python3 scripts/check_public_identity.py
       - name: Install dependencies
@@ -115,7 +106,11 @@ jobs:
         if: needs.changes.outputs.code == 'true'
         run: uv run python scripts/check_workflow_security.py
       - name: Validate public documentation
-        run: make docs-site
+        run: |
+          uv run python scripts/check_documentation_contract.py
+          uv run python -m scripts.check_documentation_examples
+          uv run mkdocs build --strict --site-dir build/site
+          uv run python scripts/check_public_docs.py build/site
       - name: Enforce supply-chain policy
         if: needs.changes.outputs.code == 'true'
         run: uv run python scripts/check_supply_chain_policy.py policy
@@ -146,7 +141,7 @@ jobs:
         run: uv run python scripts/check_compatibility_policy.py
       - name: Run audit standards check
         if: needs.changes.outputs.code == 'true'
-        run: make audit-check
+        run: uv run python scripts/audit_check.py
       - name: Click parameter check
         if: needs.changes.outputs.code == 'true'
         run: uv run python scripts/check_click_params.py src/fieldkit/commands/
@@ -173,8 +168,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          # Tach compares the explicit PR base and head revisions below.
+          # Execute the exact revision named by the retained test evidence.
           fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
       - if: needs.changes.outputs.code == 'true'
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
         with:
@@ -200,26 +196,33 @@ jobs:
         if: needs.changes.outputs.code == 'true'
         run: uv sync --locked --all-extras --dev
       - name: Run pytest
+        id: pytest
         if: needs.changes.outputs.code == 'true'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           mkdir -p reports
-          uv run pytest tests/ --tach --tach-base "$BASE_SHA" --tach-head "$HEAD_SHA" -q -n 0 \
-            --junitxml=reports/pytest.xml
+          uv run python scripts/quality_gate.py run --tier impact \
+            --base "$BASE_SHA" --head "$HEAD_SHA" --workers 4 \
+            --github-output reports/pytest-github-output \
+            --selection-report reports/test-selection.json --junitxml reports/pytest.xml \
+            --receipt reports/quality-impact.json
+          cat reports/pytest-github-output >> "$GITHUB_OUTPUT"
       - name: Summarize bounded pytest evidence
         if: always() && needs.changes.outputs.code == 'true'
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          TEST_SCOPE: ${{ steps.pytest.outputs.test_scope }}
         run: >-
           uv run python scripts/ci_evidence.py junit
           --input reports/pytest.xml
           --output reports/pytest-summary.json
           --step-summary "$GITHUB_STEP_SUMMARY"
           --source-revision "$HEAD_SHA"
-          --scope tach-selected
-          --command 'uv run pytest tests/ --tach --tach-base BASE_SHA --tach-head HEAD_SHA -q -n 0'
+          --scope "$TEST_SCOPE"
+          --selection-report reports/test-selection.json
+          --command 'uv run python scripts/run_impact_tests.py --base BASE_SHA --head HEAD_SHA --github-output GITHUB_OUTPUT --selection-report reports/test-selection.json --junitxml=reports/pytest.xml'
       - name: Upload bounded pytest evidence
         if: always() && needs.changes.outputs.code == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
@@ -228,16 +231,29 @@ jobs:
           path: |
             reports/pytest.xml
             reports/pytest-summary.json
+            reports/test-selection.json
           if-no-files-found: error
           retention-days: 14
-      - name: Behavioral eval smoke test (NO_LLM=1)
+      - name: Upload bounded quality-controller receipt
+        if: always() && needs.changes.outputs.code == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: quality-impact-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+          path: reports/quality-impact.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Behavioral eval smoke test (FIELDKIT_NO_LLM=1)
         if: needs.changes.outputs.code == 'true'
-        run: NO_LLM=1 uv run fieldkit skill eval --behavioral --all
+        run: FIELDKIT_NO_LLM=1 uv run fieldkit skill eval --behavioral --all
 
   skillsaw:
     name: Skillsaw (skill lint)
     needs: changes
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - if: needs.changes.outputs.code == 'true'
@@ -249,6 +265,9 @@ jobs:
       - name: Install dependencies
         if: needs.changes.outputs.code == 'true'
         run: uv sync --locked --all-extras --dev
+      - name: Verify native process containment
+        if: needs.changes.outputs.code == 'true'
+        run: uv run pytest tests/test_process_supervision.py tests/test_check_skillsaw.py -q -n 0
       - name: Run skillsaw (warn gate + grade density ratchet)
         if: needs.changes.outputs.code == 'true'
         run: uv run python scripts/check_skillsaw.py

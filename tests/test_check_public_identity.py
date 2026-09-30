@@ -81,6 +81,107 @@ def test_scan_documents_uses_explicit_subjects_outside_legacy_scope(tmp_path: Pa
     assert report.findings == (check_public_identity.Finding("TEST001", "organization_identity", "README.md", 1),)
 
 
+@pytest.mark.parametrize(
+    "schema_name",
+    ["release-trust-selection.schema.json", "release-controller-receipt.schema.json"],
+)
+@pytest.mark.parametrize("product_name", ["fieldkit", "Field" + "kit"])
+def test_live_policy_discovers_release_schema_titles(tmp_path: Path, schema_name: str, product_name: str) -> None:
+    """Discovery scans schema titles, not the policy's intentional forbidden-name regex."""
+    repo_root = Path(__file__).parents[1]
+    policy = check_public_identity.load_policy(repo_root)
+    rule = next(rule for rule in policy.rules if rule.rule_id == "PUBID008")
+    policy_path = tmp_path / check_public_identity.POLICY_PATH
+    policy_path.parent.mkdir(parents=True)
+    policy_text = json.dumps(
+        {
+            "schema_version": policy.schema_version,
+            "scope": policy.scope,
+            "rules": [{"id": rule.rule_id, "category": rule.category, "pattern": rule.pattern.pattern}],
+            "allowances": [],
+        },
+        indent=2,
+    )
+    policy_path.write_text(policy_text, encoding="utf-8")
+    schema_path = f"docs/release-readiness/{schema_name}"
+    schema_text = (repo_root / schema_path).read_text(encoding="utf-8")
+    assert '"title": "fieldkit ' in schema_text
+    (tmp_path / schema_path).write_text(
+        schema_text.replace('"title": "fieldkit ', f'"title": "{product_name} ', 1), encoding="utf-8"
+    )
+    _tracked_repo(tmp_path)
+
+    report = check_public_identity.validate(tmp_path)
+
+    assert report.ok is (product_name == "fieldkit")
+    assert report.scanned_files == 1
+    assert rule.pattern.search(policy_text) is not None
+    assert report.classified_matches == 0
+    assert report.findings == (
+        ()
+        if product_name == "fieldkit"
+        else (check_public_identity.Finding("PUBID008", "noncanonical_project_name", schema_path, 4),)
+    )
+
+
+@pytest.mark.parametrize(
+    "schema_name",
+    ["release-trust-selection.schema.json", "release-controller-receipt.schema.json"],
+)
+@pytest.mark.parametrize(
+    "variant", ["canonical", "other_owner", "other_repository", "other_schema_url", "operator", "other_path"]
+)
+def test_live_policy_limits_release_schema_repository_allowances(schema_name: str, variant: str) -> None:
+    """Canonical identifiers do not exempt unrelated identities or another file."""
+    repo_root = Path(__file__).parents[1]
+    policy = check_public_identity.load_policy(repo_root)
+    schema_path = f"docs/release-readiness/{schema_name}"
+    schema_text = (repo_root / schema_path).read_text(encoding="utf-8")
+    documents = [check_public_identity.Document(schema_path, schema_path, schema_text)]
+    if variant == "other_path":
+        documents.append(check_public_identity.Document("README.md", "README.md", schema_text))
+    elif variant == "other_schema_url":
+        documents[0] = check_public_identity.Document(
+            schema_path, schema_path, schema_text.replace(f'{schema_name}"', f'{schema_name}-other"', 1)
+        )
+    elif variant != "canonical":
+        replacement = {
+            "other_owner": "mpeter-other/fieldkit-cli",
+            "other_repository": "mpeter/fieldkit-cli-other",
+            "operator": "mpeter",
+        }[variant]
+        documents[0] = check_public_identity.Document(
+            schema_path, schema_path, schema_text.replace("mpeter/fieldkit-cli", replacement)
+        )
+    report = check_public_identity.scan_documents(
+        check_public_identity.Policy(
+            schema_version=policy.schema_version,
+            scope=policy.scope,
+            rules=tuple(rule for rule in policy.rules if rule.rule_id == "PUBID001"),
+            allowances=tuple(allowance for allowance in policy.allowances if allowance.path == schema_path),
+        ),
+        documents,
+        frozenset(document.policy_path for document in documents),
+    )
+
+    assert report.ok is (variant == "canonical")
+    expected_count = 2 if schema_name == "release-trust-selection.schema.json" else 1
+    if variant == "canonical":
+        assert report.classified_matches == expected_count
+        assert report.findings == ()
+    else:
+        expected_path = "README.md" if variant == "other_path" else schema_path
+        expected_lines = (3, 310) if expected_count == 2 and variant != "other_schema_url" else (3,)
+        assert report.findings == tuple(
+            check_public_identity.Finding("PUBID001", "operator_identity", expected_path, line)
+            for line in expected_lines
+        )
+        expected_classified = expected_count if variant == "other_path" else 0
+        if variant == "other_schema_url":
+            expected_classified = expected_count - 1
+        assert report.classified_matches == expected_classified
+
+
 def test_exact_path_allowance_classifies_match(tmp_path: Path) -> None:
     _write_policy(
         tmp_path,

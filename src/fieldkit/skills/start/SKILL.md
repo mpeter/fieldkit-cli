@@ -1,151 +1,68 @@
 ---
 name: start
 description: >
-  You're setting up a fieldkit workspace for the first time, or need to reinitialise it after
-  a fresh install. Creates TASKS.md, loads account and pursuit context, and bootstraps working
-  memory so the session is fully primed from the first request.
-  Trigger with "set this up", "first time running", "bootstrap my workspace", "I'm new to this",
-  "fresh install", "initialise fieldkit", "start from scratch", "set up fieldkit",
-  "initialize my workspace", "get me started".
+  Help a new user initialize a fieldkit workspace, confirm the offline first
+  success, and add account context only when they choose to. Distinguish the
+  installed command from optional task, memory, and live integration workflows.
 metadata:
   opencode/slash: "true"
   category: ops
 ---
 
-# Start Command
+# Start using fieldkit
 
-Initialize the task and memory systems for this workspace.
+Help the operator get a usable local workspace, then show one working command.
+This skill is guidance; the `fieldkit init` CLI performs initialization. Do not
+assume the user has a repository checkout, a sales account, a Google credential,
+Salesforce access, an agent memory system, or a particular task file.
 
-## Gotchas
+## Confirm installation and workspace
 
-- **Stale vault signals** — run `/brief` first if data hasn't been refreshed today
-- **Trigger overlap with adjacent skills** — confirm you need this skill and not a closely named one
+Run `fieldkit --version` and `fieldkit init --help` through the installed
+command. If either fails, report the failure and use the public installation
+guide; do not claim a workspace was created.
 
-## Constraints
+Ask where the user wants their fieldkit workspace. Explain that it is separate
+from the package/code root and holds their configuration and account data.
+For an offline start, propose `fieldkit init --minimal PATH` with the user's
+chosen absolute path. This creates a generic workspace, an empty account
+registry, runtime-data directories, and user configuration. It does **not**
+create accounts, `TASKS.md`, lesson memory, or credentials. Show the target
+and get approval before initializing; an existing configuration may be
+updated. If the operator wants prompted account setup instead, offer
+`fieldkit init` and follow the wizard without inventing answers.
 
-- **Never write to account or pursuit files without explicit confirmation**
-- **Always surface generated output for review before any external send**
+After initialization, run `fieldkit skill list` as the offline first success.
+Confirm the workspace from the saved configuration and report what was
+actually created. If either command fails, keep status partial and explain
+the next corrective step. `fieldkit doctor` checks configured services;
+an optional unconfigured integration is not a prerequisite for using the
+base installation.
 
-## Steps
+## Add context when requested
 
-### 1. Check What Exists
+If the operator wants account work, inspect the configured workspace's
+`config/accounts.yaml` and `accounts/` directory. Ask before creating an
+account or importing customer material. Read only the account or pursuit
+relevant to the current request; do not bulk-load private files into a
+session. Distinguish source dates from fresh live data and treat historical
+local qualification scores as non-current.
 
-Check the working directory for:
+`TASKS.md` and `memory/system/lessons-learned.md` are optional workspace
+conventions, not init outputs. If requested, propose exact destinations and
+content, then obtain approval before writing. Use the
+[task-management skill](../task-management/SKILL.md) for task format and
+[task-sync](../task-sync/SKILL.md) only for separately approved Google Tasks
+reconciliation. Do not create or modify agent instruction files as working
+memory.
 
-- `TASKS.md` — task list
-- `config/identity.yaml` — operator identity (role, company, accounts, motions)
-- `config/accounts.yaml` — account registry
-- `accounts/*/account.md` — account context files (Acme Corp, GlobalPay Inc, Midwest Insurance)
-- `accounts/*/pursuits/*.md` — active pursuits
-- `memory/system/lessons-learned.md` — lessons and observations
+Gmail, Calendar, Salesforce, and other live enrichment are separate,
+credentialed workflows. Check the intended account and authorization before
+using them. Never run `fieldkit gmail sync` simply because the workspace is
+new. If offline or unavailable, say so and continue with the local first
+success; do not describe cached context as a live refresh.
 
-### 2. Create What's Missing
-
-- **No TASKS.md?** Create with standard template (see task-management skill)
-- **No memory/system/lessons-learned.md?** Create with format: `## YYYY-MM-DD — <account> — <topic>` then 3-5 bullet observations
-
-### 3. Orient the User (If Already Initialized)
-
-If TASKS.md and memory exist:
-
-```
-System ready. Your tasks and memory are loaded.
-- `/brief`'s update op (`ops/update.md`) to sync tasks and check memory
-- `/brief` --comprehensive for a deep scan across Gmail, Calendar, and Backstory
-```
-
-Stop here — no need to re-bootstrap.
-
-### 4. Load Account Context (First Run Only)
-
-Groups needed for this step: **fieldkit-sales** (Backstory in Step 6). Account and pursuit files are read directly from disk (native file reads).
-
-Read config files directly (YAML):
-1. `config/identity.yaml` — operator identity, role, company, engagement motions
-2. `config/accounts.yaml` — account list, domains, team members
-
-Read account files directly:
-3. For each account: read `accounts/<account>/account.md`
-   — stakeholder maps and org charts; any local MEDDPICC values are historical
-   
-   Also check for dossier: `accounts/<account>/dossier/dossier.md`
-   If present and recent (< 14 days), use it to seed context — contracts, email intelligence, strategic priorities are pre-synthesized.
-
-Enumerate pursuits with a glob:
-4. `ls accounts/*/pursuits/*.md`
-   For each path, read the file — note stages, close dates, Salesforce linkage,
-   and current next steps; never interpret historical local scores as current
-
-Build a working picture: which accounts are active, what pursuits are in play, who the key stakeholders are.
-
-### 5. Bootstrap Task List
-
-Ask the user about their current task list. For each task, decode shorthand using loaded account context:
-
-```
-Task: "Send PSR to Todd re: Phoenix blockers"
-
-I see terms I want to confirm:
-1. PSR — What does this stand for?
-2. Todd — <contact-name> (VP Engineering, Acme Corp) from stakeholder map? Or someone else?
-3. Phoenix — The Platform Modernization pursuit at Acme Corp? Or different?
-```
-
-Skip terms already covered in account.md files, stakeholder maps, or accounts.yaml. Use what's already in the system before asking.
-
-### 6. Enrich from Live Sources
-
-Pull live context from available tools. This is not optional — it's how the system gets current.
-
-**Backstory (People.ai):** For each account in `config/accounts.yaml`:
-- `find_account` → get `peopleai_account_id`
-- `get_account_status` → risks, next steps, trending topics
-- `get_recent_account_activity` → last 30 days of engagement
-
-**Gmail cache pipeline:** Run a sync if not recently run:
-```bash
-fieldkit gmail sync
-fieldkit gmail account-tags
-```
-
-**Pursuit files:** Cross-reference pursuit frontmatter against Backstory signals:
-- Stage mismatches (pursuit says "proposal" but Backstory shows no recent activity)
-- Qualification evidence needs already documented in current next steps or meeting notes
-- Close dates within 30 days
-
-Present findings grouped:
-
-- **Ready to add** (high confidence) — offer to add to TASKS.md or memory
-- **Needs clarification** — ask the user
-- **Low signal / unclear** — note for later
-
-### 7. Write Memory
-
-From everything gathered, update:
-
-- `memory/system/lessons-learned.md` — append a dated bootstrap entry with key context discovered
-- Auto-memory files at `~/.claude/projects/.../memory/` — save user profile, preferences, decoded shorthand
-
-Do NOT modify `CLAUDE.md` — that is the operating manual, not working memory.
-
-**Memory guardrail:** Backstory-derived signals written to `memory/system/lessons-learned.md` must be labeled `[Backstory — unverified]`. Do not present Backstory synthesis as confirmed fact in memory entries. Only write to memory what the user has explicitly confirmed or what comes from local files (account.md, pursuit frontmatter, meeting notes).
-
-### 8. Report
-
-```
-Workspace ready:
-- Identity: <role> @ <company> — <N> accounts (<list>)
-- Tasks: TASKS.md (X items across Today/Active/Waiting On)
-- Accounts: 3 active (Acme Corp, GlobalPay Inc, Midwest Insurance)
-- Pursuits: X active across accounts (X in proposal+, X pre-pipeline)
-- Engagement: [any decay alerts or stale accounts from Backstory]
-- Memory: lessons-learned.md initialized
-```
-
-## Reference
-
-For comprehensive scan workflow and detailed bootstrap steps:
-
-```
-Read skills/start/bootstrap-details.md
-```
+Report version, workspace path, offline skill-discovery result, and each
+optional area as configured, skipped, pending, or unavailable. Link the user
+to the next task they chose instead of treating a missing integration as a
+failed bootstrap.

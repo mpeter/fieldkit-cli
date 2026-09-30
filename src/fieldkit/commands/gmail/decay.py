@@ -1,92 +1,114 @@
-#!/usr/bin/env python3
-"""
-Relationship decay report — last email contact per person, per account.
+"""CLI adapter for bounded relationship-decay reads."""
 
-Usage:
-    python tools/gmail-cache/decay.py global-pay
-    python tools/gmail-cache/decay.py acme-bank --days 90
-    python tools/gmail-cache/decay.py shield-ins --all
+from __future__ import annotations
 
-Shows every external contact in the account's tagged threads, sorted by
-days since last contact. Highlights contacts who have gone quiet.
-
-Domain logic has been extracted to fieldkit.gmail.decay_domain (historic regression).
-"""
+import json
+from dataclasses import asdict
+from pathlib import Path
 
 import click
 
-from fieldkit.cli_exit import EXIT_DATA
-from fieldkit.gmail.decay_domain import COLD_DAYS, connect, decay_report
+from fieldkit.config import get_accounts_config
+from fieldkit.errors import GmailSyncPartialError
+from fieldkit.gmail.decay_domain import COLD_DAYS, DecayQuery, query_decay, render_decay_text
 from fieldkit.gmail.discover import get_gmail_db_path
-from fieldkit.gmail.exceptions import GmailDbNotFoundError, GmailIndexMissingError
+from fieldkit.gmail.query_domain import connect
+from fieldkit.gmail.query_support import DEFAULT_QUERY_LIMIT, MAX_QUERY_LIMIT, configured_account_scope
 
 
 @click.command(name="decay")
-@click.argument("account", required=False, default=None)
-@click.option("--account", "account_opt", "-a", default=None, help="Account slug (preferred over positional argument).")
+@click.option("--account", "account", "-a", required=True, metavar="SLUG", help="Configured account slug.")
 @click.option(
-    "--days", type=int, default=COLD_DAYS, help=f"Days-silent threshold to flag as stale (default: {COLD_DAYS})"
+    "--days",
+    type=click.IntRange(min=0, max=36_500),
+    default=COLD_DAYS,
+    show_default=True,
+    help="Days-silent threshold to flag as stale.",
 )
-@click.option("--all", "show_all", is_flag=True, help="Show all contacts, not just stale ones")
-@click.option("--domain", default=None, help="Restrict to contacts at this domain (e.g. globalpay.com)")
-@click.option("--min-messages", type=int, default=1, help="Only show contacts with at least N messages (default: 1)")
-@click.option("--limit", type=int, default=None, help="Cap results to N contacts (default: unlimited)")
+@click.option("--all", "show_all", is_flag=True, help="Show recent and stale contacts in selected account threads.")
+@click.option(
+    "--domain",
+    default=None,
+    help="Restrict contacts to one email domain, for example acme-corp.example.com.",
+)
+@click.option(
+    "--min-messages",
+    type=click.IntRange(min=0),
+    default=1,
+    show_default=True,
+    help="Minimum account-thread messages per contact.",
+)
+@click.option(
+    "--limit",
+    type=click.IntRange(min=1, max=MAX_QUERY_LIMIT),
+    default=DEFAULT_QUERY_LIMIT,
+    show_default=True,
+    help="Maximum contacts to return.",
+)
 @click.option(
     "--max-age-days",
     default=365,
-    type=int,
+    type=click.IntRange(min=0, max=36_500),
     show_default=True,
-    help="Exclude contacts silent for more than N days (0 = no cutoff).",
+    help="Exclude contacts silent longer than this (0 disables the cutoff).",
 )
-@click.option("--db", default=lambda: str(get_gmail_db_path()), help="Path to gmail.db", show_default=True)
+@click.option(
+    "--db",
+    default=lambda: str(get_gmail_db_path()),
+    help="Path to the managed Gmail cache.",
+    show_default="<data/gmail.db>",
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit the decay report as JSON.")
 def cli(
-    account: str | None,
-    account_opt: str | None,
+    account: str,
     days: int,
     show_all: bool,
     domain: str | None,
     min_messages: int,
-    limit: int | None,
+    limit: int,
     max_age_days: int,
     db: str,
     as_json: bool,
 ) -> None:
-    """Relationship decay report — last contact per external person per account."""
-    from pathlib import Path
-
-    # implementation change: --account flag preferred; positional ACCOUNT is deprecated
-    resolved_account = account_opt or account
-    if resolved_account is None:
-        raise click.UsageError("Must provide an account name (positional or --account/-a).")
-    account = resolved_account
-    db_path = Path(db).resolve()
-    if not db_path.name.endswith(".db"):
-        raise click.UsageError(f"--db must point to a .db file, got: {db_path}")
-    try:
-        conn = connect(db_path)
-    except GmailDbNotFoundError as exc:
-        click.echo(f"Error: Gmail database not found: {db_path}. Run 'fieldkit gmail sync' first.", err=True)
-        raise SystemExit(EXIT_DATA) from exc
-    # Convert 0 → None so the library API receives the canonical "no cutoff" sentinel.
-    resolved_max_age: int | None = None if max_age_days == 0 else max_age_days
-    try:
-        decay_report(
-            conn,
-            account=account,
-            days_threshold=days,
-            show_all=show_all,
-            domain_filter=domain,
-            min_messages=min_messages,
-            limit=limit,
-            max_age_days=resolved_max_age,
-            as_json=as_json,
+    """Report contact recency from the ready published Gmail cache."""
+    scope = configured_account_scope(get_accounts_config(strict=True), account)
+    with connect(Path(db)) as connection:
+        report = query_decay(
+            connection,
+            scope,
+            DecayQuery(
+                days_threshold=days,
+                show_all=show_all,
+                domain_filter=domain,
+                min_messages=min_messages,
+                limit=limit,
+                max_age_days=None if max_age_days == 0 else max_age_days,
+            ),
         )
-    except GmailIndexMissingError as exc:
-        raise click.ClickException(str(exc)) from exc
-    finally:
-        conn.close()
-
-
-if __name__ == "__main__":
-    cli()
+    if as_json:
+        click.echo(
+            json.dumps(
+                {
+                    "account": report.account,
+                    "as_of": report.as_of,
+                    "contacts": [asdict(contact) for contact in report.contacts],
+                    "count": len(report.contacts),
+                    "truncated": report.truncated,
+                    "scan_truncated": report.scan_truncated,
+                    "scanned_rows": report.scanned_rows,
+                    "filters": {
+                        "days": days,
+                        "show_all": show_all,
+                        "domain": domain,
+                        "min_messages": min_messages,
+                        "limit": limit,
+                        "max_age_days": max_age_days,
+                    },
+                },
+                sort_keys=True,
+            )
+        )
+    else:
+        click.echo(render_decay_text(report))
+    if report.scan_truncated:
+        raise GmailSyncPartialError("Gmail decay scan reached its bounded work budget")

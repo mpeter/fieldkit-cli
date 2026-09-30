@@ -4,7 +4,7 @@ Reads the three stable input surfaces (watcher run-status JSON, alert
 files, TASKS.md) and normalizes them into ``AttentionItem``s. A cursor
 in ``<fieldkit_data>/companion-cursor.json`` makes repeated polls
 deliver each item exactly once; ``--all`` bypasses it. Layer-1 only:
-fully deterministic, no LLM, testable under ``NO_LLM=1``.
+fully deterministic, no LLM, testable under ``FIELDKIT_NO_LLM=1``.
 """
 
 import hashlib

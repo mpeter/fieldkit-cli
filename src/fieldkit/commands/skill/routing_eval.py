@@ -5,7 +5,7 @@ import json
 import click
 
 from fieldkit.commands.skill._runner import _load_all_skills
-from fieldkit.errors import LLMError
+from fieldkit.errors import RoutingInputError
 from fieldkit.skill.routing import RoutingResult, SkillCandidate, judge_routing_case, load_routing_cases
 
 
@@ -16,7 +16,7 @@ def _load_candidates() -> tuple[SkillCandidate, ...]:
         name = raw_skill.get("name")
         description = raw_skill.get("description")
         if not isinstance(name, str) or not isinstance(description, str):
-            raise LLMError("Bundled skill metadata has an invalid name or description", category="general")
+            raise RoutingInputError("Bundled skill metadata has an invalid name or description")
         candidates.append(SkillCandidate(name=name, description=description))
     return tuple(candidates)
 
@@ -38,8 +38,12 @@ def _render_human(results: tuple[RoutingResult, ...]) -> None:
 
 def run_routing_eval(*, json_output: bool, model: str | None) -> int:
     """Run every routing fixture against the complete bundled skill corpus."""
-    candidates = _load_candidates()
-    cases = load_routing_cases(candidates)
+    try:
+        candidates = _load_candidates()
+        cases = load_routing_cases(candidates)
+    except RoutingInputError as exc:
+        click.echo(str(exc), err=True)
+        return 3
     results = tuple(judge_routing_case(case, candidates, model) for case in cases)
     failed = sum(not result.passed for result in results)
     if json_output:

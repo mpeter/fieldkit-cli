@@ -175,7 +175,7 @@ def test_render_project_health_section_exception_returns_empty() -> None:
 def test_render_project_health_section_import_error_returns_empty() -> None:
     """ImportError (missing projects_health module) returns []."""
     # Patch the correct import path used by the render module and isolate
-    # get_fieldkit_home so the real config (data_repo alias) doesn't resolve.
+    # get_fieldkit_home so the real workspace configuration is not consulted.
     with (
         patch.dict("sys.modules", {"fieldkit.pursuit.projects": None}),
         patch(
@@ -434,7 +434,7 @@ def test_strip_alert_headings_does_not_strip_h2_headings_that_are_not_dates() ->
 
 def test_render_champion_section_none_shows_unavail_message() -> None:
     """historic regression: _render_champion_section(None) shows gmail unavailable message."""
-    from fieldkit.commands.pipeline.render import _render_champion_section
+    from fieldkit.pipeline.render import _render_champion_section
 
     result = _render_champion_section(None)
     assert "unavailable" in result.lower()

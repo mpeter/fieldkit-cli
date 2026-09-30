@@ -1,10 +1,10 @@
-"""tests/test_llm.py — Unit tests for lib/llm.py (all 8 behaviours).
+"""Unit tests for fieldkit.llm with isolated provider modules.
 
-All tests run under NO_LLM=1 by default in CI; the mock strategy uses
+All tests run under FIELDKIT_NO_LLM=1 by default in CI; the mock strategy uses
 monkeypatch.setitem(sys.modules, "litellm", mock_litellm) so that tests
 exercising the litellm path can inject a fake provider without a real API key.
 
-The NO_LLM stub test deliberately avoids importing litellm at all — verified
+The FIELDKIT_NO_LLM stub test deliberately avoids importing litellm at all — verified
 by asserting litellm is absent from sys.modules after the call.
 """
 
@@ -47,15 +47,11 @@ def _make_mock_litellm(
     class RateLimitError(Exception):
         pass
 
-    # Attach directly on litellm (legacy path) and on litellm.exceptions
-    # (the path used by lib/llm.py via `from litellm.exceptions import ...`).
-    mod.AuthenticationError = AuthenticationError
-    mod.RateLimitError = RateLimitError
-
     exceptions_mod = types.ModuleType("litellm.exceptions")
-    exceptions_mod.AuthenticationError = AuthenticationError
-    exceptions_mod.RateLimitError = RateLimitError
-    mod.exceptions = exceptions_mod
+    exceptions_mod.__dict__.update(AuthenticationError=AuthenticationError, RateLimitError=RateLimitError)
+    mod.__dict__.update(
+        AuthenticationError=AuthenticationError, RateLimitError=RateLimitError, exceptions=exceptions_mod
+    )
 
     def _completion(model, messages, **kwargs):
         if auth_error:
@@ -73,12 +69,12 @@ def _make_mock_litellm(
         response.choices = [choice]
         return response
 
-    mod.completion = _completion
+    mod.__dict__["completion"] = _completion
     return mod
 
 
 def _reload_llm(monkeypatch, mock_litellm: types.ModuleType | None = None, env: dict | None = None):
-    """Reload lib.llm with a controlled sys.modules and optional env overrides.
+    """Reload fieldkit.llm with controlled provider modules and environment.
 
     Args:
         mock_litellm: If provided, inject as the fake litellm module.
@@ -110,25 +106,25 @@ def _reload_llm(monkeypatch, mock_litellm: types.ModuleType | None = None, env: 
 
 
 def test_no_llm_stub_no_llm_set_returns_stub(monkeypatch):
-    """NO_LLM=1 → returns _NO_LLM_STUB without importing litellm."""
-    monkeypatch.setenv("NO_LLM", "1")
+    """FIELDKIT_NO_LLM=1 → returns _NO_LLM_STUB without importing litellm."""
+    monkeypatch.setenv("FIELDKIT_NO_LLM", "1")
     # Ensure litellm is NOT in sys.modules before the call
     monkeypatch.delitem(sys.modules, "litellm", raising=False)
 
-    llm = _reload_llm(monkeypatch, mock_litellm=None, env={"NO_LLM": "1"})
+    llm = _reload_llm(monkeypatch, mock_litellm=None, env={"FIELDKIT_NO_LLM": "1"})
 
     result = llm.synthesize("hello")
 
     assert result == llm._NO_LLM_STUB
     # litellm must NOT have been imported as a side-effect
-    assert "litellm" not in sys.modules, "litellm was imported despite NO_LLM=1"
+    assert "litellm" not in sys.modules, "litellm was imported despite FIELDKIT_NO_LLM=1"
 
 
 def test_no_llm_stub_no_llm_empty_string_falls_through(monkeypatch):
-    """NO_LLM='' (empty string) → treated as unset, falls through to litellm path."""
-    monkeypatch.setenv("NO_LLM", "")
+    """FIELDKIT_NO_LLM='' (empty string) → treated as unset, falls through to litellm path."""
+    monkeypatch.setenv("FIELDKIT_NO_LLM", "")
     mock = _make_mock_litellm(content="real response")
-    llm = _reload_llm(monkeypatch, mock_litellm=mock, env={"NO_LLM": ""})
+    llm = _reload_llm(monkeypatch, mock_litellm=mock, env={"FIELDKIT_NO_LLM": ""})
 
     result = llm.synthesize("hello")
 
@@ -140,7 +136,7 @@ def test_no_llm_stub_no_llm_empty_string_falls_through(monkeypatch):
 
 def test_model_resolution_llm_model_env_forwarded_to_completion(monkeypatch):
     """LLM_MODEL env var is forwarded to litellm.completion as the model arg."""
-    monkeypatch.delenv("NO_LLM", raising=False)
+    monkeypatch.delenv("FIELDKIT_NO_LLM", raising=False)
     # FIELDKIT_LLM_MODEL wins over LLM_MODEL (implementation note); without this the operator's
     # own setting shadows the fallback under test (historic regression).
     monkeypatch.delenv("FIELDKIT_LLM_MODEL", raising=False)
@@ -155,7 +151,7 @@ def test_model_resolution_llm_model_env_forwarded_to_completion(monkeypatch):
         captured["model"] = model
         return original_completion(model=model, messages=messages, **kwargs)
 
-    mock.completion = tracking_completion
+    monkeypatch.setattr(mock, "completion", tracking_completion)
     llm = _reload_llm(monkeypatch, mock_litellm=mock)
 
     llm.synthesize("test prompt")
@@ -165,11 +161,11 @@ def test_model_resolution_llm_model_env_forwarded_to_completion(monkeypatch):
 
 def test_model_resolution_non_vertex_env_rejected_before_completion(monkeypatch):
     """A model env var cannot route account data to a direct API provider."""
-    monkeypatch.delenv("NO_LLM", raising=False)
+    monkeypatch.delenv("FIELDKIT_NO_LLM", raising=False)
     monkeypatch.delenv("FIELDKIT_LLM_MODEL", raising=False)
     monkeypatch.setenv("LLM_MODEL", "openai/gpt-4o")
     mock = _make_mock_litellm()
-    mock.completion = MagicMock(side_effect=AssertionError("provider must not be called"))
+    monkeypatch.setattr(mock, "completion", MagicMock(side_effect=AssertionError("provider must not be called")))
     llm = _reload_llm(monkeypatch, mock_litellm=mock)
 
     with pytest.raises(LLMError, match=r"must start with 'vertex_ai/'"):
@@ -180,11 +176,11 @@ def test_model_resolution_non_vertex_env_rejected_before_completion(monkeypatch)
 
 def test_model_resolution_non_vertex_explicit_model_rejected(monkeypatch):
     """The explicit model argument cannot bypass Vertex-only routing."""
-    monkeypatch.delenv("NO_LLM", raising=False)
+    monkeypatch.delenv("FIELDKIT_NO_LLM", raising=False)
     monkeypatch.delenv("FIELDKIT_LLM_MODEL", raising=False)
     monkeypatch.delenv("LLM_MODEL", raising=False)
     mock = _make_mock_litellm()
-    mock.completion = MagicMock(side_effect=AssertionError("provider must not be called"))
+    monkeypatch.setattr(mock, "completion", MagicMock(side_effect=AssertionError("provider must not be called")))
     llm = _reload_llm(monkeypatch, mock_litellm=mock)
 
     with pytest.raises(LLMError, match=r"must start with 'vertex_ai/'"):
@@ -194,8 +190,8 @@ def test_model_resolution_non_vertex_explicit_model_rejected(monkeypatch):
 
 
 def test_model_resolution_default_model_used_when_env_unset(monkeypatch):
-    """When LLM_MODEL is not set, _DEFAULT_MODEL is used."""
-    monkeypatch.delenv("NO_LLM", raising=False)
+    """When LLM_MODEL is not set, the runtime resolver selects the default."""
+    monkeypatch.delenv("FIELDKIT_NO_LLM", raising=False)
     monkeypatch.delenv("LLM_MODEL", raising=False)
     monkeypatch.delenv("FIELDKIT_LLM_MODEL", raising=False)
     monkeypatch.delenv("FIELDKIT_ANTHROPIC_MODEL", raising=False)
@@ -209,13 +205,14 @@ def test_model_resolution_default_model_used_when_env_unset(monkeypatch):
         captured["model"] = model
         return original_completion(model=model, messages=messages, **kwargs)
 
-    mock.completion = tracking_completion
+    monkeypatch.setattr(mock, "completion", tracking_completion)
     llm = _reload_llm(monkeypatch, mock_litellm=mock)
 
     llm.synthesize("test prompt")
 
-    assert captured["model"] == llm._DEFAULT_MODEL
-    assert llm._DEFAULT_MODEL.startswith("vertex_ai/claude")
+    assert captured["model"] == llm._resolve_model(None)
+    assert captured["model"].startswith("vertex_ai/claude")
+    assert not hasattr(llm, "_DEFAULT_MODEL")
 
 
 # ── TestErrorWrapping (flattened) ───────────────────────────────────────────
@@ -223,7 +220,7 @@ def test_model_resolution_default_model_used_when_env_unset(monkeypatch):
 
 def test_error_wrapping_auth_error_raises_llm_error(monkeypatch):
     """litellm.AuthenticationError → LLMError with category='auth'."""
-    monkeypatch.delenv("NO_LLM", raising=False)
+    monkeypatch.delenv("FIELDKIT_NO_LLM", raising=False)
     mock = _make_mock_litellm(auth_error=True)
     llm = _reload_llm(monkeypatch, mock_litellm=mock)
 
@@ -238,7 +235,7 @@ def test_error_wrapping_auth_error_raises_llm_error(monkeypatch):
 
 def test_error_wrapping_rate_limit_error_raises_llm_error(monkeypatch):
     """litellm.RateLimitError → LLMError with category='rate-limit'."""
-    monkeypatch.delenv("NO_LLM", raising=False)
+    monkeypatch.delenv("FIELDKIT_NO_LLM", raising=False)
     mock = _make_mock_litellm(rate_error=True)
     llm = _reload_llm(monkeypatch, mock_litellm=mock)
     monkeypatch.setattr(
@@ -257,7 +254,7 @@ def test_error_wrapping_rate_limit_error_raises_llm_error(monkeypatch):
 
 def test_error_wrapping_generic_exception_raises_llm_error(monkeypatch):
     """Any unexpected exception → LLMError with category='general'."""
-    monkeypatch.delenv("NO_LLM", raising=False)
+    monkeypatch.delenv("FIELDKIT_NO_LLM", raising=False)
     mock = _make_mock_litellm(generic_error=True)
     llm = _reload_llm(monkeypatch, mock_litellm=mock)
 
@@ -287,12 +284,12 @@ def _vertex_location_env_var_aliases_vertex_loc(monkeypatch, env_vars: dict) -> 
         captured.update(kwargs)
         return original(*args, **kwargs)
 
-    mock.completion = capturing
+    monkeypatch.setattr(mock, "completion", capturing)
     for var in ("CLOUD_ML_REGION", "VERTEX_LOCATION", "GOOGLE_CLOUD_REGION"):
         monkeypatch.delenv(var, raising=False)
     for k, v in env_vars.items():
         monkeypatch.setenv(k, v)
-    monkeypatch.delenv("NO_LLM", raising=False)
+    monkeypatch.delenv("FIELDKIT_NO_LLM", raising=False)
     llm = _reload_llm(monkeypatch, mock_litellm=mock)
     llm.synthesize("test")
     return captured.get("vertex_location")
@@ -343,7 +340,7 @@ def test_vertex_location_env_var_aliases_no_region_var_uses_default(monkeypatch)
 
 def test_return_value_return_value_is_string_from_response(monkeypatch):
     """synthesize() returns str(response.choices[0].message.content)."""
-    monkeypatch.delenv("NO_LLM", raising=False)
+    monkeypatch.delenv("FIELDKIT_NO_LLM", raising=False)
     expected = "This is the model output."
     mock = _make_mock_litellm(content=expected)
     llm = _reload_llm(monkeypatch, mock_litellm=mock)

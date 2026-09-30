@@ -4,15 +4,18 @@ Provides the shared context builder and renderer used by both the install
 command and the eval runner.  This module is the sole location for
 ``{{key}}`` template logic — no private copies should exist elsewhere.
 
-Import constraint: MUST NOT import from ``fieldkit/`` or ``hooks/``.
-Only stdlib, third-party, and other ``lib/`` modules are permitted.
-Enforced by tach.
+Configuration comes from fieldkit.config; architecture dependencies are enforced
+by tach.toml.
 """
 
 import logging
+import os
 import re
 import shutil
+import stat
 import sys
+from collections.abc import Mapping
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import NamedTuple, TypeAlias
@@ -61,57 +64,49 @@ class UnresolvedVariable(NamedTuple):
 # ---------------------------------------------------------------------------
 
 _MAX_ACCOUNT_INDEX = 4  # accounts.0 through accounts.3
+_MAX_PRIMARY_PURSUIT_ENTRIES = 1024
 _LOCAL_MARKDOWN_LINK = re.compile(r"\]\((?P<path>[^()\s#]+\.md)(?P<fragment>#[^()\s]+)?\)")
+
+
+def _template_scalar(data: Mapping[str, object], key: str) -> str:
+    from fieldkit.config import ConfigError
+
+    value = data.get(key)
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise ConfigError(f"Template configuration field '{key}' must be a string")
+    return value
 
 
 def _load_config_fields() -> dict[str, str]:
     """Read personal fields from config.yaml.
 
-    Returns a dict with keys: name, email, role, company, data_repo.
-    Returns {} if config.yaml is absent or unreadable — never raises.
-
-    Note: ``data_repo`` is a legacy key retained for backward compatibility with
-    skill templates that reference ``{{ data_repo }}``.  New installs use
-    ``fieldkit_home`` instead.  The returned ``data_repo`` value is populated
-    from the ``data_repo`` key in config.yaml (deprecated) and will be empty
-    for installs that have migrated to ``fieldkit_home``.
+    Returns a dict with keys: name, email, role, company, fieldkit_home.
+    Returns {} if config.yaml is absent. Invalid configuration raises ConfigError.
     """
     # Import here to avoid circular imports and to keep the dependency explicit.
     import fieldkit.config._loader as _cfg_impl
 
-    CONFIG_PATH = _cfg_impl.CONFIG_PATH
-
-    if not CONFIG_PATH.exists():
+    data = _cfg_impl._load_raw_config_uncached(strict=True)
+    if data is None:
         return {}
 
-    try:
-        import yaml
+    from fieldkit.config import ConfigError, get_config_path
 
-        raw = CONFIG_PATH.read_text(encoding="utf-8")
-        data = yaml.safe_load(raw)
-    except Exception:  # noqa: BLE001  — any parse/IO failure → empty
-        log.debug("Failed to load config fields from %s", CONFIG_PATH, exc_info=True)
-        return {}
-
-    if not isinstance(data, dict):
-        return {}
-
-    def _str(key: str) -> str:
-        val = data.get(key)
-        return str(val) if val is not None else ""
-
-    # data_repo: expand user path for display purposes.
-    # DEPRECATED — new installs use 'fieldkit_home'; this key is read only for
-    # backward compatibility with skill templates that reference {{ data_repo }}.
-    data_repo_raw = data.get("data_repo", "")
-    data_repo = str(Path(str(data_repo_raw)).expanduser()) if data_repo_raw else ""
+    fieldkit_home = _template_scalar(data, "fieldkit_home")
+    if fieldkit_home:
+        workspace = Path(fieldkit_home.strip()).expanduser()
+        if not fieldkit_home.strip() or not workspace.is_absolute():
+            raise ConfigError("Template fieldkit_home must be an absolute path")
+        fieldkit_home = str(get_config_path("accounts.yaml", workspace_root=workspace).parent.parent)
 
     return {
-        "name": _str("name"),
-        "email": _str("email"),
-        "role": _str("role"),
-        "company": _str("company"),
-        "data_repo": data_repo,
+        "name": _template_scalar(data, "name"),
+        "email": _template_scalar(data, "email"),
+        "role": _template_scalar(data, "role"),
+        "company": _template_scalar(data, "company"),
+        "fieldkit_home": fieldkit_home,
     }
 
 
@@ -119,64 +114,49 @@ def _read_identity_yaml(identity_path: Path) -> dict[str, str]:
     """Parse identity.yaml and return {territory, salesforce_user_id}.
 
     Handles both flat and nested (``identity:`` key) layouts.
-    Returns empty strings for missing keys — never raises.
+    Returns empty strings for missing keys. Invalid configuration raises ConfigError.
     """
-    import yaml
+    from fieldkit.config._loader import ConfigError, read_config_mapping_for_update
 
-    defaults: dict[str, str] = {"territory": "", "salesforce_user_id": ""}
-    try:
-        identity_raw = identity_path.read_text(encoding="utf-8")
-        identity_data = yaml.safe_load(identity_raw)
-    except Exception:  # noqa: BLE001
-        log.debug("Failed to read identity.yaml at %s", identity_path, exc_info=True)
-        return defaults
-
-    if not isinstance(identity_data, dict):
-        return defaults
+    identity_data = read_config_mapping_for_update(identity_path)
 
     # historic regression: support both flat and nested (``identity:`` key) layouts.
     nested = identity_data.get("identity")
+    if "identity" in identity_data and not isinstance(nested, dict):
+        raise ConfigError("Template identity configuration must contain an identity mapping")
     lookup: dict[str, object] = nested if isinstance(nested, dict) else identity_data
 
-    def _str(key: str) -> str:
-        val = lookup.get(key)
-        return str(val) if val is not None else ""
+    return {
+        "territory": _template_scalar(lookup, "territory"),
+        "salesforce_user_id": _template_scalar(lookup, "salesforce_user_id"),
+    }
 
-    return {"territory": _str("territory"), "salesforce_user_id": _str("salesforce_user_id")}
 
+def _territory_from_accounts(configuration: Mapping[str, object]) -> str:
+    """Project territory from the same validated account snapshot as account fields."""
+    from fieldkit.config import ConfigError
 
-def _territory_from_accounts(data_repo_raw: str) -> str:
-    """historic regression: fall back to sf_territory from the first non-internal account in accounts.yaml."""
-    import yaml
-
-    try:
-        accounts_path = Path(str(data_repo_raw)).expanduser() / "config" / "accounts.yaml"
-        if not accounts_path.exists():
-            return ""
-        accounts_raw = accounts_path.read_text(encoding="utf-8")
-        accounts_data = yaml.safe_load(accounts_raw)
-        if not isinstance(accounts_data, dict):
-            return ""
-        raw_accounts = accounts_data.get("accounts", {})
-        if not isinstance(raw_accounts, dict):
-            return ""
-        for _slug, info in raw_accounts.items():
-            if not isinstance(info, dict) or info.get("internal"):
-                continue
-            sf_terr = info.get("sf_territory")
-            if sf_terr and isinstance(sf_terr, str):
-                return sf_terr
-    except Exception:  # noqa: BLE001
-        log.debug("Failed to resolve territory from accounts.yaml for %s", data_repo_raw, exc_info=True)
+    accounts = configuration.get("accounts", {})
+    if not isinstance(accounts, dict):
+        raise ConfigError("Template account configuration must contain an accounts mapping")
+    for info in accounts.values():
+        if not isinstance(info, dict):
+            raise ConfigError("Template account configuration must contain account mappings")
+        if info.get("internal"):
+            continue
+        territory = _template_scalar(info, "sf_territory")
+        if territory:
+            return territory
     return ""
 
 
-def _load_identity_fields() -> dict[str, str]:
-    """Read territory and salesforce_user_id from <data_repo>/config/identity.yaml.
+def _load_identity_fields(workspace_root: Path | None, account_territory: str) -> dict[str, str]:
+    """Read territory and salesforce_user_id from <fieldkit_home>/config/identity.yaml.
 
     Returns a dict with keys: territory, salesforce_user_id.
-    Returns empty strings for both if identity.yaml is absent, unreadable,
-    or the keys are missing — never raises.
+    Returns empty strings for both if identity.yaml is absent or keys are missing.
+    Invalid configuration raises ConfigError, including account configuration
+    when territory fallback consults it.
 
     identity.yaml may use either a flat structure (keys at top level) or a
     nested structure (keys under an ``identity:`` mapping).  Both are handled.
@@ -185,31 +165,15 @@ def _load_identity_fields() -> dict[str, str]:
     falls back to the ``sf_territory`` field of the primary account in
     accounts.yaml (the first non-internal account in the accounts list).
     """
-    import fieldkit.config._loader as _cfg_impl
-
-    CONFIG_PATH = _cfg_impl.CONFIG_PATH
     defaults: dict[str, str] = {"territory": "", "salesforce_user_id": ""}
-
-    if not CONFIG_PATH.exists():
+    if workspace_root is None:
         return defaults
 
-    try:
-        import yaml
+    from fieldkit.config import get_config_path
 
-        raw = CONFIG_PATH.read_text(encoding="utf-8")
-        data = yaml.safe_load(raw)
-    except Exception:  # noqa: BLE001
-        log.debug("Failed to load identity fields from %s", CONFIG_PATH, exc_info=True)
+    if not workspace_root.exists() and not workspace_root.is_symlink():
         return defaults
-
-    if not isinstance(data, dict):
-        return defaults
-
-    data_repo_raw = data.get("fieldkit_home", "") or data.get("data_repo", "")
-    if not data_repo_raw:
-        return defaults
-
-    identity_path = Path(str(data_repo_raw)).expanduser() / "config" / "identity.yaml"
+    identity_path = get_config_path("identity.yaml", workspace_root=workspace_root)
     if not identity_path.exists():
         return defaults
 
@@ -218,31 +182,71 @@ def _load_identity_fields() -> dict[str, str]:
     # historic regression: territory fallback — if identity.yaml does not have the field,
     # read sf_territory from the primary (first non-internal) account.
     if not fields["territory"]:
-        fields["territory"] = _territory_from_accounts(data_repo_raw)
+        fields["territory"] = account_territory
 
     return fields
 
 
-def _load_account_fields() -> dict[str, str]:
-    """Read account fields from accounts.yaml via lib.config helpers.
+def _primary_pursuit(workspace_root: Path, primary: str) -> str:
+    """Inventory a flat account directory without following child redirects.
+
+    Root authority comes from the canonical configuration path selector. The
+    directory namespace must remain stable; this is not a filesystem sandbox
+    or protection against hostile same-user replacement.
+    """
+    from fieldkit.config import ConfigError, get_config_path
+
+    try:
+        if (
+            not primary.strip()
+            or primary in {".", ".."}
+            or any(character in primary for character in ("/", "\\", ":", "\x00"))
+            or any(not character.isprintable() for character in primary)
+        ):
+            raise ValueError
+        root = get_config_path("accounts.yaml", workspace_root=workspace_root).parent.parent
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        with ExitStack() as stack:
+            directory = os.open(root, flags)
+            stack.callback(os.close, directory)
+            for component in ("accounts", primary, "pursuits"):
+                try:
+                    directory = os.open(component, flags, dir_fd=directory)
+                except FileNotFoundError:
+                    return ""
+                stack.callback(os.close, directory)
+            selected: str | None = None
+            with os.scandir(directory) as entries:
+                for count, entry in enumerate(entries, start=1):
+                    if count > _MAX_PRIMARY_PURSUIT_ENTRIES:
+                        raise ValueError
+                    if not entry.name.endswith(".md"):
+                        continue
+                    if not stat.S_ISREG(entry.stat(follow_symlinks=False).st_mode):
+                        raise ValueError
+                    if selected is None or entry.name < selected:
+                        selected = entry.name
+            return Path(selected).stem if selected is not None else ""
+    except (OSError, RuntimeError, ValueError, ConfigError):
+        raise ConfigError("Cannot read safe primary pursuit inventory") from None
+
+
+def _load_account_fields(workspace_root: Path | None) -> dict[str, str]:
+    """Read account fields from one strict selected-workspace snapshot.
 
     Returns a dict with keys: primary_account, accounts.0-3, accounts.all,
-    internal_domain, primary_pursuit, example_sf_id.
-    All values default to "" on any failure — never raises.
+    internal_domain, primary_pursuit, example_sf_id, and derived territory.
+    Identity projection overrides territory, preserving empty territory when
+    identity.yaml is absent.
+    Absent configuration has empty defaults; invalid configuration propagates.
     """
-    from fieldkit.config import get_account_names, get_accounts_root, get_internal_domains
+    from fieldkit.config import get_accounts_config
 
-    try:
-        slugs = get_account_names()
-    except Exception:  # noqa: BLE001
-        log.debug("Failed to load account names", exc_info=True)
-        slugs = []
-
-    try:
-        domains = get_internal_domains()
-    except Exception:  # noqa: BLE001
-        log.debug("Failed to load internal domains", exc_info=True)
-        domains = []
+    configuration = (
+        get_accounts_config(strict=True, workspace_root=workspace_root) if workspace_root is not None else {}
+    )
+    slugs = list(configuration.get("accounts", {}))
+    domains = configuration.get("internal_domains", [])
 
     primary = slugs[0] if slugs else ""
 
@@ -261,18 +265,12 @@ def _load_account_fields() -> dict[str, str]:
     ctx["internal_domain"] = domains[0] if domains else ""
     ctx["accounts.all"] = ", ".join(slugs)
     ctx["example_sf_id"] = "006Pe000000ExampleId"
+    ctx["territory"] = _territory_from_accounts(configuration)
 
     # primary_pursuit: stem of the first pursuit file for the primary account
     ctx["primary_pursuit"] = ""
-    if primary:
-        try:
-            pursuits_dir = get_accounts_root() / primary / "pursuits"
-            if pursuits_dir.is_dir():
-                md_files = sorted(pursuits_dir.glob("*.md"))
-                if md_files:
-                    ctx["primary_pursuit"] = md_files[0].stem
-        except Exception:  # noqa: BLE001
-            log.debug("Failed to resolve primary_pursuit for account %s", primary, exc_info=True)
+    if slugs and workspace_root is not None:
+        ctx["primary_pursuit"] = _primary_pursuit(workspace_root, primary)
 
     return ctx
 
@@ -286,25 +284,28 @@ def build_template_ctx() -> dict[str, str]:
     """Build template variable context from config.yaml, accounts.yaml, and identity.yaml.
 
     Returns a dict mapping ``{{key}}`` names to their resolved string values.
-    Missing config keys produce empty strings — never raises.
+    Missing config keys produce empty strings. Invalid account configuration
+    consulted for territory fallback raises ConfigError before installation.
 
     Available variables:
-        name, email, role, company, data_repo       (from config.yaml)
+        name, email, role, company, fieldkit_home   (from config.yaml)
         primary_account, accounts.0-3,
         accounts.all, internal_domain,
         primary_pursuit, example_sf_id              (from accounts.yaml)
-        territory, salesforce_user_id               (from <data_repo>/config/identity.yaml)
+        territory, salesforce_user_id               (from <fieldkit_home>/config/identity.yaml)
 
     Returns:
-        Empty dict if config.yaml is absent or unreadable.
+        Empty dict if config.yaml is absent. Invalid configuration raises ConfigError.
     """
     config_fields = _load_config_fields()
     if not config_fields:
         # config.yaml absent — return empty dict per spec FR-3 / contract
         return {}
 
-    account_fields = _load_account_fields()
-    identity_fields = _load_identity_fields()
+    workspace = config_fields.get("fieldkit_home", "")
+    selected_workspace = Path(workspace) if workspace else None
+    account_fields = _load_account_fields(selected_workspace)
+    identity_fields = _load_identity_fields(selected_workspace, account_fields.get("territory", ""))
 
     ctx: dict[str, str] = {}
     ctx.update(config_fields)
@@ -533,13 +534,29 @@ def _flat_support_anchor(relative_path: Path) -> str:
     return f"fieldkit-support-{normalized}"
 
 
+def _flat_sibling_link(candidate: Path, skill_root: Path, fragment: str | None) -> str | None:
+    """Map an existing sibling skill document to its installed flat rule."""
+    if not candidate.is_relative_to(skill_root.parent) or not candidate.is_file():
+        return None
+    relative = candidate.relative_to(skill_root.parent)
+    if len(relative.parts) < 2:
+        return None
+    sibling = skill_root.parent / relative.parts[0]
+    if sibling == skill_root or not (sibling / "SKILL.md").is_file():
+        return None
+    support = candidate.relative_to(sibling)
+    anchor = fragment or ("" if support == Path("SKILL.md") else f"#{_flat_support_anchor(support)}")
+    return f"]({sibling.name}.md{anchor})"
+
+
 def _render_flat_skill_bundle(skill_dir: Path, ctx: dict[str, str]) -> tuple[str, list[UnresolvedVariable]]:
     """Render a Cursor-compatible one-file skill with local Markdown support included.
 
     Flat targets cannot retain a skill directory. Every Markdown file shipped in
     the skill bundle is therefore appended to the root rule, and relative local
     Markdown links are redirected to the matching in-document anchor. Links
-    outside the bundle retain their original destination.
+    into sibling skill bundles point to the sibling flat rule and support anchor.
+    Other links retain their original destination.
     """
     root_file = skill_dir / "SKILL.md"
     markdown_files = [root_file, *sorted(path for path in skill_dir.rglob("*.md") if path != root_file)]
@@ -558,9 +575,12 @@ def _render_flat_skill_bundle(skill_dir: Path, ctx: dict[str, str]) -> tuple[str
         def _replace_local_link(match: re.Match[str], source_parent: Path = source_parent) -> str:
             candidate = (source_parent / match.group("path")).resolve()
             if not candidate.is_relative_to(resolved_root) or candidate not in relative_paths:
-                return match.group(0)
-            anchor = _flat_support_anchor(relative_paths[candidate])
-            return f"](#{anchor})"
+                return _flat_sibling_link(candidate, resolved_root, match.group("fragment")) or match.group(0)
+            relative = relative_paths[candidate]
+            anchor = match.group("fragment") or (
+                "#" if relative == Path("SKILL.md") else f"#{_flat_support_anchor(relative)}"
+            )
+            return f"]({anchor})"
 
         rendered_files.append((relative_path, _LOCAL_MARKDOWN_LINK.sub(_replace_local_link, rendered_text)))
 

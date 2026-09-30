@@ -1,12 +1,6 @@
-"""Tests for backward-compatible config key aliases (historic regression).
+"""Canonical workspace configuration and unrelated configuration defaults."""
 
-Covers:
-- data_repo key silently aliased to fieldkit_home
-- data_repo deprecation WARNING logged
-- fieldkit_home takes precedence when both keys present
-- Neither key raises ConfigError with correct message
-"""
-
+import warnings
 from pathlib import Path
 
 import pytest
@@ -20,30 +14,21 @@ pytestmark = pytest.mark.unit
 # ── TestDataRepoAlias (flattened) ───────────────────────────────────────────
 
 
-def test_data_repo_alias_data_repo_returns_correct_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_noncanonical_workspace_key_does_not_resolve(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_file = tmp_path / "config.yaml"
     config_file.write_text("data_repo: /tmp/my-fieldkit\n", encoding="utf-8")
     monkeypatch.setattr(fieldkit.config._loader, "CONFIG_PATH", config_file)
 
-    result = get_fieldkit_home()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        with pytest.raises(ConfigError, match="missing required key 'fieldkit_home'"):
+            get_fieldkit_home()
+    assert caught == []
 
-    assert result == Path("/tmp/my-fieldkit")
-    assert result.is_absolute(), "get_fieldkit_home must return an absolute Path"
 
-
-def test_data_repo_alias_data_repo_emits_warning(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Spec 043 G3b: data_repo fallback emits DeprecationWarning via warnings.warn."""
+def test_canonical_workspace_key_expands_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_file = tmp_path / "config.yaml"
-    config_file.write_text("data_repo: /tmp/my-fieldkit\n", encoding="utf-8")
-    monkeypatch.setattr(fieldkit.config._loader, "CONFIG_PATH", config_file)
-
-    with pytest.warns(DeprecationWarning, match=r"data_repo"):
-        get_fieldkit_home()
-
-
-def test_data_repo_alias_data_repo_tilde_expanded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    config_file = tmp_path / "config.yaml"
-    config_file.write_text("data_repo: ~/fieldkit-workspace\n", encoding="utf-8")
+    config_file.write_text("fieldkit_home: ~/fieldkit-workspace\n", encoding="utf-8")
     monkeypatch.setattr(fieldkit.config._loader, "CONFIG_PATH", config_file)
 
     result = get_fieldkit_home()
@@ -52,13 +37,13 @@ def test_data_repo_alias_data_repo_tilde_expanded(tmp_path: Path, monkeypatch: p
     assert result.is_absolute()
 
 
-def test_data_repo_alias_fieldkit_home_takes_precedence_over_data_repo(
+def test_canonical_workspace_key_resolves_with_unrelated_extensions(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """fieldkit_home wins when both keys are present (shouldn't normally happen)."""
+    """Unknown extension keys do not replace the canonical workspace root."""
     config_file = tmp_path / "config.yaml"
     config_file.write_text(
-        "fieldkit_home: /tmp/correct-home\ndata_repo: /tmp/stale-repo\n",
+        "fieldkit_home: /tmp/correct-home\noperator_extension: enabled\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(fieldkit.config._loader, "CONFIG_PATH", config_file)
@@ -68,21 +53,12 @@ def test_data_repo_alias_fieldkit_home_takes_precedence_over_data_repo(
     assert result == Path("/tmp/correct-home")
 
 
-def test_data_repo_alias_neither_key_raises_config_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_missing_canonical_workspace_key_raises_config_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_file = tmp_path / "config.yaml"
     config_file.write_text("some_other_key: value\n", encoding="utf-8")
     monkeypatch.setattr(fieldkit.config._loader, "CONFIG_PATH", config_file)
 
     with pytest.raises(ConfigError, match="fieldkit_home"):
-        get_fieldkit_home()
-
-
-def test_data_repo_alias_data_repo_empty_raises_config_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    config_file = tmp_path / "config.yaml"
-    config_file.write_text("data_repo: ''\n", encoding="utf-8")
-    monkeypatch.setattr(fieldkit.config._loader, "CONFIG_PATH", config_file)
-
-    with pytest.raises(ConfigError, match="data_repo"):
         get_fieldkit_home()
 
 

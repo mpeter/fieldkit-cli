@@ -55,16 +55,29 @@ refactor-only, and CI-only changes may be exempt when the change has no user-fac
 
 ## Verify the pull request
 
-Run the same bounded gate expected before review:
+Commit your changes locally, then run the same bounded gate expected before review.
+The public-tree stage requires a clean checkout, including no untracked files, so
+its result describes the committed candidate rather than an older revision. No
+push is required to run this check.
+The check also rejects `assume-unchanged` and `skip-worktree` index flags, which
+can conceal modified tracked files. Use a complete checkout for readiness checks;
+the verifier does not change your index or discard local work.
 
 ```console
 git fetch upstream main
-QUALITY_BASE=upstream/main make pr-check
+QUALITY_BASE="$(git rev-parse upstream/main)" make pr-check
 ```
 
-The command reports each failing stage separately. You can run focused tests and linters while
+This resolves the fetched upstream ref to the full immutable commit SHA required by the gate.
+The command labels each stage's output and stops at the first failing stage. Fix that failure and
+rerun to reach subsequent stages. You can run focused tests and linters while
 iterating, but `make pr-check` is the supported local readiness signal. Complete enforcement and the
 supported-platform artifact matrix run in GitHub Actions.
+
+The test stage runs the full suite for application code, fixtures, scripts, dependencies, and
+packaged data. It uses impact selection only for eligible test-file-only changes. Ordinary reader
+documentation can skip this stage, but documentation validation still runs. Each stage retains its
+120-second limit; a timeout is a failure, not passing evidence.
 
 Use conventional commit messages such as `fix(cli): handle missing config` or
 `docs: clarify installation`. Do not commit credentials, customer data, personal email addresses,

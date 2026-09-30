@@ -2,10 +2,10 @@
   "skill_name": "always-on-guidance",
   "static_checks": [
     {
-      "id": "has_transitions_table",
+      "id": "documented_next_action",
       "type": "contains",
-      "pattern": "Transitions Table",
-      "message": "Must include the NBA transitions table"
+      "pattern": "## Next best action",
+      "message": "Next-step guidance must be grounded in documented behavior"
     },
     {
       "id": "has_friction_rubric",
@@ -14,10 +14,10 @@
       "message": "Must include portable workflow-friction guidance"
     },
     {
-      "id": "has_upstream_section",
+      "id": "local_skill_edits",
       "type": "contains",
-      "pattern": "Skill Changes Upstream",
-      "message": "Must include the upstream skill change workflow"
+      "pattern": "## Local skill edits",
+      "message": "Must warn that installed skill copies may be replaced"
     },
     {
       "id": "references_post_meeting",
@@ -26,28 +26,28 @@
       "message": "Next-step guidance must require operator approval"
     },
     {
-      "id": "references_grill",
+      "id": "no_invented_commands",
       "type": "contains",
-      "pattern": "/grill",
-      "message": "Transitions table must reference /grill as an NBA"
+      "pattern": "Do not invent slash",
+      "message": "Must not invent a next-step command"
     },
     {
-      "id": "references_draft_review",
+      "id": "documented_checkout",
       "type": "contains",
-      "pattern": "/draft-review",
-      "message": "Transitions table must reference /draft-review as an NBA"
+      "pattern": "documented in\nthis checkout",
+      "message": "Must tie next steps to this checkout"
     },
     {
-      "id": "auto_file_threshold",
+      "id": "external_approval",
       "type": "contains",
-      "pattern": "two or more",
-      "message": "Rubric must specify the two-signal threshold for auto-filing"
+      "pattern": "Before\ncreating an issue, pull request, or other external record, ask the operator for\napproval",
+      "message": "External records require operator approval, not an auto-filing threshold"
     },
     {
       "id": "rubric_change_log",
       "type": "contains",
-      "pattern": "Never assume a repository name",
-      "message": "Friction guidance must not assume a private repository"
+      "pattern": "assume a repository name, labels",
+      "message": "Friction guidance must not assume a repository or labels"
     }
   ],
   "evals": [

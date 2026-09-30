@@ -7,12 +7,13 @@ import re
 import subprocess
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from fieldkit.config import (
+    TIMEOUT_PROCESS_KILL_GRACE,
     get_driver_max_concurrent,
     get_fieldkit_data,
     get_github_repo,
@@ -27,36 +28,41 @@ from fieldkit.driver.done_check_executor import (
 from fieldkit.driver.github import (
     LABEL_READY,
     AgentIssue,
+    GitHubLookupError,
     comment_on_issue,
     comment_once,
-    last_failure_comment,
     list_ready_issues,
     remove_label,
     transition_to_failed,
     transition_to_succeeded,
 )
 from fieldkit.driver.opencode import OpencodeOutcome, run_opencode
-from fieldkit.driver.retry_state import check_eligibility, complete_attempt, reserve_attempt
-from fieldkit.driver.scheduler import (
-    SchedulerError,
-    busy_files,
-    open_issue_numbers,
-    parse_depends_on,
-    select_runnable,
+from fieldkit.driver.prompt_source import (
+    FrozenPrompt,
+    PromptSourceError,
+    freeze_origin_main,
+    freeze_prompt,
+    has_prompt_reference,
+    resolve_prompt_source,
 )
+from fieldkit.driver.retry_state import FailureCode, RetryReceipt, check_eligibility, complete_attempt, reserve_attempt
+from fieldkit.driver.scheduler import SchedulerError, busy_files, open_issue_numbers, select_runnable
 from fieldkit.driver.spend import (
     cap_safe_max_concurrent,
     evaluate_daily_spend_cap,
     get_spend_summary,
     reserve_run_db_path,
 )
-from fieldkit.errors import AuthError
+from fieldkit.driver.status_types import RunOutcome
+from fieldkit.errors import AuthError, GitHubRequestError
 from fieldkit.util.atomic import locked_json_update
+from fieldkit.util.bounded_process import BoundedProcessError, run_bounded_process, run_bounded_process_bytes
 
 log = logging.getLogger(__name__)
 
 # Subprocess timeouts (seconds)
 _GIT_TIMEOUT: int = 30  # fast local git operations
+_GIT_OUTPUT_BYTES: int = 8 * 1024 * 1024
 
 # Serializes git fetch + worktree add against the shared repo checkout when
 # a batch (max_concurrent > 1) creates worktrees from concurrent threads.
@@ -67,6 +73,17 @@ _WORKTREE_CREATE_LOCK = threading.Lock()
 # once per issue rather than on every hourly tick while the file is unlanded.
 _WO_UNRESOLVED_MARKER = "⏳ **Driver waiting**"
 _RATE_LIMITED_MARKER = "⏳ **Driver rate-limited**"
+_FAILURE_MESSAGES: dict[FailureCode, str] = {
+    "agent-failed": "OpenCode execution failed; inspect the bounded local driver logs.",
+    "authentication-failed": "Driver authentication failed; operator action is required.",
+    "rate-limited": "The model provider applied a rate limit to this attempt; retry later.",
+    "setup-failed": "Independent verification setup failed.",
+    "verification-failed": "The submitted head failed independent verification.",
+    "worktree-failed": "The driver could not create its isolated worktree.",
+}
+_RETRY_FINALIZATION_FAILED = "Driver could not finalize local retry state."
+_RETRY_RESERVATION_DENIED = "Driver could not persist a local retry reservation; execution was not admitted."
+_UNKNOWN_EXECUTION_FAILURE = "Driver execution failed; inspect bounded local driver logs."
 
 
 def _notify_rate_limited(repo: str, issue_number: int, error_msg: str, dry_run: bool) -> None:
@@ -83,229 +100,8 @@ def _notify_rate_limited(repo: str, issue_number: int, error_msg: str, dry_run: 
         "The issue retries automatically only while its local retry budget remains; "
         "use `fieldkit driver retry status` and `fieldkit driver retry reset` after "
         "the budget is exhausted. If this keeps recurring, the rate-limiting needs "
-        "attention outside the driver (see historic regression).",
+        "attention outside the driver.",
     )
-
-
-# Prompt source resolution
-_WORK_ORDER_RE = re.compile(
-    r"(?:work\s*order|brief)\s*[:\-]\s*(docs/(?:work-orders|briefs)/[\w\-]+\.md)",
-    re.IGNORECASE,
-)
-
-_OPENSPEC_RE = re.compile(
-    r"(?:openspec\s*[:\-]?\s*)(openspec/changes/[\w\-]+/)",
-    re.IGNORECASE,
-)
-
-_SPECKIT_RE = re.compile(
-    r"(?:speckit\s*[:\-]?\s*)(specs/[\w\-]+/)",
-    re.IGNORECASE,
-)
-
-
-def _has_prompt_reference(body: str) -> bool:
-    """True if the issue body carries any recognized prompt-source reference.
-
-    Distinguishes "referenced a work order that is not resolvable yet" (leave
-    ``agent-ready`` on; it self-heals when the file lands) from "no reference
-    at all" (a malformed issue whose label should be removed).
-    """
-    return bool(_WORK_ORDER_RE.search(body) or _OPENSPEC_RE.search(body) or _SPECKIT_RE.search(body))
-
-
-def _exists_on_main_or_disk(repo_root: Path, abs_path: Path) -> bool:
-    """True if *abs_path* exists on disk or as a blob at ``origin/main``."""
-    if abs_path.is_file():
-        return True
-    try:
-        rel = abs_path.relative_to(repo_root)
-    except ValueError:
-        return False
-    try:
-        result = subprocess.run(
-            ["git", "cat-file", "-t", f"origin/main:{rel.as_posix()}"],
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=_GIT_TIMEOUT,
-        )
-        return result.stdout.strip() == "blob"
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
-        return False
-
-
-def _fetch_main(repo_root: Path) -> None:
-    """Best-effort ``git fetch origin main`` before work-order resolution."""
-    try:
-        subprocess.run(
-            ["git", "fetch", "origin", "main"],
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=_GIT_TIMEOUT,
-        )
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
-        stderr = getattr(exc, "stderr", "") or ""
-        log.warning("Pre-resolution fetch of origin/main failed (continuing): %s", stderr.strip() or exc)
-
-
-def _resolve_dir_source(
-    *,
-    rel_dir: str,
-    allowed_root: Path,
-    primary_file: str,
-    fallback_file: str,
-    source_label: str,
-    issue_number: int,
-    repo_root: Path,
-) -> Path | None:
-    """Resolve a directory-based prompt source (OpenSpec or Speckit).
-
-    Looks for *primary_file* inside *rel_dir*, falling back to *fallback_file*.
-    Applies a ``relative_to`` path-safety guard against *allowed_root*.
-
-    Args:
-        rel_dir:       Relative directory path from the issue body match.
-        allowed_root:  Absolute path the resolved directory must stay inside.
-        primary_file:  Filename to try first (e.g. ``"tasks.md"``).
-        fallback_file: Filename to try if primary is absent (e.g. ``"proposal.md"``).
-        source_label:  Human-readable label for error messages (e.g. ``"OpenSpec"``).
-        issue_number:  GitHub issue number, for error logging.
-        repo_root:     Absolute repository root.
-
-    Returns:
-        Absolute :class:`Path` to the resolved file, or ``None`` on failure.
-    """
-    dir_path = (repo_root / rel_dir).resolve()
-
-    # Safety: resolved directory must stay inside its allowed root.
-    try:
-        dir_path.relative_to(allowed_root)
-    except ValueError:
-        log.error(
-            "%s path %r escapes allowed root %s — refusing",
-            source_label,
-            rel_dir,
-            allowed_root,
-        )
-        return None
-
-    for candidate in (primary_file, fallback_file):
-        candidate_path = dir_path / candidate
-        if _exists_on_main_or_disk(repo_root, candidate_path):
-            log.info(
-                "Issue #%d: resolved %s prompt from %s",
-                issue_number,
-                source_label,
-                candidate_path.relative_to(repo_root),
-            )
-            return candidate_path
-
-    log.error(
-        "Issue #%d: %s directory found but neither %r nor %r exists: %s",
-        issue_number,
-        source_label,
-        primary_file,
-        fallback_file,
-        dir_path,
-    )
-    return None
-
-
-def resolve_prompt_source(issue: AgentIssue, repo_root: Path) -> Path | None:
-    """Extract and validate the prompt file path from an issue's body.
-
-    Three reference formats are tried in priority order:
-
-    1. **Work Order** (highest priority)::
-
-           WorkOrder: docs/work-orders/<name>.md
-           Brief:     docs/briefs/<name>.md   (backward compat)
-
-    2. **OpenSpec**::
-
-           OpenSpec: openspec/changes/<name>/
-
-       Resolves to ``tasks.md`` inside the directory, falling back to
-       ``proposal.md``.
-
-    3. **Speckit**::
-
-           Speckit: specs/<NNN>-<name>/
-
-       Resolves to ``tasks.md`` inside the directory, falling back to
-       ``spec.md``.
-
-    All formats are matched case-insensitively. All resolved paths are
-    validated with a ``relative_to`` guard to prevent directory traversal.
-
-    Args:
-        issue:     The issue whose body is parsed.
-        repo_root: Absolute path to the repository root.
-
-    Returns:
-        Absolute :class:`Path` to the prompt file if found and safe,
-        ``None`` otherwise.
-    """
-    # --- Work Order ---
-    wo_match = _WORK_ORDER_RE.search(issue.body)
-    if wo_match:
-        rel_path = wo_match.group(1)
-        work_order_path = (repo_root / rel_path).resolve()
-        work_orders_dir = (repo_root / "docs" / "work-orders").resolve()
-        briefs_dir = (repo_root / "docs" / "briefs").resolve()
-        # Accept both docs/work-orders/ and docs/briefs/ (backward compat).
-        try:
-            work_order_path.relative_to(work_orders_dir)
-        except ValueError:
-            try:
-                work_order_path.relative_to(briefs_dir)
-            except ValueError:
-                log.error("Work order path %r escapes docs/work-orders/ and docs/briefs/ — refusing", rel_path)
-                return None
-        if not _exists_on_main_or_disk(repo_root, work_order_path):
-            log.error("Work order not found on disk or at origin/main: %s", work_order_path)
-            return None
-        return work_order_path
-
-    # --- OpenSpec ---
-    openspec_match = _OPENSPEC_RE.search(issue.body)
-    if openspec_match:
-        return _resolve_dir_source(
-            rel_dir=openspec_match.group(1),
-            allowed_root=(repo_root / "openspec" / "changes").resolve(),
-            primary_file="tasks.md",
-            fallback_file="proposal.md",
-            source_label="OpenSpec",
-            issue_number=issue.number,
-            repo_root=repo_root,
-        )
-
-    # --- Speckit ---
-    speckit_match = _SPECKIT_RE.search(issue.body)
-    if speckit_match:
-        return _resolve_dir_source(
-            rel_dir=speckit_match.group(1),
-            allowed_root=(repo_root / "specs").resolve(),
-            primary_file="tasks.md",
-            fallback_file="spec.md",
-            source_label="Speckit",
-            issue_number=issue.number,
-            repo_root=repo_root,
-        )
-
-    log.error(
-        "Issue #%d body contains no prompt source reference "
-        "(expected 'WorkOrder: docs/work-orders/<name>.md', "
-        "'Brief: docs/briefs/<name>.md', "
-        "'OpenSpec: openspec/changes/<name>/', or "
-        "'Speckit: specs/<NNN>-<name>/')",
-        issue.number,
-    )
-    return None
 
 
 # Branch creation
@@ -334,7 +130,9 @@ def _worktrees_root() -> Path:
     return get_harness_scratch_root() / "driver" / "worktrees"
 
 
-def create_worktree(branch: str, repo_root: Path, issue_number: int) -> Path | None:
+def create_worktree(
+    branch: str, repo_root: Path, issue_number: int, *, base_revision: str | None = None
+) -> Path | None:
     """Create an isolated git worktree for *branch* off a fresh ``origin/main``.
 
     Each driver run executes in its own worktree rather than the shared
@@ -357,79 +155,66 @@ def create_worktree(branch: str, repo_root: Path, issue_number: int) -> Path | N
     Returns:
         The absolute path to the new worktree, or ``None`` on failure.
     """
-    base_ref = "origin/main"
+    base_ref = base_revision or "origin/main"
     # git fetch and git worktree add both mutate shared .git state in
     # repo_root; concurrent batch threads (max_concurrent > 1) racing here
     # hit git's ref/worktree lock files and fail spuriously — which would
     # burn an attempt on the issue. Serialize creation; the long-running
     # OpenCode sessions themselves still run concurrently.
     with _WORKTREE_CREATE_LOCK:
-        try:
-            subprocess.run(
-                ["git", "fetch", "origin", "main"],
-                cwd=repo_root,
-                capture_output=True,
-                text=True,
-                check=True,
-                timeout=_GIT_TIMEOUT,
-            )
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-            stderr = getattr(exc, "stderr", "") or ""
-            log.error("Failed to fetch %s before creating worktree: %s", base_ref, stderr.strip() or exc)
-            return None
-
         ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
         worktree_path = _worktrees_root() / f"issue-{issue_number}-{ts}"
         try:
             worktree_path.parent.mkdir(parents=True, exist_ok=True)
-        except OSError as exc:
-            log.error("Failed to create worktree root %s: %s", worktree_path.parent, exc)
+        except OSError:
+            log.error("Failed to create driver worktree root")
             return None
 
         try:
-            subprocess.run(
+            result = run_bounded_process(
                 ["git", "worktree", "add", "--force", "-B", branch, str(worktree_path), base_ref],
                 cwd=repo_root,
-                capture_output=True,
-                text=True,
-                check=True,
                 timeout=_GIT_TIMEOUT,
+                stdout_limit=_GIT_OUTPUT_BYTES,
+                stderr_limit=_GIT_OUTPUT_BYTES,
+                cleanup_timeout=TIMEOUT_PROCESS_KILL_GRACE,
             )
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-            stderr = getattr(exc, "stderr", "") or ""
-            log.error("Failed to create worktree for %s at %s: %s", branch, worktree_path, stderr.strip() or exc)
+            if result.returncode != 0:
+                raise BoundedProcessError("git worktree add failed", reason="start")
+        except BoundedProcessError:
+            log.error("Failed to create driver worktree")
             # Best-effort cleanup of a partially-created worktree.
             remove_worktree(worktree_path, repo_root)
             return None
 
-    log.info("Created worktree for %s at %s (base %s)", branch, worktree_path, base_ref)
+    log.info("Created driver worktree for issue #%d", issue_number)
     return worktree_path
 
 
 def remove_worktree(worktree_path: Path, repo_root: Path) -> None:
     """Tear down an ephemeral driver worktree.  Best-effort; never raises."""
     try:
-        subprocess.run(
+        run_bounded_process(
             ["git", "worktree", "remove", "--force", str(worktree_path)],
             cwd=repo_root,
-            capture_output=True,
-            text=True,
-            check=False,
             timeout=_GIT_TIMEOUT,
+            stdout_limit=_GIT_OUTPUT_BYTES,
+            stderr_limit=_GIT_OUTPUT_BYTES,
+            cleanup_timeout=TIMEOUT_PROCESS_KILL_GRACE,
         )
-    except (subprocess.TimeoutExpired, OSError) as exc:
-        log.warning("git worktree remove failed for %s: %s", worktree_path, exc)
+    except BoundedProcessError:
+        log.warning("git worktree remove did not complete")
     try:
-        subprocess.run(
+        run_bounded_process(
             ["git", "worktree", "prune"],
             cwd=repo_root,
-            capture_output=True,
-            text=True,
-            check=False,
             timeout=_GIT_TIMEOUT,
+            stdout_limit=_GIT_OUTPUT_BYTES,
+            stderr_limit=_GIT_OUTPUT_BYTES,
+            cleanup_timeout=TIMEOUT_PROCESS_KILL_GRACE,
         )
-    except (subprocess.TimeoutExpired, OSError) as exc:
-        log.warning("git worktree prune failed: %s", exc)
+    except BoundedProcessError:
+        log.warning("git worktree prune did not complete")
 
 
 # ---------------------------------------------------------------------------
@@ -460,7 +245,15 @@ def _isolate_data_dir(worktree_path: Path) -> Path:
 # Status logging
 # ---------------------------------------------------------------------------
 
-RunOutcome = Literal["ok", "failed", "skipped", "dry-run"]
+
+@dataclass(frozen=True)
+class CandidateResult:
+    """One candidate's outcome and whether its status record was persisted."""
+
+    issue_number: int
+    outcome: RunOutcome
+    error: str
+    status_persisted: bool
 
 
 @dataclass
@@ -472,37 +265,59 @@ class RunResult:
     elapsed_seconds: float
     spend_note: str
     error: str
+    candidates: tuple[CandidateResult, ...] = ()
 
 
 def _write_run_status(result: RunResult) -> None:
     """Append *result* to ``<fieldkit_data>/logs/driver/driver-run-status.json``."""
-    try:
-        logs_dir = get_fieldkit_data() / "logs" / "driver"
-        logs_dir.mkdir(parents=True, exist_ok=True)
-        status_file = logs_dir / "driver-run-status.json"
-        ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    logs_dir = get_fieldkit_data() / "logs" / "driver"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    status_file = logs_dir / "driver-run-status.json"
+    ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-        entry = {
-            "ts": ts,
-            "issue_number": result.issue_number,
-            "issue_title": result.issue_title,
-            "outcome": result.outcome,
-            "branch": result.branch,
-            "elapsed_seconds": round(result.elapsed_seconds, 1),
-            "spend_note": result.spend_note,
-            "error": result.error,
-        }
+    entry = {
+        "ts": ts,
+        "issue_number": result.issue_number,
+        "issue_title": result.issue_title,
+        "outcome": result.outcome,
+        "branch": result.branch,
+        "elapsed_seconds": round(result.elapsed_seconds, 1),
+        "spend_note": result.spend_note,
+        "error": result.error,
+    }
 
-        with locked_json_update(status_file) as existing:
-            entries: list[dict[str, Any]] = list(existing.get("runs", []))
-            entries.append(entry)
-            if len(entries) > 100:
-                del entries[: len(entries) - 100]
-            existing.clear()
-            existing["runs"] = entries
+    with locked_json_update(status_file) as existing:
+        entries: list[dict[str, Any]] = list(existing.get("runs", []))
+        entries.append(entry)
+        if len(entries) > 100:
+            del entries[: len(entries) - 100]
+        existing.clear()
+        existing["runs"] = entries
 
-    except OSError as exc:
-        log.warning("Could not write driver-run-status.json: %s", exc)
+
+def _aggregate_run_result(
+    result: RunResult, candidates: tuple[CandidateResult, ...], *, status_failed: bool
+) -> RunResult:
+    """Project all observed candidates into the canonical tick result once."""
+    blocked = [candidate for candidate in candidates if candidate.outcome in {"failed", "skipped"}]
+    error = result.error
+    outcome = result.outcome
+    if blocked and len(candidates) > 1:
+        error = "; ".join(f"Issue #{candidate.issue_number}: {candidate.error}" for candidate in blocked)
+        outcome = "skipped" if all(candidate.outcome == "skipped" for candidate in candidates) else "failed"
+    if status_failed:
+        error = "; ".join(filter(None, (error, "Driver status persistence failed; durable records are incomplete.")))
+        outcome = "skipped" if outcome == "skipped" else "failed"
+    return replace(
+        result,
+        issue_number=None if len(candidates) > 1 else result.issue_number,
+        issue_title="(batch)" if len(candidates) > 1 else result.issue_title,
+        branch="" if len(candidates) > 1 else result.branch,
+        spend_note="" if len(candidates) > 1 else result.spend_note,
+        outcome=outcome,
+        error=error,
+        candidates=candidates,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -510,20 +325,56 @@ def _write_run_status(result: RunResult) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _resolve_run_work_order(work_order_path: Path, repo_root: Path, worktree_path: Path | None) -> Path:
+def _sanitize_execution_result(result: RunResult) -> RunResult:
+    """Keep canonical failure messages, never publish arbitrary child diagnostics."""
+    if (
+        result.outcome == "failed"
+        and result.error not in _FAILURE_MESSAGES.values()
+        and result.error != _RETRY_FINALIZATION_FAILED
+    ):
+        return replace(result, error=_UNKNOWN_EXECUTION_FAILURE)
+    return result
+
+
+def _resolve_run_work_order(
+    work_order_path: Path,
+    repo_root: Path,
+    worktree_path: Path | None,
+    *,
+    revision_bound: bool,
+) -> Path:
     """Point the agent at the worktree's own copy of the work order.
 
     The work order is committed on main, so it is present in a fresh worktree;
     using that copy keeps the session operating entirely inside its isolation.
-    Falls back to the original path on dry-run (no worktree) or if the expected
-    copy is missing.
+    Dry-runs and isolated non-Git fixtures use the original path because they
+    have no frozen revision. A revision-bound run fails closed if its worktree
+    does not contain the prompt.
     """
     if worktree_path is None:
         return work_order_path
     candidate = worktree_path / work_order_path.relative_to(repo_root)
-    if candidate.exists():
+    if candidate.is_file() and not candidate.is_symlink():
         return candidate
+    if revision_bound:
+        raise PromptSourceError("revision-bound worktree does not contain the driver prompt")
     return work_order_path
+
+
+def _execution_worktree_is_clean(worktree_path: Path) -> bool:
+    """Return whether every local change was committed before submitted-head verification."""
+    try:
+        result = run_bounded_process_bytes(
+            ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+            cwd=worktree_path,
+            timeout=_GIT_TIMEOUT,
+            stdout_limit=_GIT_OUTPUT_BYTES,
+            stderr_limit=_GIT_OUTPUT_BYTES,
+            cleanup_timeout=TIMEOUT_PROCESS_KILL_GRACE,
+        )
+    except BoundedProcessError:
+        return False
+    return result.returncode == 0 and result.stdout == b""
 
 
 def _finalize_run_outcome(
@@ -536,6 +387,7 @@ def _finalize_run_outcome(
     started_at: datetime,
     spend_note: str,
     dry_run: bool,
+    failure_code: FailureCode = "agent-failed",
 ) -> RunResult:
     """Persist the terminal outcome before projecting it onto GitHub."""
 
@@ -556,7 +408,7 @@ def _finalize_run_outcome(
                 repo, issue.number, succeeded=True, outcome="succeeded", data_root=get_fieldkit_data()
             )
             if not finalized.allowed:
-                return _result("failed", finalized.detail)
+                return _result("failed", _RETRY_FINALIZATION_FAILED)
             transition_to_succeeded(repo, issue, attempt=attempt)
             comment_on_issue(
                 repo,
@@ -565,26 +417,37 @@ def _finalize_run_outcome(
             )
         return _result("dry-run" if dry_run else "ok", "")
 
-    error_msg = oc_outcome.reason or f"OpenCode failed for issue #{issue.number}"
     if oc_outcome.status == "rate_limited":
+        error_msg = _FAILURE_MESSAGES["rate-limited"]
         # Provider starvation still charges the reserved attempt; GitHub labels
         # remain unchanged and the idempotent comment exposes the condition.
         log.warning("Issue #%d: %s — skipping after a reserved attempt", issue.number, error_msg)
         if not dry_run:
             finalized = complete_attempt(
-                repo, issue.number, succeeded=False, outcome=error_msg, data_root=get_fieldkit_data()
+                repo,
+                issue.number,
+                succeeded=False,
+                outcome=error_msg,
+                failure_code="rate-limited",
+                data_root=get_fieldkit_data(),
             )
             if not finalized.allowed:
-                return _result("failed", finalized.detail)
+                return _result("failed", _RETRY_FINALIZATION_FAILED)
         _notify_rate_limited(repo, issue.number, error_msg, dry_run)
         return _result("skipped", error_msg)
 
+    error_msg = _FAILURE_MESSAGES[failure_code]
     if not dry_run:
         finalized = complete_attempt(
-            repo, issue.number, succeeded=False, outcome=error_msg, data_root=get_fieldkit_data()
+            repo,
+            issue.number,
+            succeeded=False,
+            outcome=error_msg,
+            failure_code=failure_code,
+            data_root=get_fieldkit_data(),
         )
         if not finalized.allowed:
-            return _result("failed", finalized.detail)
+            return _result("failed", _RETRY_FINALIZATION_FAILED)
         transition_to_failed(repo, issue, attempt=attempt, error=error_msg)
     return _result("failed", error_msg)
 
@@ -593,26 +456,35 @@ def _run_attempt_lifecycle(
     repo: str,
     issue: AgentIssue,
     work_order_path: Path,
+    contract_path: Path,
     repo_root: Path,
     started_at: datetime,
     run_started_monotonic: float,
     attempt: int,
     branch: str,
     worktree_path: Path | None,
+    retry_receipt: RetryReceipt | None,
     *,
+    source_revision: str | None,
     dry_run: bool,
 ) -> RunResult:
     snapshot = None
     try:
         work_dir = worktree_path if worktree_path is not None else repo_root
-        run_work_order = _resolve_run_work_order(work_order_path, repo_root, worktree_path)
+        run_work_order = _resolve_run_work_order(
+            work_order_path,
+            repo_root,
+            worktree_path,
+            revision_bound=source_revision is not None,
+        )
         data_dir = _isolate_data_dir(worktree_path) if worktree_path is not None else None
         llm_log_path = reserve_run_db_path(issue.number) if not dry_run else None
-        prior_failure = last_failure_comment(repo, issue.number) if attempt > 1 and not dry_run else ""
         if not dry_run:
             snapshot = create_trusted_snapshot(
                 repo_root,
                 work_order_path,
+                contract_path=contract_path,
+                base_revision=source_revision,
                 repository=repo,
                 issue_number=issue.number,
                 attempt=attempt,
@@ -627,9 +499,20 @@ def _run_attempt_lifecycle(
             dry_run=dry_run,
             data_dir=data_dir,
             llm_log_path=llm_log_path,
-            prior_failure=prior_failure,
+            retry_receipt=retry_receipt,
         )
         spend_note = get_spend_summary(issue.number, llm_log_path) if not dry_run else ""
+        failure_code: FailureCode = "agent-failed"
+
+        if (
+            oc_outcome.status == "ok"
+            and not dry_run
+            and source_revision is not None
+            and worktree_path is not None
+            and not _execution_worktree_is_clean(worktree_path)
+        ):
+            failure_code = "verification-failed"
+            oc_outcome = OpencodeOutcome(status="failed", reason="execution worktree has unsubmitted changes")
 
         if oc_outcome.status == "ok" and not dry_run:
             assert snapshot is not None
@@ -641,6 +524,7 @@ def _run_attempt_lifecycle(
                 run_started_monotonic=run_started_monotonic,
             )
             if not verification.passed:
+                failure_code = "verification-failed"
                 oc_outcome = OpencodeOutcome(
                     status="failed", reason=f"Independent verification failed: {verification.reason}"
                 )
@@ -654,29 +538,32 @@ def _run_attempt_lifecycle(
             started_at=started_at,
             spend_note=spend_note,
             dry_run=dry_run,
+            failure_code=failure_code,
         )
-    except (VerificationError, OSError, subprocess.SubprocessError) as exc:
+    except (VerificationError, GitHubLookupError, BoundedProcessError, OSError, subprocess.SubprocessError):
         return _finalize_run_outcome(
             repo,
             issue,
             attempt=attempt,
             branch=branch,
-            oc_outcome=OpencodeOutcome(status="failed", reason=f"Independent verification setup failed: {exc}"),
+            oc_outcome=OpencodeOutcome(status="failed", reason="Independent verification setup failed"),
             started_at=started_at,
             spend_note="",
             dry_run=dry_run,
+            failure_code="setup-failed",
         )
-    except AuthError as exc:
+    except AuthError:
         if not dry_run:
             finalized = complete_attempt(
                 repo,
                 issue.number,
                 succeeded=False,
                 outcome="authentication failed during independent verification",
+                failure_code="authentication-failed",
                 data_root=get_fieldkit_data(),
             )
             if not finalized.allowed:
-                raise AuthError(f"{exc}; local attempt finalization failed: {finalized.detail}") from exc
+                raise AuthError("Authentication required; local attempt finalization failed") from None
         raise
     finally:
         # Always tear down the worktree — the branch is pushed to origin for
@@ -684,13 +571,13 @@ def _run_attempt_lifecycle(
         if worktree_path is not None:
             remove_worktree(worktree_path, repo_root)
         if snapshot is not None and not remove_snapshot(snapshot):
-            log.error("Trusted snapshot cleanup failed: %s", snapshot.snapshot_dir)
+            log.error("Trusted driver snapshot cleanup failed")
 
 
 def _execute_one(
     repo: str,
     issue: AgentIssue,
-    work_order_path: Path,
+    prompt: FrozenPrompt,
     repo_root: Path,
     started_at: datetime,
     run_started_monotonic: float,
@@ -717,7 +604,13 @@ def _execute_one(
     reservation = (
         check_eligibility(repo, issue.number, issue.labels, data_root=get_fieldkit_data())
         if dry_run
-        else reserve_attempt(repo, issue.number, issue.labels, data_root=get_fieldkit_data())
+        else reserve_attempt(
+            repo,
+            issue.number,
+            issue.labels,
+            source_revision=prompt.revision,
+            data_root=get_fieldkit_data(),
+        )
     )
     if not reservation.allowed or reservation.attempt is None:
         return RunResult(
@@ -727,17 +620,25 @@ def _execute_one(
             branch="",
             elapsed_seconds=_elapsed(),
             spend_note="",
-            error=reservation.detail,
+            error=_RETRY_RESERVATION_DENIED,
         )
     attempt = reservation.attempt
     branch = make_branch_name(issue)
     worktree_path: Path | None = None
     if not dry_run:
-        worktree_path = create_worktree(branch, repo_root, issue.number)
+        if prompt.revision is None:
+            worktree_path = create_worktree(branch, repo_root, issue.number)
+        else:
+            worktree_path = create_worktree(branch, repo_root, issue.number, base_revision=prompt.revision)
         if worktree_path is None:
-            error_msg = f"Could not create worktree for {branch}"
+            error_msg = _FAILURE_MESSAGES["worktree-failed"]
             finalized = complete_attempt(
-                repo, issue.number, succeeded=False, outcome=error_msg, data_root=get_fieldkit_data()
+                repo,
+                issue.number,
+                succeeded=False,
+                outcome=error_msg,
+                failure_code="worktree-failed",
+                data_root=get_fieldkit_data(),
             )
             if finalized.allowed:
                 transition_to_failed(repo, issue, attempt=attempt, error=error_msg)
@@ -753,13 +654,16 @@ def _execute_one(
     return _run_attempt_lifecycle(
         repo,
         issue,
-        work_order_path,
+        prompt.source.path,
+        prompt.contract_path,
         repo_root,
         started_at,
         run_started_monotonic,
         attempt,
         branch,
         worktree_path,
+        reservation.receipt,
+        source_revision=prompt.revision,
         dry_run=dry_run,
     )
 
@@ -779,7 +683,7 @@ def run_driver(
         dry_run:   Log actions but make no external changes (no labels, no git).
 
     Returns:
-        The last completed run; every run also gets its own status-file entry.
+        The aggregate tick result, including each observed candidate's outcome.
     """
     lock_path = get_fieldkit_data() / "driver" / "driver.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -818,6 +722,29 @@ def run_driver(
             error=error,
         )
 
+    observations: list[CandidateResult] = []
+    status_failed = False
+    record_lock = threading.Lock()
+
+    def _record(result: RunResult) -> None:
+        nonlocal status_failed
+        with record_lock:
+            persisted = True
+            try:
+                _write_run_status(result)
+            except (OSError, ValueError):
+                persisted = False
+                status_failed = True
+                log.warning("Could not persist driver run status")
+            if result.issue_number is not None:
+                observations.append(CandidateResult(result.issue_number, result.outcome, result.error, persisted))
+
+    def _finish(result: RunResult) -> RunResult:
+        candidates = tuple(sorted(observations, key=lambda candidate: candidate.issue_number))
+        return _aggregate_run_result(
+            replace(result, elapsed_seconds=_elapsed()), candidates, status_failed=status_failed
+        )
+
     # implementation note: daily spend guard. Fails CLOSED. A cap the operator set is a statement
     # that unbounded spend is unacceptable, so "cannot verify spend" and "cap
     # misconfigured" both stop the run rather than proceeding uncapped. This mirrors the
@@ -832,15 +759,23 @@ def run_driver(
                 if spend_check.reason_code == "spend-cap-invalid"
                 else "Spend cap check (fail closed)"
             )
-            return _skipped(f"{prefix}: {spend_check.detail}")
+            executed = _skipped(prefix)
+            _record(executed)
+            return _finish(executed)
 
     repo = get_github_repo()
-    # Refresh origin/main so a work order the foreman merged this hour resolves;
-    # otherwise a freshly-authored issue whose agent-ready was flipped near the
-    # merge would be seen as "no work order" against a stale checkout.
-    if not dry_run:
-        _fetch_main(repo_root)
-    issues = list_ready_issues(repo)
+    try:
+        source_revision = freeze_origin_main(repo_root, refresh=not dry_run)
+    except PromptSourceError as exc:
+        executed = _skipped(f"Prompt-source revision lookup failed (fail closed): {exc}")
+        _record(executed)
+        return _finish(executed)
+    try:
+        issues = list_ready_issues(repo)
+    except GitHubRequestError:
+        executed = _skipped("GitHub issue queue lookup failed")
+        _record(executed)
+        return _finish(executed)
 
     if not issues:
         log.info("No agent-ready issues found — nothing to do")
@@ -848,11 +783,12 @@ def run_driver(
 
     # Resolve work orders up front — issues without a reference are delabeled
     # and skipped (they don't burn an attempt), the rest become candidates.
-    candidates: list[tuple[AgentIssue, Path]] = []
+    candidates: list[tuple[AgentIssue, FrozenPrompt]] = []
+    candidate_failures: list[str] = []
     for issue in issues:
-        work_order_path = resolve_prompt_source(issue, repo_root)
-        if work_order_path is None:
-            if _has_prompt_reference(issue.body):
+        prompt_source = resolve_prompt_source(issue, repo_root)
+        if prompt_source is None:
+            if has_prompt_reference(issue.body):
                 # Policy A: a reference is present but the file is not resolvable
                 # this tick — almost always the work order has not propagated to
                 # origin/main yet (foreman flipped agent-ready near the merge).
@@ -874,10 +810,10 @@ def run_driver(
                         "**leaving `agent-ready` in place**. If the work order was merged "
                         "moments ago it will run automatically on the next tick once the "
                         "file propagates. If it keeps recurring, the reference is likely "
-                        "wrong or the file was never merged — check the work-order path in "
-                        "the issue body and the foreman run.",
+                        "wrong or the file was never merged — correct the `WorkOrder:` path "
+                        "in the issue body before the next run.",
                     )
-                _write_run_status(
+                _record(
                     RunResult(
                         issue_number=issue.number,
                         issue_title=issue.title,
@@ -888,6 +824,7 @@ def run_driver(
                         error="Work order referenced but not resolvable this tick — agent-ready retained",
                     )
                 )
+                candidate_failures.append(f"#{issue.number}: prompt reference is not resolvable")
                 continue
             # No prompt reference at all: a malformed agent-ready issue that can
             # never run until someone adds a reference. Remove the label (the
@@ -903,10 +840,11 @@ def run_driver(
                     issue.number,
                     "⚠️ **Driver skipped** — this issue is `agent-ready` but its body has no "
                     "work-order reference (`WorkOrder: docs/work-orders/<name>.md`). "
-                    "Removing `agent-ready`; re-run the foreman to author a work order.",
+                    "Removing `agent-ready`; add a valid `WorkOrder:` reference and then "
+                    "re-add the label.",
                 )
                 remove_label(repo, issue.number, LABEL_READY)
-            _write_run_status(
+            _record(
                 RunResult(
                     issue_number=issue.number,
                     issue_title=issue.title,
@@ -917,33 +855,46 @@ def run_driver(
                     error="No work order reference — agent-ready label removed",
                 )
             )
+            candidate_failures.append(f"#{issue.number}: no prompt reference")
+            continue
+        try:
+            prompt = freeze_prompt(repo_root, prompt_source, source_revision)
+        except PromptSourceError:
+            reason = f"Prompt contract invalid or stale (fail closed): {prompt_source.path.relative_to(repo_root).as_posix()}"
+            log.warning("Issue #%d skipped: %s", issue.number, reason)
+            _record(RunResult(issue.number, issue.title, "skipped", "", _elapsed(), "", reason))
+            candidate_failures.append(f"#{issue.number}: {reason}")
             continue
         if not dry_run:
             retry_decision = check_eligibility(repo, issue.number, issue.labels, data_root=get_fieldkit_data())
             if not retry_decision.allowed:
-                log.warning("Issue #%d skipped by local retry state: %s", issue.number, retry_decision.detail)
+                reason = "Local retry eligibility denied"
+                log.warning("Issue #%d skipped by local retry state", issue.number)
+                _record(RunResult(issue.number, issue.title, "skipped", "", _elapsed(), "", reason))
+                candidate_failures.append(f"#{issue.number}: {reason}")
                 continue
-        candidates.append((issue, work_order_path))
+        candidates.append((issue, prompt))
 
     if not candidates:
-        executed = _skipped("All queued issues lacked a work order reference")
-        _write_run_status(executed)
-        return executed
+        detail = "; ".join(candidate_failures) or "No eligible prompt source was found"
+        executed = _skipped(f"No queued issue was executable: {detail}")
+        _record(executed)
+        return _finish(executed)
 
     # Covers-as-locks selection: compute the busy set (files changed by open
     # PRs targeting main) and the open dependencies, then pick a batch of
     # pairwise-disjoint candidates. Busy-set failure fails closed.
     try:
         busy = busy_files(repo)
-    except SchedulerError as exc:
-        log.error("Could not compute busy set — failing closed, running nothing: %s", exc)
-        executed = _skipped(f"Busy-set lookup failed (fail closed): {exc}")
-        _write_run_status(executed)
-        return executed
+    except SchedulerError:
+        log.error("Could not compute busy set — failing closed, running nothing")
+        executed = _skipped("Busy-set lookup failed (fail closed)")
+        _record(executed)
+        return _finish(executed)
 
     declared_deps: set[int] = set()
-    for _, work_order_path in candidates:
-        declared_deps.update(parse_depends_on(work_order_path))
+    for _, prompt in candidates:
+        declared_deps.update(prompt.contract.depends_on)
     open_deps = open_issue_numbers(repo, declared_deps) if declared_deps else frozenset()
 
     max_concurrent = cap_safe_max_concurrent(
@@ -952,47 +903,36 @@ def run_driver(
     selected, skips = select_runnable(candidates, busy, open_deps, max_concurrent)
     for skip in skips:
         log.info("Skipping issue %s", skip)
+        issue = next(issue for issue, _prompt in candidates if issue.number == skip.issue_number)
+        _record(RunResult(issue.number, issue.title, "skipped", "", _elapsed(), "", str(skip)))
 
     if not selected:
         summary = "; ".join(str(skip) for skip in skips)
         executed = _skipped(f"All candidates blocked: {summary}")
-        _write_run_status(executed)
-        return executed
+        _record(executed)
+        return _finish(executed)
+
+    def _execute_and_record(issue: AgentIssue, prompt: FrozenPrompt) -> RunResult:
+        try:
+            result = _sanitize_execution_result(
+                _execute_one(repo, issue, prompt, repo_root, start, run_started_monotonic, dry_run=dry_run)
+            )
+        except AuthError:
+            _record(RunResult(issue.number, issue.title, "failed", "", _elapsed(), "", "Authentication required"))
+            raise
+        _record(result)
+        return result
 
     # Execute the batch — plain call for one issue, threads for more (the
     # payload is subprocess.run, which releases the GIL).
     if len(selected) == 1:
-        issue, work_order_path = selected[0]
-        results = [
-            _execute_one(
-                repo,
-                issue,
-                work_order_path,
-                repo_root,
-                start,
-                run_started_monotonic,
-                dry_run=dry_run,
-            )
-        ]
+        issue, prompt = selected[0]
+        results = [_execute_and_record(issue, prompt)]
     else:
         from concurrent.futures import ThreadPoolExecutor
 
         with ThreadPoolExecutor(max_workers=len(selected)) as pool:
-            futures = [
-                pool.submit(
-                    _execute_one,
-                    repo,
-                    issue,
-                    work_order_path,
-                    repo_root,
-                    start,
-                    run_started_monotonic,
-                    dry_run=dry_run,
-                )
-                for issue, work_order_path in selected
-            ]
+            futures = [pool.submit(_execute_and_record, issue, prompt) for issue, prompt in selected]
             results = [future.result() for future in futures]
 
-    for result in results:
-        _write_run_status(result)
-    return results[-1]
+    return _finish(results[-1])

@@ -4,8 +4,9 @@
 import importlib
 import sys
 from collections.abc import Callable, Generator, Mapping
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, contextmanager, nullcontext
 from inspect import signature
+from pathlib import Path
 from subprocess import CompletedProcess
 from unittest.mock import MagicMock, patch
 
@@ -14,8 +15,11 @@ from click.testing import CliRunner, Result
 
 from fieldkit.commands.watch.cli import cli
 from fieldkit.commands.watch.cli import cli as _cli_group  # noqa: F401
-from fieldkit.errors import AuthError
+from fieldkit.errors import AuthError, LLMError, LLMErrorCategory
 from fieldkit.watch import close_date_countdown as countdown_domain
+from fieldkit.watch.integration_plan import IntegrationPlan
+from fieldkit.watch.slack_threads import SlackRunOutcome
+from fieldkit.watch.status import WatcherDailySnapshot, WatcherOutcome, WatcherRunResult
 
 pytestmark = pytest.mark.unit
 
@@ -49,6 +53,29 @@ def _all_zero() -> dict[str, int]:
     }
 
 
+def _slack_outcome(exit_code: int) -> SlackRunOutcome:
+    return SlackRunOutcome(
+        run=_typed_result(exit_code),
+        records_checked=0,
+        alerts_generated=0,
+        failures=int(exit_code != 0),
+        auth_error=exit_code == 2,
+        provider_error=False,
+        elapsed_seconds=0.0,
+        dry_run=False,
+    )
+
+
+def _typed_result(code: int) -> WatcherRunResult:
+    if code == 0:
+        return WatcherRunResult("ok", True, "written")
+    if code == 1:
+        return WatcherRunResult("partial", True, "written")
+    if code == 2:
+        return WatcherRunResult("fatal", False, None, 2)
+    return WatcherRunResult("fatal", False, None, 3)
+
+
 # ---------------------------------------------------------------------------
 # run --all sequencing and exit code aggregation
 # ---------------------------------------------------------------------------
@@ -79,8 +106,10 @@ def _patch_watcher_runs(
                     raise outcome
                 if callable(outcome):
                     callback: Callable[[], object] = outcome
-                    return callback()
-                return outcome
+                    outcome = callback()
+                if _name == "slack-threads" and type(outcome) is int:
+                    return _slack_outcome(outcome)
+                return _typed_result(outcome) if type(outcome) is int else outcome
 
             stack.enter_context(patch(target, side_effect=_run))
         yield
@@ -93,12 +122,20 @@ def _run_all_run_run_all(
     brief_rc: int = 0,
 ) -> Result:
     outer_runner = CliRunner()
+    plan = IntegrationPlan(
+        preflight_services=(),
+        optional_watchers=("backstory-health", "draft-queue", "slack-threads"),
+        calendar=False,
+        llm=False,
+        skipped=(),
+    )
     with (
         _patch_watcher_runs(outcomes, calls),
-        patch("fieldkit.watch.status.was_run_today", return_value=False),
-        patch("fieldkit.watch.status.write_run_status"),
+        patch("fieldkit.watch.status.get_daily_run_snapshot", return_value=WatcherDailySnapshot(False, None)),
+        patch("fieldkit.watch.status.write_run_status", return_value="written"),
         patch("fieldkit.watch.preflight.preflight_check", return_value=[]),
-        patch("fieldkit.commands.brief.generate._run_generate_inner", return_value=brief_rc),
+        patch("fieldkit.watch.integration_plan.build_integration_plan", return_value=plan),
+        patch("fieldkit.commands.brief.generate._run_generate_inner", return_value=_typed_result(brief_rc)),
     ):
         return outer_runner.invoke(cli, ["run", "--all"] + (args or []), catch_exceptions=False)
 
@@ -109,6 +146,47 @@ def test_run_all_calls_all_watchers_in_correct_order() -> None:
     result = _run_all_run_run_all(_all_zero(), calls)
     assert [name for name, _kwargs in calls] == _watch_cli_mod._WATCHER_ORDER
     assert result.exit_code == 0
+
+
+def test_run_all_local_plan_skips_optional_watchers_explicitly() -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
+    plan = IntegrationPlan(
+        (),
+        (),
+        False,
+        False,
+        (
+            "backstory-health: not configured",
+            "draft-queue: not configured",
+            "slack-threads: not selected",
+        ),
+    )
+    with (
+        _patch_watcher_runs(_all_zero(), calls),
+        patch("fieldkit.watch.integration_plan.build_integration_plan", return_value=plan),
+        patch("fieldkit.watch.status.get_daily_run_snapshot", return_value=WatcherDailySnapshot(False, None)),
+        patch("fieldkit.watch.status.write_run_status", return_value="written"),
+        patch("fieldkit.commands.brief.generate._run_generate_inner", return_value=_typed_result(0)),
+    ):
+        result = CliRunner().invoke(cli, ["run", "--all"])
+
+    assert result.exit_code == 0
+    assert [name for name, _kwargs in calls] == [
+        "waiting-on-tracker",
+        "pursuit-stalls",
+        "close-date-countdown",
+        "contract-expiry",
+    ]
+    assert "not run: backstory-health: not configured" in result.output
+
+
+def test_run_all_slack_flag_is_part_of_canonical_selection() -> None:
+    plan = IntegrationPlan((), (), False, False, ())
+    with patch("fieldkit.watch.integration_plan.build_integration_plan", return_value=plan) as build:
+        result = CliRunner().invoke(cli, ["run", "--all", "--slack", "--dry-run"])
+
+    assert result.exit_code in {0, 1}
+    assert build.call_args.kwargs["slack_requested"] is True
 
 
 def test_run_all_uses_effective_watcher_defaults() -> None:
@@ -145,7 +223,6 @@ def test_run_all_uses_effective_watcher_defaults() -> None:
                 "limit": 50,
                 "limit_per_account": None,
                 "dry_run": False,
-                "as_json": False,
             },
         ),
         ("draft-queue", {"dry_run": False, "account": None, "as_json": False}),
@@ -166,10 +243,10 @@ def test_run_all_leaf_countdown_defaults_match_domain_constants() -> None:
 def test_run_all_discards_domain_streams_and_restores_aggregate_output() -> None:
     """Domain stdout/stderr stay hidden while the aggregate summary remains visible."""
 
-    def noisy_domain() -> int:
+    def noisy_domain() -> WatcherRunResult:
         print("domain stdout marker")
         print("domain stderr marker", file=sys.stderr)
-        return 0
+        return _typed_result(0)
 
     outcomes: Mapping[str, object] = {**_all_zero(), "waiting-on-tracker": noisy_domain}
 
@@ -181,17 +258,17 @@ def test_run_all_discards_domain_streams_and_restores_aggregate_output() -> None
     assert "Watcher Summary:" in result.output
 
 
-def test_invoke_watcher_returns_exact_integer_and_discards_domain_streams(capsys: pytest.CaptureFixture[str]) -> None:
+def test_invoke_watcher_returns_typed_result_and_discards_domain_streams(capsys: pytest.CaptureFixture[str]) -> None:
     """The direct-call boundary preserves an exact domain exit code without leaking output."""
 
-    def noisy_domain() -> int:
+    def noisy_domain() -> WatcherRunResult:
         print("domain stdout marker")
         print("domain stderr marker", file=sys.stderr)
-        return 3
+        return _typed_result(3)
 
     rc = _watch_cli_mod._invoke_watcher("waiting-on-tracker", noisy_domain)
 
-    assert rc == 3
+    assert rc == _typed_result(3)
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err == ""
@@ -201,7 +278,36 @@ def test_invoke_watcher_returns_exact_integer_and_discards_domain_streams(capsys
 def test_invoke_watcher_treats_non_exact_integer_result_as_failure(invalid_result: object) -> None:
     rc = _watch_cli_mod._invoke_watcher("waiting-on-tracker", lambda: invalid_result)
 
-    assert rc == 1
+    assert rc == WatcherRunResult("fatal", False, None)
+
+
+@pytest.mark.parametrize("adapter", ["watcher", "brief"])
+@pytest.mark.parametrize(
+    "returned,expected",
+    [
+        (0, WatcherRunResult("fatal", False, None)),
+        ("private-diagnostic-sentinel", WatcherRunResult("fatal", False, None)),
+        (WatcherRunResult("ok", True, None), WatcherRunResult("fatal", True, None)),
+        (WatcherRunResult("partial", True, "skipped"), WatcherRunResult("fatal", True, "skipped")),
+    ],
+)
+def test_invalid_execution_evidence_has_a_fixed_adapter_diagnostic(
+    adapter: str,
+    returned: object,
+    expected: WatcherRunResult,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    if adapter == "watcher":
+        result = _watch_cli_mod._invoke_watcher("waiting-on-tracker", lambda: returned)
+        name = "waiting-on-tracker"
+    else:
+        with patch("fieldkit.commands.brief.generate._run_generate_inner", return_value=returned):
+            result, _elapsed = _watch_cli_mod._run_brief_step(dry_run=False, no_llm=True)
+        name = "morning-brief"
+
+    assert result == expected
+    assert f"watcher={name} returned invalid execution evidence" in caplog.text
+    assert "private-diagnostic-sentinel" not in caplog.text
 
 
 def test_invoke_watcher_propagates_auth_error() -> None:
@@ -218,8 +324,9 @@ def test_invoke_watcher_maps_ordinary_exception_to_failure(caplog: pytest.LogCap
 
     rc = _watch_cli_mod._invoke_watcher("waiting-on-tracker", ordinary_failure)
 
-    assert rc == 1
-    assert "watcher=waiting-on-tracker raised unexpected exception: ValueError: watcher failure" in caplog.text
+    assert rc == WatcherRunResult("fatal", False, None)
+    assert "watcher=waiting-on-tracker raised an unexpected exception" in caplog.text
+    assert "watcher failure" not in caplog.text
 
 
 def test_run_all_restores_streams_before_logging_ordinary_exception() -> None:
@@ -242,7 +349,8 @@ def test_run_all_restores_streams_before_logging_ordinary_exception() -> None:
     assert result.exit_code == 1
     assert "domain stdout marker" not in result.output
     assert "domain stderr marker" not in result.output
-    assert "watcher=waiting-on-tracker raised unexpected exception: ValueError: watcher failure" in result.output
+    assert "watcher=waiting-on-tracker raised an unexpected exception" in result.output
+    assert "watcher failure" not in result.output
     assert [name for name, _kwargs in calls] == _watch_cli_mod._WATCHER_ORDER
 
 
@@ -258,8 +366,8 @@ def test_run_all_restores_streams_before_auth_error_boundary(capsys: pytest.Capt
     outcomes: Mapping[str, object] = {**_all_zero(), "waiting-on-tracker": noisy_auth_failure}
     with (
         _patch_watcher_runs(outcomes, []),
-        patch("fieldkit.watch.status.was_run_today", return_value=False),
-        patch("fieldkit.watch.status.write_run_status"),
+        patch("fieldkit.watch.status.get_daily_run_snapshot", return_value=WatcherDailySnapshot(False, None)),
+        patch("fieldkit.watch.status.write_run_status", return_value="written"),
         patch("fieldkit.watch.preflight.preflight_check", return_value=[]),
     ):
         result = main(["watch", "run", "--all"])
@@ -290,6 +398,89 @@ def test_run_all_exit_code_zero_when_all_succeed() -> None:
     """Exit code is 0 when all watchers return 0."""
     result = _run_all_run_run_all(_all_zero(), [])
     assert result.exit_code == 0
+
+
+@pytest.mark.parametrize("watcher_code", [0, 1, 2, 3])
+@pytest.mark.parametrize("allow_partial", [False, True])
+def test_run_all_status_write_failure_remains_nonpassing(watcher_code: int, allow_partial: bool) -> None:
+    outcomes = _all_zero()
+    outcomes["close-date-countdown"] = watcher_code
+    plan = IntegrationPlan((), ("backstory-health", "draft-queue", "slack-threads"), False, False, ())
+    args = ["run", "--all"]
+    if allow_partial:
+        args.append("--allow-partial")
+    with (
+        _patch_watcher_runs(outcomes, []),
+        patch("fieldkit.watch.status.get_daily_run_snapshot", return_value=WatcherDailySnapshot(False, None)),
+        patch("fieldkit.watch.status.write_run_status", return_value="failed") as write_status,
+        patch("fieldkit.watch.preflight.preflight_check", return_value=[]),
+        patch("fieldkit.watch.integration_plan.build_integration_plan", return_value=plan),
+        patch("fieldkit.commands.brief.generate._run_generate_inner", return_value=_typed_result(0)),
+    ):
+        result = CliRunner().invoke(cli, args, catch_exceptions=False)
+
+    assert result.exit_code == max(1, watcher_code)
+    assert "run status was not persisted" in result.output
+    write_status.assert_called_once()
+
+
+def test_run_all_maps_typed_slack_auth_outcome_to_exit_two() -> None:
+    outcome = _slack_outcome(2)
+    results: Mapping[str, object] = {**_all_zero(), "slack-threads": outcome}
+
+    result = _run_all_run_run_all(results, [])
+
+    assert outcome.run.failure_code == 2
+    assert result.exit_code == 2
+
+
+def test_run_all_propagates_partial_countdown_to_exit_and_persisted_outcome() -> None:
+    outcomes = _all_zero()
+    outcomes["close-date-countdown"] = 1
+    calls: list[tuple[str, dict[str, object]]] = []
+    plan = IntegrationPlan((), ("backstory-health", "draft-queue", "slack-threads"), False, False, ())
+
+    with (
+        _patch_watcher_runs(outcomes, calls),
+        patch("fieldkit.watch.status.get_daily_run_snapshot", return_value=WatcherDailySnapshot(False, None)),
+        patch("fieldkit.watch.status.write_run_status", return_value="written") as write_status,
+        patch("fieldkit.watch.preflight.preflight_check", return_value=[]),
+        patch("fieldkit.watch.integration_plan.build_integration_plan", return_value=plan),
+        patch("fieldkit.commands.brief.generate._run_generate_inner", return_value=_typed_result(0)),
+    ):
+        result = CliRunner().invoke(cli, ["run", "--all"], catch_exceptions=False)
+
+    assert result.exit_code == 1
+    assert [name for name, _kwargs in calls] == _watch_cli_mod._WATCHER_ORDER
+    write_status.assert_called_once()
+    assert write_status.call_args.kwargs["watcher"] == "run-all"
+    assert write_status.call_args.kwargs["outcome"] == "partial"
+    assert write_status.call_args.kwargs["failures"] == 1
+
+
+@pytest.mark.parametrize("prior_outcome", ["ok", "partial", "fatal"])
+def test_run_all_dry_run_ignores_prior_daily_outcome_and_executes_preview(prior_outcome: WatcherOutcome) -> None:
+    from fieldkit.__main__ import main
+
+    calls: list[tuple[str, dict[str, object]]] = []
+    plan = IntegrationPlan((), ("backstory-health", "draft-queue", "slack-threads"), False, False, ())
+    with (
+        _patch_watcher_runs(_all_zero(), calls),
+        patch("fieldkit.watch.status.get_daily_run_snapshot", return_value=WatcherDailySnapshot(True, prior_outcome)),
+        patch("fieldkit.commands.watch.cli._run_preflight_guard") as preflight,
+        patch("fieldkit.watch.status.write_run_status", return_value="written") as write_status,
+        patch("fieldkit.watch.integration_plan.build_integration_plan", return_value=plan),
+        patch("fieldkit.commands.brief.generate._run_generate_inner", return_value=_typed_result(0)),
+    ):
+        exit_code = main(["watch", "run", "--all", "--dry-run"])
+
+    assert exit_code == 0
+    assert [name for name, _kwargs in calls] == [
+        name for name in _watch_cli_mod._WATCHER_ORDER if name != "slack-threads"
+    ]
+    assert all(kwargs["dry_run"] is True for _name, kwargs in calls)
+    preflight.assert_not_called()
+    write_status.assert_not_called()
 
 
 @pytest.mark.parametrize("invalid_result", [False, None, "1"])
@@ -326,14 +517,53 @@ def test_run_all_auth_error_maps_to_exit_two_at_real_cli_boundary(capsys: pytest
     outcomes: Mapping[str, object] = {**_all_zero(), "waiting-on-tracker": AuthError("refresh credentials")}
     with (
         _patch_watcher_runs(outcomes, []),
-        patch("fieldkit.watch.status.was_run_today", return_value=False),
-        patch("fieldkit.watch.status.write_run_status"),
+        patch("fieldkit.watch.status.get_daily_run_snapshot", return_value=WatcherDailySnapshot(False, None)),
+        patch("fieldkit.watch.status.write_run_status", return_value="written"),
         patch("fieldkit.watch.preflight.preflight_check", return_value=[]),
     ):
         result = main(["watch", "run", "--all"])
 
     assert result == 2
     assert "Auth error" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("watcher", ["backstory-health", "slack-threads"])
+@pytest.mark.parametrize("content", [b"accounts: [\n", b"accounts: {}\naccounts: {}\n", b"\xff"])
+def test_run_all_invalid_account_configuration_maps_to_exit_three(
+    tmp_path: Path, watcher: str, content: bytes, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Invalid account configuration is not a retryable aggregate failure."""
+    from fieldkit.__main__ import main
+
+    config = tmp_path / "accounts.yaml"
+    config.write_bytes(content)
+    domain = importlib.import_module(f"fieldkit.watch.{watcher.replace('-', '_')}")
+    run = domain._run_backstory_health if watcher == "backstory-health" else domain._run_slack_threads
+
+    def read_invalid_config() -> object:
+        if watcher == "backstory-health":
+            return run(threshold=60, account=None, dry_run=False)
+        return run(threshold_hours=48, account=None, limit=50, dry_run=False)
+
+    outcomes: Mapping[str, object] = {**_all_zero(), watcher: read_invalid_config}
+    plan = IntegrationPlan(preflight_services=(), optional_watchers=(watcher,), calendar=False, llm=False, skipped=())
+    with (
+        _patch_watcher_runs(outcomes, []),
+        patch("fieldkit.config._accounts.get_config_path", return_value=config),
+        patch.object(domain, "watcher_logging", return_value=nullcontext()),
+        patch.object(domain, "write_run_status") as domain_status,
+        patch("fieldkit.watch.integration_plan.build_integration_plan", return_value=plan),
+        patch("fieldkit.watch.status.get_daily_run_snapshot", return_value=WatcherDailySnapshot(False, None)),
+        patch("fieldkit.watch.status.write_run_status", return_value="written"),
+        patch("fieldkit.watch.preflight.preflight_check", return_value=[]),
+        patch("fieldkit.commands.brief.generate._run_generate_inner", return_value=_typed_result(0)),
+    ):
+        result = main(["watch", "run", "--all"])
+
+    assert result == 3
+    assert "Config error" in capsys.readouterr().err
+    domain_status.assert_not_called()
+    assert config.read_bytes() == content
 
 
 def test_run_all_dry_run_passes_flag_to_each_watcher() -> None:
@@ -344,27 +574,78 @@ def test_run_all_dry_run_passes_flag_to_each_watcher() -> None:
     assert all(kwargs["dry_run"] is True for _name, kwargs in calls)
 
 
-def test_run_all_brief_llm_preflight_failure_marks_morning_brief_failed() -> None:
-    """A failed llm pre-flight check for the brief step must not call _run_generate_inner
-    and must fold a failure exit code into the run --all summary (max_code)."""
-    calls: list[tuple[str, dict[str, object]]] = []
+def test_run_all_brief_configuration_error_maps_to_exit_three(capsys: pytest.CaptureFixture[str]) -> None:
+    """The aggregate brief step preserves the same invalid-data category."""
+    from fieldkit.__main__ import main
+    from fieldkit.config import ConfigError
 
-    def fake_preflight(services: list[str], *, dry_run: bool = False) -> list[str]:
-        return ["llm credentials missing"] if services == ["llm"] else []
+    plan = IntegrationPlan(preflight_services=(), optional_watchers=(), calendar=False, llm=False, skipped=())
+    with (
+        _patch_watcher_runs(_all_zero(), []),
+        patch("fieldkit.watch.integration_plan.build_integration_plan", return_value=plan),
+        patch("fieldkit.watch.status.get_daily_run_snapshot", return_value=WatcherDailySnapshot(False, None)),
+        patch("fieldkit.watch.status.write_run_status", return_value="written"),
+        patch("fieldkit.watch.preflight.preflight_check", return_value=[]),
+        patch(
+            "fieldkit.commands.brief.generate._run_generate_inner",
+            side_effect=ConfigError("Invalid account configuration"),
+        ),
+    ):
+        result = main(["watch", "run", "--all"])
+
+    assert result == 3
+    assert "Config error" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(("category", "status"), [("auth", 2), ("rate-limit", 1), ("general", 3)])
+def test_run_all_brief_llm_error_reaches_cli_category_mapping(
+    capsys: pytest.CaptureFixture[str],
+    category: LLMErrorCategory,
+    status: int,
+) -> None:
+    from fieldkit.__main__ import main
+
+    failure = LLMError("private-provider-payload-sentinel", category)
+    plan = IntegrationPlan(preflight_services=(), optional_watchers=(), calendar=False, llm=False, skipped=())
+    with (
+        _patch_watcher_runs(_all_zero(), []),
+        patch("fieldkit.watch.integration_plan.build_integration_plan", return_value=plan),
+        patch("fieldkit.watch.status.get_daily_run_snapshot", return_value=WatcherDailySnapshot(False, None)),
+        patch("fieldkit.watch.status.write_run_status", return_value="written") as aggregate_status,
+        patch("fieldkit.watch.preflight.preflight_check", return_value=[]),
+        patch("fieldkit.commands.brief.generate._run_generate_inner", side_effect=failure),
+    ):
+        result = main(["watch", "run", "--all"])
+
+    assert result == status
+    assert aggregate_status.call_args.kwargs["watcher"] == "run-all"
+    assert aggregate_status.call_args.kwargs["outcome"] == "fatal"
+    assert aggregate_status.call_args.kwargs["failures"] >= 1
+    assert "private-provider-payload-sentinel" not in capsys.readouterr().err
+
+
+def test_run_all_selected_llm_preflight_failure_stops_before_dispatch(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A selected LLM fails before any watcher or brief provider work begins."""
+    calls: list[tuple[str, dict[str, object]]] = []
+    plan = IntegrationPlan(("llm",), (), False, True, ())
+    from fieldkit.__main__ import main
 
     with (
         _patch_watcher_runs(_all_zero(), calls),
-        patch("fieldkit.watch.status.was_run_today", return_value=False),
-        patch("fieldkit.watch.status.write_run_status"),
-        patch("fieldkit.watch.preflight.preflight_check", side_effect=fake_preflight),
+        patch("fieldkit.watch.status.get_daily_run_snapshot", return_value=WatcherDailySnapshot(False, None)),
+        patch("fieldkit.watch.status.write_run_status", return_value="written"),
+        patch("fieldkit.watch.integration_plan.build_integration_plan", return_value=plan),
+        patch("fieldkit.watch.preflight.preflight_check", return_value=["llm credentials missing"]),
         patch("fieldkit.commands.brief.generate._run_generate_inner") as mock_generate,
     ):
-        result = CliRunner().invoke(cli, ["run", "--all"], catch_exceptions=False)
+        result = main(["watch", "run", "--all"])
 
     mock_generate.assert_not_called()
-    assert result.exit_code == 1
-    assert "morning-brief" in result.output
-    assert "WARN" in result.output
+    assert result == 2
+    assert calls == []
+    assert "Auth error" in capsys.readouterr().err
 
 
 def test_run_brief_step_unexpected_exception_returns_failure_code() -> None:
@@ -377,9 +658,9 @@ def test_run_brief_step_unexpected_exception_returns_failure_code() -> None:
             side_effect=ValueError("LLM BadRequestError: model not servable"),
         ),
     ):
-        rc, elapsed = _watch_cli_mod._run_brief_step(dry_run=False)
+        rc, elapsed = _watch_cli_mod._run_brief_step(dry_run=False, no_llm=True)
 
-    assert rc == 1
+    assert rc == WatcherRunResult("fatal", False, None)
     assert elapsed >= 0.0
 
 
@@ -604,10 +885,14 @@ def test_exception_does_not_leak_to_stdout_watcher_exception_stays_off_stdout(
     outcomes: Mapping[str, object] = {**_all_zero(), "waiting-on-tracker": ValueError("watcher failure")}
     with (
         _patch_watcher_runs(outcomes, calls),
-        patch("fieldkit.watch.status.was_run_today", return_value=False),
-        patch("fieldkit.watch.status.write_run_status"),
+        patch("fieldkit.watch.status.get_daily_run_snapshot", return_value=WatcherDailySnapshot(False, None)),
+        patch("fieldkit.watch.status.write_run_status", return_value="written"),
         patch("fieldkit.watch.preflight.preflight_check", return_value=[]),
-        patch("fieldkit.commands.watch.cli._run_brief_step", return_value=(0, 0.0)),
+        patch(
+            "fieldkit.watch.integration_plan.build_integration_plan",
+            return_value=IntegrationPlan((), ("backstory-health", "draft-queue", "slack-threads"), False, False, ()),
+        ),
+        patch("fieldkit.commands.watch.cli._run_brief_step", return_value=(_typed_result(0), 0.0)),
         pytest.raises(SystemExit, match="1"),
     ):
         _watch_cli_mod.run_all(dry_run=False, install_cron=False, cron_time="0 6 * * *", force=False)

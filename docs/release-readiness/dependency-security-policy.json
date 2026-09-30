@@ -6,6 +6,7 @@
     "BSD-2-Clause",
     "BSD-3-Clause",
     "CNRI-Python",
+    "ISC",
     "MIT",
     "MIT-0",
     "MPL-2.0",
@@ -21,6 +22,60 @@
       "rationale": "The installed distribution metadata reports UNKNOWN, while the tagged upstream source carries Apache-2.0.",
       "expires_on": "2026-12-10",
       "review_condition": "Review on any package version or license-metadata change, and no later than the expiry date."
+    },
+    {
+      "package_url": "pkg:pypi/jinja2@3.1.6",
+      "spdx_license": "BSD-3-Clause",
+      "owner": "@mpeter",
+      "evidence_url": "https://github.com/pallets/jinja/blob/15206881c006c79667fe5154fe80c01c65410679/LICENSE.txt",
+      "rationale": "The exact-tag license contains all three BSD redistribution conditions; the locked wheel and sdist carry the same license text although metadata is UNKNOWN.",
+      "expires_on": "2026-12-31",
+      "review_condition": "Review on any version, selected artifact, metadata, or license-notice change, and before expiry."
+    },
+    {
+      "package_url": "pkg:pypi/python-dateutil@2.9.0.post0",
+      "spdx_license": "BSD-3-Clause",
+      "owner": "@mpeter",
+      "evidence_url": "https://github.com/dateutil/dateutil/blob/1ae807774053c071acc9e7d3d27778fba0a7773e/LICENSE",
+      "rationale": "The exact-tag license expressly applies BSD-3-Clause to all code, including contributions also covered by Apache-2.0; locked artifacts carry the same text while metadata is UNKNOWN.",
+      "expires_on": "2026-12-31",
+      "review_condition": "Review on any version, selected artifact, metadata, or license-notice change, and before expiry."
+    },
+    {
+      "package_url": "pkg:pypi/prompt-toolkit@3.0.52",
+      "spdx_license": "BSD-3-Clause",
+      "owner": "@mpeter",
+      "evidence_url": "https://github.com/prompt-toolkit/python-prompt-toolkit/blob/d8adbe9bfcf5f7e95b015d8ab12e2985b9a7822b/LICENSE",
+      "rationale": "The exact-tag license contains all three BSD redistribution conditions; the locked wheel and sdist carry the same license text although metadata is UNKNOWN.",
+      "expires_on": "2026-12-31",
+      "review_condition": "Review on any version, selected artifact, metadata, or license-notice change, and before expiry."
+    },
+    {
+      "package_url": "pkg:pypi/fastuuid@0.14.0",
+      "spdx_license": "BSD-3-Clause",
+      "owner": "@mpeter",
+      "evidence_url": "https://github.com/fastuuid/fastuuid/blob/0abe2ffab8add1114f74ae8122b21512495e179e/LICENSE",
+      "rationale": "The exact-tag project license contains all three BSD redistribution conditions and matches the inspected locked artifact; this metadata exception does not approve uninspected platform wheels or native components.",
+      "expires_on": "2026-12-31",
+      "review_condition": "Review on any version, selected artifact, metadata, or license-notice change, and before expiry."
+    },
+    {
+      "package_url": "pkg:pypi/tiktoken@0.13.0",
+      "spdx_license": "MIT",
+      "owner": "@mpeter",
+      "evidence_url": "https://github.com/openai/tiktoken/blob/fa8b65d062fb6a656ac3810c89efde4c8ab999e2/LICENSE",
+      "rationale": "The exact-tag project license is MIT and matches the inspected locked artifact; this metadata exception does not approve uninspected platform wheels or native components.",
+      "expires_on": "2026-12-31",
+      "review_condition": "Review on any version, selected artifact, metadata, or license-notice change, and before expiry."
+    },
+    {
+      "package_url": "pkg:pypi/pyasn1-modules@0.4.2",
+      "spdx_license": "BSD-2-Clause",
+      "owner": "@mpeter",
+      "evidence_url": "https://github.com/pyasn1/pyasn1-modules/blob/7154ca47caea6e012ef58d6a9975c719f2b6213b/LICENSE.txt",
+      "rationale": "The exact-tag license contains the two BSD redistribution conditions and no endorsement restriction; the locked wheel and sdist carry the same text while metadata is UNKNOWN.",
+      "expires_on": "2026-12-31",
+      "review_condition": "Review on any version, selected artifact, metadata, or license-notice change, and before expiry."
     }
   ]
 }

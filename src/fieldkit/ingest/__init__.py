@@ -15,9 +15,6 @@ from fieldkit.ingest.db import (
 from fieldkit.ingest.db import (
     init_db as init_db,
 )
-from fieldkit.ingest.db import (
-    update_artifact_version as update_artifact_version,
-)
 from fieldkit.ingest.docs import (
     DocAccessDeniedError as DocAccessDeniedError,
 )
@@ -50,9 +47,6 @@ from fieldkit.ingest.pipeline import (
 )
 from fieldkit.ingest.pipeline import (
     TranscriptMeta as TranscriptMeta,
-)
-from fieldkit.ingest.pipeline import (
-    compute_vault_path as compute_vault_path,
 )
 from fieldkit.ingest.pipeline import (
     primary_account as primary_account,
@@ -94,7 +88,6 @@ __all__ = [
     "RouteResult",
     "Stage1Result",
     "TranscriptMeta",
-    "compute_vault_path",
     "extract_text_from_tab",
     "fetch_gemini_doc",
     "get_artifacts_for_reprocess",
@@ -113,5 +106,4 @@ __all__ = [
     "route_with_pursuits",
     "stage1_clean",
     "stage2_extract",
-    "update_artifact_version",
 ]

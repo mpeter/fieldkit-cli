@@ -2,103 +2,444 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/mpeter/fieldkit-cli/blob/main/docs/release-readiness/release-bundle-provenance.schema.json",
   "title": "fieldkit local release bundle provenance",
-  "type": "object",
-  "additionalProperties": false,
-  "required": [
-    "schema_version",
-    "candidate_report_sha256",
-    "source_commit",
-    "source_tree",
-    "exported_tree",
-    "export_policy_sha256",
-    "expected_repository",
-    "planned_tag",
-    "artifacts",
-    "runtime_sbom",
-    "runtime_requirements",
-    "release_build_requirements",
-    "runtime_wheelhouse",
-    "checksum_manifest"
-  ],
-  "properties": {
-    "schema_version": {"const": 1},
-    "candidate_report_sha256": {"$ref": "#/$defs/sha256"},
-    "source_commit": {"$ref": "#/$defs/git_oid"},
-    "source_tree": {"$ref": "#/$defs/git_oid"},
-    "exported_tree": {"$ref": "#/$defs/git_oid"},
-    "export_policy_sha256": {"$ref": "#/$defs/sha256"},
-    "expected_repository": {"type": "string", "pattern": "^[a-z0-9-]+/fieldkit-cli$"},
-    "planned_tag": {"const": "v1.0.0"},
-    "artifacts": {
-      "type": "array",
-      "minItems": 2,
-      "maxItems": 2,
-      "items": {"$ref": "#/$defs/artifact"}
+  "oneOf": [
+    {
+      "$ref": "#/$defs/initial"
     },
-    "runtime_sbom": {"$ref": "#/$defs/runtime_sbom"},
-    "runtime_requirements": {"$ref": "#/$defs/runtime_requirements"},
-    "release_build_requirements": {"$ref": "#/$defs/release_build_requirements"},
-    "runtime_wheelhouse": {"$ref": "#/$defs/runtime_wheelhouse"},
-    "checksum_manifest": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["name", "format_version"],
-      "properties": {
-        "name": {"const": "SHA256SUMS"},
-        "format_version": {"const": 1}
-      }
-    },
-    "runtime_requirements": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["name", "sha256"],
-      "properties": {
-        "name": {"const": "runtime-requirements.txt"},
-        "sha256": {"$ref": "#/$defs/sha256"}
-      }
-    },
-    "runtime_wheelhouse": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["name", "sha256"],
-      "properties": {
-        "name": {"const": "runtime-wheelhouse.zip"},
-        "sha256": {"$ref": "#/$defs/sha256"}
-      }
+    {
+      "$ref": "#/$defs/public_history"
     }
-  },
+  ],
   "$defs": {
-    "filename": {"type": "string", "pattern": "^[^/\\\\\\u0000\\r\\n]+$"},
-    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-    "git_oid": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "initial": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "candidate_report_sha256",
+        "source_commit",
+        "source_tree",
+        "exported_tree",
+        "export_policy_sha256",
+        "expected_repository",
+        "planned_tag",
+        "artifacts",
+        "runtime_sbom",
+        "license_observations",
+        "platform_requirements",
+        "marker_environment",
+        "runtime_requirements",
+        "release_build_requirements",
+        "runtime_wheelhouse",
+        "checksum_manifest"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 2
+        },
+        "license_observations": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "sha256"
+          ],
+          "properties": {
+            "name": {
+              "const": "runtime-license-observations.json"
+            },
+            "sha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        },
+        "platform_requirements": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "sha256"
+          ],
+          "properties": {
+            "name": {
+              "const": "platform-all-extras-requirements.txt"
+            },
+            "sha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        },
+        "marker_environment": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "implementation_name",
+            "implementation_version",
+            "os_name",
+            "platform_machine",
+            "platform_python_implementation",
+            "platform_release",
+            "platform_system",
+            "platform_version",
+            "python_full_version",
+            "python_version",
+            "sys_platform"
+          ],
+          "properties": {
+            "implementation_name": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "implementation_version": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "os_name": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "platform_machine": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "platform_python_implementation": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "platform_release": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "platform_system": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "platform_version": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "python_full_version": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "python_version": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "sys_platform": {
+              "type": "string",
+              "maxLength": 1024
+            }
+          }
+        },
+        "candidate_report_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "source_commit": {
+          "$ref": "#/$defs/git_oid"
+        },
+        "source_tree": {
+          "$ref": "#/$defs/git_oid"
+        },
+        "exported_tree": {
+          "$ref": "#/$defs/git_oid"
+        },
+        "export_policy_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "expected_repository": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+/fieldkit-cli$"
+        },
+        "planned_tag": {
+          "const": "v1.0.0"
+        },
+        "artifacts": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {
+            "$ref": "#/$defs/artifact"
+          }
+        },
+        "runtime_sbom": {
+          "$ref": "#/$defs/runtime_sbom"
+        },
+        "runtime_requirements": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "sha256"
+          ],
+          "properties": {
+            "name": {
+              "const": "runtime-requirements.txt"
+            },
+            "sha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        },
+        "release_build_requirements": {
+          "$ref": "#/$defs/release_build_requirements"
+        },
+        "runtime_wheelhouse": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "sha256"
+          ],
+          "properties": {
+            "name": {
+              "const": "runtime-wheelhouse.zip"
+            },
+            "sha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        },
+        "checksum_manifest": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "format_version"
+          ],
+          "properties": {
+            "name": {
+              "const": "SHA256SUMS"
+            },
+            "format_version": {
+              "const": 1
+            }
+          }
+        }
+      }
+    },
+    "public_history": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "source_kind",
+        "status",
+        "release_ready",
+        "pending_controls",
+        "candidate_report_sha256",
+        "source_commit",
+        "source_tree",
+        "export_policy_sha256",
+        "expected_repository",
+        "repository_id",
+        "version",
+        "planned_tag",
+        "anchor",
+        "source_contract",
+        "artifacts",
+        "runtime_sbom",
+        "license_observations",
+        "platform_requirements",
+        "marker_environment",
+        "runtime_requirements",
+        "release_build_requirements",
+        "runtime_wheelhouse",
+        "checksum_manifest"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 3
+        },
+        "source_kind": {
+          "const": "public-history"
+        },
+        "status": {
+          "const": "prepared"
+        },
+        "release_ready": {
+          "const": false
+        },
+        "pending_controls": {
+          "const": [
+            "successor-protected-workflow",
+            "successor-release-approval"
+          ]
+        },
+        "candidate_report_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "source_commit": {
+          "$ref": "#/$defs/git_oid"
+        },
+        "source_tree": {
+          "$ref": "#/$defs/git_oid"
+        },
+        "export_policy_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "expected_repository": {
+          "$ref": "#/$defs/initial/properties/expected_repository"
+        },
+        "repository_id": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "version": {
+          "type": "string",
+          "maxLength": 32,
+          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+        },
+        "planned_tag": {
+          "type": "string",
+          "maxLength": 33,
+          "pattern": "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+        },
+        "anchor": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "repository",
+            "repository_id",
+            "initial_commit",
+            "initial_tree",
+            "record_sha256"
+          ],
+          "properties": {
+            "repository": {
+              "$ref": "#/$defs/initial/properties/expected_repository"
+            },
+            "repository_id": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "initial_commit": {
+              "$ref": "#/$defs/git_oid"
+            },
+            "initial_tree": {
+              "$ref": "#/$defs/git_oid"
+            },
+            "record_sha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        },
+        "source_contract": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "sha256"
+          ],
+          "properties": {
+            "name": {
+              "const": "public-history-source.json"
+            },
+            "sha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        },
+        "artifacts": {
+          "$ref": "#/$defs/initial/properties/artifacts"
+        },
+        "runtime_sbom": {
+          "$ref": "#/$defs/initial/properties/runtime_sbom"
+        },
+        "license_observations": {
+          "$ref": "#/$defs/initial/properties/license_observations"
+        },
+        "platform_requirements": {
+          "$ref": "#/$defs/initial/properties/platform_requirements"
+        },
+        "marker_environment": {
+          "$ref": "#/$defs/initial/properties/marker_environment"
+        },
+        "runtime_requirements": {
+          "$ref": "#/$defs/initial/properties/runtime_requirements"
+        },
+        "release_build_requirements": {
+          "$ref": "#/$defs/initial/properties/release_build_requirements"
+        },
+        "runtime_wheelhouse": {
+          "$ref": "#/$defs/initial/properties/runtime_wheelhouse"
+        },
+        "checksum_manifest": {
+          "$ref": "#/$defs/initial/properties/checksum_manifest"
+        }
+      }
+    },
+    "filename": {
+      "type": "string",
+      "pattern": "^[^/\\\\\\u0000\\r\\n]+$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "git_oid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
     "artifact": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "kind", "sha256"],
+      "required": [
+        "name",
+        "kind",
+        "sha256"
+      ],
       "properties": {
-        "name": {"$ref": "#/$defs/filename"},
-        "kind": {"enum": ["wheel", "sdist"]},
-        "sha256": {"$ref": "#/$defs/sha256"}
+        "name": {
+          "$ref": "#/$defs/filename"
+        },
+        "kind": {
+          "enum": [
+            "wheel",
+            "sdist"
+          ]
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
       }
     },
     "runtime_sbom": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "sha256", "scope"],
+      "required": [
+        "name",
+        "sha256",
+        "scope"
+      ],
       "properties": {
-        "name": {"const": "locked-graph.cdx.json"},
-        "sha256": {"$ref": "#/$defs/sha256"},
-        "scope": {"const": "runtime-all-extras"}
+        "name": {
+          "const": "locked-graph.cdx.json"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "scope": {
+          "const": "runtime-all-extras"
+        }
       }
-    }
-    ,
+    },
     "release_build_requirements": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "sha256"],
+      "required": [
+        "name",
+        "sha256"
+      ],
       "properties": {
-        "name": {"const": "release-build-requirements.txt"},
-        "sha256": {"$ref": "#/$defs/sha256"}
+        "name": {
+          "const": "release-build-requirements.txt"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
       }
     }
   }

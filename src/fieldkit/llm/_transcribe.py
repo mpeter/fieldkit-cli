@@ -1,37 +1,10 @@
-"""lib/transcribe.py — Audio transcription via LiteLLM.
+"""Audio transcription through an explicitly selected LiteLLM model.
 
-Thin wrapper around litellm.transcription. No default provider is configured —
-callers must set FIELDKIT_TRANSCRIBE_MODEL (or pass model= explicitly) to a
-supported transcription model string. Falls back to the NO_LLM stub path so
-tests can run offline.
-
-Provider validation (2026-07-10):
-    vertex_ai/gemini-2.5-flash was evaluated as a candidate default. LiteLLM's
-    transcription() function does NOT support the vertex_ai provider — it only
-    routes to azure, openai, nvidia_riva, soniox, and OpenAI-compatible cloud
-    providers. A vertex_ai transcription call raises ValueError:
-    "Unmapped provider passed in." No local-whisper LiteLLM provider exists
-    without a dedicated gRPC service or external API key.
-
-    Conclusion: No default provider is configured. Callers must supply a model
-    string explicitly or via FIELDKIT_TRANSCRIBE_MODEL. Supported option that
-    complies with the no-external-API-key constraint:
-      - nvidia_riva/<model>  (requires a local NVIDIA Riva gRPC server)
-      Also requires: NVIDIA_RIVA_API_BASE=<host:port> (e.g. localhost:50051)
-      and:          pip install 'litellm[stt-nvidia-riva]'  (riva-client)
-    All cloud STT providers (OpenAI-compatible, Azure, soniox) require external
-    API keys and are disallowed. Explicit operator configuration is required.
-
-Usage:
-    from fieldkit.transcribe import transcribe, TranscribeError
-
-    text = transcribe(Path("recording.m4a"), model="nvidia_riva/<your-riva-model-name>")
-
-Environment variables (implementation note: FIELDKIT_* prefixed names are primary):
-    FIELDKIT_NO_LLM / NO_LLM — any non-empty string → return stub, skip API call
-    FIELDKIT_TRANSCRIBE_MODEL / TRANSCRIBE_MODEL — required: set to a supported
-        transcription model string (e.g. nvidia_riva/<model>). No default provider
-        is configured; omitting this raises TranscribeError.
+Callers pass ``model=`` or set ``FIELDKIT_TRANSCRIBE_MODEL``; this wrapper has
+no default provider and does not impose the synthesis route's Vertex-only model
+prefix. Provider availability and credentials depend on the selected model.
+``FIELDKIT_NO_LLM`` returns a deterministic stub before optional imports or
+provider calls. The public import is ``fieldkit.llm.transcribe``.
 """
 
 import logging
@@ -45,7 +18,8 @@ from fieldkit.errors import FieldkitError
 
 logger = logging.getLogger(__name__)
 
-_NO_LLM_STUB = "[TRANSCRIBE STUB] NO_LLM=1 is set — no API call was made."
+_NO_LLM_STUB = "[TRANSCRIBE STUB] FIELDKIT_NO_LLM=1 is set — no API call was made."
+_TRANSCRIPTION_TIMEOUT_SECONDS = 90
 
 # Supported audio formats (LiteLLM transcription API).
 _SUPPORTED_EXTENSIONS = frozenset({".mp3", ".mp4", ".mpeg", ".mpga", ".m4a", ".wav", ".webm", ".ogg", ".flac"})
@@ -85,7 +59,8 @@ def transcribe(
     Args:
         audio_path: Path to the audio file (m4a, mp3, wav, etc.)
         model:      Optional model override (e.g. "openai/whisper-1").
-                    Falls back to TRANSCRIBE_MODEL env var, then the default.
+                    Falls back to FIELDKIT_TRANSCRIBE_MODEL.
+                    No default model is selected.
         language:   BCP-47 language code hint (default: "en").
         prompt:     Optional text to guide the transcription (speaker names,
                     domain terms). Improves accuracy on jargon.
@@ -117,12 +92,11 @@ def transcribe(
 
     _ensure_initialized()
 
-    # implementation note: FIELDKIT_TRANSCRIBE_MODEL is the primary name; TRANSCRIBE_MODEL is the legacy alias.
-    resolved_model = model or os.environ.get("FIELDKIT_TRANSCRIBE_MODEL") or os.environ.get("TRANSCRIBE_MODEL")
+    resolved_model = model or os.environ.get("FIELDKIT_TRANSCRIBE_MODEL")
     if not resolved_model:
         raise TranscribeError(
-            "No transcription model configured. Set FIELDKIT_TRANSCRIBE_MODEL to a Google "
-            "Vertex AI or local model string (e.g. vertex_ai/gemini-2.5-flash).",
+            "No transcription model configured. Set FIELDKIT_TRANSCRIBE_MODEL to a "
+            "transcription model supported by your approved provider, or pass model explicitly.",
             category="general",
         )
 
@@ -140,6 +114,7 @@ def transcribe(
                 language=language,
                 prompt=prompt,
                 response_format="text",
+                timeout=_TRANSCRIPTION_TIMEOUT_SECONDS,
             )
         # litellm returns TranscriptionResponse; .text holds the plain string
         text = getattr(response, "text", None) or str(response)

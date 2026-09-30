@@ -8,15 +8,20 @@ Provides two public functions:
   matching when a keyword list is supplied.
 """
 
+import os
 import re
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-import yaml
+from fieldkit.config import ConfigError, get_accounts_config, get_fieldkit_home
+from fieldkit.errors import RoutingReadRetryableError
+from fieldkit.pursuit.io import read_pursuit_text_snapshot
+from fieldkit.util.workspace_paths import resolve_workspace_output
 
-from fieldkit.config import get_accounts_config, get_fieldkit_home, get_internal_domains
+_MAX_PURSUIT_DIRECTORY_ENTRIES = 10_000
+_PURSUIT_HEADING_CHARACTERS = 500
 
 # ---------------------------------------------------------------------------
 # Product name normalization (historic regression)
@@ -357,49 +362,72 @@ def _pursuit_haystack(slug: str, h1: str) -> set[str]:
 
 
 def _read_pursuit_h1(path: Path) -> str:
-    """Return the first H1 heading from the first 500 bytes of *path*, or ''."""
+    """View the first 500 characters of a bounded, no-follow pursuit snapshot."""
     try:
-        content = path.read_bytes()[:500].decode("utf-8", errors="replace")
+        content = read_pursuit_text_snapshot(path).content[:_PURSUIT_HEADING_CHARACTERS]
     except OSError:
-        return ""
+        raise RoutingReadRetryableError("Cannot read ingest pursuit input; restore access and retry") from None
+    except ValueError:
+        raise ConfigError("Invalid or unsafe ingest pursuit input") from None
     for line in content.splitlines():
         if line.startswith("# "):
             return line[2:].strip()
     return ""
 
 
+def _pursuit_path(root: Path, relative_path: str) -> Path:
+    """Confine pursuit sources within a stable configured workspace namespace."""
+    try:
+        return resolve_workspace_output(root, relative_path)
+    except (ValueError, OSError, RuntimeError):
+        raise ConfigError("Invalid or redirected ingest pursuit path") from None
+
+
+def _match_configured_pursuits(account_info: dict[str, Any], keywords: list[str], data_root: Path | None) -> list[str]:
+    """Inspect one confined, bounded pursuit inventory for both matching APIs.
+
+    Configured workspace aliases are supported. Ancestor directories must stay
+    stable during inspection; this is not a hostile same-user rename sandbox.
+    """
+    relative_dir = account_info.get("pursuit_dir", "")
+    if not isinstance(relative_dir, str):
+        raise ConfigError("Invalid configured ingest pursuit directory")
+    if not relative_dir:
+        return []
+    root = data_root if data_root is not None else get_fieldkit_home()
+    pursuit_dir = _pursuit_path(root, relative_dir)
+    try:
+        entries = os.scandir(pursuit_dir)
+    except FileNotFoundError:
+        return []
+    except OSError:
+        raise RoutingReadRetryableError("Cannot scan ingest pursuit directory; restore access and retry") from None
+    paths: list[Path] = []
+    try:
+        with entries:
+            for count, entry in enumerate(entries, start=1):
+                if count > _MAX_PURSUIT_DIRECTORY_ENTRIES:
+                    raise ConfigError("Ingest pursuit directory exceeds the entry limit")
+                if entry.name.endswith(".md"):
+                    paths.append(_pursuit_path(root, f"{relative_dir}/{entry.name}"))
+    except OSError:
+        raise RoutingReadRetryableError("Cannot scan ingest pursuit directory; restore access and retry") from None
+    account_keywords = [str(value).lower() for value in (account_info.get("keywords") or [])]
+    all_keywords = _normalize_pursuit_keywords(keywords) + account_keywords
+    matched: list[str] = []
+    for path in sorted(paths):
+        slug = path.stem
+        if ".template" in slug or "gmail-intel" in slug:
+            continue
+        tokens = _pursuit_haystack(slug, _read_pursuit_h1(path))
+        if any(keyword in tokens for keyword in all_keywords):
+            matched.append(slug)
+    return matched
+
+
 def _load_accounts_config(data_root: Path | None) -> dict[str, Any]:
-    """Load accounts.yaml config, honouring *data_root* when supplied.
-
-    When data_root is not None, reads ``data_root/config/accounts.yaml``
-    directly (returns {} on missing file or parse error) so that tests can
-    supply fixture configs without touching the real install.
-    When data_root is None, delegates to get_accounts_config().
-    """
-    if data_root is not None:
-        path = data_root / "config" / "accounts.yaml"
-        if not path.exists():
-            return {}
-        try:
-            with path.open(encoding="utf-8") as f:
-                data = yaml.safe_load(f)
-            return data if isinstance(data, dict) else {}
-        except (yaml.YAMLError, OSError):
-            return {}
-    return get_accounts_config()
-
-
-def _load_internal_domains(data_root: Path | None) -> list[str]:
-    """Return the internal_domains list, honouring *data_root* when supplied.
-
-    When data_root is not None, reads from the local accounts.yaml (key
-    'internal_domains').  When None, delegates to get_internal_domains().
-    """
-    if data_root is not None:
-        cfg = _load_accounts_config(data_root)
-        domains = cfg.get("internal_domains", [])
-        return list(domains) if isinstance(domains, list) else []
-    return get_internal_domains()
+    """Read fresh validated routing configuration for the selected workspace."""
+    return get_accounts_config(strict=True, workspace_root=data_root)
 
 
 # ---------------------------------------------------------------------------
@@ -425,17 +453,16 @@ def route_by_domains(
        1 external match → HIGH.
        2+ distinct matches → LOW (all matched account names).
 
-    Errors from get_accounts_config() / get_internal_domains() propagate
+    Errors from get_accounts_config() propagate
     to the caller — they are NOT swallowed here.
     """
     normed = _normalize_domains(domains)
     if not normed:
         return _unknown()
 
-    internal = set(_load_internal_domains(data_root))
-
-    # Build domain → account mapping from accounts.yaml
+    # Internal and external classifications use the same validated snapshot.
     cfg = _load_accounts_config(data_root)
+    internal = set(cfg.get("internal_domains", []))
     accounts_cfg: dict[str, Any] = cfg.get("accounts", {}) if isinstance(cfg, dict) else {}
 
     if all(d in internal for d in normed):
@@ -535,10 +562,10 @@ def route_with_pursuits(
     route_by_domains() is returned unchanged.
 
     Pursuit matching:
-    - Globs ``<pursuit_dir>/*.md``, skipping files whose stem contains
+    - Inspects a bounded, confined ``<pursuit_dir>/*.md`` inventory, skipping files whose stem contains
       '.template' or 'gmail-intel'.
     - For each file, extracts the slug (stem) and the first H1 heading from
-      the first 500 characters.
+      the first 500 characters of the shared bounded pursuit snapshot.
     - A pursuit is included when *any* of the following keyword lists has at
       least one case-insensitive match against slug or H1:
         * the explicit *keywords* parameter (if provided)
@@ -559,35 +586,7 @@ def route_with_pursuits(
     accounts_cfg: dict[str, Any] = cfg.get("accounts", {}) if isinstance(cfg, dict) else {}
     account_info: dict[str, Any] = accounts_cfg.get(account_name, {}) or {}
 
-    pursuit_dir_raw: str = account_info.get("pursuit_dir", "") or ""
-    if not pursuit_dir_raw:
-        return base
-
-    resolved_root: Path = data_root if data_root is not None else get_fieldkit_home()
-    pursuit_dir: Path = resolved_root / pursuit_dir_raw
-
-    if not pursuit_dir.is_dir():
-        return base
-
-    # Build combined keyword set (caller keywords + account keywords)
-    account_keywords: list[str] = [str(k).lower() for k in (account_info.get("keywords") or [])]
-    # Normalize caller keywords: product aliases + stopword filtering
-    caller_keywords: list[str] = _normalize_pursuit_keywords(list(keywords or []))
-    all_keywords: list[str] = caller_keywords + account_keywords
-
-    matched_pursuits: list[str] = []
-
-    for md_file in sorted(pursuit_dir.glob("*.md")):
-        slug = md_file.stem
-        # Skip template and intel files
-        if ".template" in slug or "gmail-intel" in slug:
-            continue
-
-        h1 = _read_pursuit_h1(md_file)
-        tokens = _pursuit_haystack(slug, h1)
-
-        if any(kw in tokens for kw in all_keywords):
-            matched_pursuits.append(slug)
+    matched_pursuits = _match_configured_pursuits(account_info, list(keywords or []), data_root)
 
     return RouteResult(
         accounts=base.accounts,
@@ -622,29 +621,4 @@ def match_pursuits_for_account(
     accounts_cfg: dict[str, Any] = cfg.get("accounts", {}) if isinstance(cfg, dict) else {}
     account_info: dict[str, Any] = accounts_cfg.get(account_name, {}) or {}
 
-    pursuit_dir_raw: str = account_info.get("pursuit_dir", "") or ""
-    if not pursuit_dir_raw:
-        return []
-
-    resolved_root: Path = data_root if data_root is not None else get_fieldkit_home()
-    pursuit_dir: Path = resolved_root / pursuit_dir_raw
-
-    if not pursuit_dir.is_dir():
-        return []
-
-    account_keywords: list[str] = [str(k).lower() for k in (account_info.get("keywords") or [])]
-    # Normalize caller keywords: apply product aliases, tokenize, strip stopwords.
-    normalized: list[str] = _normalize_pursuit_keywords(keywords)
-    # Account keywords are identity signals (short, specific) — keep as-is.
-    all_keywords: list[str] = normalized + account_keywords
-
-    matched: list[str] = []
-    for md_file in sorted(pursuit_dir.glob("*.md")):
-        slug = md_file.stem
-        if ".template" in slug or "gmail-intel" in slug:
-            continue
-        h1 = _read_pursuit_h1(md_file)
-        tokens = _pursuit_haystack(slug, h1)
-        if any(kw in tokens for kw in all_keywords):
-            matched.append(slug)
-    return matched
+    return _match_configured_pursuits(account_info, keywords, data_root)

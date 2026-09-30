@@ -58,7 +58,7 @@ def test_services_only_search_failure_reports_diagnostic_while_quiet(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     from fieldkit.commands.sf.listview import _sync_account_opps
-    from fieldkit.sf.client import SFAPIError
+    from fieldkit.sf.errors import SFAPIError
 
     monkeypatch.setattr("fieldkit.commands.sf.listview._quiet_mode", True)
     client = MagicMock()
@@ -72,7 +72,7 @@ def test_services_only_auth_failure_reports_reauth_while_quiet(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     from fieldkit.commands.sf.listview import _sync_account_opps
-    from fieldkit.sf.client import SFAuthError
+    from fieldkit.sf.errors import SFAuthError
 
     monkeypatch.setattr("fieldkit.commands.sf.listview._quiet_mode", True)
     client = MagicMock()
@@ -141,7 +141,7 @@ def test_services_only_walk_failure_reports_opportunity_while_quiet(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     from fieldkit.commands.sf.listview import _sync_account_opps
-    from fieldkit.sf.client import SFAPIError
+    from fieldkit.sf.errors import SFAPIError
 
     monkeypatch.setattr("fieldkit.commands.sf.listview._quiet_mode", True)
     client = MagicMock()
@@ -162,7 +162,7 @@ def test_services_only_walk_failure_continues_to_later_candidate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from fieldkit.commands.sf.listview import _sync_account_opps
-    from fieldkit.sf.client import SFAPIError
+    from fieldkit.sf.errors import SFAPIError
 
     client = MagicMock()
     client.search_opportunity_candidates.return_value = OpportunitySearchResult(
@@ -189,7 +189,7 @@ def test_services_only_walk_failure_continues_to_later_candidate(
 
 def test_services_only_component_auth_failure_propagates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from fieldkit.commands.sf.listview import _sync_account_opps
-    from fieldkit.sf.client import SFAuthError
+    from fieldkit.sf.errors import SFAuthError
 
     client = MagicMock()
     client.search_opportunity_candidates.return_value = OpportunitySearchResult(

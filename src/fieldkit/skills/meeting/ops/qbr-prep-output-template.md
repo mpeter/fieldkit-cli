@@ -1,11 +1,15 @@
 # QBR Output Template
 
-```markdown
+Fill sections from inspected, dated sources. Mark missing signals unavailable;
+do not turn a suggested risk or opportunity into a customer fact. Keep internal
+Slack, proprietary account intelligence, and internal strategy in private
+preparation notes unless the operator approves their use in this draft.
+
 # QBR: [Account] — [Quarter]
 
 **Date:** [QBR date]
 **Attendees:** [Names and roles]
-**Prepared by:** {{name}}, {{company}}
+**Prepared by:** [Presenter], [Organization]
 
 ---
 
@@ -19,12 +23,12 @@ and what's coming. Lead with their outcome, not our delivery.]
 ## Their World This Quarter
 
 ### Business Context
-[Company news, industry pressures, leadership changes — from Backstory + web.
-Frame as: "Here's what's changed in your environment since we last met."]
+[Verified company news, industry pressures, or leadership changes from dated
+sources. Frame as: "Here's what's changed in your environment since we last met."]
 
 ### Their Stated Priorities
-[What Backstory activity signals show they're focused on.
-What has dominated recent conversations?]
+[Priorities the customer actually stated in dated conversations or documents.
+Treat optional account-intelligence signals as questions to verify.]
 
 ---
 
@@ -40,9 +44,10 @@ What has dominated recent conversations?]
 
 | Stakeholder | Role | Engagement Signal | Notes |
 |-------------|------|-------------------|-------|
-| [Name] | [Title] | [Active / Quiet / New from Backstory] | |
+| [Name] | [Title] | [Dated observed signal or unavailable] | |
 
-**Backstory summary:** [Overall engagement level and sentiment from account signals]
+**Optional account-intelligence summary:** [Source, date, and unverified signal,
+or unavailable if no authorized source was inspected]
 
 ---
 
@@ -56,8 +61,8 @@ What has dominated recent conversations?]
 
 ## Risks to Address
 
-[Backstory-flagged risks + any from account.md or recent meetings.
-Surface these before the customer does.]
+[Evidence-backed risks from account records or recent meetings. Label optional
+account-intelligence suggestions as unverified questions for private review.]
 
 - [Risk 1] — [Recommended response]
 - [Risk 2] — [Recommended response]
@@ -67,7 +72,7 @@ Surface these before the customer does.]
 ## Looking Ahead: [Next Quarter]
 
 ### Their Priorities
-[Based on Backstory activity + account.md strategic context]
+[Based on stated customer priorities and dated account context]
 
 ### Where We Can Help
 [Problem-first framing — their need first, then the capability]
@@ -76,8 +81,8 @@ Surface these before the customer does.]
 
 ## Expansion Opportunities
 
-[Whitespace from ask_sales_ai + playbooks/expansion.md.
-Frame each as: their problem → our capability → expected outcome.]
+[Only opportunities supported by a customer need and a feasible capability.
+Optional synthesis is a lead to verify, not evidence.]
 
 | Opportunity | Their Need | Our Capability | Proposed Next Step |
 |-------------|------------|-------------------|-------------------|
@@ -95,6 +100,5 @@ Frame each as: their problem → our capability → expected outcome.]
 ## Discovery Questions to Ask in the Room
 
 1. [Question about their upcoming priorities]
-2. [Question about a gap or risk surfaced by Backstory]
+2. [Question about an evidence gap or unverified risk]
 3. [Question to open an expansion conversation]
-```

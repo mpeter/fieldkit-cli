@@ -6,11 +6,33 @@ import fnmatch
 import hashlib
 import json
 import re
+import shlex
 import sys
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from typing import TYPE_CHECKING
 
 from jsonschema import Draft202012Validator
+from markdown_it import MarkdownIt
+
+if TYPE_CHECKING or __package__:
+    from scripts.documentation_commands import (
+        CONTRIBUTOR_JOURNEY_EVIDENCE,
+        DOCUMENT_COMMANDS,
+        EXAMPLE_COMMANDS,
+        OWNER_PHASES,
+    )
+    from scripts.documentation_manual import manual_scenarios
+    from scripts.markdown_tables import markdown_tables
+else:
+    from documentation_commands import (
+        CONTRIBUTOR_JOURNEY_EVIDENCE,
+        DOCUMENT_COMMANDS,
+        EXAMPLE_COMMANDS,
+        OWNER_PHASES,
+    )
+    from documentation_manual import manual_scenarios
+    from markdown_tables import markdown_tables
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _CONTRACT_PATH = Path("docs/documentation-contract.json")
@@ -22,73 +44,237 @@ _FUTURE_STATUS = re.compile(
     r"future (?:contributors?|release|work)|pending (?:implementation|release|support|work)|"
     r"not yet (?:implemented|published|supported)|planned (?:first |public )?(?:release|work))\b"
 )
-_FENCE_START = re.compile(r"^ {0,3}(?P<marker>`{3,}|~{3,})(?P<info>.*)$")
-_TABLE_SEPARATOR = re.compile(r"^ {0,3}\|?(?:[ :]?-{3,}[ :]?\|)+(?:[ :]?-{3,}[ :]?)?$")
 _VERIFICATION_EVIDENCE = {
-    "artifact_smoke": "make artifact-check",
-    "contributor_gate": "QUALITY_BASE=upstream/main make pr-check",
-    "generated_dependency_map": "uv run python scripts/generate_dep_map.py --check",
-    "generated_reference": "uv run python scripts/generate_cli_docs.py --check",
+    **{owner: shlex.join(commands[0]) for owner, commands in DOCUMENT_COMMANDS.items()},
+    "contributor_gate": CONTRIBUTOR_JOURNEY_EVIDENCE,
     "live_cutover": "ROADMAP.md",
     "policy_validator": "make quality",
-    "source_contract": "uv run python scripts/check_documentation_contract.py",
 }
 _AUTOMATED_EXAMPLE_CLASSES = frozenset({"generated_reference", "safe_automated_command", "structural_assertion"})
 _MANUAL_EXAMPLE_CLASSES = frozenset({"credentialed_manual_integration", "exact_release_cutover_proof"})
 _EXAMPLE_VERIFICATION_EVIDENCE = {
+    "automated.threat-model-contract": (
+        "structural_assertion",
+        "automated",
+        shlex.join(EXAMPLE_COMMANDS["automated.threat-model-contract"][0]),
+        (
+            "tests/test_threat_model_contract.py",
+            "tests/test_ingest_paths.py",
+            "tests/test_ingest_prepared.py",
+            "tests/test_ingest_prepared_store.py",
+            "tests/test_pursuit_effects.py",
+            "tests/test_task_effects.py",
+            "tests/test_owned_markdown.py",
+            "tests/test_text_snapshot.py",
+            "tests/test_atomic_text_create.py",
+            "tests/test_web_server.py",
+            "tests/test_cli_exit.py",
+            "scripts/markdown_tables.py",
+        ),
+    ),
+    "automated.contributor-journey": (
+        "safe_automated_command",
+        "automated",
+        CONTRIBUTOR_JOURNEY_EVIDENCE,
+        ("Makefile",),
+    ),
+    "automated.contributor-instruction-structure": (
+        "structural_assertion",
+        "automated",
+        shlex.join(EXAMPLE_COMMANDS["automated.contributor-instruction-structure"][0]),
+        ("tests/test_documentation_contributor_design.py",),
+    ),
+    "automated.ingest-workflow-scenarios": (
+        "safe_automated_command",
+        "automated",
+        shlex.join(EXAMPLE_COMMANDS["automated.ingest-workflow-scenarios"][0]),
+        ("tests/test_ingest_workflow_scenarios.py", "tests/documentation_workflow_support.py"),
+    ),
+    "automated.remaining-public-scenarios": (
+        "safe_automated_command",
+        "automated",
+        shlex.join(EXAMPLE_COMMANDS["automated.remaining-public-scenarios"][0]),
+        ("tests/test_remaining_public_skill_contracts.py", "tests/documentation_workflow_support.py"),
+    ),
+    "automated.remaining-public-structure": (
+        "structural_assertion",
+        "automated",
+        shlex.join(EXAMPLE_COMMANDS["automated.remaining-public-structure"][0]),
+        ("tests/test_remaining_public_skill_contracts.py", "scripts/markdown_tables.py"),
+    ),
+    "automated.brief-workflow-scenarios": (
+        "safe_automated_command",
+        "automated",
+        shlex.join(EXAMPLE_COMMANDS["automated.brief-workflow-scenarios"][0]),
+        ("tests/test_brief_documentation_scenarios.py", "tests/documentation_workflow_support.py"),
+    ),
+    "automated.watcher-workflow-scenarios": (
+        "safe_automated_command",
+        "automated",
+        shlex.join(EXAMPLE_COMMANDS["automated.watcher-workflow-scenarios"][0]),
+        ("tests/test_watcher_documentation_scenarios.py", "tests/documentation_workflow_support.py"),
+    ),
+    "automated.salesforce-auth-contract": (
+        "structural_assertion",
+        "automated",
+        shlex.join(EXAMPLE_COMMANDS["automated.salesforce-auth-contract"][0]),
+        ("tests/test_auth_sf.py", "tests/test_sf_session_check.py"),
+    ),
     "automated.roadmap-contract": (
         "structural_assertion",
         "automated",
-        "uv run python scripts/check_roadmap_contract.py",
+        shlex.join(EXAMPLE_COMMANDS["automated.roadmap-contract"][0]),
         ("scripts/check_roadmap_contract.py",),
     ),
     "automated.compatibility-policy": (
         "structural_assertion",
         "automated",
-        "uv run python scripts/check_compatibility_policy.py",
+        shlex.join(EXAMPLE_COMMANDS["automated.compatibility-policy"][0]),
         ("scripts/check_compatibility_policy.py",),
     ),
     "automated.configuration-example-contract": (
         "structural_assertion",
         "automated",
-        "uv run pytest tests/test_documentation_configuration_examples.py -q",
-        ("tests/test_documentation_configuration_examples.py",),
+        shlex.join(EXAMPLE_COMMANDS["automated.configuration-example-contract"][0]),
+        ("tests/test_documentation_configuration_examples.py", "tests/test_config_xdg.py"),
     ),
     "automated.documentation-contract": (
         "structural_assertion",
         "automated",
-        "uv run python scripts/check_documentation_contract.py",
+        shlex.join(EXAMPLE_COMMANDS["automated.documentation-contract"][0]),
         ("scripts/check_documentation_contract.py",),
     ),
     "automated.exit-code-contract": (
         "structural_assertion",
         "automated",
-        "uv run pytest tests/test_cli_exit.py -q",
-        ("tests/test_cli_exit.py",),
+        shlex.join(EXAMPLE_COMMANDS["automated.exit-code-contract"][0]),
+        ("tests/test_cli_exit.py", "tests/test_documentation_exit_examples.py", "scripts/markdown_tables.py"),
+    ),
+    "automated.integration-profile-contract": (
+        "structural_assertion",
+        "automated",
+        shlex.join(EXAMPLE_COMMANDS["automated.integration-profile-contract"][0]),
+        (
+            "tests/test_integrations_page_contract.py",
+            "tests/test_documentation_integration_profiles.py",
+            "tests/test_installation_profiles.py",
+            "scripts/markdown_tables.py",
+            "scripts/check_dependency_profiles.py",
+        ),
+    ),
+    "automated.release-mode-table-contract": (
+        "structural_assertion",
+        "automated",
+        shlex.join(EXAMPLE_COMMANDS["automated.release-mode-table-contract"][0]),
+        ("tests/test_documentation_release_mode_table.py", "scripts/release_workflow_policy.py"),
+    ),
+    "automated.security-support-contract": (
+        "structural_assertion",
+        "automated",
+        shlex.join(EXAMPLE_COMMANDS["automated.security-support-contract"][0]),
+        ("tests/test_documentation_security_support.py", "scripts/_release_policy.py", "scripts/markdown_tables.py"),
+    ),
+    "automated.privacy-destination-contract": (
+        "structural_assertion",
+        "automated",
+        shlex.join(EXAMPLE_COMMANDS["automated.privacy-destination-contract"][0]),
+        ("tests/test_documentation_privacy_destinations.py", "scripts/markdown_tables.py"),
+    ),
+    "automated.pipeline-example-contract": (
+        "structural_assertion",
+        "automated",
+        shlex.join(EXAMPLE_COMMANDS["automated.pipeline-example-contract"][0]),
+        ("tests/test_forecast.py", "tests/test_pipeline_quota.py", "tests/test_documentation_pursuit_workflow.py"),
+    ),
+    "automated.meeting-template-contract": (
+        "structural_assertion",
+        "automated",
+        shlex.join(EXAMPLE_COMMANDS["automated.meeting-template-contract"][0]),
+        ("tests/test_tool_routing_cli_first.py",),
+    ),
+    "automated.meeting-report-scenarios": (
+        "safe_automated_command",
+        "automated",
+        shlex.join(EXAMPLE_COMMANDS["automated.meeting-report-scenarios"][0]),
+        ("tests/test_meeting_workflow_scenarios.py", "tests/documentation_workflow_support.py"),
+    ),
+    "automated.meeting-report-structure": (
+        "structural_assertion",
+        "automated",
+        shlex.join(EXAMPLE_COMMANDS["automated.meeting-report-structure"][0]),
+        ("tests/test_meeting_workflow_scenarios.py",),
+    ),
+    "automated.win-loss-template-contract": (
+        "structural_assertion",
+        "automated",
+        shlex.join(EXAMPLE_COMMANDS["automated.win-loss-template-contract"][0]),
+        ("tests/test_win_loss_skill_documentation.py",),
+    ),
+    "automated.humanizer-structure-contract": (
+        "structural_assertion",
+        "automated",
+        shlex.join(EXAMPLE_COMMANDS["automated.humanizer-structure-contract"][0]),
+        ("tests/test_humanizer_skill_documentation.py",),
+    ),
+    "automated.handoff-template-contract": (
+        "structural_assertion",
+        "automated",
+        shlex.join(EXAMPLE_COMMANDS["automated.handoff-template-contract"][0]),
+        ("tests/test_handoff_skill_documentation.py",),
+    ),
+    "automated.draft-review-structure-contract": (
+        "structural_assertion",
+        "automated",
+        shlex.join(EXAMPLE_COMMANDS["automated.draft-review-structure-contract"][0]),
+        ("tests/test_draft_review_skill_documentation.py",),
+    ),
+    "automated.workstream-discover-structure-contract": (
+        "structural_assertion",
+        "automated",
+        shlex.join(EXAMPLE_COMMANDS["automated.workstream-discover-structure-contract"][0]),
+        ("tests/test_workstream_discover_skill_documentation.py",),
+    ),
+    "automated.contract-workflow-structure-contract": (
+        "structural_assertion",
+        "automated",
+        shlex.join(EXAMPLE_COMMANDS["automated.contract-workflow-structure-contract"][0]),
+        ("tests/test_contract_skill_documentation.py",),
     ),
     "automated.generated-dependency-map": (
         "generated_reference",
         "automated",
-        "dependency-map documentation generator",
+        shlex.join(EXAMPLE_COMMANDS["automated.generated-dependency-map"][0]),
         ("scripts/generate_dep_map.py",),
     ),
     "automated.generated-reference": (
         "generated_reference",
         "automated",
-        "canonical documentation generator",
+        shlex.join(EXAMPLE_COMMANDS["automated.generated-reference"][0]),
         ("scripts/generate_cli_docs.py",),
     ),
     "automated.installed-base-artifact": (
         "safe_automated_command",
         "automated",
-        "fixed installed-artifact documentation scenarios",
+        shlex.join(EXAMPLE_COMMANDS["automated.installed-base-artifact"][0]),
         ("scripts/check_documentation_example_scenarios.py", "scripts/smoke_artifact.py"),
+    ),
+    "automated.gmail-example-contract": (
+        "structural_assertion",
+        "automated",
+        shlex.join(EXAMPLE_COMMANDS["automated.gmail-example-contract"][0]),
+        ("tests/test_smoke_gmail_examples.py",),
+    ),
+    "automated.gmail-import-scenario": (
+        "safe_automated_command",
+        "automated",
+        shlex.join(EXAMPLE_COMMANDS["automated.gmail-import-scenario"][0]),
+        ("tests/test_smoke_gmail_examples.py",),
     ),
     "automated.release-workflow-policy": (
         "safe_automated_command",
         "automated",
-        "make release-workflow-policy-check",
-        ("Makefile", "scripts/release_workflow_policy.py"),
+        shlex.join(EXAMPLE_COMMANDS["automated.release-workflow-policy"][0]),
+        ("scripts/documentation_commands.py", "scripts/release_workflow_policy.py"),
     ),
     "manual.credentialed-integration": (
         "credentialed_manual_integration",
@@ -149,6 +335,34 @@ def _public_markdown_paths(repo_root: Path) -> frozenset[str]:
     return frozenset(path for path in candidates if any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns))
 
 
+def _skill_index_findings(repo_root: Path) -> tuple[Finding, ...]:
+    """Require a complete, unique link index for packaged skill entry points."""
+    skill_root = repo_root / "src/fieldkit/skills"
+    if not skill_root.is_dir():
+        return ()
+    index = skill_root / "README.md"
+    expected = [
+        f"- [{path.parent.name}]({path.parent.name}/SKILL.md)"
+        for path in sorted(skill_root.glob("*/SKILL.md"))
+        if path.is_file()
+    ]
+    if index.is_file():
+        lines = index.read_text(encoding="utf-8").splitlines()
+        headings = [
+            (position, re.sub(r"[ \t]+#+[ \t]*$", "", match[1]).strip())
+            for position, line in enumerate(lines)
+            if (match := re.fullmatch(r" {0,3}##[ \t]+(.*)", line))
+        ]
+        index_headings = [position for position, title in headings if title == "Skill index"]
+        if len(index_headings) == 1:
+            start = index_headings[0] + 1
+            end = next((position for position, _ in headings if position >= start), len(lines))
+            observed = [line for line in lines[start:end] if line.strip()]
+            if observed == expected:
+                return ()
+    return (Finding("DOC411", "src/fieldkit/skills/README.md"),)
+
+
 def _private_patterns(repo_root: Path) -> tuple[str, ...]:
     """Return source patterns excluded from the clean public repository."""
     policy = _load_json(repo_root / _SURFACE_POLICY_PATH)
@@ -164,7 +378,9 @@ def _source_files(repo_root: Path, patterns: list[str]) -> tuple[Path, ...]:
     matches: set[Path] = set()
     for pattern in patterns:
         for path in repo_root.glob(pattern):
-            if path.is_symlink():
+            if any(
+                component.is_symlink() for component in (path, *path.parents) if component.is_relative_to(repo_root)
+            ):
                 raise ValueError(f"{_CONTRACT_PATH}: source patterns must not resolve through symlinks")
             if path.is_file():
                 matches.add(path)
@@ -195,49 +411,51 @@ def _fingerprint(repo_root: Path, patterns: list[str]) -> str:
     return f"sha256:{digest.hexdigest()}"
 
 
-def _block_inventory(document: Path) -> list[dict[str, str]]:
-    """Inventory CommonMark fenced blocks by language and reviewed content."""
-    inventory: list[dict[str, str]] = []
-    lines = document.read_text(encoding="utf-8").splitlines(keepends=True)
-    index = 0
-    while index < len(lines):
-        opening = _FENCE_START.fullmatch(lines[index].rstrip("\r\n"))
-        if opening is None:
-            index += 1
+@dataclass(frozen=True)
+class FencedBlock:
+    """One parsed fence with command text and its newline-normalized source slice."""
+
+    language: str
+    body: str
+    source_body: str
+
+
+def fenced_blocks(document: Path) -> list[FencedBlock]:
+    """Parse CommonMark fences while rejecting implicitly closed blocks."""
+    text = document.read_text(encoding="utf-8")
+    lines = text.splitlines(keepends=True)
+    blocks: list[FencedBlock] = []
+    for token in MarkdownIt("commonmark").parse(text):
+        if token.type != "fence":
             continue
-        marker = opening.group("marker")
-        info = opening.group("info").strip()
-        language = info.split(maxsplit=1)[0] if info else ""
-        closing = re.compile(rf"^ {{0,3}}{re.escape(marker[0])}{{{len(marker)},}}[ \t]*(?:\r?\n)?$")
-        body_start = index + 1
-        index = body_start
-        while index < len(lines) and closing.fullmatch(lines[index]) is None:
-            index += 1
-        if index == len(lines):
+        if token.map is None:
+            raise ValueError(f"{document}: fenced block has no source range")
+        start, end = token.map
+        # CommonMark permits EOF to close a fence. Release evidence does not:
+        # an explicit closing line is excluded from the parsed body line count.
+        if len(token.content.splitlines()) != end - start - 2:
             raise ValueError(f"{document}: unclosed fenced block")
-        body = "".join(lines[body_start:index])
-        digest = hashlib.sha256(f"{language}\0{body}".encode()).hexdigest()
-        inventory.append({"language": language, "sha256": digest})
-        index += 1
-    return inventory
+        info = token.info.strip()
+        blocks.append(
+            FencedBlock(info.split(maxsplit=1)[0] if info else "", token.content, "".join(lines[start + 1 : end - 1]))
+        )
+    return blocks
+
+
+def _block_inventory(document: Path) -> list[dict[str, str]]:
+    """Bind every parsed fence to its reviewed textual source content."""
+    return [
+        {
+            "language": block.language,
+            "sha256": hashlib.sha256(f"{block.language}\0{block.source_body}".encode()).hexdigest(),
+        }
+        for block in fenced_blocks(document)
+    ]
 
 
 def _table_inventory(document: Path) -> list[dict[str, str]]:
     """Inventory complete pipe-table structures by their reviewed content."""
-    inventory: list[dict[str, str]] = []
-    lines = document.read_text(encoding="utf-8").splitlines(keepends=True)
-    index = 0
-    while index + 1 < len(lines):
-        if "|" not in lines[index] or _TABLE_SEPARATOR.fullmatch(lines[index + 1].rstrip("\r\n")) is None:
-            index += 1
-            continue
-        table_start = index
-        index += 2
-        while index < len(lines) and "|" in lines[index] and lines[index].strip():
-            index += 1
-        digest = hashlib.sha256("".join(lines[table_start:index]).encode()).hexdigest()
-        inventory.append({"sha256": digest})
-    return inventory
+    return [{"sha256": hashlib.sha256(table.source_text.encode()).hexdigest()} for table in markdown_tables(document)]
 
 
 def _documents(contract: dict[str, object]) -> dict[str, dict[str, object]]:
@@ -271,20 +489,44 @@ def _validate_schema(repo_root: Path, contract: dict[str, object]) -> None:
 
 def _validate_example_ownership(contract: dict[str, object], documents: dict[str, dict[str, object]]) -> None:
     """Require stable, unique ownership for every fenced block and table."""
+    automated_owners = {
+        owner for owner, metadata in _EXAMPLE_VERIFICATION_EVIDENCE.items() if metadata[1] == "automated"
+    }
+    if set(EXAMPLE_COMMANDS) != automated_owners:
+        raise ValueError("automated command registry does not match ownership")
     raw_verifications = contract.get("example_verifications")
     if not isinstance(raw_verifications, dict):
         raise ValueError(f"{_CONTRACT_PATH}: example_verifications must be an object")
     if set(raw_verifications) != set(_EXAMPLE_VERIFICATION_EVIDENCE):
         raise ValueError(f"{_CONTRACT_PATH}: example verifications must be the supported set")
-    for verification_id, expected in _EXAMPLE_VERIFICATION_EVIDENCE.items():
-        verification = raw_verifications.get(verification_id)
+    for expected_verification_id, expected in _EXAMPLE_VERIFICATION_EVIDENCE.items():
+        verification = raw_verifications.get(expected_verification_id)
         if not isinstance(verification, dict):
-            raise ValueError(f"{_CONTRACT_PATH}: missing example verification: {verification_id}")
-        classification, mode, evidence, _ = expected
-        if verification != {"classification": classification, "mode": mode, "evidence": evidence}:
-            raise ValueError(f"{_CONTRACT_PATH}: unsupported example verification route: {verification_id}")
+            raise ValueError(f"{_CONTRACT_PATH}: missing example verification: {expected_verification_id}")
+        expected_classification, expected_mode, expected_evidence, _ = expected
+        expected_route = {
+            "classification": expected_classification,
+            "mode": expected_mode,
+            "evidence": expected_evidence,
+        }
+        if OWNER_PHASES.get(expected_verification_id) == "contributor_journey" or "phase" in verification:
+            expected_route["phase"] = OWNER_PHASES[expected_verification_id]
+        if verification != expected_route:
+            raise ValueError(f"{_CONTRACT_PATH}: unsupported example verification route: {expected_verification_id}")
     identifiers: list[str] = []
     for path, entry in documents.items():
+        if path == "AGENTS.md":
+            blocks = entry.get("fenced_blocks")
+            if (
+                not isinstance(blocks, list)
+                or not blocks
+                or not isinstance(blocks[0], dict)
+                or (
+                    blocks[0].get("id") != "agents.md.block-1"
+                    or blocks[0].get("verification_id") != "automated.contributor-journey"
+                )
+            ):
+                raise ValueError(f"{_CONTRACT_PATH}: contributor journey subject requires its canonical owner")
         for field, subject in (("fenced_blocks", "fenced block"), ("tables", "table")):
             records = entry.get(field, [])
             if not isinstance(records, list):
@@ -295,10 +537,20 @@ def _validate_example_ownership(contract: dict[str, object], documents: dict[str
                 identifier = record.get("id")
                 classification = record.get("classification")
                 verification_id = record.get("verification_id")
+                if (
+                    path == "AGENTS.md"
+                    and identifier == "agents.md.block-1"
+                    and verification_id != "automated.contributor-journey"
+                ):
+                    raise ValueError(f"{_CONTRACT_PATH}: contributor journey subject requires its canonical owner")
                 if not isinstance(identifier, str) or not isinstance(verification_id, str):
                     raise ValueError(f"{_CONTRACT_PATH}: {path} {subject}s need stable ownership identifiers")
                 identifiers.append(identifier)
                 verification = raw_verifications.get(verification_id)
+                if OWNER_PHASES.get(verification_id) == "contributor_journey" and (
+                    path != "AGENTS.md" or identifier != "agents.md.block-1" or field != "fenced_blocks"
+                ):
+                    raise ValueError(f"{_CONTRACT_PATH}: contributor journey owner has an unsupported subject")
                 if not isinstance(verification, dict) or verification.get("classification") != classification:
                     raise ValueError(
                         f"{_CONTRACT_PATH}: {identifier} has unknown or incompatible verification ownership"
@@ -310,6 +562,7 @@ def _validate_example_ownership(contract: dict[str, object], documents: dict[str
                     raise ValueError(f"{_CONTRACT_PATH}: {identifier} manual verification has an unsafe mode")
     if len(identifiers) != len(set(identifiers)):
         raise ValueError(f"{_CONTRACT_PATH}: fenced block identifiers must be unique")
+    manual_scenarios(documents)
 
 
 def _validate_verification_ownership(contract: dict[str, object], documents: dict[str, dict[str, object]]) -> None:
@@ -319,9 +572,20 @@ def _validate_verification_ownership(contract: dict[str, object], documents: dic
         raise ValueError(f"{_CONTRACT_PATH}: verification mechanisms must be the supported set")
     owners: list[str] = []
     for mechanism, value in raw.items():
-        if not isinstance(value, dict) or set(value) != {"evidence", "paths"}:
+        expected_keys = {"evidence", "paths"}
+        if OWNER_PHASES[mechanism] == "contributor_journey" or (isinstance(value, dict) and "phase" in value):
+            expected_keys.add("phase")
+        if not isinstance(value, dict) or set(value) != expected_keys:
             raise ValueError(f"{_CONTRACT_PATH}: verification entries need evidence and paths")
+        if value.get("phase", "leaf") != OWNER_PHASES[mechanism]:
+            raise ValueError(f"{_CONTRACT_PATH}: unsupported document verification phase: {mechanism}")
         paths = value.get("paths")
+        if isinstance(paths, list) and "CONTRIBUTING.md" in paths and mechanism != "contributor_gate":
+            raise ValueError(f"{_CONTRACT_PATH}: contributor journey document requires its canonical owner")
+        if mechanism == "contributor_gate" and "CONTRIBUTING.md" in documents and paths != ["CONTRIBUTING.md"]:
+            raise ValueError(f"{_CONTRACT_PATH}: contributor journey document requires its canonical owner")
+        if OWNER_PHASES[mechanism] == "contributor_journey" and paths not in ([], ["CONTRIBUTING.md"]):
+            raise ValueError(f"{_CONTRACT_PATH}: contributor journey document owner has unsupported paths")
         if (
             value.get("evidence") != _VERIFICATION_EVIDENCE[mechanism]
             or not isinstance(paths, list)
@@ -337,8 +601,7 @@ def _validate_verification_evidence(repo_root: Path) -> None:
     """Ensure every declared verification route exists in the repository."""
     makefile = (repo_root / "Makefile").read_text(encoding="utf-8")
     required_targets = {
-        "artifact-check:": "make artifact-check",
-        "pr-check:": "QUALITY_BASE=upstream/main make pr-check",
+        "pr-check:": _VERIFICATION_EVIDENCE["contributor_gate"],
         "quality:": "make quality",
     }
     for target, evidence in required_targets.items():
@@ -350,6 +613,7 @@ def _validate_verification_evidence(repo_root: Path) -> None:
         "scripts/generate_dep_map.py",
         "scripts/check_documentation_contract.py",
         "scripts/check_documentation_examples.py",
+        "scripts/check_skill_documentation_contract.py",
         "ROADMAP.md",
     )
     for relative in required_files:
@@ -359,6 +623,19 @@ def _validate_verification_evidence(repo_root: Path) -> None:
         for relative in evidence_paths:
             if not (repo_root / relative).is_file():
                 raise ValueError(f"{_CONTRACT_PATH}: example verification evidence is unavailable: {relative}")
+
+
+def _has_future_status(path: str, text: str) -> bool:
+    """Keep project plans in ROADMAP without mistaking literal workspace task headings for plans."""
+    runtime_heading = {
+        "src/fieldkit/skills/task-management/SKILL.md": "In TASKS.md, the local queued section is named `## Backlog`.",
+        "src/fieldkit/skills/task-sync/SKILL.md": "The `Backlog` section in TASKS.md is local and outside the sync markers.",
+    }.get(path)
+    if runtime_heading is not None:
+        text = "\n\n".join(
+            paragraph for paragraph in text.split("\n\n") if " ".join(paragraph.split()) != runtime_heading
+        )
+    return _FUTURE_STATUS.search(text) is not None
 
 
 def validate(repo_root: Path = _REPO_ROOT) -> tuple[Finding, ...]:
@@ -372,7 +649,7 @@ def validate(repo_root: Path = _REPO_ROOT) -> tuple[Finding, ...]:
     roadmap = contract.get("roadmap")
     if not isinstance(roadmap, str) or documents.get(roadmap, {}).get("content_type") != "roadmap":
         raise ValueError(f"{_CONTRACT_PATH}: roadmap must name the roadmap document")
-    findings: list[Finding] = []
+    findings: list[Finding] = list(_skill_index_findings(repo_root))
     public_paths = _public_markdown_paths(repo_root)
     private_patterns = _private_patterns(repo_root)
     for path in sorted(public_paths - documents.keys()):
@@ -406,7 +683,7 @@ def validate(repo_root: Path = _REPO_ROOT) -> tuple[Finding, ...]:
             findings.append(Finding("DOC409", path))
         if entry.get("source_fingerprint") != _fingerprint(repo_root, source_patterns):
             findings.append(Finding("DOC406", path))
-        if path != roadmap and _FUTURE_STATUS.search(document.read_text(encoding="utf-8")):
+        if path != roadmap and _has_future_status(path, document.read_text(encoding="utf-8")):
             findings.append(Finding("DOC407", path))
         declared_blocks = entry.get("fenced_blocks")
         reviewed_inventory = (
@@ -427,11 +704,19 @@ def validate(repo_root: Path = _REPO_ROOT) -> tuple[Finding, ...]:
     return tuple(sorted(findings))
 
 
-def refresh_fingerprints(repo_root: Path = _REPO_ROOT) -> None:
-    """Refresh source fingerprints after a human reviews affected documents."""
+def refresh_fingerprints(repo_root: Path = _REPO_ROOT, *, paths: tuple[str, ...] | None = None) -> None:
+    """Refresh only selected reviewed documents, or all documents for fixture setup."""
     contract_path = repo_root / _CONTRACT_PATH
     contract = _load_json(contract_path)
-    for path, entry in _documents(contract).items():
+    documents = _documents(contract)
+    selected = tuple(dict.fromkeys(paths)) if paths is not None else tuple(documents)
+    if not selected:
+        raise ValueError("no documents selected for fingerprint refresh")
+    unknown = set(selected) - set(documents)
+    if unknown:
+        raise ValueError(f"unknown document for fingerprint refresh: {sorted(unknown)}")
+    for path in selected:
+        entry = documents[path]
         sources = entry.get("sources")
         if not isinstance(sources, list) or not sources or not all(isinstance(source, str) for source in sources):
             raise ValueError(f"{_CONTRACT_PATH}: {path} has invalid sources")
@@ -476,11 +761,16 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, default=_REPO_ROOT)
     parser.add_argument("--refresh", action="store_true")
+    parser.add_argument("--refresh-path", action="append", default=[])
     parser.add_argument("--refresh-blocks", action="store_true")
     args = parser.parse_args(argv)
+    if args.refresh and not args.refresh_path:
+        parser.error("--refresh requires at least one --refresh-path")
+    if args.refresh_path and not args.refresh:
+        parser.error("--refresh-path requires --refresh")
     try:
         if args.refresh:
-            refresh_fingerprints(args.repo_root)
+            refresh_fingerprints(args.repo_root, paths=tuple(args.refresh_path))
         if args.refresh_blocks:
             refresh_block_inventory(args.repo_root)
         findings = validate(args.repo_root)

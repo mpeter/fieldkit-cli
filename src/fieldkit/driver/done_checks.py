@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import TypeAlias
 
-import yaml
+from fieldkit.util.strict_yaml import StrictYAMLError, load_strict_yaml
 
 _FRONTMATTER_RE = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n---(?:[ \t]*\r?\n|\Z)", re.DOTALL)
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
@@ -63,30 +63,6 @@ class DoneCheckContract:
     checks: tuple[DoneCheck, ...]
 
 
-class _UniqueKeyLoader(yaml.SafeLoader):  # type: ignore[misc]
-    """Safe YAML loader which fails rather than silently replacing a key."""
-
-
-def _construct_unique_mapping(
-    loader: _UniqueKeyLoader, node: yaml.MappingNode, deep: bool = False
-) -> dict[object, object]:
-    loader.flatten_mapping(node)
-    result: dict[object, object] = {}
-    for key_node, value_node in node.value:
-        key = loader.construct_object(key_node, deep=deep)
-        try:
-            duplicate = key in result
-        except TypeError as exc:
-            raise DoneCheckError("mapping keys must be scalar values") from exc
-        if duplicate:
-            raise DoneCheckError(f"duplicate YAML key: {key!r}")
-        result[key] = loader.construct_object(value_node, deep=deep)
-    return result
-
-
-_UniqueKeyLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _construct_unique_mapping)
-
-
 def _mapping(value: object, location: str) -> dict[str, object]:
     if not isinstance(value, dict) or any(not isinstance(key, str) for key in value):
         raise DoneCheckError(f"{location} must be an object")
@@ -113,17 +89,17 @@ def _has_traversal(value: str) -> bool:
 
 def _validate_argument(value: str, location: str) -> None:
     if "\n" in value or "\r" in value or value in _SHELL_TOKENS or re.match(r"^\d*(?:>|<)", value):
-        raise DoneCheckError(f"{location} contains shell composition syntax: {value!r}")
+        raise DoneCheckError(f"{location} contains shell composition syntax")
     if "`" in value or "$(" in value or "${" in value:
-        raise DoneCheckError(f"{location} contains shell evaluation syntax: {value!r}")
+        raise DoneCheckError(f"{location} contains shell evaluation syntax")
     if _has_traversal(value):
-        raise DoneCheckError(f"{location} contains path traversal: {value!r}")
+        raise DoneCheckError(f"{location} contains path traversal")
     artifact = _ARTIFACT_RE.fullmatch(value)
     if artifact is not None:
         if not _safe_relative_path(artifact.group(1)):
-            raise DoneCheckError(f"{location} contains an unsupported placeholder: {value!r}")
+            raise DoneCheckError(f"{location} contains an unsupported placeholder")
     elif _PLACEHOLDER_RE.search(value):
-        raise DoneCheckError(f"{location} contains an unsupported placeholder: {value!r}")
+        raise DoneCheckError(f"{location} contains an unsupported placeholder")
 
 
 def _safe_relative_path(value: str) -> bool:
@@ -154,7 +130,7 @@ def _validate_python_leaf(leaf: tuple[str, ...]) -> None:
 def _normalize_argv(argv: tuple[str, ...]) -> tuple[str, ...]:
     executable = argv[0]
     if "/" in executable or executable in _FORBIDDEN_EXECUTABLES:
-        raise DoneCheckError(f"untrusted executable: {executable!r}")
+        raise DoneCheckError("untrusted executable")
     if executable == "make":
         if len(argv) != 2 or argv[1] not in _MAKE_TARGETS:
             raise DoneCheckError("make requires exactly one approved target: quality, quality-full, or gazepy")
@@ -163,7 +139,7 @@ def _normalize_argv(argv: tuple[str, ...]) -> tuple[str, ...]:
     leaf = _unwrap_leaf(argv)
     leaf_executable = leaf[0]
     if leaf_executable in {"uv", "uvx", "make"} or leaf_executable not in _LEAF_EXECUTABLES:
-        raise DoneCheckError(f"untrusted leaf executable: {leaf_executable!r}")
+        raise DoneCheckError("untrusted leaf executable")
     if leaf_executable == "python":
         _validate_python_leaf(leaf)
     return leaf
@@ -221,7 +197,7 @@ def _parse_check(value: object, index: int) -> DoneCheck:
     record = _mapping(value, location)
     unknown = set(record) - _CHECK_KEYS
     if unknown:
-        raise DoneCheckError(f"{location} has unknown keys: {', '.join(sorted(unknown))}")
+        raise DoneCheckError(f"{location} has unknown keys")
     check_id = record.get("id")
     if not isinstance(check_id, str) or _ID_RE.fullmatch(check_id) is None:
         raise DoneCheckError(f"{location}.id must match {_ID_RE.pattern}")
@@ -240,10 +216,12 @@ def parse_done_checks(text: str) -> DoneCheckContract:
     if match is None:
         raise DoneCheckError("work order must begin with YAML frontmatter")
     try:
-        loaded = yaml.load(match.group(1), Loader=_UniqueKeyLoader)
-    except DoneCheckError:
-        raise
-    except yaml.YAMLError as exc:
+        loaded = load_strict_yaml(match.group(1))
+    except StrictYAMLError as exc:
+        if exc.reason == "duplicate_key":
+            raise DoneCheckError("duplicate YAML key") from exc
+        if exc.reason == "non_scalar_key":
+            raise DoneCheckError("mapping keys must be scalar values") from exc
         raise DoneCheckError(f"invalid YAML frontmatter: {exc}") from exc
     frontmatter = _mapping(loaded, "frontmatter")
     if "done_checks" not in frontmatter:
@@ -251,7 +229,7 @@ def parse_done_checks(text: str) -> DoneCheckContract:
     contract = _mapping(frontmatter["done_checks"], "done_checks")
     unknown = set(contract) - {"version", "checks"}
     if unknown:
-        raise DoneCheckError(f"done_checks has unknown keys: {', '.join(sorted(unknown))}")
+        raise DoneCheckError("done_checks has unknown keys")
     version = contract.get("version")
     if isinstance(version, bool) or not isinstance(version, int) or version != 1:
         raise DoneCheckError("done_checks.version must be integer 1")

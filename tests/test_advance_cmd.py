@@ -13,10 +13,32 @@ import pytest
 import yaml
 from click.testing import CliRunner
 
-from fieldkit.commands.pursuit.advance_cmd import _apply_transition, advance_cmd
+from fieldkit.commands.pursuit.advance_cmd import _apply_transition, _next_stage, advance_cmd
 from fieldkit.pursuit.gate_criteria import ALLOWED_GATE_STATUSES
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.mark.parametrize(
+    "current,expected",
+    [("discover", "validate"), ("negotiate", "closed-won"), ("unknown", None)],
+)
+def test_default_next_stage_returns_plain_yaml_values(current: str, expected: str | None) -> None:
+    result = _next_stage(current)
+    assert result == expected
+    if result is not None:
+        assert type(result) is str
+        history = {"transition-history": [{"from": current, "to": result}]}
+        assert yaml.safe_load(yaml.safe_dump(history)) == history
+
+
+@pytest.fixture(autouse=True)
+def _confine_advance_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "fieldkit.commands.pursuit.advance_cmd.get_accounts_root",
+        lambda: tmp_path / "accounts",
+    )
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -47,7 +69,8 @@ sf_amount: 50000
 
 
 def _make_pursuit(tmp_path: Path, name: str = "pursuit.md") -> Path:
-    p = tmp_path / name
+    p = tmp_path / "accounts" / "acme" / "pursuits" / name
+    p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(_MINIMAL_FM, encoding="utf-8")
     return p
 
@@ -138,7 +161,8 @@ sf_close_date: 2025-12-31
 
 
 def _make_discover_pursuit(tmp_path: Path, name: str = "pursuit.md") -> Path:
-    p = tmp_path / name
+    p = tmp_path / "accounts" / "acme" / "pursuits" / name
+    p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(_DISCOVER_FM, encoding="utf-8")
     return p
 
@@ -291,7 +315,8 @@ sf_close_date: 2027-12-31
 @pytest.mark.unit
 def test_advance_cmd_exits_nonzero_gate_pending(tmp_path: Path) -> None:
     """advance_cmd exits 1 while native policy is unratified."""
-    p = tmp_path / "pursuit.md"
+    p = tmp_path / "accounts" / "acme" / "pursuits" / "pursuit.md"
+    p.parent.mkdir(parents=True)
     p.write_text(_FAILING_FM, encoding="utf-8")
 
     runner = CliRunner()
@@ -304,7 +329,8 @@ def test_advance_cmd_exits_nonzero_gate_pending(tmp_path: Path) -> None:
 @pytest.mark.unit
 def test_advance_cmd_legacy_passing_scores_do_not_advance(tmp_path: Path) -> None:
     """Historical scores cannot pass an unratified native gate."""
-    p = tmp_path / "pursuit.md"
+    p = tmp_path / "accounts" / "acme" / "pursuits" / "pursuit.md"
+    p.parent.mkdir(parents=True)
     p.write_text(_PASSING_FM, encoding="utf-8")
 
     runner = CliRunner()
@@ -652,7 +678,8 @@ def test_override_path_positional_spec(tmp_path: Path) -> None:
     )
     # Historical values do not affect the pending policy decision.
     meddpicc_yaml = "\n".join(f"  {k}: {v}" for k, v in low_scores.items())
-    p = tmp_path / "pursuit.md"
+    p = tmp_path / "accounts" / "acme" / "pursuits" / "pursuit.md"
+    p.parent.mkdir(parents=True)
     p.write_text(
         f"""---
 stage: discover

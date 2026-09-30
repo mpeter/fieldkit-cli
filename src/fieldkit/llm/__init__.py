@@ -7,9 +7,6 @@ from fieldkit.llm._transcribe import (
     transcribe as transcribe,
 )
 from fieldkit.llm.core import (
-    _DEFAULT_MODEL as _DEFAULT_MODEL,
-)
-from fieldkit.llm.core import (
     _NO_LLM_STUB as _NO_LLM_STUB,
 )
 from fieldkit.llm.core import (
@@ -45,7 +42,6 @@ __all__ = [
     "LLM_SKILL",
     "LLM_SYNTHESIS_TIMEOUT",
     "UNTRUSTED_DATA_PREAMBLE",
-    "_DEFAULT_MODEL",
     "_NO_LLM_STUB",
     "TranscribeError",
     "_resolve_model",

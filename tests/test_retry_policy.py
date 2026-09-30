@@ -190,7 +190,7 @@ def test_exhaustion_logs_error_with_attempt_count(caplog: pytest.LogCaptureFixtu
 
     @connect_retry(_LOG, wait_min=0, wait_max=0)
     def _create() -> str:
-        raise httpx.ConnectError("connection refused")
+        raise httpx.ConnectError("provider-payload-sentinel")
 
     with caplog.at_level(logging.ERROR, logger="test_retry_policy"), pytest.raises(httpx.ConnectError):
         _create()
@@ -200,6 +200,7 @@ def test_exhaustion_logs_error_with_attempt_count(caplog: pytest.LogCaptureFixtu
     assert len(errors) == 1, "exactly one exhaustion report expected"
     assert str(RETRY_MAX_ATTEMPTS) in errors[0].getMessage()
     assert "failed after" in errors[0].getMessage()
+    assert "provider-payload-sentinel" not in caplog.text
 
 
 def test_successful_retry_logs_warning(caplog: pytest.LogCaptureFixture) -> None:
@@ -210,7 +211,7 @@ def test_successful_retry_logs_warning(caplog: pytest.LogCaptureFixture) -> None
     def _create() -> str:
         calls.append(1)
         if len(calls) == 1:
-            raise httpx.ConnectError("connection refused")
+            raise httpx.ConnectError("provider-payload-sentinel")
         return "ok"
 
     with caplog.at_level(logging.WARNING, logger="test_retry_policy"):
@@ -219,6 +220,7 @@ def test_successful_retry_logs_warning(caplog: pytest.LogCaptureFixture) -> None
     assert result == "ok"
     warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
     assert len(warnings) == 1, "a recovered retry must still emit a warning"
+    assert "provider-payload-sentinel" not in caplog.text
 
 
 def test_exhaustion_attaches_attempt_count_note() -> None:
@@ -266,7 +268,10 @@ def test_with_policy_overrides_attempts() -> None:
         calls.append(1)
         raise httpx.ConnectError("connection refused")
 
-    tuned = _create.with_policy(attempts=5)
+    override = vars(_create)["with_policy"]
+    assert callable(override)
+    tuned = override(attempts=5)
+    assert callable(tuned)
 
     with pytest.raises(httpx.ConnectError, match="connection refused"):
         tuned()

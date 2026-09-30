@@ -21,11 +21,11 @@ from typing import Any
 
 import click
 
-from fieldkit.cli_exit import EXIT_PARTIAL, cli_main
+from fieldkit.cli_exit import EXIT_AUTH, EXIT_DATA, EXIT_PARTIAL, cli_main
 from fieldkit.cli_registry import declare_write
-from fieldkit.commands.issue.gh_store import GHIssueStore
 from fieldkit.config import get_fieldkit_data, get_github_repo
 from fieldkit.health.runner import HealthRunResult, run_health
+from fieldkit.issue import GHIssueStore
 
 
 class _GHIssueFiler:
@@ -84,11 +84,18 @@ def _echo_result(result: HealthRunResult, *, dry_run: bool) -> None:
     for err in result.runner_errors:
         click.echo(click.style(f"  Runner error: {err}", fg="red"), err=True)
     if any("filing failed" in err for err in result.runner_errors):
-        click.echo(
-            "  Regressions were sensed but could not be filed — check `gh auth status` "
-            "before the next nightly run retries with the same credentials.",
-            err=True,
-        )
+        if result.filing_failure == "authentication":
+            guidance = "authentication is required. Run `gh auth login`, then rerun the health command."
+        elif result.filing_failure == "retryable":
+            guidance = "the provider request failed; retry the health run later."
+        elif result.filing_failure == "data":
+            guidance = (
+                "the filing result is uncertain or invalid. Do not retry automatically; "
+                "reconcile the recorded filed checks with GitHub issue state first."
+            )
+        else:
+            guidance = "review the recorded run status before retrying."
+        click.echo(f"  Regressions were sensed but could not be filed — {guidance}", err=True)
 
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
@@ -112,7 +119,8 @@ def run(dry_run: bool, as_json: bool) -> None:
     """Run the gate bundle against origin/main and file new regressions.
 
     Exits 0 when every check executed (gate failures are sensed regressions,
-    not runner failures). Exits 1 on partial/fatal runner outcomes.
+    not runner failures). Filing authentication exits 2, uncertain or invalid
+    filing data exits 3, and other partial/fatal outcomes exit 1.
     """
     with cli_main():
         # A systemd timeout kill sends SIGTERM; convert it to an exception so
@@ -129,6 +137,10 @@ def run(dry_run: bool, as_json: bool) -> None:
             click.echo(json.dumps({**dataclasses.asdict(result), "dry_run": dry_run}, indent=2, default=str))
         else:
             _echo_result(result, dry_run=dry_run)
+        if result.filing_failure == "authentication":
+            raise SystemExit(EXIT_AUTH)
+        if result.filing_failure == "data":
+            raise SystemExit(EXIT_DATA)
         if result.outcome != "ok":
             raise SystemExit(EXIT_PARTIAL)
 

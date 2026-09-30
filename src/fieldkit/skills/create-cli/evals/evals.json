@@ -2,6 +2,12 @@
   "skill_name": "create-cli",
   "static_checks": [
     {
+      "id": "explicit_source_checkout",
+      "type": "contains_all",
+      "patterns": ["requires an authorized source checkout", "not resolve these paths relative", "prerequisite", "pending", "proposal is not"],
+      "message": "Installed skill paths must not masquerade as an available contributor checkout or implemented proof"
+    },
+    {
       "id": "canonical_agent_guide",
       "type": "contains",
       "pattern": "AGENTS.md",
@@ -49,10 +55,11 @@
     },
     {
       "id": 1,
-      "prompt": "Add --account to fieldkit pipeline export and make it work in human and JSON modes",
+      "prompt": "Design --account filtering for a proposed fieldkit pipeline export command in human and JSON modes. First verify whether that command exists in the selected source checkout; do not invent an installed route.",
       "expected_behavior": "Specifies the material option change end to end",
       "assertions": [
-        "Traces --account from Click parsing through domain filtering to observable human and JSON output",
+        "Verifies the command's existence before treating it as a material option change; otherwise identifies it as a proposed new route",
+        "Traces proposed --account from Click parsing through domain filtering to observable human and JSON output",
         "Defines unknown-account and accepted-but-ignored regression tests",
         "Covers compatibility, generated docs, and non-interactive behavior"
       ]

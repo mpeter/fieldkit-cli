@@ -47,12 +47,11 @@ def _apply_web_result(
 
 
 def _enrich_result(
-    *, total_enriched: int = 8, total_failed: int = 1, migrated_legacy_files: int = 0, total_raw_contacts: int = 9
+    *, total_enriched: int = 8, total_failed: int = 1, total_raw_contacts: int = 9
 ) -> EnrichRecordsResult:
     return EnrichRecordsResult(
         total_enriched=total_enriched,
         total_failed=total_failed,
-        migrated_legacy_files=migrated_legacy_files,
         total_raw_contacts=total_raw_contacts,
     )
 
@@ -260,19 +259,19 @@ def test_default_path_does_not_call_discover_or_apply_web() -> None:
 
 def test_enrich_records_json_output_is_exact_json() -> None:
     runner = CliRunner()
-    sample = _enrich_result(total_enriched=8, total_failed=1, migrated_legacy_files=0, total_raw_contacts=9)
+    sample = _enrich_result(total_enriched=8, total_failed=1, total_raw_contacts=9)
     with patch(f"{_MOD}.enrich_records", return_value=sample):
         result = runner.invoke(cli, ["--json"])
 
     assert result.exit_code == 0
     assert result.output.strip() == json.dumps(
-        {"total_enriched": 8, "total_failed": 1, "migrated_legacy_files": 0, "total_raw_contacts": 9}, indent=2
+        {"total_enriched": 8, "total_failed": 1, "total_raw_contacts": 9}, indent=2
     )
 
 
 def test_enrich_records_no_contacts_message_and_returns() -> None:
     runner = CliRunner()
-    sample = _enrich_result(total_raw_contacts=0, migrated_legacy_files=0, total_enriched=0, total_failed=0)
+    sample = _enrich_result(total_raw_contacts=0, total_enriched=0, total_failed=0)
     with patch(f"{_MOD}.enrich_records", return_value=sample):
         result = runner.invoke(cli, [])
 
@@ -282,21 +281,11 @@ def test_enrich_records_no_contacts_message_and_returns() -> None:
     assert "Migrated" not in result.output
 
 
-def test_enrich_records_migrated_legacy_files_shown_when_nonzero() -> None:
-    runner = CliRunner()
-    sample = _enrich_result(migrated_legacy_files=2, total_raw_contacts=9)
-    with patch(f"{_MOD}.enrich_records", return_value=sample):
-        result = runner.invoke(cli, [])
+def test_enrich_records_has_no_migration_message() -> None:
+    with patch(f"{_MOD}.enrich_records", return_value=_enrich_result()):
+        result = CliRunner().invoke(cli, [])
 
-    assert "Migrated 2 contact file(s) from legacy memory location." in result.output
-
-
-def test_enrich_records_migrated_legacy_files_hidden_when_zero() -> None:
-    runner = CliRunner()
-    sample = _enrich_result(migrated_legacy_files=0, total_raw_contacts=9)
-    with patch(f"{_MOD}.enrich_records", return_value=sample):
-        result = runner.invoke(cli, [])
-
+    assert result.exit_code == 0
     assert "Migrated" not in result.output
 
 

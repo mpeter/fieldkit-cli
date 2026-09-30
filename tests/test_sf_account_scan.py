@@ -13,7 +13,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from fieldkit.commands.sf.account import _resolve_account_id_by_pursuit_scan
-from fieldkit.sf.client import SFAPIError, SFAuthError
+from fieldkit.errors import FieldkitError, SalesforceSyncPartialError
+from fieldkit.sf.errors import SFAPIError, SFAuthError
 
 pytestmark = pytest.mark.unit
 
@@ -88,21 +89,22 @@ def test_resolve_account_id_by_pursuit_scan_sf_auth_error_on_sosl_search_propaga
         _resolve_account_id_by_pursuit_scan("acme-corp", {}, mock_client)
 
 
-def test_resolve_account_id_by_pursuit_scan_sf_api_error_on_sosl_search_returns_none(tmp_path: Path) -> None:
-    """SFAPIError from sosl_search is caught; returns None."""
+def test_resolve_account_id_by_pursuit_scan_sf_api_error_on_sosl_search_propagates(tmp_path: Path) -> None:
+    """SFAPIError must not become a successful no-match result."""
     pursuits_dir = _make_pursuits_dir(tmp_path, "acme-corp")
     (pursuits_dir / "renewal-2026.md").write_text(_FRONTMATTER_WITH_OPP_ID, encoding="utf-8")
     mock_client = MagicMock()
     mock_client.sosl_search.side_effect = SFAPIError("API error")
 
-    with patch("fieldkit.commands.sf.account.get_fieldkit_home", return_value=tmp_path):
-        result = _resolve_account_id_by_pursuit_scan("acme-corp", {}, mock_client)
+    with (
+        patch("fieldkit.commands.sf.account.get_fieldkit_home", return_value=tmp_path),
+        pytest.raises(SFAPIError, match="API error"),
+    ):
+        _resolve_account_id_by_pursuit_scan("acme-corp", {}, mock_client)
 
-    assert result is None
 
-
-def test_oserror_reading_pursuit_file_is_skipped(tmp_path: Path) -> None:
-    """_resolve_account_id_by_pursuit_scan skips files that raise OSError on read."""
+def test_oserror_reading_pursuit_file_propagates(tmp_path: Path) -> None:
+    """An incomplete local scan must not become a completed no-match."""
     pursuits_dir = _make_pursuits_dir(tmp_path, "acme-corp")
     broken_file = pursuits_dir / "broken.md"
     broken_file.write_text("---\nstage: negotiate\n---\nBody.\n", encoding="utf-8")
@@ -111,12 +113,27 @@ def test_oserror_reading_pursuit_file_is_skipped(tmp_path: Path) -> None:
 
     with (
         patch("fieldkit.commands.sf.account.get_fieldkit_home", return_value=tmp_path),
-        patch("pathlib.Path.read_text", side_effect=OSError("permission denied")),
+        patch("fieldkit.sf.sync.read_pursuit_text_snapshot", side_effect=OSError("synthetic-private-path")),
+        pytest.raises(SalesforceSyncPartialError, match="Salesforce local pursuit read failed") as caught,
     ):
-        result = _resolve_account_id_by_pursuit_scan("acme-corp", {}, mock_client)
+        _resolve_account_id_by_pursuit_scan("acme-corp", {}, mock_client)
 
-    assert result is None
     mock_client.sosl_search.assert_not_called()
+    assert "synthetic-private-path" not in str(caught.value)
+
+
+def test_malformed_pursuit_yaml_is_not_a_completed_no_match(tmp_path: Path) -> None:
+    pursuits_dir = _make_pursuits_dir(tmp_path, "acme-corp")
+    malformed = "---\nsf_opportunity_id: [private-invalid\n---\nBody.\n"
+    (pursuits_dir / "broken.md").write_text(malformed, encoding="utf-8")
+
+    with (
+        patch("fieldkit.commands.sf.account.get_fieldkit_home", return_value=tmp_path),
+        pytest.raises(FieldkitError, match=r"^Invalid pursuit frontmatter$") as exc_info,
+    ):
+        _resolve_account_id_by_pursuit_scan("acme-corp", {}, MagicMock())
+
+    assert "private-invalid" not in str(exc_info.value)
 
 
 def test_first_pursuit_no_opp_id_second_has_opp_id_returns_account_id(tmp_path: Path) -> None:

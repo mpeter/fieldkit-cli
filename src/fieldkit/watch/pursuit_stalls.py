@@ -49,7 +49,13 @@ from fieldkit.watch import _pursuit_stall_render as stall_render
 from fieldkit.watch import _pursuit_stall_scan as stall_scan
 from fieldkit.watch import _pursuit_stall_state as stall_state
 from fieldkit.watch.logging import watcher_logging
-from fieldkit.watch.status import WatcherOutcome, get_last_run_outcome, was_run_today, write_run_status
+from fieldkit.watch.status import (
+    WatcherOutcome,
+    WatcherRunResult,
+    classify_watcher_outcome,
+    get_daily_run_snapshot,
+    write_run_status,
+)
 
 # ---------------------------------------------------------------------------
 # Defaults
@@ -139,25 +145,29 @@ def _process_stall_entry(
     return 1, stalled_delta, snoozed_delta, updated_state
 
 
-def _check_already_ran(dry_run: bool, force: bool = False) -> int | None:
+def _check_already_ran(dry_run: bool, force: bool = False) -> WatcherRunResult | None:
     """historic regression/historic regression: skip or error if already ran today.
 
-    Returns an exit code (0 or 1) if the run should be skipped, or None to proceed.
+    Returns incomplete invocation facts if suppressed, or None to proceed.
     Pass force=True (historic regression) to bypass the guard unconditionally.
     """
-    if force or dry_run or not was_run_today("pursuit-stalls"):
+    if force or dry_run:
         return None
-    prior_outcome = get_last_run_outcome("pursuit-stalls")
-    if prior_outcome == "fatal":
+    snapshot = get_daily_run_snapshot("pursuit-stalls")
+    if not snapshot.ran_today:
+        return None
+    prior_outcome = snapshot.outcome
+    if prior_outcome != "ok":
         log.warning(
-            "pursuit-stalls last run today had outcome=fatal — "
-            "re-run with --force to investigate or check watcher-run-status.json"
+            "pursuit-stalls last run today had outcome=%s — "
+            "re-run with --force to investigate or check watcher-run-status.json",
+            prior_outcome,
         )
-        return 1
+        return WatcherRunResult("partial" if prior_outcome == "partial" else "fatal", False, None)
     log.info("pursuit-stalls already ran today; skipping (use --force to override)")
     # historic regression: write zero counts on skip so watcher-run-status.json reflects the
     # skip rather than retaining stale counts from the previous real run.
-    write_run_status(
+    status_result = write_run_status(
         watcher="pursuit-stalls",
         outcome="ok",
         records_checked=0,
@@ -166,7 +176,7 @@ def _check_already_ran(dry_run: bool, force: bool = False) -> int | None:
         elapsed_seconds=0.0,
         dry_run=False,
     )
-    return 0
+    return WatcherRunResult("ok" if status_result == "written" else "fatal", False, status_result)
 
 
 def _load_and_validate_accounts(
@@ -310,7 +320,7 @@ def _watcher_outcome(checked: int, data_failures: int, intentional_exclusions: i
     """Classify an empty scan as fatal unless it consisted only of intentional exclusions."""
     if checked == 0 and (data_failures > 0 or intentional_exclusions == 0):
         return "fatal"
-    return "partial" if data_failures else "ok"
+    return classify_watcher_outcome(checked=checked, failures=data_failures)
 
 
 def _run_pursuit_stalls(
@@ -319,13 +329,13 @@ def _run_pursuit_stalls(
     account: str | None,
     dry_run: bool,
     force: bool = False,
-) -> int:
-    """Core logic; returns POSIX exit code."""
+) -> WatcherRunResult:
+    """Core logic; returns invocation facts."""
     import time
 
     start = time.monotonic()
     today = datetime.datetime.now(tz=datetime.UTC).date()
-    with watcher_logging("pursuit-stalls"):
+    with watcher_logging("pursuit-stalls", enabled=not dry_run):
         # historic regression / historic regression: skip if already ran today (historic regression: force bypasses)
         skip_code = _check_already_ran(dry_run, force=force)
         if skip_code is not None:
@@ -333,7 +343,7 @@ def _run_pursuit_stalls(
 
         accounts = _load_and_validate_accounts(account, threshold)
         if accounts is None:
-            return 1
+            return WatcherRunResult("fatal", False, None)
 
         config = get_accounts_config()
         persisted_state = stall_state.load_state()
@@ -375,7 +385,7 @@ def _run_pursuit_stalls(
             dry_run,
         )
         outcome = "fatal" if state_write_failed else _watcher_outcome(checked, data_failures, intentional_exclusions)
-        write_run_status(
+        status_result = write_run_status(
             watcher="pursuit-stalls",
             outcome=outcome,
             records_checked=checked,
@@ -384,6 +394,9 @@ def _run_pursuit_stalls(
             elapsed_seconds=elapsed,
             dry_run=dry_run,
         )
+        status_write_failed = status_result == "failed"
+        if status_write_failed:
+            outcome = "fatal"
         # historic regression: print dry-run summary to stdout so --dry-run is useful as a preview.
         if dry_run:
             click.echo(
@@ -393,16 +406,17 @@ def _run_pursuit_stalls(
         # having to inspect watcher-run-status.json manually.
         if outcome == "fatal":
             message = (
-                "ERROR: pursuit-stall state was not persisted — resolve the storage failure before rerunning"
+                "ERROR: pursuit-stall run status was not persisted — resolve the storage failure before rerunning"
+                if status_write_failed
+                else "ERROR: pursuit-stall state was not persisted — resolve the storage failure before rerunning"
                 if state_write_failed
                 else "ERROR: no pursuits were scanned — use --verbose to diagnose the watcher input"
             )
             click.echo(message, err=True)
-            return 1
+            return WatcherRunResult(outcome, True, status_result)
         if data_failures > 0:
             click.echo(
                 f"NOTE: {data_failures} pursuit(s) could not be scanned — use --verbose to see details",
                 err=True,
             )
-            return 1
-        return 0
+        return WatcherRunResult(outcome, True, status_result)

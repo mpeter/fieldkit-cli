@@ -3,11 +3,12 @@
 cc=8, cov=44%, target: cover error/isError/json/raw/None branches.
 """
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from fieldkit.watch.morning_brief_mcp import MCPSession
+from fieldkit.watch import mcp as mcp_module
+from fieldkit.watch.mcp import MCPAuthError, MCPSession
 
 pytestmark = pytest.mark.unit
 
@@ -58,7 +59,7 @@ def test_call_tool_mcp_error_raises_on_error_key() -> None:
     session = _session_with_id()
     body = {"jsonrpc": "2.0", "error": {"code": -32601, "message": "Method not found"}, "id": 1}
 
-    with _mock_post({}, body), pytest.raises(RuntimeError, match="returned error"):
+    with _mock_post({}, body), pytest.raises(RuntimeError, match="MCP tool request failed"):
         session.call_tool("unknown_tool", {})
 
 
@@ -86,8 +87,8 @@ def test_call_tool_is_error_raises_on_is_error_true() -> None:
         session.call_tool("some_tool", {})
 
 
-def test_call_tool_is_error_is_error_message_includes_content_texts() -> None:
-    """The RuntimeError message joins all text content blocks."""
+def test_call_tool_is_error_does_not_retain_provider_content() -> None:
+    """Provider error bodies never enter the caller-facing diagnostic."""
     session = _session_with_id()
     body = {
         "jsonrpc": "2.0",
@@ -101,8 +102,11 @@ def test_call_tool_is_error_is_error_message_includes_content_texts() -> None:
         "id": 1,
     }
 
-    with _mock_post({}, body), pytest.raises(RuntimeError, match="Error A"):
+    with _mock_post({}, body), pytest.raises(RuntimeError) as exc_info:
         session.call_tool("some_tool", {})
+
+    assert "Error A" not in str(exc_info.value)
+    assert "Error B" not in str(exc_info.value)
 
 
 # ---------------------------------------------------------------------------
@@ -143,6 +147,98 @@ def test_call_tool_json_result_returns_list_when_json_is_array() -> None:
     assert result == [1, 2, 3]
 
 
+def test_call_tool_rejects_multiple_usable_text_blocks() -> None:
+    session = _session_with_id()
+    body = {
+        "jsonrpc": "2.0",
+        "result": {
+            "content": [
+                {"type": "text", "text": "[]"},
+                {"type": "text", "text": "private-provider-payload"},
+            ]
+        },
+        "id": 1,
+    }
+
+    with _mock_post({}, body), pytest.raises(RuntimeError, match="invalid content") as exc_info:
+        session.call_tool("list_tool", {})
+
+    assert "private-provider-payload" not in str(exc_info.value)
+
+
+def test_call_tool_rejects_text_block_over_byte_bound(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(mcp_module, "_MCP_TEXT_MAX_BYTES", 4)
+    session = _session_with_id()
+    body = {
+        "jsonrpc": "2.0",
+        "result": {"content": [{"type": "text", "text": "12345-private-provider-payload"}]},
+        "id": 1,
+    }
+
+    with _mock_post({}, body), pytest.raises(RuntimeError, match="invalid content") as exc_info:
+        session.call_tool("list_tool", {})
+
+    assert "private-provider-payload" not in str(exc_info.value)
+
+
+def test_call_tool_accepts_one_structured_payload_without_text_content() -> None:
+    session = _session_with_id()
+    body = {
+        "jsonrpc": "2.0",
+        "result": {"structuredContent": {"messages": []}, "content": []},
+        "id": 1,
+    }
+
+    with _mock_post({}, body):
+        result = session.call_tool("list_tool", {})
+
+    assert result == {"messages": []}
+
+
+def test_call_tool_rejects_ambiguous_structured_and_text_payloads() -> None:
+    session = _session_with_id()
+    body = {
+        "jsonrpc": "2.0",
+        "result": {
+            "structuredContent": {"messages": []},
+            "content": [{"type": "text", "text": '{"messages":[{"id":"private"}]}'}],
+        },
+        "id": 1,
+    }
+
+    with _mock_post({}, body), pytest.raises(RuntimeError, match="invalid content") as exc_info:
+        session.call_tool("list_tool", {})
+
+    assert "private" not in str(exc_info.value)
+
+
+def test_call_tool_rejects_duplicate_json_keys_in_text_content() -> None:
+    session = _session_with_id()
+    body = {
+        "jsonrpc": "2.0",
+        "result": {"content": [{"type": "text", "text": '{"messages":[],"messages":[{}]}'}]},
+        "id": 1,
+    }
+
+    with _mock_post({}, body), pytest.raises(RuntimeError, match="invalid content"):
+        session.call_tool("list_tool", {})
+
+
+def test_call_tool_bounds_json_parser_recursion_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    session = _session_with_id()
+    body = {
+        "jsonrpc": "2.0",
+        "result": {"content": [{"type": "text", "text": "private-provider-payload"}]},
+        "id": 1,
+    }
+    monkeypatch.setattr("fieldkit.watch.mcp.json.loads", MagicMock(side_effect=RecursionError))
+
+    with _mock_post({}, body), pytest.raises(RuntimeError, match="invalid content") as exc_info:
+        session.call_tool("list_tool", {})
+
+    assert "private-provider-payload" not in str(exc_info.value)
+
+
 # ---------------------------------------------------------------------------
 # Raw string result (non-JSON text)
 # ---------------------------------------------------------------------------
@@ -174,8 +270,8 @@ def test_call_tool_raw_string_returns_raw_string_when_not_json() -> None:
 # ── TestCallToolNoContent (flattened) ───────────────────────────────────────
 
 
-def test_call_tool_no_content_returns_none_when_content_is_empty() -> None:
-    """call_tool returns None when the result has no content blocks."""
+def test_call_tool_rejects_empty_content() -> None:
+    """An empty tool result cannot be counted as a successful provider read."""
     session = _session_with_id()
     body = {
         "jsonrpc": "2.0",
@@ -183,25 +279,21 @@ def test_call_tool_no_content_returns_none_when_content_is_empty() -> None:
         "id": 1,
     }
 
-    with _mock_post({}, body):
-        result = session.call_tool("empty_tool", {})
-
-    assert result is None
+    with _mock_post({}, body), pytest.raises(RuntimeError, match="usable text content"):
+        session.call_tool("empty_tool", {})
 
 
-def test_call_tool_no_content_returns_none_when_result_key_missing() -> None:
-    """call_tool returns None when result key is entirely absent."""
+def test_call_tool_rejects_missing_result_key() -> None:
+    """A missing result cannot be counted as a successful provider read."""
     session = _session_with_id()
     body = {"jsonrpc": "2.0", "id": 1}
 
-    with _mock_post({}, body):
-        result = session.call_tool("missing_result_tool", {})
-
-    assert result is None
+    with _mock_post({}, body), pytest.raises(RuntimeError, match="invalid result"):
+        session.call_tool("missing_result_tool", {})
 
 
-def test_call_tool_no_content_returns_none_when_only_non_text_content() -> None:
-    """call_tool returns None when content blocks are non-text type."""
+def test_call_tool_rejects_only_non_text_content() -> None:
+    """This text-consuming client cannot treat an image-only result as success."""
     session = _session_with_id()
     body = {
         "jsonrpc": "2.0",
@@ -209,10 +301,26 @@ def test_call_tool_no_content_returns_none_when_only_non_text_content() -> None:
         "id": 1,
     }
 
-    with _mock_post({}, body):
-        result = session.call_tool("image_tool", {})
+    with _mock_post({}, body), pytest.raises(RuntimeError, match="usable text content"):
+        session.call_tool("image_tool", {})
 
-    assert result is None
+
+def test_call_tool_auth_failures_never_open_availability_circuit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Repeated dead credentials remain canonical authentication failures."""
+    session = _session_with_id()
+    failure = MCPAuthError("authentication failed")
+    post = MagicMock(side_effect=failure)
+    monkeypatch.setattr(session, "_post", post)
+
+    for _ in range(4):
+        with pytest.raises(MCPAuthError) as exc_info:
+            session.call_tool("some_tool", {})
+        assert exc_info.value is failure
+
+    assert session._breaker.state == session._breaker.CLOSED
+    assert post.call_count == 4
 
 
 # ---------------------------------------------------------------------------
@@ -226,7 +334,7 @@ def test_call_tool_no_content_returns_none_when_only_non_text_content() -> None:
 def test_call_tool_id_increment_call_id_increments_on_each_call() -> None:
     """Each call_tool invocation uses an incrementing ID."""
     session = _session_with_id()
-    body = {"jsonrpc": "2.0", "result": {"content": []}, "id": 1}
+    body = {"jsonrpc": "2.0", "result": {"content": [{"type": "text", "text": "{}"}]}, "id": 1}
     captured_payloads: list[dict] = []
 
     def capture_post(payload, session_id):

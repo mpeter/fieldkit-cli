@@ -67,7 +67,7 @@ repos:
     hooks:
       - id: markdown-link-check
         args: [-q, --config, .markdown-link-check.json]
-        files: ^((AGENTS|CHANGELOG|CONTRIBUTING|GOVERNANCE|README|SECURITY|SUPPORT)\.md|docs/.*\.md|\.opencode/(agents|commands|skills)/.*\.md|\.claude/(agents|commands)/.*\.md|src/fieldkit/skills/.*\.md)$
+        files: ^([^/]+\.md|\.github/.*\.md|docs/.*\.md|src/.*\.md)$
         # Pin the toolchain: pre-commit's node runner passes --ignore-prepublish
         # (languages/node.py), which npm >=12 rejects with EUNKNOWNCONFIG. Using
         # the system node picks up whatever npm is installed and breaks on fresh

@@ -1,59 +1,39 @@
-# Pipeline Health
+# Review pursuit health
 
-Scans all active (non-closed) pursuit files and ranks them by risk tier.
+Use `fieldkit pursuit health --json` to classify locally tracked pursuits by
+close-date and Salesforce-linkage findings. Add `--account ACCOUNT` to limit the
+scan to a validated literal account directory slug; wildcard characters are
+rejected rather than broadening the scan.
 
-## Gotchas
+The command excludes closed-won, closed-lost, and pre-pipeline pursuits.
+Prospect-stage pursuits are also excluded unless `--include-prospect` is supplied.
 
-- **Stale vault signals** — run `/brief` first if data hasn't been refreshed today
-- **Trigger overlap with adjacent skills** — confirm you need this skill and not a closely named one
+## Read the result
 
-## Constraints
+The implemented risk tiers are:
 
-- **Never write to account files without explicit confirmation**
-- **Always surface generated output for review before any external send**
+- HIGH when the recorded close date is overdue;
+- MEDIUM when the close date is within 30 days and the pursuit is not in a late
+  stage, or when `sf_opportunity_id` is missing; and
+- LOW when neither condition is present.
 
-## Quick Reference
+Days in stage is displayed when `last-transition` contains a parseable date, but
+it does not change the risk tier. Missing or old `sf_last_pulled` data also does
+not change the tier. This report does not detect Salesforce staleness.
 
-```bash
-# All accounts
-fieldkit pursuit health
+Qualification is always `unavailable`. The command does not fetch native
+ClosePlan evidence and does not use historical local qualification scores.
 
-# Single account
-fieldkit pursuit health --account acme-corp
+## Use policy exits deliberately
 
-# Treat HIGH findings as an exit-1 policy failure
-fieldkit pursuit health --strict
+The default report exits 0 even when HIGH or MEDIUM items exist. Add `--strict`
+when automation must exit 1 for one or more HIGH items. MEDIUM alone is not a
+strict failure. Exit 3 means the configured workspace, accounts directory, or
+usable pursuit set was unavailable.
 
-# Apply the same strict gate to delivery-project findings
-fieldkit pursuit projects --strict
-```
+Use `--json` for automation; it returns the same classification fields without
+changing the policy. Do not infer a clean Salesforce state from exit 0.
 
-**Risk tiers:**
-- **HIGH** — overdue close date
-- **MEDIUM** — close date within 30 days while still in an early stage, or missing `sf_opportunity_id`
-- **LOW** — no immediate timeline or linkage concerns
-
-The command never classifies risk from historical local qualification values. It
-reports Native Qualification as `unavailable`; use `/grill` for a fresh read-only
-ClosePlan review. A successful native read means observed state, not a stage-gate pass.
-
-**Exit codes:**
-- `0` — valid report by default; with `--strict`, no attention findings
-- `1` — `--strict` found HIGH pursuits, or ZOMBIE/UNKNOWN projects
-- `3` — data error
-
-## When to Use
-
-- Start of day / before pipeline reviews
-- After `fieldkit sf listview` to surface newly stale deals
-- When asked "what needs attention in my pipeline?"
-
-## Output
-
-Prints a ranked table with deal name, stage, days in stage, Native Qualification
-(`unavailable`), close date, and qualification-independent risk reasons.
-
-## Related Skills
-
-- `pipeline` skill's `ops/forecast.md` — weighted revenue projection instead of risk scan
-- `pipeline` skill's `ops/engagement-health.md` — delivery/contract status instead of deal risk
+This command performs no writes. If current Salesforce evidence is required,
+hand off to the separately approved `sf-sync` workflow and rerun this report
+only after its exact local destinations have been verified.

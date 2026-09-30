@@ -21,6 +21,7 @@ from fieldkit.watch._pursuit_stall_state import (
     snooze_pursuit,
 )
 from fieldkit.watch.pursuit_stalls import _run_pursuit_stalls
+from fieldkit.watch.status import WatcherDailySnapshot, WatcherRunResult
 
 pytestmark = pytest.mark.unit
 # ---------------------------------------------------------------------------
@@ -742,13 +743,14 @@ def test_snooze_ack_snoozed_pursuit_skipped_in_alert_output(tmp_path: Path) -> N
         # fieldkit.watch.status.get_fieldkit_home (not the patched pursuit_stalls.get_fieldkit_home).
         # Mock it here so parallel test runs don't pollute this test via a sibling
         # writing a fatal outcome to the live status file.
-        patch("fieldkit.watch.pursuit_stalls.was_run_today", return_value=False),
+        patch("fieldkit.watch.pursuit_stalls.get_daily_run_snapshot", return_value=WatcherDailySnapshot(False, None)),
         patch("fieldkit.watch.pursuit_stalls.watcher_logging"),
-        patch("fieldkit.watch.pursuit_stalls.write_run_status"),
+        patch("fieldkit.watch.pursuit_stalls.write_run_status", return_value="written"),
     ):
         rc = _run_pursuit_stalls(threshold=14, account=None, dry_run=False)
 
-    assert rc == 0
+    assert isinstance(rc, WatcherRunResult)
+    assert rc.exit_code == 0
     # Alert file should NOT contain a stall entry for the snoozed pursuit
     if alerts_file.exists():
         text = alerts_file.read_text(encoding="utf-8")
@@ -800,13 +802,14 @@ def test_snooze_ack_stage_change_clears_snooze_and_resets_timer(tmp_path: Path) 
         patch("fieldkit.watch._pursuit_stall_state.state_file", return_value=state_file),
         patch("fieldkit.watch._pursuit_stall_render._alerts_file", return_value=alerts_file),
         patch("fieldkit.watch._pursuit_stall_render.get_watchers_dir", return_value=tmp_path),
-        patch("fieldkit.watch.pursuit_stalls.was_run_today", return_value=False),
+        patch("fieldkit.watch.pursuit_stalls.get_daily_run_snapshot", return_value=WatcherDailySnapshot(False, None)),
         patch("fieldkit.watch.pursuit_stalls.watcher_logging"),
-        patch("fieldkit.watch.pursuit_stalls.write_run_status"),
+        patch("fieldkit.watch.pursuit_stalls.write_run_status", return_value="written"),
     ):
         rc = _run_pursuit_stalls(threshold=14, account=None, dry_run=False)
 
-    assert rc == 0
+    assert isinstance(rc, WatcherRunResult)
+    assert rc.exit_code == 0
     # snoozed_until should be cleared in saved state (stage change detected)
     saved = json.loads(state_file.read_text(encoding="utf-8"))
     assert "snoozed_until" not in saved.get("acme/deal", {})
@@ -844,13 +847,14 @@ def test_snooze_ack_expired_snooze_allows_alerting(tmp_path: Path) -> None:
         patch("fieldkit.watch._pursuit_stall_state.state_file", return_value=state_file),
         patch("fieldkit.watch._pursuit_stall_render._alerts_file", return_value=alerts_file),
         patch("fieldkit.watch._pursuit_stall_render.get_watchers_dir", return_value=tmp_path),
-        patch("fieldkit.watch.pursuit_stalls.was_run_today", return_value=False),
+        patch("fieldkit.watch.pursuit_stalls.get_daily_run_snapshot", return_value=WatcherDailySnapshot(False, None)),
         patch("fieldkit.watch.pursuit_stalls.watcher_logging"),
-        patch("fieldkit.watch.pursuit_stalls.write_run_status"),
+        patch("fieldkit.watch.pursuit_stalls.write_run_status", return_value="written"),
     ):
         rc = _run_pursuit_stalls(threshold=14, account=None, dry_run=False)
 
-    assert rc == 0
+    assert isinstance(rc, WatcherRunResult)
+    assert rc.exit_code == 0
     # Expired snooze → alert should be written
     assert alerts_file.exists()
     text = alerts_file.read_text(encoding="utf-8")

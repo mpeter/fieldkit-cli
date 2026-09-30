@@ -1,25 +1,25 @@
 """Integration test: account_tags.py correctly populates thread_accounts from ref/* labels."""
 
-import sqlite3
 from pathlib import Path
 
 import pytest
 
-from fieldkit.commands.gmail import account_tags
-
-build_account_tags = account_tags.build_account_tags
+from fieldkit.gmail.account_tags import update_account_tags
+from fieldkit.gmail.publication import open_gmail_publication
 
 
 @pytest.mark.integration
 def test_account_tags_populates_thread_accounts_excluding_keep(account_tags_db):
-    """build_account_tags maps ref/* labels to thread_accounts, skipping ref/keep."""
+    """The published updater maps ref/* labels while skipping ref/keep."""
     db_path: Path = account_tags_db
 
-    build_account_tags(str(db_path))
+    update_account_tags(db_path)
 
-    conn = sqlite3.connect(str(db_path))
-    rows = conn.execute("SELECT thread_id, account FROM thread_accounts ORDER BY thread_id").fetchall()
-    conn.close()
+    with open_gmail_publication(db_path) as connection:
+        rows = [
+            tuple(row)
+            for row in connection.execute("SELECT thread_id, account FROM thread_accounts ORDER BY thread_id")
+        ]
 
     assert rows == [
         ("thread001", "acme-bank"),

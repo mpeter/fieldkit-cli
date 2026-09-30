@@ -20,6 +20,12 @@ API calls until the session expires.
 
 - Chrome is open and you are logged into `yourorg.my.salesforce.com`
 - fieldkit is installed (`fieldkit --version` returns a version string)
+- Configure the REST organization URL before installing the cookie: set
+  `sf_org_url: https://yourorg.my.salesforce.com` in `config.yaml`, or
+  `salesforce.org_url` in the workspace's `accounts.yaml`. See the
+  [configuration reference](../reference/config-file.md#optional-integration-keys)
+  for configuration locations. An absent or invalid organization URL is refused
+  before the cookie is written.
 
 ## Initial setup
 
@@ -48,12 +54,30 @@ API calls until the session expires.
    Expected output (on stderr):
 
    ```
-   [auth-sf] sid written to ~/.config/fieldkit/sf-cookies.json
+   [auth-sf] sid stored in fieldkit configuration
    [auth-sf] Validating session against Salesforce API...
-   [auth-sf] Session valid — authenticated
+   [auth-sf] Session valid — Salesforce API session is active.
+   [auth-sf] Done.
    ```
 
+   The validation messages omit the credential-file path and organization hostname.
+
 ## Verify your session
+
+The cookie file must contain at most one matching REST session on
+`my.salesforce.com` or a valid subdomain. Lookalike SID domains are skipped;
+if one valid SID remains, the probe uses only that session. Duplicate JSON keys,
+malformed entries, and ambiguous matching sessions are refused before the probe
+sends credentials. Files must be regular UTF-8 files, not leaf symlinks or
+special files, and are limited to 1,000,000 bytes and 1,000 cookie entries.
+Re-run `fieldkit auth sf` to replace ambiguous or lookalike SID entries with one
+session for the configured organization. Safely parsed non-SID cookies are kept;
+malformed JSON is replaced with an explicit warning. Unsafe, oversized, or
+non-UTF-8 files are not overwritten: repair or move the file aside first.
+Both authentication input methods restore the prior credential bytes if session
+validation rejects the candidate, raises an error, or is interrupted. If no
+credential file existed, the failed candidate file is removed. This rollback
+does not promise recovery from process termination or power loss.
 
 ```
 fieldkit sf session-check
@@ -63,17 +87,22 @@ Expected output when the session is valid:
 
 ```
 Session: ACTIVE
-instance: yourorg.my.salesforce.com
+Salesforce API session is active.
 ```
 
-Exit code 0 means fieldkit can reach Salesforce. Exit code 2 means the session
-needs to be refreshed.
+Exit code `0` means the stored cookie successfully accessed the Account metadata
+endpoint. The command currently uses exit `2` and the `EXPIRED` label for every
+unsuccessful probe, including network failures and unexpected HTTP responses.
+Read the accompanying message: a connectivity failure does not establish that
+the credential expired.
 
 ## Session lifespan
 
 Your Salesforce organization controls session lifetime and invalidation. Check
-the session before work that depends on Salesforce, and refresh the cookie when
-`fieldkit sf session-check` exits `2`.
+the session before work that depends on Salesforce. If `fieldkit sf session-check`
+exits `2`, read its message. Refresh the cookie for a confirmed authentication
+failure; for a network error, check connectivity and retry. For an unexpected
+HTTP response, check Salesforce availability and permissions.
 
 ## Refresh your session
 
@@ -95,7 +124,9 @@ install -m 600 /dev/null ./sf-sid
 fieldkit auth sf --sid-file ./sf-sid
 ```
 
-fieldkit rejects symlinks and group- or world-readable secret files.
+The file must contain non-empty UTF-8 text and be at most 8,192 bytes, including
+surrounding whitespace. fieldkit rejects symlinks, pipes, directories, and
+group- or world-accessible secret files before installing credentials.
 
 ## Signs something is wrong
 
@@ -103,7 +134,7 @@ fieldkit rejects symlinks and group- or world-readable secret files.
 
 ```
 Session: EXPIRED
-SF session expired — run 'fieldkit auth sf' — copy the 'sid' cookie from browser DevTools at yourorg.my.salesforce.com
+SF session expired — run 'fieldkit auth sf' — copy the 'sid' cookie from your Salesforce org's browser DevTools
 ```
 
 This is the most common error. Follow the refresh steps above.
@@ -112,7 +143,7 @@ This is the most common error. Follow the refresh steps above.
 
 ```
 Session: EXPIRED
-SF session expired (redirect to login) — run 'fieldkit auth sf' — copy the 'sid' cookie from browser DevTools at yourorg.my.salesforce.com
+SF session expired (redirect to login) — run 'fieldkit auth sf' — copy the 'sid' cookie from your Salesforce org's browser DevTools
 ```
 
 Your Chrome session has expired. Log back into `yourorg.my.salesforce.com` in
@@ -125,15 +156,22 @@ Chrome, then re-inject the sid.
 ```
 
 You may have copied the wrong cookie or included extra whitespace. Return to
-DevTools, click the `sid` row again, and copy only the Value field. The sid must
-contain a `!` character.
+DevTools, click the `sid` row again, and copy only the Value field. Interactive
+input is considered unusual unless it contains `!` and is longer than 20
+characters. For SID format, the file-input path treats any nonempty value
+containing `!` as usual; its file-security checks still apply.
+These checks warn rather than prove validity; the API session check decides
+whether authentication succeeds.
 
 ## What NOT to do
 
 - **Do not use undocumented login helpers** — they are not part of fieldkit and may
   violate your organization's SSO configuration.
 - **Do not set `SALESFORCE_*` environment variables** — fieldkit does not read them.
-  All Salesforce auth goes through the cookie injected by `fieldkit auth sf`.
+  API clients accept a non-empty `sf_session_id` configuration value before
+  falling back to the cookie injected by `fieldkit auth sf`. The session-check
+  command checks the cookie file, not that override; remove an obsolete override
+  before relying on cookie authentication. Treat either credential as a secret.
 - **Do not copy the sid from the Lightning URL** — always use the
   `yourorg.my.salesforce.com` domain in DevTools, not `yourorg.lightning.force.com`.
   The Lightning sid does not work for REST API calls.

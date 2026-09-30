@@ -2,13 +2,14 @@
   "skill_name": "memory-management",
   "static_checks": [
     {
-      "id": "two_tier",
+      "id": "project_local",
       "type": "contains_all",
       "patterns": [
-        "CLAUDE.md",
-        "memory/"
+        "memory/system/lessons-learned.md",
+        "configured fieldkit workspace",
+        "not working"
       ],
-      "message": "Must reference both CLAUDE.md hot cache and memory/ deep storage"
+      "message": "Must route memory to the configured workspace and keep agent instructions separate"
     },
     {
       "id": "decodes_shorthand",
@@ -20,11 +21,11 @@
   "evals": [
     {
       "id": 0,
-      "prompt": "remember that 'the renewal' for {{primary_account}} means the {{primary_pursuit}} pursuit",
-      "expected_behavior": "Stores the shorthand mapping in appropriate memory tier",
+      "prompt": "Remember that 'the renewal' for acme-corp means its Platform Renewal pursuit.",
+      "expected_behavior": "Checks the selected pursuit and account record, proposes the confirmed shorthand mapping in the appropriate workspace file, and reads back an approved write",
       "assertions": [
-        "Stores the 'the renewal' → {{primary_pursuit}} shorthand mapping in memory",
-        "Chooses appropriate tier (CLAUDE.md for hot access or memory/ for persistence)"
+        "Checks whether 'the renewal' refers to the Platform Renewal pursuit rather than assuming the mapping",
+        "Shows the destination and text before writing, and does not use agent instruction files as working memory"
       ]
     }
   ]

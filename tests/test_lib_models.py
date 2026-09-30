@@ -1,6 +1,5 @@
-"""Unit tests for lib.models — validates Pydantic models against fixtures and real pursuits."""
+"""Pursuit models validate deterministic fictional frontmatter."""
 
-import datetime
 from pathlib import Path
 
 import pytest
@@ -8,17 +7,15 @@ import yaml
 from pydantic import ValidationError
 
 from fieldkit.pursuit.models import AccountFrontmatter, LegacyMEDDPICC, PursuitFrontmatter
-from tests.conftest import DATA_ROOT, needs_data
 
 pytestmark = pytest.mark.unit
 
 ROOT = Path(__file__).resolve().parent.parent
-_DATA = DATA_ROOT or Path("/nonexistent")
 
 
 def _load_frontmatter(path: Path) -> dict:
     """Extract YAML frontmatter from a markdown file."""
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     parts = text.split("---", 2)
     return yaml.safe_load(parts[1])
 
@@ -64,32 +61,23 @@ def test_legacy_opportunity_territory_is_ignored_by_active_model() -> None:
     assert "sf_opportunity_territory" not in model.model_dump()
 
 
-# ── TestRealPursuits (flattened) ────────────────────────────────────────────
+# ── Populated Salesforce pursuit contracts ────────────────────────────────
 
 
-@needs_data
-@pytest.mark.integration  # requires real account files via DATA_ROOT
-def test_real_pursuits_parse_real_acme_corp_pursuit():
-    target = _DATA / "accounts/acme-corp/pursuits/ads-repave-services.md"  # pii-guard: ignore
-    if not target.exists():
-        pytest.skip("Real account file not available in this environment")
-    data = _load_frontmatter(target)
+def test_populated_pursuit_parses_salesforce_stage(sf_pursuit: Path) -> None:
+    data = _load_frontmatter(sf_pursuit)
     m = PursuitFrontmatter(**data)
-    assert m.sf_stage is not None
+    assert m.sf_stage == "Proposal"
+    assert m.stage == "propose"
+    assert m.sf_opportunity_id == "006EXAMPLE000001AAA"
 
 
-@needs_data
-@pytest.mark.integration  # requires real account files via DATA_ROOT
-def test_real_pursuits_parse_real_globalpay_pursuit():
-    import pytest
-
-    target = _DATA / "accounts/globalpay/pursuits/add-on-services.md"  # pii-guard: ignore
-    if not target.exists():
-        pytest.skip("Real account file not available in this environment")
-    data = _load_frontmatter(target)
+def test_populated_pursuit_preserves_date_amount_and_yaml_sensitive_text(sf_pursuit: Path) -> None:
+    data = _load_frontmatter(sf_pursuit)
     m = PursuitFrontmatter(**data)
-    assert isinstance(m.sf_close_date, (str, datetime.date))
-    assert m.sf_arr is None or isinstance(m.sf_arr, str)
+    assert m.sf_close_date == "2026-12-15"
+    assert m.sf_arr == 250000.0
+    assert m.sf_next_steps == "Review: scope #1 with sponsor"
 
 
 # ── TestValidation (flattened) ──────────────────────────────────────────────
@@ -97,7 +85,7 @@ def test_real_pursuits_parse_real_globalpay_pursuit():
 
 def test_validation_invalid_stage_rejected():
     with pytest.raises(ValidationError, match=r"stage"):
-        PursuitFrontmatter(stage="invalid")
+        PursuitFrontmatter.model_validate({"stage": "invalid"})
 
 
 # ── TestAccountFrontmatter (flattened) ──────────────────────────────────────
@@ -150,7 +138,7 @@ def test_transition_entry_all_fields_optional():
     from fieldkit.pursuit.models import TransitionEntry
 
     # Empty entry is valid — all fields optional
-    entry = TransitionEntry()
+    entry = TransitionEntry.model_validate({})
     assert entry.from_ is None
     assert entry.to is None
     assert entry.date is None
@@ -285,13 +273,10 @@ def test_coerce_yaml_types_converts_date_sf_close_date() -> None:
     assert fm.sf_close_date == "2026-06-01"
 
 
-def test_coerce_yaml_types_passthrough_non_dict() -> None:
-    """Non-dict input is returned unchanged by the validator."""
-    # model_validate raises ValidationError for non-dict — test the raw validator path
-    from fieldkit.pursuit.models import PursuitFrontmatter
-
-    result = PursuitFrontmatter.coerce_yaml_types("not-a-dict")
-    assert result == "not-a-dict"
+def test_coerce_yaml_types_rejects_non_dict_at_model_boundary() -> None:
+    """Invalid frontmatter is rejected through the supported model boundary."""
+    with pytest.raises(ValidationError, match="valid dictionary"):
+        PursuitFrontmatter.model_validate("not-a-dict")
 
 
 # ---------------------------------------------------------------------------

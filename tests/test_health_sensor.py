@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 from click.testing import CliRunner
 
+from fieldkit.errors import AuthError, GitHubCreationUncertainError, GitHubRequestError
 from fieldkit.health import runner as runner_mod
 from fieldkit.health.checks import HEALTH_CHECKS, CheckResult, HealthCheck, run_check
 from fieldkit.health.filing import (
@@ -298,6 +299,114 @@ def test_filing_failure_downgrades_to_partial_not_silent(data_root: Path, monkey
     assert any("filing failed" in err for err in result.runner_errors)
     entries = _read_status_entries(data_root)
     assert entries[0]["outcome"] == "partial"
+
+
+def test_later_filing_failure_preserves_earlier_created_issue(data_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    worktree = data_root / "wt"
+    worktree.mkdir()
+    monkeypatch.setattr(runner_mod, "prepare_main_worktree", lambda repo_root: worktree)
+    monkeypatch.setattr(runner_mod, "remove_main_worktree", lambda path, repo_root: None)
+    monkeypatch.setattr(runner_mod, "_bootstrap_check_environment", lambda worktree, env: None)
+    monkeypatch.setattr(
+        runner_mod,
+        "HEALTH_CHECKS",
+        (HealthCheck("mypy", ("true",)), HealthCheck("ruff", ("true",))),
+    )
+    monkeypatch.setattr(runner_mod, "run_check", lambda check, *, cwd, env: _result(check.check_id, "fail"))
+    filer = _RecordingFiler()
+    filer.file_regression = MagicMock(side_effect=["fieldkit-101 (#101)", RuntimeError("provider body")])
+
+    result = run_health(Path("/repo"), filer)
+
+    assert result.outcome == "partial"
+    assert result.issues_filed == ("mypy",)
+    assert result.runner_errors == ("filing failed for ruff",)
+    entries = _read_status_entries(data_root)
+    assert entries[0]["issues_filed"] == ["mypy"]
+    assert "provider body" not in json.dumps(entries[0])
+
+
+@pytest.mark.parametrize(
+    ("failure", "category", "expected_exit", "expected_guidance", "forbidden_guidance"),
+    [
+        (
+            GitHubRequestError("private provider payload"),
+            "retryable",
+            1,
+            "retry the health run later",
+            "gh auth login",
+        ),
+        (
+            AuthError("private provider payload"),
+            "authentication",
+            2,
+            "gh auth login",
+            "retry the health run later",
+        ),
+        (
+            GitHubCreationUncertainError("private provider payload"),
+            "data",
+            3,
+            "Do not retry automatically",
+            "retry the health run later",
+        ),
+    ],
+)
+@pytest.mark.parametrize("as_json", [False, True], ids=["text", "json"])
+def test_filing_failure_preserves_canonical_cli_exit_and_safe_partial_outcome(
+    data_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: Exception,
+    category: str,
+    expected_exit: int,
+    expected_guidance: str,
+    forbidden_guidance: str,
+    as_json: bool,
+) -> None:
+    from fieldkit.commands.health import cli as health_cli
+
+    worktree = data_root / "wt"
+    worktree.mkdir()
+    monkeypatch.setattr(runner_mod, "prepare_main_worktree", lambda repo_root: worktree)
+    monkeypatch.setattr(runner_mod, "remove_main_worktree", lambda path, repo_root: None)
+    monkeypatch.setattr(runner_mod, "_bootstrap_check_environment", lambda worktree, env: None)
+    monkeypatch.setattr(
+        runner_mod,
+        "HEALTH_CHECKS",
+        (HealthCheck("mypy", ("true",)), HealthCheck("ruff", ("true",))),
+    )
+    monkeypatch.setattr(runner_mod, "run_check", lambda check, *, cwd, env: _result(check.check_id, "fail"))
+    filer = _RecordingFiler()
+    filer.file_regression = MagicMock(side_effect=["fieldkit-101 (#101)", failure])
+    result = run_health(Path("/repo"), filer)
+
+    assert result.issues_filed == ("mypy",)
+    assert result.filing_failure == category
+    persisted_entries = _read_status_entries(data_root)
+    assert persisted_entries[0]["issues_filed"] == ["mypy"]
+    assert persisted_entries[0]["filing_failure"] == category
+    persisted = json.dumps(persisted_entries)
+    assert "private provider payload" not in persisted
+
+    monkeypatch.setattr(health_cli, "run_health", lambda repo_root, issue_filer, *, dry_run: result)
+    monkeypatch.setattr(health_cli, "_GHIssueFiler", lambda repo: MagicMock())
+    monkeypatch.setattr(health_cli, "get_github_repo", lambda: "acme-corp/fieldkit-cli")
+    argv = ["run", "--json"] if as_json else ["run"]
+
+    invocation = CliRunner().invoke(health_cli.cli, argv)
+
+    assert invocation.exit_code == expected_exit
+    assert "private provider payload" not in invocation.output
+    if as_json:
+        payload = json.loads(invocation.stdout)
+        assert payload["issues_filed"] == ["mypy"]
+        assert payload["filing_failure"] == category
+        assert expected_guidance not in invocation.output
+    else:
+        assert expected_guidance in invocation.output
+        assert forbidden_guidance not in invocation.output
+        if category == "data":
+            assert "reconcile the recorded filed checks with GitHub issue state first" in invocation.output
 
 
 def test_write_health_run_status_skips_dry_run_and_caps_entries(data_root: Path) -> None:
@@ -603,21 +712,21 @@ def test_prepare_main_worktree_sweeps_stale_worktrees(tmp_path: Path, monkeypatc
 
 def test_filed_issue_carries_no_agent_ready_label(monkeypatch: pytest.MonkeyPatch) -> None:
     from fieldkit.commands.health.cli import _GHIssueFiler
-    from fieldkit.commands.issue import gh_store
+    from fieldkit.issue import github
 
     captured: dict[str, tuple[str, ...]] = {}
 
-    def _fake_gh(*args: str) -> str:
+    def _fake_gh(*args: str, irreversible: bool = False) -> str:
+        assert irreversible is True
         captured["args"] = args
-        return "123"
+        return '{"number": 123}'
 
-    monkeypatch.setattr(gh_store, "_gh", _fake_gh)
-    monkeypatch.setattr(gh_store.GHIssueStore, "next_id", lambda self, issue_type: "historic regression")
+    monkeypatch.setattr(github, "_gh", _fake_gh)
     filer = _GHIssueFiler("acme-corp/fieldkit-cli")
 
     ref = filer.file_regression(title=issue_title_for("mypy"), body="body")
 
-    assert ref == "historic regression (#123)"
+    assert ref == "fieldkit-123 (#123)"
     labels = [a for a in captured["args"] if a.startswith("labels[]=")]
     assert labels == ["labels[]=bug", "labels[]=severity:high", "labels[]=module:other"]
     assert "labels[]=agent-ready" not in captured["args"]

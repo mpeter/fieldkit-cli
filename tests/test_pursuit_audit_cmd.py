@@ -1,6 +1,7 @@
 """Tests for fieldkit.pursuit.audit_cmd — CLI branches not covered by test_pursuit_audit.py."""
 
 import json
+import os
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,8 @@ from fieldkit.commands.pursuit.audit_cmd import (
     _warning_items,
     cli,
 )
+from fieldkit.errors import FrontmatterStalenessError
+from fieldkit.util.atomic import PathLockTimeoutError
 
 pytestmark = pytest.mark.unit
 
@@ -477,6 +480,24 @@ def test_cli_fix_dry_run_previews_without_writes_or_report(tmp_path: Path) -> No
     assert not (accounts_dir / ".audit").exists()
 
 
+def test_cli_fix_dry_run_creates_no_workspace_or_runtime_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pursuits = tmp_path / "accounts" / "acme" / "pursuits"
+    pursuits.mkdir(parents=True)
+    pursuit = pursuits / "deal.md"
+    pursuit.write_text("---\nsf-opportunity-id: 006LEGACY\n---\nBody\n", encoding="utf-8")
+    runtime = tmp_path / "runtime"
+    before = sorted(path.relative_to(tmp_path) for path in tmp_path.rglob("*"))
+    monkeypatch.setenv("FIELDKIT_DATA_DIR", str(runtime))
+
+    with patch("fieldkit.commands.pursuit.audit_cmd.get_fieldkit_home", return_value=tmp_path):
+        result = CliRunner().invoke(cli, ["--fix", "--dry-run"], catch_exceptions=False)
+
+    after = sorted(path.relative_to(tmp_path) for path in tmp_path.rglob("*"))
+    assert result.exit_code == 1
+    assert after == before
+    assert not runtime.exists()
+
+
 def test_cli_fix_dry_run_reports_when_no_corrections_are_needed(tmp_path: Path) -> None:
     pursuit_dir = tmp_path / "accounts" / "acme" / "pursuits"
     pursuit_dir.mkdir(parents=True)
@@ -522,6 +543,30 @@ def test_cli_fix_refuses_malformed_file_and_continues_batch(
         assert (tmp_path / "accounts" / ".audit").is_dir()
 
 
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_cli_fix_duplicate_key_refusal_matches_preview_and_apply(tmp_path: Path, dry_run: bool) -> None:
+    pursuits = tmp_path / "accounts" / "acme" / "pursuits"
+    pursuits.mkdir(parents=True)
+    duplicate = pursuits / "a-duplicate.md"
+    duplicate_content = "---\nsf-opportunity-id: 006A\nsf-opportunity-id: 006B\n---\nBody\n"
+    duplicate.write_text(duplicate_content, encoding="utf-8")
+    repairable = pursuits / "b-repairable.md"
+    repairable_content = "---\nsf-opportunity-id: 006C\n---\nBody\n"
+    repairable.write_text(repairable_content, encoding="utf-8")
+
+    with patch("fieldkit.commands.pursuit.audit_cmd.get_fieldkit_home", return_value=tmp_path):
+        result = CliRunner().invoke(cli, ["--fix", *(["--dry-run"] if dry_run else [])], catch_exceptions=False)
+
+    assert result.exit_code == 1
+    assert "repair refused: acme/pursuits/a-duplicate.md (unsafe or invalid pursuit data)" in result.output
+    assert "b-repairable.md" in result.output
+    assert duplicate.read_text(encoding="utf-8") == duplicate_content
+    if dry_run:
+        assert repairable.read_text(encoding="utf-8") == repairable_content
+    else:
+        assert "sf_opportunity_id: 006C" in repairable.read_text(encoding="utf-8")
+
+
 def test_cli_fix_json_keeps_stdout_machine_readable(tmp_path: Path) -> None:
     pursuit_dir = tmp_path / "accounts" / "acme" / "pursuits"
     pursuit_dir.mkdir(parents=True)
@@ -538,6 +583,119 @@ def test_cli_fix_json_keeps_stdout_machine_readable(tmp_path: Path) -> None:
     assert isinstance(payload, list)
     assert "refused: acme/pursuits/a-malformed.md" in result.stderr
     assert "fixed: acme/pursuits/b-repairable.md" in result.stderr
+
+
+@pytest.mark.parametrize("as_json", [False, True])
+@pytest.mark.parametrize(
+    "failure",
+    [
+        ValueError("private repair sentinel"),
+        OSError("/fictional-private/operator/private-write-sentinel"),
+        FrontmatterStalenessError("/fictional-private/operator/private-stale-sentinel"),
+        PathLockTimeoutError("/fictional-private/operator/private-lock-sentinel"),
+    ],
+)
+def test_cli_fix_failure_remains_non_success_after_compliant_reaudit(
+    tmp_path: Path,
+    as_json: bool,
+    failure: Exception,
+) -> None:
+    """A later clean audit must not erase a refused or failed requested repair."""
+    pursuit_dir = tmp_path / "accounts" / "acme" / "pursuits"
+    pursuit_dir.mkdir(parents=True)
+    (pursuit_dir / "deal.md").write_text("---\nstage: discover\n---\n", encoding="utf-8")
+
+    from fieldkit.commands.pursuit.audit import AuditResult
+
+    audit_result = AuditResult(path=pursuit_dir / "deal.md", relative_path="acme/pursuits/deal.md")
+    args = ["--fix", *(["--json"] if as_json else [])]
+    with (
+        patch("fieldkit.commands.pursuit.audit_cmd.get_fieldkit_home", return_value=tmp_path),
+        patch("fieldkit.commands.pursuit.audit_cmd.apply_fixes", side_effect=failure),
+        patch("fieldkit.commands.pursuit.audit_cmd.audit_directory", return_value=[audit_result]),
+    ):
+        result = CliRunner().invoke(cli, args, catch_exceptions=False)
+
+    assert result.exit_code == 1
+    diagnostic = result.stderr if as_json else result.output
+    assert "repair" in diagnostic.lower()
+    assert str(failure) not in diagnostic
+    if as_json:
+        assert isinstance(json.loads(result.stdout), list)
+
+
+def test_cli_fix_continues_after_stale_file_and_keeps_json_valid(tmp_path: Path) -> None:
+    pursuits = tmp_path / "accounts" / "acme" / "pursuits"
+    pursuits.mkdir(parents=True)
+    stale = pursuits / "a-stale.md"
+    repairable = pursuits / "b-repairable.md"
+    for path in (stale, repairable):
+        path.write_text("---\nsf-opportunity-id: 006LEGACY\n---\n", encoding="utf-8")
+    from fieldkit.commands.pursuit.audit import AuditResult, FixResult
+
+    audit_results = [
+        AuditResult(path=stale, relative_path="acme/pursuits/a-stale.md"),
+        AuditResult(path=repairable, relative_path="acme/pursuits/b-repairable.md"),
+    ]
+    with (
+        patch("fieldkit.commands.pursuit.audit_cmd.get_fieldkit_home", return_value=tmp_path),
+        patch(
+            "fieldkit.commands.pursuit.audit_cmd.apply_fixes",
+            side_effect=[FrontmatterStalenessError("private stale path"), FixResult(path=repairable, renames=1)],
+        ) as apply,
+        patch("fieldkit.commands.pursuit.audit_cmd.audit_directory", return_value=audit_results),
+    ):
+        result = CliRunner().invoke(cli, ["--fix", "--json"], catch_exceptions=False)
+
+    assert result.exit_code == 1
+    assert apply.call_count == 2
+    assert isinstance(json.loads(result.stdout), list)
+    assert "changed during repair" in result.stderr
+    assert "private stale path" not in result.stderr
+
+
+def test_cli_fix_same_mtime_replacement_preserves_bytes_and_continues_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pursuits = tmp_path / "accounts" / "acme" / "pursuits"
+    pursuits.mkdir(parents=True)
+    stale = pursuits / "a-stale.md"
+    repairable = pursuits / "b-repairable.md"
+    original = "---\nstage: discover\nsf-opportunity-id: 006OLD\n---\nOriginal body\n"
+    concurrent = "---\nstage: discover\nsf-opportunity-id: 006NEW\n---\nConcurrent body\n"
+    stale.write_text(original, encoding="utf-8")
+    repairable.write_text(original, encoding="utf-8")
+    stale_info = stale.stat()
+    from fieldkit.commands.pursuit import audit as audit_module
+    from fieldkit.commands.pursuit.audit import AuditResult
+
+    original_render = audit_module.__dict__["render_frontmatter_raw"]
+
+    def render_then_replace(path: Path, *args: object, **kwargs: object) -> str:
+        rendered: str = original_render(path, *args, **kwargs)
+        if path == stale:
+            stale.write_text(concurrent, encoding="utf-8")
+            os.utime(stale, ns=(stale_info.st_atime_ns, stale_info.st_mtime_ns))
+        return rendered
+
+    monkeypatch.setattr(audit_module, "render_frontmatter_raw", render_then_replace)
+    audit_results = [
+        AuditResult(path=stale, relative_path="acme/pursuits/a-stale.md"),
+        AuditResult(path=repairable, relative_path="acme/pursuits/b-repairable.md"),
+    ]
+    with (
+        patch("fieldkit.commands.pursuit.audit_cmd.get_fieldkit_home", return_value=tmp_path),
+        patch("fieldkit.commands.pursuit.audit_cmd.audit_directory", return_value=audit_results),
+    ):
+        result = CliRunner().invoke(cli, ["--fix", "--json"], catch_exceptions=False)
+
+    assert result.exit_code == 1
+    assert isinstance(json.loads(result.stdout), list)
+    assert stale.read_text(encoding="utf-8") == concurrent
+    assert "sf_opportunity_id: 006OLD" in repairable.read_text(encoding="utf-8")
+    assert "changed during repair" in result.stderr
+    assert "006NEW" not in result.stderr
+    assert "Concurrent body" not in result.stderr
 
 
 @pytest.mark.parametrize(
@@ -580,10 +738,51 @@ def test_cli_account_not_found_exits_3(tmp_path: Path) -> None:
     assert result.exit_code == 3
 
 
+def test_cli_rejects_account_traversal_before_repairs(tmp_path: Path) -> None:
+    accounts_dir = tmp_path / "accounts"
+    accounts_dir.mkdir()
+    outside = tmp_path / "outside" / "pursuits"
+    outside.mkdir(parents=True)
+    target = outside / "deal.md"
+    target.write_text("---\nsf-opportunity-id: 006LEGACY\n---\n", encoding="utf-8")
+
+    with (
+        patch("fieldkit.commands.pursuit.audit_cmd.get_fieldkit_home", return_value=tmp_path),
+        patch("fieldkit.commands.pursuit.audit_cmd.apply_fixes") as mock_fix,
+    ):
+        result = CliRunner().invoke(cli, ["--account", "../outside", "--fix"], catch_exceptions=False)
+
+    assert result.exit_code == 3
+    mock_fix.assert_not_called()
+    assert "sf-opportunity-id" in target.read_text(encoding="utf-8")
+
+
+def test_cli_rejects_symlinked_account_before_repairs(tmp_path: Path) -> None:
+    accounts_dir = tmp_path / "accounts"
+    accounts_dir.mkdir()
+    outside = tmp_path / "outside" / "pursuits"
+    outside.mkdir(parents=True)
+    target = outside / "deal.md"
+    target.write_text("---\nsf-opportunity-id: 006LEGACY\n---\n", encoding="utf-8")
+    (accounts_dir / "acme").symlink_to(outside.parent, target_is_directory=True)
+
+    with (
+        patch("fieldkit.commands.pursuit.audit_cmd.get_fieldkit_home", return_value=tmp_path),
+        patch("fieldkit.commands.pursuit.audit_cmd.apply_fixes") as mock_fix,
+    ):
+        result = CliRunner().invoke(cli, ["--account", "acme", "--fix"], catch_exceptions=False)
+
+    assert result.exit_code == 3
+    mock_fix.assert_not_called()
+    assert "sf-opportunity-id" in target.read_text(encoding="utf-8")
+
+
 def test_cli_output_path_respected(tmp_path: Path) -> None:
     accounts_dir = tmp_path / "accounts"
     accounts_dir.mkdir()
-    output_file = tmp_path / "report.md"
+    audit_dir = accounts_dir / ".audit"
+    audit_dir.mkdir()
+    output_file = audit_dir / "report.md"
     runner = CliRunner()
     with (
         patch("fieldkit.commands.pursuit.audit_cmd.get_fieldkit_home", return_value=tmp_path),
@@ -594,11 +793,91 @@ def test_cli_output_path_respected(tmp_path: Path) -> None:
     assert output_file.exists()
 
 
-def test_cli_report_overwrite_warns(tmp_path: Path) -> None:
-    """Writing to an existing report file emits an overwrite warning."""
+def test_cli_output_path_outside_audit_directory_is_rejected(tmp_path: Path) -> None:
     accounts_dir = tmp_path / "accounts"
     accounts_dir.mkdir()
     output_file = tmp_path / "report.md"
+    with (
+        patch("fieldkit.commands.pursuit.audit_cmd.get_fieldkit_home", return_value=tmp_path),
+        patch("fieldkit.commands.pursuit.audit_cmd.audit_directory", return_value=[_make_result()]),
+    ):
+        result = CliRunner().invoke(cli, ["--output", str(output_file)], catch_exceptions=False)
+
+    assert result.exit_code == 3
+    assert not output_file.exists()
+
+
+def test_cli_output_symlink_escape_is_rejected(tmp_path: Path) -> None:
+    accounts_dir = tmp_path / "accounts"
+    audit_dir = accounts_dir / ".audit"
+    audit_dir.mkdir(parents=True)
+    outside = tmp_path / "outside.md"
+    outside.write_text("preserve me", encoding="utf-8")
+    output_file = audit_dir / "report.md"
+    output_file.symlink_to(outside)
+    with (
+        patch("fieldkit.commands.pursuit.audit_cmd.get_fieldkit_home", return_value=tmp_path),
+        patch("fieldkit.commands.pursuit.audit_cmd.audit_directory", return_value=[_make_result()]),
+    ):
+        result = CliRunner().invoke(cli, ["--output", str(output_file)], catch_exceptions=False)
+
+    assert result.exit_code == 3
+    assert outside.read_text(encoding="utf-8") == "preserve me"
+
+
+def test_cli_report_uses_atomic_text_replacement(tmp_path: Path) -> None:
+    accounts_dir = tmp_path / "accounts"
+    audit_dir = accounts_dir / ".audit"
+    audit_dir.mkdir(parents=True)
+    output_file = audit_dir / "report.md"
+    with (
+        patch("fieldkit.commands.pursuit.audit_cmd.get_fieldkit_home", return_value=tmp_path),
+        patch("fieldkit.commands.pursuit.audit_cmd.audit_directory", return_value=[_make_result()]),
+        patch("fieldkit.commands.pursuit.audit_cmd.atomic_text_write") as mock_atomic_write,
+    ):
+        result = CliRunner().invoke(cli, ["--output", str(output_file)], catch_exceptions=False)
+
+    assert result.exit_code == 0
+    written_path, rendered = mock_atomic_write.call_args.args
+    assert written_path == output_file
+    assert rendered.startswith("# Pursuit Compliance Report")
+
+
+def test_cli_report_is_private_utf8_atomic_output(tmp_path: Path) -> None:
+    accounts = tmp_path / "accounts"
+    audit_dir = accounts / ".audit"
+    audit_dir.mkdir(parents=True)
+    output = audit_dir / "report.md"
+    output.write_text("old", encoding="utf-8")
+    output.chmod(0o644)
+    with (
+        patch("fieldkit.commands.pursuit.audit_cmd.get_fieldkit_home", return_value=tmp_path),
+        patch("fieldkit.commands.pursuit.audit_cmd.audit_directory", return_value=[_make_result()]),
+    ):
+        result = CliRunner().invoke(cli, ["--output", "report.md"], catch_exceptions=False)
+
+    assert result.exit_code == 0
+    assert output.stat().st_mode & 0o777 == 0o600
+    assert output.read_bytes().decode("utf-8").startswith("# Pursuit Compliance Report")
+
+
+def test_cli_nested_missing_output_parent_is_rejected(tmp_path: Path) -> None:
+    (tmp_path / "accounts").mkdir()
+    with (
+        patch("fieldkit.commands.pursuit.audit_cmd.get_fieldkit_home", return_value=tmp_path),
+        patch("fieldkit.commands.pursuit.audit_cmd.audit_directory", return_value=[_make_result()]),
+    ):
+        result = CliRunner().invoke(cli, ["--output", "missing/report.md"], catch_exceptions=False)
+    assert result.exit_code == 3
+    assert not (tmp_path / "accounts" / ".audit" / "missing").exists()
+
+
+def test_cli_report_overwrite_replaces_complete_content(tmp_path: Path) -> None:
+    accounts_dir = tmp_path / "accounts"
+    accounts_dir.mkdir()
+    audit_dir = accounts_dir / ".audit"
+    audit_dir.mkdir()
+    output_file = audit_dir / "report.md"
     output_file.write_text("old content", encoding="utf-8")
     runner = CliRunner()
     with (
@@ -607,9 +886,8 @@ def test_cli_report_overwrite_warns(tmp_path: Path) -> None:
     ):
         result = runner.invoke(cli, ["--output", str(output_file)], catch_exceptions=False)
     assert result.exit_code == 0
-    # Warning goes to stderr (mixed into output by CliRunner)
-    combined = result.output + (result.stderr if hasattr(result, "stderr") else "")
-    assert "WARNING" in combined or "Overwriting" in combined or output_file.read_text()
+    assert output_file.read_text(encoding="utf-8").startswith("# Pursuit Compliance Report")
+    assert "old content" not in output_file.read_text(encoding="utf-8")
 
 
 def test_cli_default_report_path_created(tmp_path: Path) -> None:
@@ -626,6 +904,15 @@ def test_cli_default_report_path_created(tmp_path: Path) -> None:
     assert audit_dir.exists()
     reports = list(audit_dir.glob("pursuit-compliance-*.md"))
     assert len(reports) == 1
+
+
+@pytest.mark.parametrize("account", ["*", "?", "[acme]"])
+def test_cli_rejects_glob_account_names(tmp_path: Path, account: str) -> None:
+    (tmp_path / "accounts").mkdir()
+    with patch("fieldkit.commands.pursuit.audit_cmd.get_fieldkit_home", return_value=tmp_path):
+        result = CliRunner().invoke(cli, ["--account", account], catch_exceptions=False)
+    assert result.exit_code == 3
+    assert account not in result.output
 
 
 def test_cli_account_filter_passed_to_audit(tmp_path: Path) -> None:
@@ -707,6 +994,42 @@ def test_run_fix_gmail_intel_file_skipped_during_fix(tmp_path: Path) -> None:
     # gmail-intel.md should NOT be in the list of files passed to apply_fixes
     assert "gmail-intel.md" not in apply_fix_calls
     assert "deal.md" in apply_fix_calls
+
+
+def test_run_fix_template_file_is_skipped(tmp_path: Path) -> None:
+    pursuits = tmp_path / "accounts" / "acme" / "pursuits"
+    pursuits.mkdir(parents=True)
+    template = pursuits / "template.md"
+    template.write_text("---\nsf-opportunity-id: 006LEGACY\n---\n", encoding="utf-8")
+    deal = pursuits / "deal.md"
+    deal.write_text(
+        "---\nstage: discover\ngate-status: pending\nlast-transition: 2026-01-01\ntransition-history: []\n---\n",
+        encoding="utf-8",
+    )
+    with (
+        patch("fieldkit.commands.pursuit.audit_cmd.get_fieldkit_home", return_value=tmp_path),
+        patch("fieldkit.commands.pursuit.audit_cmd.audit_directory", return_value=[_make_result()]),
+    ):
+        result = CliRunner().invoke(cli, ["--fix"], catch_exceptions=False)
+    assert result.exit_code == 0
+    assert "sf-opportunity-id" in template.read_text(encoding="utf-8")
+
+
+def test_cli_rejects_fix_with_check_yaml_before_workspace_access() -> None:
+    with patch("fieldkit.commands.pursuit.audit_cmd.get_fieldkit_home") as get_home:
+        result = CliRunner().invoke(cli, ["--fix", "--check-yaml"])
+    assert result.exit_code == 2
+    assert "cannot be combined" in result.output
+    get_home.assert_not_called()
+
+
+def test_cli_fix_with_check_yaml_is_fieldkit_exit_3(capsys: pytest.CaptureFixture[str]) -> None:
+    from fieldkit.__main__ import main
+
+    result = main(["pursuit", "audit", "--fix", "--check-yaml"])
+
+    assert result == 3
+    assert "--fix cannot be combined with --check-yaml" in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------------------
@@ -810,6 +1133,8 @@ def test_write_audit_report_json_flag_emits_json(tmp_path: Path) -> None:
     assert isinstance(parsed, list)
     assert len(parsed) == 1
     assert "relative_path" in parsed[0]
+    assert "path" not in parsed[0]
+    assert str(tmp_path) not in result.output
     assert parsed[0]["qualification_status"] == "unavailable"
     assert "meddpicc_score" not in parsed[0]
 

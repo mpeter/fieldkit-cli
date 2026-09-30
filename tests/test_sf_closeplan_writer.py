@@ -8,7 +8,6 @@ from unittest.mock import MagicMock
 import pytest
 from test_sf_meddpicc import _DEAL_ID, _scorecard
 
-from fieldkit.sf.client import SFConditionalWriteConflict, SFConditionalWriteOutcomeUnknown
 from fieldkit.sf.closeplan_writer import (
     ClosePlanPlanError,
     apply_score_preview,
@@ -20,6 +19,7 @@ from fieldkit.sf.closeplan_writer import (
     poll_scorecard_rollup,
     prune_recovery_receipts,
 )
+from fieldkit.sf.errors import SFConditionalWriteConflict, SFConditionalWriteOutcomeUnknown
 from fieldkit.sf.types import MeddpiccQuestion
 
 pytestmark = pytest.mark.unit

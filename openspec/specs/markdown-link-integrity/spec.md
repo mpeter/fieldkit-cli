@@ -3,20 +3,20 @@
 ## Purpose
 Define the current behavioral contract for markdown-link-integrity, including required behavior, failure modes, and observable outcomes.
 ## Requirements
-### Requirement: Repository and agent-facing Markdown links are in scope
+### Requirement: Public repository and shipped Markdown links are in scope
 
-The relative-link checker SHALL cover root `AGENTS.md`, documentation Markdown, OpenCode agent/command/skill Markdown, Claude agent/command Markdown, and shipped skill Markdown. It SHALL NOT duplicate the `.opencode/skills` tree through the `.claude/skills` symlink.
+The relative-link checker SHALL cover root `AGENTS.md`, reviewed scoped domain
+`AGENTS.md` guides, public documentation Markdown, and shipped skill Markdown.
 
 #### Scenario: Shipped skill contains a broken relative link
 
 - **WHEN** a Markdown link under `src/fieldkit/skills` resolves to no repository file
 - **THEN** the relative-link check fails
 
-#### Scenario: Claude skills symlink is present
+#### Scenario: Public contributor guidance contains a broken link
 
-- **WHEN** the hook enumerates all covered files
-- **THEN** `.opencode/skills` is checked through its real path
-- **AND** `.claude/skills` is not enumerated as a second copy
+- **WHEN** root `AGENTS.md` links to a repository path that does not exist
+- **THEN** the relative-link check fails
 
 ### Requirement: Pull requests cannot bypass relative-link validation
 

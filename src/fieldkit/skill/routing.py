@@ -8,7 +8,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from fieldkit.config import llm_disabled
-from fieldkit.errors import LLMError
+from fieldkit.errors import LLMError, RoutingInputError
 from fieldkit.llm import (
     _NO_LLM_STUB,
     LLM_SYNTHESIS_TIMEOUT,
@@ -84,13 +84,13 @@ class RoutingResult:
 def validate_skill_corpus(candidates: Sequence[SkillCandidate]) -> tuple[SkillCandidate, ...]:
     """Validate and sort the complete routing candidate corpus."""
     if not candidates:
-        raise LLMError("Routing skill corpus is empty", category="general")
+        raise RoutingInputError("Routing skill corpus is empty")
     names: set[str] = set()
     for candidate in candidates:
         if not candidate.name.strip() or not candidate.description.strip():
-            raise LLMError("Routing skill corpus contains an empty name or description", category="general")
+            raise RoutingInputError("Routing skill corpus contains an empty name or description")
         if candidate.name in names:
-            raise LLMError(f"Routing skill corpus contains duplicate name {candidate.name!r}", category="general")
+            raise RoutingInputError("Routing skill corpus contains duplicate names")
         names.add(candidate.name)
     return tuple(sorted(candidates, key=lambda candidate: candidate.name))
 
@@ -100,36 +100,36 @@ def _load_fixture_document() -> list[object]:
     data_ref = importlib.resources.files("fieldkit._data").joinpath("skill-routing-evals.json")
     try:
         raw: object = json.loads(data_ref.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise LLMError(f"Cannot load routing fixtures: {exc}", category="general") from exc
+    except (OSError, UnicodeError, json.JSONDecodeError, RecursionError):
+        raise RoutingInputError("Cannot load routing fixtures; check the fieldkit installation") from None
     if (
         not isinstance(raw, dict)
         or set(raw) != {"version", "cases"}
         or type(raw.get("version")) is not int
         or raw.get("version") != 1
     ):
-        raise LLMError("Routing fixtures must use the version-1 schema", category="general")
+        raise RoutingInputError("Routing fixtures must use the version-1 schema")
     raw_cases = raw.get("cases")
     if not isinstance(raw_cases, list) or not raw_cases:
-        raise LLMError("Routing fixtures must contain a non-empty cases array", category="general")
+        raise RoutingInputError("Routing fixtures must contain a non-empty cases array")
     return raw_cases
 
 
 def _parse_routing_case(raw_case: object, corpus_names: set[str], seen_ids: set[str]) -> RoutingCase:
     """Validate one raw fixture and return its typed form."""
     if not isinstance(raw_case, dict) or set(raw_case) != _FIXTURE_KEYS:
-        raise LLMError("Each routing fixture must contain only id, utterance, and expected_skill", category="general")
+        raise RoutingInputError("Each routing fixture must contain only id, utterance, and expected_skill")
     case_id = raw_case.get("id")
     utterance = raw_case.get("utterance")
     expected_skill = raw_case.get("expected_skill")
     if not isinstance(case_id, str) or _CASE_ID_RE.fullmatch(case_id) is None:
-        raise LLMError(f"Invalid routing fixture id {case_id!r}", category="general")
+        raise RoutingInputError("Invalid routing fixture id")
     if case_id in seen_ids:
-        raise LLMError(f"Duplicate routing fixture id {case_id!r}", category="general")
+        raise RoutingInputError("Duplicate routing fixture id")
     if not isinstance(utterance, str) or not utterance.strip():
-        raise LLMError(f"Routing fixture {case_id!r} has an empty utterance", category="general")
+        raise RoutingInputError("Routing fixture has an empty utterance")
     if not isinstance(expected_skill, str) or expected_skill not in corpus_names:
-        raise LLMError(f"Routing fixture {case_id!r} expects unknown skill {expected_skill!r}", category="general")
+        raise RoutingInputError("Routing fixture expects unknown skill")
     seen_ids.add(case_id)
     return RoutingCase(case_id, utterance, expected_skill)
 
@@ -194,7 +194,7 @@ def judge_routing_case(
             case.case_id,
             case.expected_skill,
             _NO_LLM_STUB,
-            "NO_LLM=1 — stub mode active",
+            "FIELDKIT_NO_LLM=1 — stub mode active",
             _NO_LLM_STUB,
             True,
             len(corpus),

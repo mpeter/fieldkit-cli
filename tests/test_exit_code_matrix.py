@@ -56,8 +56,6 @@ def _run(args: list[str], *, tmp_home: Path) -> int:
     for _oauth_var in (
         "GOOGLE_OAUTH_CLIENT_ID",
         "GOOGLE_OAUTH_CLIENT_SECRET",
-        "GOOGLE_CLIENT_ID",
-        "GOOGLE_CLIENT_SECRET",
         # Note: GOOGLE_APPLICATION_CREDENTIALS is ADC (service account), not used
         # by InstalledAppFlow — it is intentionally omitted from this scrub list.
     ):

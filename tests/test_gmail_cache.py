@@ -1,14 +1,23 @@
 """Tests for gmail-cache utility functions across multiple modules."""
 
-import sqlite3
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-from fieldkit.commands.gmail import query
-from fieldkit.contact import people_index
+from fieldkit.commands.gmail.query import _strip_quoted
 from fieldkit.contact.people_index import build_people_index
-from fieldkit.gmail import decay_domain, sync_store
+from fieldkit.gmail import query_domain as query
+from fieldkit.gmail import sync_store
+from fieldkit.gmail.addresses import parse_address_header
+from fieldkit.gmail.exceptions import GmailSchemaError
+from fieldkit.gmail.publication import (
+    GMAIL_QUERY_READY_KEY,
+    apply_gmail_page,
+    initialize_gmail_publication,
+    open_gmail_publication,
+)
+from fieldkit.sqlite_publication import SQLiteMutationConnection
 
 # Org-specific domains used in tests — mock get_internal_domains() so these
 # tests don't require a live config file (org-agnostic refactor removed the
@@ -18,62 +27,7 @@ _TEST_INTERNAL_DOMAINS = ["internal.example.com", "external.example.com"]  # pii
 pytestmark = pytest.mark.unit
 
 
-# --- decay.py ---
-
-
-# ── TestIsInternalOrNoise (flattened) ───────────────────────────────────────
-
-
-def test_is_internal_or_noise_configured_domain():
-    with patch("fieldkit.gmail.decay_domain.get_internal_domains", return_value=_TEST_INTERNAL_DOMAINS):
-        assert decay_domain.is_internal_or_noise("user@internal.example.com") is True  # pii-guard: ignore
-
-
-def test_is_internal_or_noise_ibm():
-    with patch("fieldkit.gmail.decay_domain.get_internal_domains", return_value=_TEST_INTERNAL_DOMAINS):
-        assert decay_domain.is_internal_or_noise("user@external.example.com") is True
-
-
-def test_is_internal_or_noise_external():
-    with patch("fieldkit.gmail.decay_domain.get_internal_domains", return_value=_TEST_INTERNAL_DOMAINS):
-        assert decay_domain.is_internal_or_noise("jane@globalpay.example.com") is False
-
-
-def test_is_internal_or_noise_noreply():
-    with patch("fieldkit.gmail.decay_domain.get_internal_domains", return_value=_TEST_INTERNAL_DOMAINS):
-        assert decay_domain.is_internal_or_noise("noreply@globalpay.example.com") is True
-
-
-def test_is_internal_or_noise_notifications():
-    with patch("fieldkit.gmail.decay_domain.get_internal_domains", return_value=_TEST_INTERNAL_DOMAINS):
-        assert decay_domain.is_internal_or_noise("notifications@github.example.com") is True
-
-
-def test_is_internal_or_noise_case_insensitive():
-    with patch("fieldkit.gmail.decay_domain.get_internal_domains", return_value=_TEST_INTERNAL_DOMAINS):
-        assert decay_domain.is_internal_or_noise("User@INTERNAL.EXAMPLE.COM") is True
-
-
-# ── TestDecayExtractEmail (flattened) ───────────────────────────────────────
-
-
-def test_decay_extract_email_angle_bracket():
-    assert decay_domain._extract_email("Jane Doe <jane@globalpay.example.com>") == "jane@globalpay.example.com"
-
-
-def test_decay_extract_email_bare():
-    assert decay_domain._extract_email("jane@globalpay.example.com") == "jane@globalpay.example.com"
-
-
-def test_decay_extract_email_uppercase():
-    assert decay_domain._extract_email("JANE@GLOBALPAY.EXAMPLE.COM") == "jane@globalpay.example.com"
-
-
-def test_decay_extract_email_whitespace():
-    assert decay_domain._extract_email("  jane@globalpay.example.com  ") == "jane@globalpay.example.com"
-
-
-# --- query.py ---
+# --- query domain ---
 # query imported above from fieldkit.commands.gmail
 
 
@@ -117,47 +71,36 @@ def test_build_date_clause_both():
 
 def test_strip_quoted_strips_quoted_lines():
     text = "Hello\n> quoted line\n> another"
-    result = query._strip_quoted(text)
+    result = _strip_quoted(text)
     assert result == "Hello"
 
 
 def test_strip_quoted_strips_on_wrote():
     text = "Reply text\nOn Mon Jan 1 wrote:\noriginal"
-    result = query._strip_quoted(text)
+    result = _strip_quoted(text)
     assert result == "Reply text"
 
 
 def test_strip_quoted_max_chars():
     text = "a" * 500
-    result = query._strip_quoted(text, max_chars=100)
+    result = _strip_quoted(text, max_chars=100)
     assert len(result) == 100
 
 
 def test_strip_quoted_empty():
-    assert query._strip_quoted("") == ""
-
-
-# ── TestQueryExtractEmail (flattened) ───────────────────────────────────────
-
-
-def test_query_extract_email_angle():
-    assert query._extract_email_addr("Bob <bob@x.example.com>") == "bob@x.example.com"
-
-
-def test_query_extract_email_bare():
-    assert query._extract_email_addr("bob@x.example.com") == "bob@x.example.com"
+    assert _strip_quoted("") == ""
 
 
 # ── TestQueryIsNoise (flattened) ────────────────────────────────────────────
 
 
 def test_query_is_noise_internal():
-    with patch("fieldkit.commands.gmail.query.get_internal_domains", return_value=_TEST_INTERNAL_DOMAINS):
+    with patch("fieldkit.gmail.query_domain.get_internal_domains", return_value=_TEST_INTERNAL_DOMAINS):
         assert query._is_noise("user@internal.example.com") is True  # pii-guard: ignore
 
 
 def test_query_is_noise_external():
-    with patch("fieldkit.commands.gmail.query.get_internal_domains", return_value=_TEST_INTERNAL_DOMAINS):
+    with patch("fieldkit.gmail.query_domain.get_internal_domains", return_value=_TEST_INTERNAL_DOMAINS):
         assert query._is_noise("user@globalpay.example.com") is False
 
 
@@ -173,67 +116,95 @@ def test_query_is_noise_noreply():
 
 
 def test_parse_addresses_name_email():
-    result = people_index.parse_addresses("Jane Doe <jane@globalpay.example.com>")
-    assert result == [("Jane Doe", "jane@globalpay.example.com")]
+    result = parse_address_header("Jane Doe <jane@globalpay.example.com>", field="message address")
+    assert result == (("Jane Doe", "jane@globalpay.example.com"),)
 
 
 def test_parse_addresses_bare_email():
-    result = people_index.parse_addresses("jane@globalpay.example.com")
-    assert result == [("", "jane@globalpay.example.com")]
+    result = parse_address_header("jane@globalpay.example.com", field="message address")
+    assert result == (("", "jane@globalpay.example.com"),)
 
 
 def test_parse_addresses_multiple():
-    result = people_index.parse_addresses("Jane <j@a.example.com>, Bob <b@a.example.com>")
+    result = parse_address_header("Jane <j@a.example.com>, Bob <b@a.example.com>", field="message address")
     assert len(result) == 2
 
 
 def test_parse_addresses_none():
-    assert people_index.parse_addresses(None) == []
+    assert parse_address_header(None, field="message address") == ()
 
 
 def test_parse_addresses_empty():
-    assert people_index.parse_addresses("") == []
+    assert parse_address_header("", field="message address") == ()
 
 
 def test_parse_addresses_quoted_name():
-    result = people_index.parse_addresses('"Jane Doe" <jane@globalpay.example.com>')
+    result = parse_address_header('"Jane Doe" <jane@globalpay.example.com>', field="message address")
     assert result[0][0] == "Jane Doe"
     assert result[0][1] == "jane@globalpay.example.com"
+
+
+@pytest.mark.parametrize(
+    ("header", "expected"),
+    [
+        ("alice@example.com (Alice)", (("Alice", "alice@example.com"),)),
+        (
+            "Group: alice@example.com, bob@example.com;",
+            (("", "alice@example.com"), ("", "bob@example.com")),
+        ),
+        ('"Doe, Jane" <Jane@Example.COM>', (("Doe, Jane", "jane@example.com"),)),
+    ],
+)
+def test_parse_addresses_accepts_supported_rfc_forms(
+    header: str,
+    expected: tuple[tuple[str, str], ...],
+) -> None:
+    assert parse_address_header(header, field="message address") == expected
+
+
+@pytest.mark.parametrize("header", ["Group:;", "Undisclosed recipients:;", "Group: ;"])
+def test_parse_addresses_accepts_addressless_rfc_groups(header: str) -> None:
+    assert parse_address_header(header, field="message address") == ()
+
+
+@pytest.mark.parametrize(
+    "header",
+    [
+        "bad <not-address>",
+        "a@b@example.com",
+        "name <a b@example.com>",
+        "a@example.com garbage",
+        "a@.example.com",
+        "a@example..com",
+        "a@example.com.",
+        ".a@example.com",
+        "a..b@example.com",
+        "a.@example.com",
+        "Alice <alice@example.com",
+    ],
+)
+def test_parse_addresses_rejects_malformed_mailboxes_without_payload(header: str) -> None:
+    with pytest.raises(GmailSchemaError, match="invalid message address data") as captured:
+        parse_address_header(header, field="message address")
+
+    assert header not in str(captured.value)
 
 
 # ── TestPeopleCli (flattened) ───────────────────────────────────────────────
 
 
 def _people_cli_make_db(path: str) -> None:
-    """Create a minimal gmail.db with the required schema."""
-    conn = sqlite3.connect(path)
-    conn.execute(
-        """CREATE TABLE messages (
-            id TEXT PRIMARY KEY,
-            thread_id TEXT,
-            from_addr TEXT,
-            to_addr TEXT,
-            cc_addr TEXT,
-            date_epoch INTEGER
-        )"""
-    )
-    conn.execute(
-        """CREATE TABLE people (
-            email TEXT PRIMARY KEY,
-            display_name TEXT,
-            first_seen TEXT,
-            last_seen TEXT,
-            message_count INTEGER DEFAULT 0
-        )"""
-    )
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS thread_accounts (
-            thread_id TEXT,
-            account TEXT
-        )"""
-    )
-    conn.commit()
-    conn.close()
+    """Create an empty ready published Gmail cache."""
+    source = Path(path)
+    initialize_gmail_publication(source)
+
+    def mark_ready(connection: SQLiteMutationConnection) -> None:
+        connection.execute(
+            "INSERT OR REPLACE INTO sync_state(key, value) VALUES (?, 'true')",
+            (GMAIL_QUERY_READY_KEY,),
+        )
+
+    apply_gmail_page(source, mark_ready)
 
 
 def test_people_cli_cli_produces_summary_output(tmp_path, capsys):
@@ -254,109 +225,90 @@ def test_people_cli_cli_produces_summary_output(tmp_path, capsys):
 
 
 def _people_cli_make_db_with_data(path: str) -> None:
-    """Create a gmail.db with two threads tagged to different accounts."""
-    conn = sqlite3.connect(path)
-    conn.execute(
-        """CREATE TABLE messages (
-            id TEXT PRIMARY KEY,
-            thread_id TEXT,
-            from_addr TEXT,
-            to_addr TEXT,
-            cc_addr TEXT,
-            date_epoch INTEGER
-        )"""
-    )
-    conn.execute(
-        """CREATE TABLE people (
-            email TEXT PRIMARY KEY,
-            display_name TEXT,
-            first_seen TEXT,
-            last_seen TEXT,
-            message_count INTEGER DEFAULT 0
-        )"""
-    )
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS thread_accounts (
-            thread_id TEXT,
-            account TEXT
-        )"""
-    )
-    # Thread 1 → acme account, sender alice@acme-corp.com
-    conn.execute(
-        "INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?)",
-        ("msg1", "thread1", "Alice <alice@acme-corp.com>", "bob@example.com", None, 1_700_000_000),  # pii-guard: ignore
-    )
-    conn.execute("INSERT INTO thread_accounts VALUES (?, ?)", ("thread1", "acme"))
-    # Thread 2 → globex account, sender carol@globalpay.example.com
-    conn.execute(
-        "INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?)",
-        (
-            "msg2",
-            "thread2",
-            "Carol <carol@globalpay.example.com>",
-            "dave@example.com",  # pii-guard: ignore
-            None,
-            1_700_000_001,
-        ),  # pii-guard: ignore
-    )
-    conn.execute("INSERT INTO thread_accounts VALUES (?, ?)", ("thread2", "globex"))
-    conn.commit()
-    conn.close()
+    """Create a ready published Gmail cache with two account-tagged threads."""
+    source = Path(path)
+    initialize_gmail_publication(source)
+
+    def publish(connection: SQLiteMutationConnection) -> None:
+        connection.executemany(
+            "INSERT INTO threads(thread_id, subject, message_count, updated_at) VALUES (?, '', 1, '')",
+            (("thread1",), ("thread2",)),
+        )
+        connection.executemany(
+            """
+            INSERT INTO messages(message_id, thread_id, from_addr, to_addr, cc_addr, date_epoch)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                (
+                    "msg1",
+                    "thread1",
+                    "Alice <alice@acme-corp.example.com>",
+                    "bob@example.com",  # pii-guard: ignore
+                    None,
+                    1_700_000_000,
+                ),
+                (
+                    "msg2",
+                    "thread2",
+                    "Carol <carol@globalpay.example.com>",
+                    "dave@example.com",  # pii-guard: ignore
+                    None,
+                    1_700_000_001,
+                ),
+            ),
+        )
+        connection.executemany(
+            "INSERT INTO thread_accounts(thread_id, account) VALUES (?, ?)",
+            (("thread1", "acme"), ("thread2", "globex")),
+        )
+        connection.execute(
+            "INSERT OR REPLACE INTO sync_state(key, value) VALUES (?, 'true')",
+            (GMAIL_QUERY_READY_KEY,),
+        )
+
+    apply_gmail_page(source, publish)
 
 
-def test_people_cli_account_filter_restricts_to_matching_threads(tmp_path):
-    """historic regression: --account filters people index to threads tagged with that account slug.
-
-    With --account acme, only alice@acme-corp.com (from thread1) should appear;
-    carol@globalpay.example.com (from thread2/globex) must be absent.
-    """
-    import sqlite3 as _sqlite3
-
+def test_people_cli_account_filter_reconciles_complete_index(tmp_path):
+    """An account-triggered rebuild retains contacts shared with other accounts."""
     db_path = str(tmp_path / "gmail.db")
     _people_cli_make_db_with_data(db_path)
 
     build_people_index(db_path, account_filter="acme", show_progress=False)
 
-    # Verify the people table only contains the acme-tagged contact
-    conn = _sqlite3.connect(db_path)
-    emails = {row[0] for row in conn.execute("SELECT email FROM people")}
-    conn.close()
+    with open_gmail_publication(Path(db_path)) as conn:
+        emails = {row[0] for row in conn.execute("SELECT email FROM people")}
 
-    assert "alice@acme-corp.com" in emails, "Expected acme contact in people table"
-    assert "carol@globalpay.example.com" not in emails, "globex contact must be excluded when --account acme"
+    assert "alice@acme-corp.example.com" in emails, "Expected acme contact in people table"
+    assert "carol@globalpay.example.com" in emails, "Complete index must preserve the other account"
 
 
-def test_people_cli_account_filter_short_flag(tmp_path):
-    """historic regression: -a short flag must work identically to --account."""
-    import sqlite3 as _sqlite3
-
+def test_people_cli_account_filter_short_flag_reconciles_complete_index(tmp_path):
+    """The short account flag triggers the same complete reconciliation."""
     db_path = str(tmp_path / "gmail.db")
     _people_cli_make_db_with_data(db_path)
 
     build_people_index(db_path, account_filter="globex", show_progress=False)
 
-    conn = _sqlite3.connect(db_path)
-    emails = {row[0] for row in conn.execute("SELECT email FROM people")}
-    conn.close()
+    with open_gmail_publication(Path(db_path)) as conn:
+        emails = {row[0] for row in conn.execute("SELECT email FROM people")}
 
     assert "carol@globalpay.example.com" in emails, "Expected globex contact in people table"
-    assert "alice@acme-corp.com" not in emails, "acme contact must be excluded when -a globex"
+    assert "alice@acme-corp.example.com" in emails, "Complete index must preserve the other account"
 
 
 def test_people_cli_no_account_filter_includes_all_threads(tmp_path):
     """historic regression: without --account, all threads are processed (existing behaviour preserved)."""
-    import sqlite3 as _sqlite3
-
     db_path = str(tmp_path / "gmail.db")
     _people_cli_make_db_with_data(db_path)
 
     build_people_index(db_path, account_filter=None, show_progress=False)
 
-    conn = _sqlite3.connect(db_path)
-    emails = {row[0] for row in conn.execute("SELECT email FROM people")}
-    conn.close()
+    with open_gmail_publication(Path(db_path)) as conn:
+        emails = {row[0] for row in conn.execute("SELECT email FROM people")}
 
-    assert "alice@acme-corp.com" in emails, "acme contact must be present without filter"
+    assert "alice@acme-corp.example.com" in emails, "acme contact must be present without filter"
     assert "carol@globalpay.example.com" in emails, "globex contact must be present without filter"
 
 

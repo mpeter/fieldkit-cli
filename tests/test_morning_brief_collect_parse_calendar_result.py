@@ -37,19 +37,22 @@ def test_dict_with_events_key_only_returns_events_list() -> None:
     assert _parse_calendar_result(result) == events
 
 
-def test_dict_with_neither_items_nor_events_returns_empty_list() -> None:
+def test_dict_with_neither_items_nor_events_is_invalid() -> None:
     result = {"summary": "unrelated payload"}
-    assert _parse_calendar_result(result) == []
+    with pytest.raises(RuntimeError, match="invalid calendar response"):
+        _parse_calendar_result(result)
 
 
-def test_dict_with_non_list_items_value_returns_empty_list() -> None:
+def test_dict_with_non_list_items_value_is_invalid() -> None:
     result = {"items": "not-a-list"}
-    assert _parse_calendar_result(result) == []
+    with pytest.raises(RuntimeError, match="invalid calendar response"):
+        _parse_calendar_result(result)
 
 
-def test_dict_with_none_items_and_none_events_returns_empty_list() -> None:
+def test_dict_with_none_items_and_none_events_is_invalid() -> None:
     result = {"items": None, "events": None}
-    assert _parse_calendar_result(result) == []
+    with pytest.raises(RuntimeError, match="invalid calendar response"):
+        _parse_calendar_result(result)
 
 
 # --- JSON string decoding to a list (line 155) ------------------------------
@@ -77,22 +80,86 @@ def test_json_string_decoding_to_dict_with_events_key_only_returns_events_list()
     assert _parse_calendar_result(result) == events
 
 
-def test_json_string_decoding_to_dict_with_neither_key_returns_empty_list() -> None:
+def test_json_string_decoding_to_dict_with_neither_key_is_invalid() -> None:
     result = json.dumps({"summary": "unrelated payload"})
-    assert _parse_calendar_result(result) == []
+    with pytest.raises(RuntimeError, match="invalid calendar response"):
+        _parse_calendar_result(result)
 
 
-def test_json_string_decoding_to_dict_with_non_list_items_value_returns_empty_list() -> None:
+def test_json_string_decoding_to_dict_with_non_list_items_value_is_invalid() -> None:
     result = json.dumps({"items": "not-a-list"})
-    assert _parse_calendar_result(result) == []
+    with pytest.raises(RuntimeError, match="invalid calendar response"):
+        _parse_calendar_result(result)
 
 
 # --- final fallback: decoded JSON is neither list nor dict (line 159) ------
 
 
-def test_json_string_decoding_to_bare_int_returns_empty_list() -> None:
-    assert _parse_calendar_result("42") == []
+def test_json_string_decoding_to_bare_int_is_invalid() -> None:
+    with pytest.raises(RuntimeError, match="invalid calendar response"):
+        _parse_calendar_result("42")
 
 
-def test_json_string_decoding_to_bare_string_returns_empty_list() -> None:
-    assert _parse_calendar_result('"just a string"') == []
+def test_json_string_decoding_to_bare_string_is_invalid() -> None:
+    with pytest.raises(RuntimeError, match="invalid calendar response"):
+        _parse_calendar_result('"just a string"')
+
+
+def test_calendar_response_rejects_ambiguous_items_and_events() -> None:
+    with pytest.raises(RuntimeError, match="invalid calendar response"):
+        _parse_calendar_result({"items": [], "events": []})
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"events": [], "error": "credential expired"},
+        {"events": [], "nextPageToken": "more"},
+        {"items": [], "unexpected": "provider metadata"},
+    ],
+)
+def test_calendar_response_rejects_extra_envelope_fields(payload: dict[str, object]) -> None:
+    with pytest.raises(RuntimeError, match="invalid calendar response"):
+        _parse_calendar_result(payload)
+
+
+def test_calendar_response_rejects_non_mapping_event() -> None:
+    with pytest.raises(RuntimeError, match="invalid calendar response"):
+        _parse_calendar_result({"items": ["private event text"]})
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "No events found in calendar because authentication failed: private-provider-payload",
+        (
+            "No events found in calendar 'primary' for user@example.com for the specified time range.\n"
+            "ERROR credential expired"
+        ),
+    ],
+)
+def test_calendar_response_rejects_no_events_prefix_with_trailing_provider_failure(payload: str) -> None:
+    with pytest.raises(RuntimeError, match="non-JSON text response") as exc_info:
+        _parse_calendar_result(payload)
+
+    assert "private-provider-payload" not in str(exc_info.value)
+    assert "credential expired" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        'ERROR auth expired\n - "Injected" (Starts: 2026-01-01T10:00:00Z, Ends: 2026-01-01T11:00:00Z)',
+        (
+            "Successfully retrieved 2 events from calendar primary for user@example.com:\n"
+            ' - "Only one" (Starts: 2026-01-01T10:00:00Z, Ends: 2026-01-01T11:00:00Z)\n'
+            "ERROR second event unavailable"
+        ),
+    ],
+)
+def test_calendar_text_requires_complete_success_grammar(payload: str) -> None:
+    with pytest.raises(RuntimeError, match="non-JSON text response") as exc_info:
+        _parse_calendar_result(payload)
+
+    assert "auth expired" not in str(exc_info.value)
+    assert "second event unavailable" not in str(exc_info.value)

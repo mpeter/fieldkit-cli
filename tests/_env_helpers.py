@@ -19,14 +19,11 @@ import os
 SELECTION_ENV_KEYS = frozenset(
     {
         # LLM on/off
-        "NO_LLM",
         "FIELDKIT_NO_LLM",
-        # model selection — each has a FIELDKIT_-prefixed alias that wins over the bare
-        # name (implementation note), which is precisely what makes a half-scrubbed environment
-        # produce a passing-but-meaningless test
+        # Model selection includes documented provider conventions such as
+        # LLM_MODEL as well as fieldkit-owned names.
         "LLM_MODEL",
         "FIELDKIT_LLM_MODEL",
-        "TRANSCRIBE_MODEL",
         "FIELDKIT_TRANSCRIBE_MODEL",
         "ANTHROPIC_MODEL",
         "FIELDKIT_ANTHROPIC_MODEL",
@@ -43,7 +40,7 @@ SELECTION_ENV_KEYS = frozenset(
         "FIELDKIT_MCP_GATEWAY_URL",
     }
 )
-"""Every env var that selects a model or endpoint, prefixed alias included.
+"""Every env var that selects a model or endpoint.
 
 Deliberately excludes credentials (``ANTHROPIC_VERTEX_PROJECT_ID`` and friends): the
 code under test needs them to import, and they do not steer resolution.

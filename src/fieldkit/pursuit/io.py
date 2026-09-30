@@ -12,15 +12,12 @@ The implementation preserves YAML key ordering and only writes keys that were
 present in the original file (no extra sf_ fields added on round-trip).
 """
 
-import fcntl
-import hashlib
 import json
 import logging
 import os
 import re
 import stat
-import tempfile
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -36,27 +33,63 @@ from fieldkit.pursuit.models import (
     TransitionEntry,
     canonicalize_legacy_meddpicc,
 )
+from fieldkit.util.atomic import atomic_text_create, atomic_text_write, exclusive_file_lock, prepare_runtime_lock_path
+from fieldkit.util.text_snapshot import TextSnapshot, read_text_snapshot
 
 _log = logging.getLogger(__name__)
+_PURSUIT_BODY_TIMEOUT_SECONDS = 5
+_MAX_PURSUIT_BYTES = 4_000_000
+
+
+def read_pursuit_text_snapshot(path: Path) -> TextSnapshot:
+    """Capture one bounded, no-follow pursuit source for validated updates."""
+    return read_text_snapshot(path, max_bytes=_MAX_PURSUIT_BYTES)
 
 
 def _pursuit_lock_path(path: Path) -> Path:
     """Return the stable runtime lock path for a canonical pursuit target."""
-    digest = hashlib.sha256(str(path.resolve()).encode("utf-8")).hexdigest()
-    return get_fieldkit_data() / "locks" / "pursuit" / f"{digest}.lock"
+    return prepare_runtime_lock_path(path, get_fieldkit_data(), "pursuit")
 
 
 @contextmanager
-def _pursuit_lock(path: Path) -> Generator[None, None, None]:
+def _pursuit_lock(path: Path, *, timeout_seconds: float | None = None) -> Generator[None, None, None]:
     """Serialize cooperating pursuit writers without adding workspace files."""
     lock_path = _pursuit_lock_path(path)
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with lock_path.open("a", encoding="utf-8") as lock_fh:
-        fcntl.flock(lock_fh, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(lock_fh, fcntl.LOCK_UN)
+    with exclusive_file_lock(lock_path, timeout_seconds=timeout_seconds):
+        yield
+
+
+def update_pursuit_body(
+    path: Path, transform: Callable[[str], str], *, timeout_seconds: float = _PURSUIT_BODY_TIMEOUT_SECONDS
+) -> bool:
+    """Transform an existing pursuit body under its one canonical bounded lock.
+
+    The transform must be pure. Frontmatter is validated but retained byte for
+    byte; existing mode is preserved by the pursuit writer. A changed target
+    is refused, including when the transform would otherwise be a no-op.
+    """
+    with _pursuit_lock(path, timeout_seconds=timeout_seconds):
+        before = read_pursuit_text_snapshot(path)
+        frontmatter, body = _split_frontmatter(before.content)
+        _validate_no_duplicate_keys(frontmatter)
+        if not isinstance(yaml.safe_load(frontmatter), dict):
+            raise ValueError("Invalid pursuit frontmatter")
+        updated_body = transform(body)
+        if not isinstance(updated_body, str):
+            raise ValueError("Invalid pursuit body update")
+        if updated_body and not updated_body.startswith("\n"):
+            raise ValueError("Pursuit body must begin with a newline")
+        prefix = before.content[: -len(body)] if body else before.content
+        updated = prefix + updated_body
+        if len(updated.encode("utf-8")) > _MAX_PURSUIT_BYTES:
+            raise ValueError("Pursuit body update exceeds byte limit")
+        after = read_pursuit_text_snapshot(path)
+        if before.identity != after.identity or before.content != after.content:
+            raise ValueError("Pursuit changed during body update")
+        if updated_body == body:
+            return False
+        atomic_text_write(path, updated, mode=stat.S_IMODE(before.info.st_mode))
+    return True
 
 
 class _DuplicateKeyLoader(yaml.SafeLoader):  # type: ignore[misc]
@@ -68,9 +101,13 @@ def _construct_mapping_warn_duplicates(loader: yaml.SafeLoader, node: yaml.Mappi
     seen: set[object] = set()
     for key_node, _ in node.value:
         key = loader.construct_object(key_node)
-        if key in seen:
+        try:
+            duplicate = key in seen
+            seen.add(key)
+        except TypeError:
+            raise yaml.YAMLError("Unsupported complex YAML mapping key") from None
+        if duplicate:
             _log.warning("Duplicate YAML key %r — last value wins", key)
-        seen.add(key)
     pairs: list[tuple[object, object]] = loader.construct_pairs(node, deep=True)
     return dict(pairs)
 
@@ -115,10 +152,10 @@ def split_frontmatter_raw(text: str) -> tuple[str, str] | None:
     The opening ``---`` must be at position 0 (anchored match).  Returns
     ``None`` when no frontmatter block is found.
     """
-    m = _FM_RE.match(text)
-    if not m:
+    try:
+        return _split_frontmatter(text)
+    except ValueError:
         return None
-    return m.group(1), text[m.end() :]
 
 
 # SF fields recognized by the schema — derived from PursuitFrontmatter.model_fields
@@ -163,7 +200,7 @@ def parse_frontmatter(text: str) -> tuple[dict[str, Any], str] | None:
     fm_text, tail = result
     try:
         parsed = yaml.load(fm_text, Loader=_DuplicateKeyLoader)
-    except yaml.YAMLError:
+    except (TypeError, yaml.YAMLError):
         return None
     if not isinstance(parsed, dict):
         return None
@@ -245,6 +282,10 @@ def detect_duplicate_yaml_keys(fm_text: str) -> list[str]:
         loader.flatten_mapping(node)
         for key_node, _ in node.value:
             key = loader.construct_object(key_node)
+            try:
+                hash(key)
+            except TypeError:
+                raise yaml.YAMLError("Unsupported complex YAML mapping key") from None
             key_str = str(key)
             if key_str in seen:
                 duplicates.append(key_str)
@@ -556,45 +597,12 @@ def _write_frontmatter_locked(
     new_content = f"---\n{yaml_str}\n---{body}"
 
     _validate_no_duplicate_keys(yaml_str, path)
-    _atomic_text_write(path, new_content)
-
-
-def _publish_text_temp(tmp_path: str, path: Path, *, exclusive_create: bool) -> None:
-    """Publish a completed temporary file, optionally without replacing a peer."""
-    if not exclusive_create:
-        Path(tmp_path).replace(path)
-        return
-    try:
-        os.link(tmp_path, path)
-    except FileExistsError as exc:
-        raise FileExistsError(f"Pursuit file already exists: {path}") from exc
-    Path(tmp_path).unlink()
+    atomic_text_write(path, new_content, mode=_existing_mode(path))
 
 
 def _existing_mode(path: Path) -> int | None:
     """Return the current file mode when a replacement should preserve it."""
     return stat.S_IMODE(path.stat().st_mode) if path.exists() else None
-
-
-def _atomic_text_write(path: Path, content: str, *, exclusive_create: bool = False) -> None:
-    """Publish text atomically and clean up its same-directory temporary file."""
-    existing_mode = None if exclusive_create else _existing_mode(path)
-    tmp_path: str | None = None
-    try:
-        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False) as tmp:
-            tmp_path = tmp.name
-            if existing_mode is not None:
-                os.fchmod(tmp.fileno(), existing_mode)
-            tmp.write(content)
-            tmp.flush()
-            os.fsync(tmp.fileno())
-        _publish_text_temp(tmp_path, path, exclusive_create=exclusive_create)
-        tmp_path = None
-    except BaseException:
-        # historic regression: clean up orphaned temp file on any failure (disk full, cross-device, Ctrl-C)
-        if tmp_path is not None:
-            Path(tmp_path).unlink(missing_ok=True)
-        raise
 
 
 def render_raw_key_value(key: str, value: Any) -> list[str]:
@@ -648,6 +656,18 @@ def _render_new_raw_frontmatter(fm: dict[str, Any]) -> str:
     return "\n".join(fm_lines)
 
 
+def _load_validated_raw_frontmatter(fm_text: str, path: Path | None = None) -> dict[str, Any]:
+    """Load one mapping after the canonical duplicate-key validation."""
+    try:
+        _validate_no_duplicate_keys(fm_text, path)
+        loaded = yaml.load(fm_text, Loader=_DuplicateKeyLoader)
+    except (TypeError, yaml.YAMLError):
+        raise ValueError("Invalid pursuit frontmatter") from None
+    if loaded is not None and not isinstance(loaded, dict):
+        raise ValueError("Invalid pursuit frontmatter")
+    return loaded or {}
+
+
 def render_frontmatter_raw(
     path: str | Path,
     fm: dict[str, Any],
@@ -697,8 +717,7 @@ def render_frontmatter_raw(
             fm_text, _ = _split_frontmatter(current)
         except ValueError as exc:
             raise ValueError(f"write_frontmatter_raw: no frontmatter block in {path}") from exc
-        _validate_no_duplicate_keys(fm_text, path)
-        raw_on_disk: dict[str, Any] = yaml.load(fm_text, Loader=_DuplicateKeyLoader) or {}
+        raw_on_disk = _load_validated_raw_frontmatter(fm_text, path)
 
         fm, raw_on_disk = _canonicalize_raw_frontmatter(fm, raw_on_disk)
 
@@ -728,13 +747,25 @@ def write_frontmatter_raw(
     exclusive_create: bool = False,
     expected_mtime: float | None = None,
     remove_keys: frozenset[str] = frozenset(),
+    timeout_seconds: float | None = None,
+    validated_content: str | None = None,
+    validated_source_content: str | None = None,
 ) -> None:
-    """Write validated raw frontmatter under the pursuit's runtime lock."""
+    """Write validated raw frontmatter under the pursuit's runtime lock.
+
+    ``timeout_seconds`` bounds lock acquisition when supplied; ``None`` keeps
+    the legacy blocking behavior for existing callers.
+
+    ``validated_content`` is a deterministic result from
+    :func:`render_frontmatter_raw`. Supplying it requires ``expected_mtime``;
+    the writer rechecks staleness and the rendered document under the lock.
+    ``validated_source_content`` binds that plan to the exact source bytes.
+    """
     path = Path(path)
     if exclusive_create and not create:
         raise ValueError("exclusive_create requires create=True")
     path.parent.mkdir(parents=True, exist_ok=True)
-    with _pursuit_lock(path):
+    with _pursuit_lock(path, timeout_seconds=timeout_seconds):
         _write_frontmatter_raw_locked(
             path,
             fm=fm,
@@ -743,6 +774,8 @@ def write_frontmatter_raw(
             exclusive_create=exclusive_create,
             expected_mtime=expected_mtime,
             remove_keys=remove_keys,
+            validated_content=validated_content,
+            validated_source_content=validated_source_content,
         )
 
 
@@ -755,18 +788,39 @@ def _write_frontmatter_raw_locked(
     exclusive_create: bool,
     expected_mtime: float | None,
     remove_keys: frozenset[str],
+    validated_content: str | None,
+    validated_source_content: str | None,
 ) -> None:
     """Validate and replace one pursuit while its runtime lock is held."""
     if path.is_symlink():
         raise OSError(f"Refusing to replace symlinked pursuit file: {path}")
     if exclusive_create and path.exists():
-        raise FileExistsError(f"Pursuit file already exists: {path}")
-    new_content = render_frontmatter_raw(
-        path,
-        fm,
-        body,
-        create=create,
-        expected_mtime=expected_mtime,
-        remove_keys=remove_keys,
-    )
-    _atomic_text_write(path, new_content, exclusive_create=exclusive_create)
+        raise FileExistsError("Pursuit file already exists")
+    if validated_content is None:
+        new_content = render_frontmatter_raw(
+            path,
+            fm,
+            body,
+            create=create,
+            expected_mtime=expected_mtime,
+            remove_keys=remove_keys,
+        )
+    else:
+        if expected_mtime is None or validated_source_content is None:
+            raise ValueError("Validated frontmatter content requires an exact source snapshot")
+        current = read_pursuit_text_snapshot(path)
+        if current.info.st_mtime != expected_mtime or current.content != validated_source_content:
+            raise FrontmatterStalenessError("Pursuit changed after frontmatter validation")
+        raw = split_frontmatter_raw(validated_content)
+        if raw is None:
+            raise ValueError("Invalid validated pursuit frontmatter")
+        yaml_text, _ = raw
+        _load_validated_raw_frontmatter(yaml_text)
+        new_content = validated_content
+    if exclusive_create:
+        try:
+            atomic_text_create(path, new_content)
+        except FileExistsError:
+            raise FileExistsError("Pursuit file already exists") from None
+    else:
+        atomic_text_write(path, new_content, mode=_existing_mode(path))

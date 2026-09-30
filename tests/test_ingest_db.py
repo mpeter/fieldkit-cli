@@ -4,20 +4,22 @@ Pattern: use tmp_path SQLite file (not :memory:) so file-existence checks work.
 """
 
 import sqlite3
+import threading
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 import fieldkit.ingest.db as ingest_db_mod
 from fieldkit.commands.ingest.registry import PIPELINES
+from fieldkit.errors import SQLiteSnapshotError
 from fieldkit.ingest.db import (
     ArtifactRecord,
     get_artifacts_for_reprocess,
     get_db,
     get_db_path,
+    get_db_read_only,
     init_db,
-    update_artifact_version,
 )
 
 pytestmark = pytest.mark.unit
@@ -41,6 +43,24 @@ def test_get_db_path_returns_path_object() -> None:
 
 
 # ── init_db ────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("message", ["database is locked", "disk I/O error", "no such table: artifacts"])
+def test_init_db_propagates_migration_failure(tmp_path: Path, message: str) -> None:
+    """An operational migration failure must not return a usable-looking connection."""
+    connection = MagicMock(spec=sqlite3.Connection)
+    journal_cursor = MagicMock()
+    journal_cursor.fetchone.return_value = ("delete",)
+    connection.execute.side_effect = [journal_cursor, None, None, None, sqlite3.OperationalError(message)]
+
+    with (
+        patch("fieldkit.ingest.db.sqlite3.connect", return_value=connection),
+        pytest.raises(sqlite3.OperationalError, match=message),
+    ):
+        init_db(tmp_path / "pipeline.db")
+
+    connection.close.assert_called_once()
+    connection.commit.assert_not_called()
 
 
 def test_init_db_creates_file(tmp_path: Path) -> None:
@@ -154,6 +174,97 @@ def test_get_db_opens_existing_db(tmp_path: Path) -> None:
     assert count == 4
 
 
+def test_get_db_migrates_a_closed_wal_database_through_sqlite(tmp_path: Path) -> None:
+    """An authorized write open converts legacy WAL state without losing rows."""
+    db_path = tmp_path / "pipeline.db"
+    legacy = sqlite3.connect(db_path)
+    assert legacy.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+    legacy.execute("CREATE TABLE retained(value TEXT NOT NULL)")
+    legacy.execute("INSERT INTO retained VALUES ('kept')")
+    legacy.commit()
+    legacy.close()
+    assert tuple(db_path.read_bytes()[18:20]) == (2, 2)
+
+    migrated = get_db(db_path)
+    try:
+        assert migrated.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+        assert migrated.execute("SELECT value FROM retained").fetchone()[0] == "kept"
+    finally:
+        migrated.close()
+
+    assert tuple(db_path.read_bytes()[18:20]) == (1, 1)
+
+
+def test_get_db_refuses_wal_migration_while_another_writer_is_active(tmp_path: Path) -> None:
+    db_path = tmp_path / "pipeline.db"
+    active = sqlite3.connect(db_path)
+    assert active.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+    active.execute("CREATE TABLE retained(value TEXT NOT NULL)")
+    active.commit()
+    active.execute("BEGIN IMMEDIATE")
+    try:
+        with pytest.raises(SQLiteSnapshotError) as caught:
+            get_db(db_path)
+        assert caught.value.reason == "active"
+    finally:
+        active.rollback()
+        active.close()
+
+
+def test_get_db_rejects_malformed_database_with_fixed_typed_error(tmp_path: Path) -> None:
+    db_path = tmp_path / "fictional-private-customer.db"
+    db_path.write_bytes(b"not a sqlite database")
+
+    with pytest.raises(SQLiteSnapshotError) as caught:
+        get_db(db_path)
+
+    assert caught.value.reason == "unverified"
+    assert str(db_path) not in str(caught.value)
+
+
+def test_delete_journal_writers_serialize_and_preserve_both_commits(tmp_path: Path) -> None:
+    db_path = tmp_path / "pipeline.db"
+    first = init_db(db_path, pipelines=PIPELINES)
+    first.execute("BEGIN IMMEDIATE")
+    first.execute("UPDATE pipelines SET description = 'first' WHERE pipeline_id = 'transcript-ingest'")
+    attempted = threading.Event()
+    finished = threading.Event()
+    failures: list[BaseException] = []
+
+    def second_writer() -> None:
+        attempted.set()
+        try:
+            second = get_db(db_path)
+            try:
+                second.execute("UPDATE pipelines SET version = '2.0.0' WHERE pipeline_id = 'transcript-ingest'")
+                second.commit()
+            finally:
+                second.close()
+        except BaseException as exc:  # pragma: no cover - asserted below
+            failures.append(exc)
+        finally:
+            finished.set()
+
+    worker = threading.Thread(target=second_writer)
+    worker.start()
+    assert attempted.wait(timeout=1)
+    assert not finished.wait(timeout=0.05)
+    first.commit()
+    first.close()
+    worker.join(timeout=2)
+
+    assert not worker.is_alive()
+    assert failures == []
+    reader = get_db(db_path)
+    try:
+        row = reader.execute(
+            "SELECT description, version FROM pipelines WHERE pipeline_id = 'transcript-ingest'"
+        ).fetchone()
+        assert tuple(row) == ("first", "2.0.0")
+    finally:
+        reader.close()
+
+
 def test_get_db_error_message_contains_path(tmp_path: Path) -> None:
     """FileNotFoundError message must contain the missing path."""
     db_path = tmp_path / "pipeline.db"
@@ -161,7 +272,49 @@ def test_get_db_error_message_contains_path(tmp_path: Path) -> None:
         get_db(db_path)
 
 
-# ── ArtifactRecord / get_artifacts_for_reprocess / update_artifact_version ─
+def test_get_db_read_only_does_not_create_sidecars_or_mutate_database(tmp_path: Path) -> None:
+    db_path = tmp_path / "pipeline.db"
+    conn = init_db(db_path, pipelines=PIPELINES)
+    conn.close()
+    for sidecar in (tmp_path / "pipeline.db-wal", tmp_path / "pipeline.db-shm"):
+        if sidecar.exists():
+            sidecar.unlink()
+    before = (db_path.read_bytes(), db_path.stat().st_mtime_ns, {p.name for p in tmp_path.iterdir()})
+
+    reader = get_db_read_only(db_path)
+    try:
+        count = reader.execute("SELECT COUNT(*) FROM pipelines").fetchone()[0]
+        assert count == len(PIPELINES)
+    finally:
+        reader.close()
+
+    after = (db_path.read_bytes(), db_path.stat().st_mtime_ns, {p.name for p in tmp_path.iterdir()})
+    assert after == before
+
+
+def test_get_db_read_only_refuses_an_active_delete_journal_writer(tmp_path: Path) -> None:
+    db_path = tmp_path / "pipeline.db"
+    writer = init_db(db_path, pipelines=PIPELINES)
+    writer.execute("BEGIN IMMEDIATE")
+    try:
+        with pytest.raises(SQLiteSnapshotError) as caught:
+            get_db_read_only(db_path)
+        assert caught.value.reason == "active"
+    finally:
+        writer.rollback()
+        writer.close()
+
+
+def test_get_db_read_only_missing_database_does_not_create_it(tmp_path: Path) -> None:
+    db_path = tmp_path / "missing.db"
+
+    with pytest.raises(FileNotFoundError):
+        get_db_read_only(db_path)
+
+    assert not db_path.exists()
+
+
+# ── ArtifactRecord / get_artifacts_for_reprocess ─
 
 
 def _seed_artifact(
@@ -199,6 +352,19 @@ def _seed_artifact(
         (artifact_id, source_id, pipeline_id, pipeline_version, content_path),
     )
     conn.commit()
+
+
+@pytest.mark.parametrize("other", ["acmeXcorp", "ACME_CORP", "acme_corp-extra"])
+def test_reprocess_account_selection_is_literal(tmp_path: Path, other: str) -> None:
+    conn = init_db(tmp_path / "pipeline.db")
+    try:
+        _seed_artifact(conn, "selected", content_path="/workspace/accounts/acme_corp/meetings/note.md")
+        _seed_artifact(conn, "excluded", content_path=f"/workspace/accounts/{other}/meetings/note.md")
+        result = get_artifacts_for_reprocess(conn, "transcript-ingest", account="acme_corp")
+        assert len(result) == 1
+        assert result[0].artifact_id == "selected"
+    finally:
+        conn.close()
 
 
 def test_get_artifacts_for_reprocess_empty_db(tmp_path: Path) -> None:
@@ -265,42 +431,6 @@ def test_get_artifacts_for_reprocess_limit(tmp_path: Path) -> None:
     conn.close()
 
     assert len(results) == 3
-
-
-def test_update_artifact_version_changes_version_and_path(tmp_path: Path) -> None:
-    """update_artifact_version must persist the new version and content_path."""
-    conn = init_db(tmp_path / "pipeline.db")
-    _seed_artifact(conn, "art-upd", pipeline_version="0.1.0", content_path="/old/path.md")
-
-    update_artifact_version(conn, "art-upd", "0.2.0", "/new/path.md")
-
-    row = conn.execute(
-        "SELECT pipeline_version, content_path FROM artifacts WHERE artifact_id = ?",
-        ("art-upd",),
-    ).fetchone()
-    conn.close()
-
-    assert row["pipeline_version"] == "0.2.0"
-    assert row["content_path"] == "/new/path.md"
-
-
-def test_update_artifact_version_is_committed(tmp_path: Path) -> None:
-    """Changes from update_artifact_version must be visible on a fresh connection."""
-    db_path = tmp_path / "pipeline.db"
-    conn = init_db(db_path)
-    _seed_artifact(conn, "art-commit", pipeline_version="0.1.0", content_path="/before.md")
-    update_artifact_version(conn, "art-commit", "0.3.0", "/after.md")
-    conn.close()
-
-    conn2 = get_db(db_path)
-    row = conn2.execute(
-        "SELECT pipeline_version, content_path FROM artifacts WHERE artifact_id = ?",
-        ("art-commit",),
-    ).fetchone()
-    conn2.close()
-
-    assert row["pipeline_version"] == "0.3.0"
-    assert row["content_path"] == "/after.md"
 
 
 # ── get_db_path path-is-not-__file__-relative regression ──────────────────

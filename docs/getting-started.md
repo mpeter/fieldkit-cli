@@ -1,9 +1,14 @@
 ---
-last_reviewed: 2026-09-13
+last_reviewed: 2026-09-29
 covers:
   - pyproject.toml
+  - src/fieldkit/__main__.py
   - src/fieldkit/commands/init/
   - src/fieldkit/commands/doctor/
+  - src/fieldkit/config/
+  - src/fieldkit/commands/skill/
+  - src/fieldkit/skill/
+  - src/fieldkit/skills/
 audience: user
 ---
 
@@ -31,7 +36,7 @@ uv --version
 
 ## Install
 
-For the released package:
+Install the released base package:
 
 ```console
 uv tool install fieldkit-cli
@@ -48,7 +53,7 @@ checkout, use the contributor path in
 [CONTRIBUTING.md](https://github.com/mpeter/fieldkit-cli/blob/main/CONTRIBUTING.md)
 and run `uv run fieldkit` from that checkout.
 
-Optional profiles are independent:
+To install a profile instead of the base package, choose one of these commands:
 
 ```console
 uv tool install 'fieldkit-cli[google]'      # Google APIs and OAuth
@@ -59,11 +64,13 @@ uv tool install 'fieldkit-cli[all]'         # all packaged optional dependencies
 ```
 
 Installing a profile does not configure a provider or authorize fieldkit to use
-one. See [Integrations and profiles](integrations.md) before enabling a service.
+one. If fieldkit is already installed, add `--force` to replace its tool
+environment with the selected profile. See [Integrations and
+profiles](integrations.md) before enabling a service.
 
 ## Create your first workspace
 
-Choose a path outside the source repository, then run:
+Choose a directory whose contents fieldkit may create or update, then run:
 
 ```console
 fieldkit init --minimal ./fieldkit-workspace
@@ -71,26 +78,32 @@ fieldkit init --minimal ./fieldkit-workspace
 
 Minimal initialization is non-interactive. It creates generic workspace
 structure without writing identity values, service credentials, or sample
-customer records. It also writes or updates `~/.config/fieldkit/config.yaml`,
+customer records. It also writes or updates `~/.config/fieldkit/config.yaml`
+(or `$XDG_CONFIG_HOME/fieldkit/config.yaml` when `XDG_CONFIG_HOME` is absolute),
 making this directory the active workspace and setting its database paths.
 Other existing configuration keys are preserved.
 
-For an isolated trial that does not read or modify your normal fieldkit
-configuration, set an absolute XDG configuration root for every trial command:
+For a disposable trial that does not read file contents from or modify your normal
+configuration, workspace, or runtime-data root, run the commands in a subshell:
 
 ```console
 FIELDKIT_TRIAL_ROOT="$(mktemp -d)"
-export XDG_CONFIG_HOME="$FIELDKIT_TRIAL_ROOT/config"
-fieldkit init --minimal ./fieldkit-workspace
-fieldkit doctor
-fieldkit skill list
+(
+  export XDG_CONFIG_HOME="$FIELDKIT_TRIAL_ROOT/config"
+  export FIELDKIT_DATA_DIR="$FIELDKIT_TRIAL_ROOT/runtime-data"
+  export PYTHON_DOTENV_DISABLED=1
+  unset GOOGLE_OAUTH_CLIENT_ID GOOGLE_OAUTH_CLIENT_SECRET
+  unset FIELDKIT_SKILLS_DIR
+  fieldkit init --minimal "$FIELDKIT_TRIAL_ROOT/workspace"
+  fieldkit doctor
+  fieldkit skill list
+)
 echo "$FIELDKIT_TRIAL_ROOT"
-unset XDG_CONFIG_HOME
 ```
 
 The `echo` command prints the temporary directory containing the trial
-configuration. `unset` restores the shell's normal configuration lookup for
-later fieldkit commands. Verify the printed trial path before removing it.
+configuration, workspace, and runtime data. The subshell restores your existing
+environment when it exits. Verify the printed path before removing it.
 
 If you already use fieldkit, choose the workspace you intend to make active or
 back up that configuration file before trying a different workspace.
@@ -102,10 +115,15 @@ fieldkit doctor
 fieldkit skill list
 ```
 
-`fieldkit doctor` exits successfully when the portable core is healthy and
-reports unconfigured services as optional. `fieldkit skill list` verifies that
-packaged resources can be discovered and rendered. Neither command contacts an
-external provider in this minimal configuration.
+`fieldkit doctor` exits successfully when the services it checks are healthy or
+unconfigured and their checked settings are valid. It does not validate every
+LLM, MCP, or driver setting. In the isolated trial above, Salesforce, Gmail,
+Google, and ShadowBot are reported as disabled or not configured. If an
+integration is enabled instead, fieldkit found existing configuration or
+credentials. With no `FIELDKIT_SKILLS_DIR` or configured `fieldkit_root`
+override, `fieldkit skill list` verifies packaged workflow resources can be
+discovered. With the isolated roots and cleared credentials shown above,
+neither command contacts an external provider.
 
 If either command fails, keep the exact command, exit code, and sanitized error
 text, then use [Troubleshooting](reference/troubleshooting.md) or the route in
@@ -113,11 +131,14 @@ text, then use [Troubleshooting](reference/troubleshooting.md) or the route in
 
 ## Keep or replace the workspace
 
-The workspace contains only the generic files created by minimal initialization
-unless you add data. Keep it as your working directory. Before removing it,
-initialize another workspace or restore your previous configuration so fieldkit
-does not retain paths into a deleted directory. Uninstalling the application
-does not remove workspaces or the active fieldkit configuration file:
+An initially empty, newly created workspace contains only the generic files
+created by minimal initialization unless you add data. Existing workspace files
+are preserved. You can keep it as your working directory. Before removing
+a non-disposable workspace, initialize another workspace or update your fieldkit
+configuration so it does not retain paths into a deleted directory.
+
+Uninstalling the application removes the tool environment and launcher. It does
+not remove workspaces, runtime data, or the active fieldkit configuration:
 
 ```console
 uv tool uninstall fieldkit-cli
@@ -125,8 +146,8 @@ uv tool uninstall fieldkit-cli
 
 ## Configure a real workspace
 
-Run the interactive setup when you are ready to supply identity, workspace, and
-optional integration settings:
+Run the interactive setup only when you are ready to supply identity, workspace,
+and optional integration settings:
 
 ```console
 fieldkit init

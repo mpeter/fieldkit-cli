@@ -19,17 +19,16 @@ def test_no_llm_save_path_on_stdout(tmp_path: Path, capsys: pytest.CaptureFixtur
     briefs_dir.mkdir()
 
     with (
-        patch("fieldkit.commands.brief.main.get_fieldkit_home", return_value=tmp_path),
-        patch("fieldkit.commands.brief.main.get_fieldkit_root", return_value=tmp_path),
-        patch("fieldkit.commands.brief.main.collect_pursuit_alerts", return_value="(none)"),
-        patch("fieldkit.commands.brief.main.collect_champion_signals", return_value="(none)"),
-        patch("fieldkit.commands.brief.main.collect_decay_signals", return_value="(none)"),
-        patch("fieldkit.commands.brief.main.collect_stale_prose", return_value="(none)"),
-        patch("fieldkit.commands.brief.main.collect_tasks", return_value=("(none)", "(none)")),
-        patch("fieldkit.commands.brief.main._collect_degraded_sources", return_value=[]),
-        patch("fieldkit.commands.brief.main._render_degraded_section", return_value=""),
+        patch("fieldkit.brief.pipeline_only.get_fieldkit_home", return_value=tmp_path),
+        patch("fieldkit.brief.pipeline_only.collect_pursuit_alerts", return_value="(none)"),
+        patch("fieldkit.brief.pipeline_only.collect_champion_signals", return_value="(none)"),
+        patch("fieldkit.brief.pipeline_only.collect_decay_signals", return_value="(none)"),
+        patch("fieldkit.brief.pipeline_only.collect_stale_prose", return_value="(none)"),
+        patch("fieldkit.brief.pipeline_only.collect_tasks", return_value=("(none)", "(none)")),
+        patch("fieldkit.brief.pipeline_only._collect_degraded_sources", return_value=[]),
+        patch("fieldkit.brief.pipeline_only._render_degraded_section", return_value=""),
     ):
-        from fieldkit.commands.brief.main import _run
+        from fieldkit.commands.brief.cli import _run_pipeline_only as _run
 
         _run(no_llm=True, account=None)
 
@@ -54,19 +53,18 @@ def test_llm_save_path_on_stdout(tmp_path: Path, capsys: pytest.CaptureFixture[s
     briefs_dir.mkdir()
 
     with (
-        patch("fieldkit.commands.brief.main.get_fieldkit_home", return_value=tmp_path),
-        patch("fieldkit.commands.brief.main.get_fieldkit_root", return_value=tmp_path),
-        patch("fieldkit.commands.brief.main.collect_pursuit_alerts", return_value="(none)"),
-        patch("fieldkit.commands.brief.main.collect_champion_signals", return_value="(none)"),
-        patch("fieldkit.commands.brief.main.collect_decay_signals", return_value="(none)"),
-        patch("fieldkit.commands.brief.main.collect_stale_prose", return_value="(none)"),
-        patch("fieldkit.commands.brief.main.collect_tasks", return_value=("(none)", "(none)")),
-        patch("fieldkit.commands.brief.main._collect_degraded_sources", return_value=[]),
-        patch("fieldkit.commands.brief.main._render_degraded_section", return_value=""),
+        patch("fieldkit.brief.pipeline_only.get_fieldkit_home", return_value=tmp_path),
+        patch("fieldkit.brief.pipeline_only.collect_pursuit_alerts", return_value="(none)"),
+        patch("fieldkit.brief.pipeline_only.collect_champion_signals", return_value="(none)"),
+        patch("fieldkit.brief.pipeline_only.collect_decay_signals", return_value="(none)"),
+        patch("fieldkit.brief.pipeline_only.collect_stale_prose", return_value="(none)"),
+        patch("fieldkit.brief.pipeline_only.collect_tasks", return_value=("(none)", "(none)")),
+        patch("fieldkit.brief.pipeline_only._collect_degraded_sources", return_value=[]),
+        patch("fieldkit.brief.pipeline_only._render_degraded_section", return_value=""),
         # Stub LLM so no real API call is made.
-        patch("fieldkit.commands.brief.main.synthesize", return_value="## LLM Brief\n\nStub output."),
+        patch("fieldkit.brief.pipeline_only.synthesize", return_value="## LLM Brief\n\nStub output."),
     ):
-        from fieldkit.commands.brief.main import _run
+        from fieldkit.commands.brief.cli import _run_pipeline_only as _run
 
         _run(no_llm=False, account=None)
 

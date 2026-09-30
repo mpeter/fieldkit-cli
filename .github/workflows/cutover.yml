@@ -44,4 +44,14 @@ jobs:
       - name: Prove the initial public commit is a root commit
         run: test "$(git rev-list --parents -n 1 HEAD)" = "$GITHUB_SHA"
       - name: Run the frozen full repository gate
-        run: make quality-full
+        run: >-
+          uv run python scripts/quality_gate.py run --tier full --workers 4
+          --receipt reports/quality-full.json
+      - name: Upload the full quality-controller receipt
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cutover-quality-receipt-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          path: reports/quality-full.json
+          retention-days: 30
+          if-no-files-found: error

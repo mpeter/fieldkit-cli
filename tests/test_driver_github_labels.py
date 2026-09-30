@@ -14,22 +14,22 @@ failure turn into comment spam" (``comment_once`` runs every tick).
 """
 
 import json
-import subprocess
 from typing import Any
 from unittest.mock import patch
 
 import pytest
 
 from fieldkit.driver.github import _GH_TIMEOUT, add_label, comment_once, remove_label
+from fieldkit.util.bounded_process import BoundedProcessError, BoundedProcessResult
 
 pytestmark = pytest.mark.unit
 
-_RUN = "fieldkit.driver.github.subprocess.run"
+_RUN = "fieldkit.driver.github.run_bounded_process"
 _COMMENT = "fieldkit.driver.github.comment_on_issue"
 
 
-def _ok(cmd: list[str], stdout: str = "") -> subprocess.CompletedProcess[str]:
-    return subprocess.CompletedProcess(cmd, 0, stdout, "")
+def _ok(_cmd: list[str], stdout: str = "") -> BoundedProcessResult:
+    return BoundedProcessResult(0, stdout, "")
 
 
 # ---------------------------------------------------------------------------
@@ -71,25 +71,27 @@ def test_label_write_passes_the_shared_timeout(func: Any) -> None:
         func("owner/repo", 42, "agent-ready")
 
     assert mock_run.call_args.kwargs["timeout"] == _GH_TIMEOUT
-    assert mock_run.call_args.kwargs["check"] is True
+    assert mock_run.call_args.kwargs["stdout_limit"] > 0
+    assert mock_run.call_args.kwargs["stderr_limit"] > 0
 
 
 @pytest.mark.parametrize("func", [add_label, remove_label], ids=["add_label", "remove_label"])
 @pytest.mark.parametrize(
-    "exc",
+    "outcome",
     [
-        subprocess.CalledProcessError(1, "gh", stderr="label not found"),
-        subprocess.TimeoutExpired("gh", 30),
+        BoundedProcessResult(1, "", "label not found"),
+        BoundedProcessError("driver support process timed out", reason="timeout"),
     ],
     ids=["called-process-error", "timeout"],
 )
-def test_label_write_reports_failure_without_raising(func: Any, exc: Exception) -> None:
+def test_label_write_reports_failure_without_raising(func: Any, outcome: object) -> None:
     """A failed label write returns False so the caller can decide, and never propagates.
 
     The driver treats a label write as best-effort; an exception escaping here
     would abort the whole tick rather than the single issue.
     """
-    with patch(_RUN, side_effect=exc):
+    patcher = patch(_RUN, side_effect=outcome) if isinstance(outcome, Exception) else patch(_RUN, return_value=outcome)
+    with patcher:
         result = func("owner/repo", 42, "agent-ready")
 
     assert result is False
@@ -129,22 +131,23 @@ def test_comment_once_stays_quiet_when_a_marker_comment_already_exists() -> None
 
 
 @pytest.mark.parametrize(
-    "exc",
+    "outcome",
     [
-        subprocess.CalledProcessError(1, "gh", stderr="rate limited"),
-        subprocess.TimeoutExpired("gh", 30),
-        FileNotFoundError("gh not installed"),
+        BoundedProcessResult(1, "", "rate limited"),
+        BoundedProcessError("driver support process timed out", reason="timeout"),
+        BoundedProcessError("driver support process could not start", reason="start"),
     ],
     ids=["called-process-error", "timeout", "gh-missing"],
 )
-def test_comment_once_does_not_post_when_the_lookup_fails(exc: Exception) -> None:
+def test_comment_once_does_not_post_when_the_lookup_fails(outcome: object) -> None:
     """A failed lookup must fail closed: not posting is the safe direction.
 
     Treating a transient `gh` error as "no existing comment" would repost on
     every tick for as long as the error persisted — exactly the comment spam
     this function exists to prevent.
     """
-    with patch(_RUN, side_effect=exc), patch(_COMMENT) as mock_comment:
+    patcher = patch(_RUN, side_effect=outcome) if isinstance(outcome, Exception) else patch(_RUN, return_value=outcome)
+    with patcher, patch(_COMMENT) as mock_comment:
         result = comment_once("owner/repo", 42, "<!-- marker -->", "body text")
 
     assert result is False

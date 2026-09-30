@@ -1,10 +1,10 @@
-"""Tests for config/_loader.py hardening (spec 043).
+"""Tests for configuration integration accessors and loader contracts.
 
 Covers:
 - get_sf_rest_base_url(): Lightning transform, my.salesforce.com passthrough,
   unrecognised format raises ConfigError, empty returns "".
 - get_sf_session_id(): routes through _load_raw_config() cache.
-- get_fieldkit_home(): data_repo fallback emits DeprecationWarning.
+- get_fieldkit_home(): missing canonical workspace key fails closed.
 - get_llm_model(): llm_model without vertex_ai/ prefix raises ConfigError.
 """
 
@@ -83,6 +83,39 @@ def test_get_sf_rest_base_url_unrecognised_raises() -> None:
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize(
+    "org_url",
+    [
+        "https://private-url-sentinel.example.com",
+        "https://private-user-sentinel:private-password-sentinel@acme.my.salesforce.com",  # pii-guard: ignore — synthetic credential-userinfo rejection fixture
+        "https://[private-url-sentinel",
+    ],
+    ids=["unsupported-host", "credential-userinfo", "malformed-address"],
+)
+def test_invalid_sf_org_url_has_fixed_cli_diagnostic(
+    org_url: str, capsys: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture
+) -> None:
+    from fieldkit.__main__ import main
+    from fieldkit.config._loader import clear_config_caches
+
+    clear_config_caches()
+    with (
+        patch("fieldkit.__main__.load_dotenv_safe"),
+        patch("fieldkit.config._loader._load_raw_config", return_value={"sf_org_url": org_url}),
+        patch("fieldkit.commands.sf.schema.get_sf_session_id", return_value="fictional-session"),
+        patch("fieldkit.commands.sf.schema.SFDirectClient") as client,
+    ):
+        result = main(["sf", "schema", "Account", "--record-id", "001000000000001"])
+
+    assert result == 3
+    captured = capsys.readouterr()
+    assert "Unrecognised Salesforce org URL format" in captured.err
+    assert "private-" not in captured.out + captured.err + caplog.text
+    assert "Traceback" not in captured.err
+    client.assert_not_called()
+
+
+@pytest.mark.unit
 def test_get_sf_rest_base_url_empty_returns_empty() -> None:
     """Empty sf_org_url should return empty string (no config set)."""
     from fieldkit.config._integrations import get_sf_rest_base_url
@@ -125,7 +158,7 @@ def test_get_sf_rest_base_url_trailing_slash_stripped() -> None:
 
 
 # ---------------------------------------------------------------------------
-# get_sf_session_id() — G3a: routes through _load_raw_config() cache
+# get_sf_session_id() — routes through _load_raw_config() cache
 # ---------------------------------------------------------------------------
 
 
@@ -192,31 +225,25 @@ def test_get_cookie_file_follows_config_directory(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# get_fieldkit_home() — G3b: data_repo emits DeprecationWarning
+# get_fieldkit_home() — canonical workspace key is required
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.unit
-def test_data_repo_emits_deprecation_warning() -> None:
-    """data_repo fallback path must emit DeprecationWarning."""
+def test_noncanonical_workspace_key_is_not_an_alias() -> None:
+    from fieldkit.config import ConfigError
     from fieldkit.config._loader import clear_config_caches
     from fieldkit.config._paths import get_fieldkit_home
 
     clear_config_caches()
     with (
         patch(
-            "fieldkit.config._loader.CONFIG_PATH",
-        ) as mock_path,
-        patch(
-            "fieldkit.config._loader._load_raw_config",
+            "fieldkit.config._loader._load_raw_config_uncached",
             return_value={"data_repo": "/tmp/test-fieldkit-home"},
         ),
+        pytest.raises(ConfigError, match="missing required key 'fieldkit_home'"),
     ):
-        # CONFIG_PATH.exists() must return True for get_fieldkit_home to proceed
-        mock_path.exists.return_value = True
-        mock_path.read_text.return_value = "data_repo: /tmp/test-fieldkit-home"
-        with pytest.warns(DeprecationWarning, match=r"data_repo"):
-            get_fieldkit_home()
+        get_fieldkit_home()
 
 
 # ---------------------------------------------------------------------------
@@ -273,54 +300,62 @@ def test_llm_model_absent_returns_none() -> None:
 
 
 # ---------------------------------------------------------------------------
-# get_mcp_gateway_base() — historic regression
+# get_mcp_gateway_url() — historic regression
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.unit
-def test_get_mcp_gateway_base_returns_default() -> None:
+def test_mcp_gateway_base_compatibility_alias_is_removed() -> None:
+    """The public config surface exposes only the canonical gateway accessor."""
+    import fieldkit.config
+
+    assert not hasattr(fieldkit.config, "get_mcp_gateway_base")
+
+
+@pytest.mark.unit
+def test_get_mcp_gateway_url_returns_default() -> None:
     """Without env var, the hardcoded default is returned."""
     import os
 
-    from fieldkit.config._integrations import get_mcp_gateway_base
+    from fieldkit.config._integrations import get_mcp_gateway_url
 
     env = {k: v for k, v in os.environ.items() if k != "FIELDKIT_MCP_GATEWAY_URL"}
     with patch.dict(os.environ, env, clear=True):
-        result = get_mcp_gateway_base()
+        result = get_mcp_gateway_url()
     assert result == "http://127.0.0.1:8080"
 
 
 @pytest.mark.unit
-def test_get_mcp_gateway_base_env_override() -> None:
+def test_get_mcp_gateway_url_env_override() -> None:
     """FIELDKIT_MCP_GATEWAY_URL env var overrides the default."""
     import os
 
-    from fieldkit.config._integrations import get_mcp_gateway_base
+    from fieldkit.config._integrations import get_mcp_gateway_url
 
     with patch.dict(os.environ, {"FIELDKIT_MCP_GATEWAY_URL": "http://localhost:9090"}, clear=False):
-        result = get_mcp_gateway_base()
+        result = get_mcp_gateway_url()
     assert result == "http://localhost:9090"
 
 
 @pytest.mark.unit
-def test_get_mcp_gateway_base_strips_trailing_slash() -> None:
+def test_get_mcp_gateway_url_strips_trailing_slash() -> None:
     """Trailing slash is stripped from the env var value."""
     import os
 
-    from fieldkit.config._integrations import get_mcp_gateway_base
+    from fieldkit.config._integrations import get_mcp_gateway_url
 
     with patch.dict(os.environ, {"FIELDKIT_MCP_GATEWAY_URL": "http://localhost:9090/"}, clear=False):
-        result = get_mcp_gateway_base()
+        result = get_mcp_gateway_url()
     assert result == "http://localhost:9090"
 
 
 @pytest.mark.unit
-def test_get_mcp_gateway_base_empty_env_uses_default() -> None:
+def test_get_mcp_gateway_url_empty_env_uses_default() -> None:
     """An empty FIELDKIT_MCP_GATEWAY_URL falls back to the hardcoded default."""
     import os
 
-    from fieldkit.config._integrations import get_mcp_gateway_base
+    from fieldkit.config._integrations import get_mcp_gateway_url
 
     with patch.dict(os.environ, {"FIELDKIT_MCP_GATEWAY_URL": ""}, clear=False):
-        result = get_mcp_gateway_base()
+        result = get_mcp_gateway_url()
     assert result == "http://127.0.0.1:8080"

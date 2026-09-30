@@ -20,7 +20,7 @@ from fieldkit.config import get_watchers_dir as get_watchers_dir
 from fieldkit.watch.logging import watcher_logging
 from fieldkit.watch.state import merge_state
 from fieldkit.watch.state import state_write_failed as _state_write_failed
-from fieldkit.watch.status import WatcherOutcome, write_run_status
+from fieldkit.watch.status import WatcherOutcome, WatcherRunResult, write_run_status
 
 log = logging.getLogger(__name__)
 
@@ -178,8 +178,8 @@ def _append_alert(item: str, days: int, item_date: datetime.date, *, dry_run: bo
 # ---------------------------------------------------------------------------
 
 
-def _run(*, threshold: int, dry_run: bool, as_json: bool = False) -> int:
-    with watcher_logging("waiting-on-tracker"):
+def _run(*, threshold: int, dry_run: bool, as_json: bool = False) -> WatcherRunResult:
+    with watcher_logging("waiting-on-tracker", enabled=not dry_run):
         return _run_inner(threshold=threshold, dry_run=dry_run, as_json=as_json)
 
 
@@ -211,8 +211,8 @@ def _emit_run_json(
     )
 
 
-def _run_inner(*, threshold: int, dry_run: bool, as_json: bool = False) -> int:
-    """Inner logic (separated for testability); returns POSIX exit code.
+def _run_inner(*, threshold: int, dry_run: bool, as_json: bool = False) -> WatcherRunResult:
+    """Inner logic (separated for testability); returns invocation facts.
 
     ``as_json`` emits the run-status document on stdout; the exit code is unaffected.
     """
@@ -227,7 +227,7 @@ def _run_inner(*, threshold: int, dry_run: bool, as_json: bool = False) -> int:
         # both the persisted status and the emitted document.
         no_file_outcome: WatcherOutcome = "ok"
         no_file_failures = 0
-        write_run_status(
+        status_write = write_run_status(
             watcher="waiting-on-tracker",
             outcome=no_file_outcome,
             records_checked=0,
@@ -236,6 +236,9 @@ def _run_inner(*, threshold: int, dry_run: bool, as_json: bool = False) -> int:
             elapsed_seconds=0.0,
             dry_run=dry_run,
         )
+        if status_write == "failed":
+            no_file_outcome = "fatal"
+            no_file_failures += 1
         if as_json:
             _emit_run_json(
                 outcome=no_file_outcome,
@@ -245,7 +248,7 @@ def _run_inner(*, threshold: int, dry_run: bool, as_json: bool = False) -> int:
                 elapsed=0.0,
                 dry_run=dry_run,
             )
-        return 0
+        return WatcherRunResult(no_file_outcome, True, status_write)
 
     items = _extract_waiting_on_lines(content)
     log.info("Waiting On section: %d item(s) found", len(items))
@@ -310,7 +313,7 @@ def _run_inner(*, threshold: int, dry_run: bool, as_json: bool = False) -> int:
     # derived together here and handed to both sinks, never restated at the sink.
     failures = int(state_write_failed)
     outcome: WatcherOutcome = "fatal" if state_write_failed else "ok"
-    write_run_status(
+    status_write = write_run_status(
         watcher="waiting-on-tracker",
         outcome=outcome,
         records_checked=checked,
@@ -319,12 +322,15 @@ def _run_inner(*, threshold: int, dry_run: bool, as_json: bool = False) -> int:
         elapsed_seconds=elapsed,
         dry_run=dry_run,
     )
+    if status_write == "failed":
+        outcome = "fatal"
+        failures += 1
     if as_json:
         _emit_run_json(
             outcome=outcome, checked=checked, alerts=alerts, failures=failures, elapsed=elapsed, dry_run=dry_run
         )
-        return 1 if state_write_failed else 0
+        return WatcherRunResult(outcome, True, status_write)
     # historic regression: log dry-run summary so --dry-run is useful as a preview.
     if dry_run:
         log.info("[DRY-RUN] waiting-on-tracker: %d item(s) scanned, %d alert(s) would fire", checked, alerts)
-    return 1 if state_write_failed else 0
+    return WatcherRunResult(outcome, True, status_write)

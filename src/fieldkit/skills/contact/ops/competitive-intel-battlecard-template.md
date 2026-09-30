@@ -1,88 +1,80 @@
-# Battlecard — Output Template
+# Competitive battlecard template
 
-```markdown
-# Competitive Battlecard — [Competitor] vs. Our Offering
-Account: [Account Name]  |  Deal: [Opportunity]  |  Date: YYYY-MM-DD
+Fill this template only from reviewed evidence. Carry a source and date beside
+each material claim. Do not fill a claim from brand memory, prior model output,
+or an uncited search snippet.
 
----
+## Scope
 
-## Quick Reference
+- Competitor: [exact company and offering]
+- Our offering: [exact offering and version when relevant]
+- Account or pursuit: [confirmed scope or not account-specific]
+- Audience and decision: [what the reader needs to decide]
+- Research completed: [access date]
 
-**Competitor:** [Name]
-**Their Pitch:** [1-sentence summary of how they position]
-**Our Counter:** [1-sentence why we win]
-**Win Rate vs. Them:** [X% or "insufficient data"]
+## Source ledger
 
----
+For each source record:
 
-## Comparison Matrix
+- Source and date: [title, publisher or workspace source, publication or
+  observation date, and access date]
+- Evidence type: [official documentation, customer statement, internal
+  observation, CRM-derived field, independent analysis, or hypothesis]
+- Scope and limitations: [version, account, date range, missing coverage]
 
-| Dimension | Our Offering | [Competitor] | Edge |
-|-----------|---------|-------------|------|
-| [capability 1] | [our position] | [their position] | [RH / Them / Tie] |
-| [capability 2] | ... | ... | ... |
-| Pricing model | [model] | [model] | ... |
-| Lock-in risk | Open source, no lock-in | [their approach] | RH |
-| Enterprise support | IBM-backed, 24/7 | [their support] | ... |
-| Ecosystem | [partners, ISVs] | [their ecosystem] | ... |
+## Quick reference
 
----
+- Competitor position: [supported summary and source]
+- Our relevant position: [supported summary and source]
+- Most important verified difference: [claim and source]
+- Unavailable evidence: [pricing, support, win rate, roadmap, or other gaps]
+- Conflicting evidence: [sources that disagree and what remains unresolved]
 
-## Talk Tracks by Audience
+## Comparison evidence
 
-### For Economic Buyers
-**Frame:** [Problem-first statement connecting to business outcome]
-**Key Point:** [Cost, risk, or strategic advantage]
-**Proof:** [Specific metric or case study]
+Repeat this block for each relevant dimension:
 
-### For Technical Buyers
-**Frame:** [Technical problem statement]
-**Key Point:** [Architecture, integration, or capability advantage]
-**Proof:** [Technical validation or reference]
+- Dimension: [capability, deployment, security, operations, commercial model,
+  support, ecosystem, or another in-scope concern]
+- Our observed position: [claim, source, and date]
+- Competitor observed position: [claim, source, and date]
+- Practical implication: [fact or clearly labeled inference]
+- Confidence: [verified, partially supported, disputed, or unavailable]
 
-### For User Buyers
-**Frame:** [Day-to-day operational concern]
-**Key Point:** [Usability, community, or support advantage]
-**Proof:** [Customer feedback or adoption metric]
+## Conversation guidance
 
----
+For each audience, include only supported material:
 
-## Landmine Questions
+- Audience: [economic, technical, user, procurement, or another role]
+- Relevant concern: [customer-stated concern or labeled hypothesis]
+- Evidence-backed point: [claim and source]
+- Question to validate: [neutral question; do not embed an unsupported premise]
 
-Questions that naturally expose competitor weaknesses without attacking directly:
+## Objections
 
-1. "[Question that reveals their limitation in area X]"
-   **Why it works:** [what their answer will reveal]
+Repeat for each observed or anticipated objection:
 
-2. "[Question about their approach to Y]"
-   **Why it works:** [how this highlights our strength]
+- Objection: [exact customer statement, sourced pattern, or labeled hypothesis]
+- Response: [factual answer with source]
+- Unknowns to confirm: [missing version, pricing, requirement, or decision role]
 
-3. "[Question about long-term cost/lock-in]"
-   **Why it works:** [open source advantage surfaces naturally]
+## Recent evidence
 
----
+List dated releases, policy changes, company announcements, independent findings,
+or account observations. Include Source and date plus the bounded implication for
+this scope. Do not treat recency alone as relevance.
 
-## Objection Handling
+## Outcome history
 
-| They Say | We Say |
-|----------|--------|
-| "[competitor claim 1]" | [factual response + redirect to our strength] |
-| "[competitor claim 2]" | [factual response + redirect] |
-| "They're cheaper" | [TCO argument or value differentiation] |
+- Verified wins: [dated, scoped records or unavailable]
+- Verified losses: [dated, scoped records or unavailable]
+- Repeated conditions: [supported pattern or insufficient evidence]
+- Unsupported prior claims removed: [claims excluded during review]
 
----
+## Review status
 
-## Recent Intelligence
-
-| Signal | Date | Source | Implication |
-|--------|------|--------|-------------|
-| [news/event] | [date] | [source] | [what it means for this deal] |
-
----
-
-## Win/Loss Patterns
-
-**We tend to win when:** [conditions]
-**We tend to lose when:** [conditions]
-**Key differentiator in this deal:** [specific to this account/opportunity]
-```
+- Reviewer: [operator or unavailable]
+- Claims still requiring verification: [list]
+- Approved uses: [meeting draft, internal review, saved account artifact, or
+  another explicit scope]
+- External sharing status: [not approved unless explicitly authorized]

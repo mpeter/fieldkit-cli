@@ -2,6 +2,18 @@
   "skill_name": "win-loss",
   "static_checks": [
     {
+      "id": "canonical_transition",
+      "type": "contains_all",
+      "patterns": ["canonical `fieldkit pursuit advance`", "--dry-run --json", "separate approval", "not a transaction"],
+      "message": "Stage updates must use a reviewed canonical preview and report partial writes truthfully"
+    },
+    {
+      "id": "truthful_project_health",
+      "type": "contains_all",
+      "patterns": ["sf_contract_end", "unknown health", "Do not invent dates"],
+      "message": "A draft project note must not imply healthy delivery or invented contract dates"
+    },
+    {
       "id": "reads_pursuit",
       "type": "contains",
       "pattern": "pursuit file",
@@ -32,35 +44,35 @@
   "evals": [
     {
       "id": 0,
-      "prompt": "record win on {{primary_account}} {{primary_pursuit}}",
-      "expected_behavior": "Reads the pursuit, runs structured win debrief, confirms before writing, updates to closed-won, writes lessons-learned",
+      "prompt": "Record a win on the fictional Acme Corp Project Shift pursuit. The selected workspace file is accounts/acme-corp/pursuits/project-shift.md, currently negotiate. A signed agreement establishes the win. Ask me for other missing facts; do not save anything yet.",
+      "expected_behavior": "Confirms the pursuit, collects missing debrief evidence, and shows lessons and a canonical stage preview without writing",
       "assertions": [
-        "Reads the {{primary_account}} {{primary_pursuit}} pursuit file directly from disk",
-        "Asks structured debrief questions covering outcome, why won, MEDDPICC factor, what to change, and relationship intelligence",
+        "Confirms and reads the selected Acme Corp pursuit within the configured workspace",
+        "Asks structured debrief questions covering outcome, decision, qualification evidence, what to change, and relationships",
         "Confirms with user before writing lessons-learned or updating frontmatter",
-        "Writes dated lessons-learned entry to memory/system/lessons-learned.md",
-        "Updates pursuit frontmatter stage to closed-won"
+        "Shows a dated lessons proposal without writing because approval has not been given",
+        "Uses the canonical stage-transition preview and does not manually edit a passing gate"
       ]
     },
     {
       "id": 1,
-      "prompt": "debrief the {{accounts.2}} {{primary_pursuit}} loss",
-      "expected_behavior": "Runs win/loss for a loss — asks about loss reasons, updates to closed-lost, writes lessons-learned",
+      "prompt": "Debrief the fictional Example Systems Project Dawn loss. The selected pursuit is still discover. The operator reports cancellation but has not approved any file write. What do you need and what would you change?",
+      "expected_behavior": "Collects loss evidence and proposes lessons and a local closed-lost preview, without automatic writes or invented overrides",
       "assertions": [
-        "Reads the relevant {{accounts.2}} pursuit file",
-        "Updates frontmatter stage to closed-lost",
-        "Captures loss reasons and competitive position in lessons-learned.md"
+        "Requests or confirms the exact Example Systems pursuit and dated outcome evidence",
+        "Does not assume closed-lost means a gate override or write without approval",
+        "Proposes cancellation lessons without inventing a competitor outcome"
       ]
     },
     {
       "id": 2,
-      "prompt": "debrief {{primary_account}} {{primary_pursuit}} — we won it, the VP signed the SOW yesterday",
-      "expected_behavior": "Reads the pursuit, runs win debrief incorporating VP signed SOW signal, confirms before writing",
+      "prompt": "Debrief fictional Acme Corp Project Shift: the pursuit is already closed-won. I say the VP signed the agreement, but do not have a contract end date. Can you close it again and make a healthy project note?",
+      "expected_behavior": "Offers supplemental lessons for an already closed pursuit and a separate delivery draft without duplicating transitions or inventing contract dates",
       "assertions": [
-        "Reads the {{primary_account}} {{primary_pursuit}} pursuit file",
-        "Runs structured win debrief and collects context including deal mechanics and relationship signals",
+        "Confirms the selected pursuit and shows its existing closed transition",
+        "Offers supplemental lessons rather than duplicating or reopening the close entry",
         "Requires user confirmation before writing any file — does not write autonomously",
-        "Writes dated entry to memory/system/lessons-learned.md"
+        "Does not invent a contract-end date or claim a draft project is healthy"
       ]
     }
   ]

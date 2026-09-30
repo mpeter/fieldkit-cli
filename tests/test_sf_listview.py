@@ -7,8 +7,10 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from click.testing import CliRunner
 
 from fieldkit.commands.sf.listview import LOG_PREFIX, _log, _process_opp, cli
+from fieldkit.errors import FieldkitError
 from tests.conftest import OPP_GPAY
 
 pytestmark = pytest.mark.unit
@@ -26,7 +28,7 @@ def _make_opp(opp_id: str, name: str = "Test Opp", stage: str = "Negotiate") -> 
     }
 
 
-def _fake_config() -> dict[str, Any]:
+def _fake_config(**kwargs: object) -> dict[str, Any]:
     return {
         "accounts": {
             "global-pay": {"keywords": ["Global Pay", "globalpay"]},
@@ -57,13 +59,13 @@ def _make_mock_client(results: list[dict[str, Any]] | None = None) -> MagicMock:
 
 
 def test_process_opp_stdout_restored_after_oserror(monkeypatch: pytest.MonkeyPatch) -> None:
-    """sys.stdout must be restored to its pre-call value even when do_match_pursuit raises OSError."""
-    import fieldkit.commands.sf.sync as sync_mod2
+    """sys.stdout must be restored to its pre-call value even when match_pursuit raises OSError."""
+    import fieldkit.commands.sf.listview as sync_mod2
 
-    def _raise_oserror(pursuit_dir: str, opp_id: str) -> None:
+    def _raise_oserror(pursuit_dir: str, opp_id: str, **kwargs: object) -> None:
         raise OSError("simulated IO failure")
 
-    monkeypatch.setattr(sync_mod2, "do_match_pursuit", _raise_oserror)
+    monkeypatch.setattr(sync_mod2, "match_pursuit", _raise_oserror)
 
     original_stdout = sys.stdout
     opp = {"opportunity_id": "006TEST000000000AA", "name": "Test", "stage": "Negotiate"}
@@ -146,9 +148,9 @@ def orchestration_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[
     for acct in ("global-pay", "acme-bank", "shield-ins"):
         (tmp_path / "accounts" / acct / "pursuits").mkdir(parents=True)
 
-    import fieldkit.commands.sf.sync as sync_mod
+    import fieldkit.commands.sf.listview as sync_mod
 
-    monkeypatch.setattr(sync_mod, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(sync_mod, "get_fieldkit_home", lambda: tmp_path)
 
     import fieldkit.commands.sf.listview as lv_mod
 
@@ -158,7 +160,7 @@ def orchestration_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[
 
     # Config + account names
     monkeypatch.setattr(lv_mod, "get_accounts_config", _fake_config)
-    monkeypatch.setattr(lv_mod, "get_account_names", lambda: ["global-pay", "acme-bank", "shield-ins"])
+    monkeypatch.setattr(lv_mod, "configured_accounts", lambda: ["global-pay", "acme-bank", "shield-ins"])
 
     # Default SOSL client — returns empty list
     monkeypatch.setattr("fieldkit.sf.client.SFDirectClient", lambda **kwargs: _make_mock_client())
@@ -181,12 +183,12 @@ def test_orchestration_single_account_updates_pursuit(
     sosl_result = [_make_opp(OPP_GPAY, "Global Pay Deal")]
     monkeypatch.setattr("fieldkit.sf.client.SFDirectClient", lambda **kwargs: _make_mock_client(sosl_result))
 
-    write_calls: list[tuple[str, str]] = []
+    write_calls: list[tuple[str, Path]] = []
 
-    def fake_write_opp(opp_id: str, pursuit_file: str, json_str: str) -> None:
+    def fake_write_opp(opp_id: str, pursuit_file: Path, values: dict[str, object], **kwargs: object) -> None:
         write_calls.append((opp_id, pursuit_file))
 
-    monkeypatch.setattr("fieldkit.commands.sf.sync.do_write_opp", fake_write_opp)
+    monkeypatch.setattr("fieldkit.commands.sf.listview.sync_opportunity", fake_write_opp)
     monkeypatch.setattr(sys, "argv", ["sf_pipeline listview", "global-pay"])
 
     cli.main(sys.argv[1:], standalone_mode=False)
@@ -241,14 +243,16 @@ def test_orchestration_missing_keywords_counts_error(
     """When no keywords are configured for an account, error is counted and we continue."""
     _tree, _lv_mod = orchestration_env
 
-    monkeypatch.setattr(_lv_mod, "get_accounts_config", lambda: {"accounts": {"global-pay": {}}})
+    monkeypatch.setattr(_lv_mod, "get_accounts_config", lambda **kwargs: {"accounts": {"global-pay": {}}})
     monkeypatch.setattr(sys, "argv", ["sf_pipeline listview", "global-pay"])
 
-    cli.main(sys.argv[1:], standalone_mode=False)
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(sys.argv[1:], standalone_mode=False)
 
     _bug401_captured = capsys.readouterr()
     out = _bug401_captured.err.strip().splitlines()[-1] if _bug401_captured.err.strip() else ""
     result = json.loads(out.strip())
+    assert exc_info.value.code == 1
     assert result["errors"] >= 1
     assert result["status"] == "partial"
 
@@ -258,7 +262,7 @@ def test_orchestration_api_error_counts_error(
 ) -> None:
     """When SFDirectClient raises SFAPIError, total_errors is incremented and we continue."""
     _tree, _lv_mod = orchestration_env
-    from fieldkit.sf.client import SFAPIError as _SFAPIError
+    from fieldkit.sf.errors import SFAPIError as _SFAPIError
 
     def _failing_client(**kwargs: Any) -> Any:
         m = MagicMock()
@@ -270,11 +274,13 @@ def test_orchestration_api_error_counts_error(
     monkeypatch.setattr("fieldkit.sf.client.SFDirectClient", _failing_client)
     monkeypatch.setattr(sys, "argv", ["sf_pipeline listview", "global-pay"])
 
-    cli.main(sys.argv[1:], standalone_mode=False)
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(sys.argv[1:], standalone_mode=False)
 
     _bug401_captured = capsys.readouterr()
     out = _bug401_captured.err.strip().splitlines()[-1] if _bug401_captured.err.strip() else ""
     result = json.loads(out.strip())
+    assert exc_info.value.code == 1
     assert result["errors"] >= 1
     assert result["status"] == "partial"
 
@@ -282,7 +288,7 @@ def test_orchestration_api_error_counts_error(
 def test_orchestration_auth_error_exits_2(orchestration_env: tuple[Path, Any], monkeypatch: pytest.MonkeyPatch) -> None:
     """When SFDirectClient raises SFAuthError, sys.exit(2) is raised."""
     _tree, _lv_mod = orchestration_env
-    from fieldkit.sf.client import SFAuthError as _SFAuthError
+    from fieldkit.sf.errors import SFAuthError as _SFAuthError
 
     def _auth_failing_client(**kwargs: Any) -> Any:
         m = MagicMock()
@@ -334,19 +340,19 @@ def test_sosl_path_sosl_called_with_configured_keywords(
     monkeypatch.setattr(
         lv_mod,
         "get_accounts_config",
-        lambda: {"accounts": {"global-pay": {"keywords": ["Global Pay", "globalpay"]}}},
+        lambda **kwargs: {"accounts": {"global-pay": {"keywords": ["Global Pay", "globalpay"]}}},
     )
 
     sosl_result = [_make_opp(OPP_GPAY, "Global Pay Deal")]
     mock_client = _make_mock_client(sosl_result)
     monkeypatch.setattr("fieldkit.sf.client.SFDirectClient", lambda **kwargs: mock_client)
 
-    write_calls: list[tuple[str, str]] = []
+    write_calls: list[tuple[str, Path]] = []
 
-    def fake_write_opp(opp_id: str, pursuit_file: str, json_str: str) -> None:
+    def fake_write_opp(opp_id: str, pursuit_file: Path, values: dict[str, object], **kwargs: object) -> None:
         write_calls.append((opp_id, pursuit_file))
 
-    monkeypatch.setattr("fieldkit.commands.sf.sync.do_write_opp", fake_write_opp)
+    monkeypatch.setattr("fieldkit.commands.sf.listview.sync_opportunity", fake_write_opp)
     monkeypatch.setattr(sys, "argv", ["sf_pipeline listview", "global-pay"])
 
     cli.main(sys.argv[1:], standalone_mode=False)
@@ -384,7 +390,7 @@ def test_sosl_path_sosl_api_error_counts_error(
 ) -> None:
     """When SFDirectClient raises SFAPIError, total_errors is incremented and we continue."""
     _tree, _lv_mod = orchestration_env
-    from fieldkit.sf.client import SFAPIError as _SFAPIError
+    from fieldkit.sf.errors import SFAPIError as _SFAPIError
 
     def _failing_client(**kwargs: Any) -> Any:
         m = MagicMock()
@@ -396,11 +402,13 @@ def test_sosl_path_sosl_api_error_counts_error(
     monkeypatch.setattr("fieldkit.sf.client.SFDirectClient", _failing_client)
     monkeypatch.setattr(sys, "argv", ["sf_pipeline listview", "global-pay"])
 
-    cli.main(sys.argv[1:], standalone_mode=False)
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(sys.argv[1:], standalone_mode=False)
 
     _bug401_captured = capsys.readouterr()
     out = _bug401_captured.err.strip().splitlines()[-1] if _bug401_captured.err.strip() else ""
     result = json.loads(out.strip())
+    assert exc_info.value.code == 1
     assert result["errors"] >= 1
     assert result["status"] == "partial"
 
@@ -411,21 +419,21 @@ def test_sosl_path_sosl_api_error_counts_error(
 # ── TestAllAccountIteration (flattened) ─────────────────────────────────────
 
 
-def test_sync_account_opps_all_uses_get_account_names(
+def test_sync_account_opps_all_uses_configured_accounts(
     orchestration_env: tuple[Path, Any],
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """--all must use get_account_names(), not a hardcoded list."""
+    """--all must use configured_accounts(), not a hardcoded list."""
     _tree, _lv_mod = orchestration_env
 
     accounts_called: list[str] = []
 
-    def tracking_get_account_names() -> list[str]:
+    def tracking_configured_accounts() -> list[str]:
         accounts_called.append("called")
         return ["global-pay"]
 
-    monkeypatch.setattr(_lv_mod, "get_account_names", tracking_get_account_names)
+    monkeypatch.setattr(_lv_mod, "configured_accounts", tracking_configured_accounts)
     monkeypatch.setattr(sys, "argv", ["sf_pipeline listview", "--json"])
 
     cli.main(sys.argv[1:], standalone_mode=False)
@@ -468,26 +476,27 @@ def test_bug237_and141_regression_systemexit_in_write_opp_counted_as_error_not_k
     capsys: pytest.CaptureFixture[str],
     write_pursuit_sf: Any,
 ) -> None:
-    """historic regression: SystemExit(0) from write_opp is caught in _process_opp, not kill the loop."""
+    """A callee SystemExit is counted, summarized, then normalized to partial."""
     from tests.conftest import OPP_GPAY
 
     tree, _lv_mod = orchestration_env
     write_pursuit_sf(tree, "global-pay", "deal-gp", OPP_GPAY)
 
-    def write_raises_systemexit(opp_id: str, pursuit_file: str, json_str: str) -> None:
-        raise SystemExit(0)  # simulate old reconcile bug
+    def write_raises_systemexit(opp_id: str, pursuit_file: Path, values: dict[str, object], **kwargs: object) -> None:
+        raise FieldkitError("invalid publication")
 
     sosl_result = [_make_opp(OPP_GPAY, "Global Pay Deal")]
     monkeypatch.setattr("fieldkit.sf.client.SFDirectClient", lambda **kwargs: _make_mock_client(sosl_result))
-    monkeypatch.setattr("fieldkit.commands.sf.sync.do_write_opp", write_raises_systemexit)
+    monkeypatch.setattr("fieldkit.commands.sf.listview.sync_opportunity", write_raises_systemexit)
     monkeypatch.setattr(sys, "argv", ["sf_pipeline listview", "global-pay", "--json"])
 
-    # Must complete without re-raising SystemExit
-    cli.main(sys.argv[1:], standalone_mode=False)
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(sys.argv[1:], standalone_mode=False)
 
     # historic regression: --json flag emits JSON to stdout
     out = capsys.readouterr().out
     result = json.loads(out.strip())
+    assert exc_info.value.code == 1
     assert result["errors"] >= 1, (
         f"historic regression: expected errors >= 1 (SystemExit caught as error), got {result}"
     )
@@ -507,7 +516,7 @@ def test_check_sf_auth_auth_error_on_first_account_still_processes_others(
 ) -> None:
     """historic regression: auth failure on global-pay must not prevent acme-bank/shield-ins from running."""
     _tree, _lv_mod = orchestration_env
-    from fieldkit.sf.client import SFAuthError as _SFAuthError
+    from fieldkit.sf.errors import SFAuthError as _SFAuthError
 
     call_order: list[str] = []
 
@@ -544,7 +553,7 @@ def test_check_sf_auth_auth_error_deferred_exit_is_2(
 ) -> None:
     """historic regression: deferred sys.exit(2) fires after the loop, not inside it."""
     _tree, _lv_mod = orchestration_env
-    from fieldkit.sf.client import SFAuthError as _SFAuthError
+    from fieldkit.sf.errors import SFAuthError as _SFAuthError
 
     def _auth_fail_client(**kwargs: Any) -> Any:
         m = MagicMock()
@@ -572,9 +581,9 @@ def test_print_untracked_table_process_opp_returns_opp_dict_for_untracked_open(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """implementation change: _process_opp returns the opp dict as 4th element for untracked open opps."""
-    import fieldkit.commands.sf.sync as sync_mod
+    import fieldkit.commands.sf.listview as sync_mod
 
-    monkeypatch.setattr(sync_mod, "do_match_pursuit", lambda pursuit_dir, opp_id: None)
+    monkeypatch.setattr(sync_mod, "match_pursuit", lambda pursuit_dir, opp_id, **kwargs: None)
 
     opp = {"opportunity_id": "006UNTRK0000000AAA", "name": "Untracked Deal", "stage": "Negotiate"}
     u, unt, err, untracked = _process_opp(opp, "/fake/pursuits")
@@ -589,9 +598,9 @@ def test_print_untracked_table_process_opp_returns_none_for_closed_untracked(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """implementation change: _process_opp returns None for closed untracked opps (no table row)."""
-    import fieldkit.commands.sf.sync as sync_mod
+    import fieldkit.commands.sf.listview as sync_mod
 
-    monkeypatch.setattr(sync_mod, "do_match_pursuit", lambda pursuit_dir, opp_id: None)
+    monkeypatch.setattr(sync_mod, "match_pursuit", lambda pursuit_dir, opp_id, **kwargs: None)
 
     opp = {"opportunity_id": "006CLSD0000000AAA", "name": "Closed Deal", "stage": "Closed Won"}
     _u, unt, _err, untracked = _process_opp(opp, "/fake/pursuits")
@@ -675,10 +684,10 @@ def test_print_untracked_table_no_untracked_table_when_all_tracked(
     sosl_result = [_make_opp(OPP_GPAY, "Global Pay Deal")]
     monkeypatch.setattr("fieldkit.sf.client.SFDirectClient", lambda **kwargs: _make_mock_client(sosl_result))
 
-    def fake_write_opp(opp_id: str, pursuit_file: str, json_str: str) -> None:
+    def fake_write_opp(opp_id: str, pursuit_file: Path, values: dict[str, object], **kwargs: object) -> None:
         pass
 
-    monkeypatch.setattr("fieldkit.commands.sf.sync.do_write_opp", fake_write_opp)
+    monkeypatch.setattr("fieldkit.commands.sf.listview.sync_opportunity", fake_write_opp)
     monkeypatch.setattr(sys, "argv", ["sf_pipeline listview", "global-pay"])
 
     cli.main(sys.argv[1:], standalone_mode=False)
@@ -782,25 +791,27 @@ def test_run_listview_write_opp_exception_counted_as_error(
     capsys: pytest.CaptureFixture[str],
     write_pursuit_sf: Any,
 ) -> None:
-    """Generic Exception from do_write_opp is caught and counted as error (not crash)."""
+    """Generic Exception from sync_opportunity is caught and counted as error (not crash)."""
     from tests.conftest import OPP_GPAY
 
     tree, _lv_mod = orchestration_env
     write_pursuit_sf(tree, "global-pay", "deal-gp", OPP_GPAY)
 
-    def write_raises_exception(opp_id: str, pursuit_file: str, json_str: str) -> None:
-        raise RuntimeError("unexpected write failure")
+    def write_raises_exception(opp_id: str, pursuit_file: Path, values: dict[str, object], **kwargs: object) -> None:
+        raise OSError("unexpected write failure")
 
     sosl_result = [_make_opp(OPP_GPAY, "Global Pay Deal")]
     monkeypatch.setattr("fieldkit.sf.client.SFDirectClient", lambda **kwargs: _make_mock_client(sosl_result))
-    monkeypatch.setattr("fieldkit.commands.sf.sync.do_write_opp", write_raises_exception)
+    monkeypatch.setattr("fieldkit.commands.sf.listview.sync_opportunity", write_raises_exception)
     monkeypatch.setattr(sys, "argv", ["sf_pipeline listview", "global-pay"])
 
-    cli.main(sys.argv[1:], standalone_mode=False)
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(sys.argv[1:], standalone_mode=False)
 
     _bug401_captured = capsys.readouterr()
     out = _bug401_captured.err.strip().splitlines()[-1] if _bug401_captured.err.strip() else ""
     result = json.loads(out.strip())
+    assert exc_info.value.code == 1
     assert result["errors"] >= 1
     assert result["status"] == "partial"
 
@@ -862,36 +873,39 @@ def test_run_listview_multiple_untracked_opps_all_in_table(
     assert result["untracked"] == 2
 
 
-def test_run_listview_opp_with_no_id_skipped_silently(
+def test_run_listview_opp_with_no_id_reports_partial_error(
     orchestration_env: tuple[Path, Any],
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Opportunity with empty opportunity_id is silently skipped (returns 0,0,0,None)."""
+    """Malformed remote candidates produce an explicit error and partial summary."""
     _tree, _lv_mod = orchestration_env
 
     sosl_result = [{"opportunity_id": "", "name": "No ID Opp", "stage": "Negotiate"}]
     monkeypatch.setattr("fieldkit.sf.client.SFDirectClient", lambda **kwargs: _make_mock_client(sosl_result))
     monkeypatch.setattr(sys, "argv", ["sf_pipeline listview", "global-pay"])
 
-    cli.main(sys.argv[1:], standalone_mode=False)
+    with pytest.raises(SystemExit) as failure:
+        cli.main(sys.argv[1:], standalone_mode=False)
+    assert failure.value.code == 1
 
     _bug401_captured = capsys.readouterr()
     out = _bug401_captured.err.strip().splitlines()[-1] if _bug401_captured.err.strip() else ""
     result = json.loads(out.strip())
     assert result["updated"] == 0
     assert result["untracked"] == 0
-    assert result["errors"] == 0
+    assert result["errors"] == 1
+    assert result["status"] == "partial"
 
 
-def test_run_listview_all_accounts_errors_still_exits_0_when_no_auth_error(
+def test_run_listview_non_auth_errors_exit_partial_after_summary(
     orchestration_env: tuple[Path, Any],
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Non-auth errors (SFAPIError) do not cause exit 2 — exits 0 with partial status."""
+    """Non-auth errors fail closed with exit 1 after emitting the partial summary."""
     _tree, _lv_mod = orchestration_env
-    from fieldkit.sf.client import SFAPIError as _SFAPIError
+    from fieldkit.sf.errors import SFAPIError as _SFAPIError
 
     def _failing_client(**kwargs: Any) -> Any:
         m = MagicMock()
@@ -903,13 +917,101 @@ def test_run_listview_all_accounts_errors_still_exits_0_when_no_auth_error(
     monkeypatch.setattr("fieldkit.sf.client.SFDirectClient", _failing_client)
     monkeypatch.setattr(sys, "argv", ["sf_pipeline listview", "global-pay"])
 
-    # Should NOT raise SystemExit — only auth errors cause exit 2
-    cli.main(sys.argv[1:], standalone_mode=False)
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(sys.argv[1:], standalone_mode=False)
 
     _bug401_captured = capsys.readouterr()
     out = _bug401_captured.err.strip().splitlines()[-1] if _bug401_captured.err.strip() else ""
     result = json.loads(out.strip())
+    assert exc_info.value.code == 1
     assert result["status"] == "partial"
+
+
+def test_process_opp_dry_run_performs_no_workspace_write(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A matched dry-run record is counted but never reaches the cache/frontmatter writer."""
+    write_opp = MagicMock()
+
+    def match_pursuit(_pursuit_dir: Path, _opp_id: str, **kwargs: object) -> Path:
+        return Path("/workspace/accounts/acme-corp/pursuits/renewal.md")
+
+    monkeypatch.setattr("fieldkit.commands.sf.listview.match_pursuit", match_pursuit)
+    monkeypatch.setattr("fieldkit.commands.sf.listview.sync_opportunity", write_opp)
+
+    result = _process_opp(
+        {"opportunity_id": "006000000000000AAA", "name": "Renewal", "stage": "Negotiate"},
+        "/workspace/accounts/acme-corp/pursuits",
+        write=False,
+    )
+
+    assert result == (1, 0, 0, None)
+    write_opp.assert_called_once()
+    assert write_opp.call_args.kwargs["dry_run"] is True
+
+
+def test_listview_dry_run_json_reports_zero_writes(
+    orchestration_env: tuple[Path, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The CLI preview names would-update matches without claiming writes."""
+    _tree, _lv_mod = orchestration_env
+    sosl_result = [
+        {
+            "opportunity_id": "006000000000000AAA",
+            "name": "Renewal",
+            "stage": "Negotiate",
+        }
+    ]
+    monkeypatch.setattr("fieldkit.sf.client.SFDirectClient", lambda **kwargs: _make_mock_client(sosl_result))
+    monkeypatch.setattr(
+        "fieldkit.commands.sf.listview.match_pursuit",
+        lambda _pursuit_dir, _opp_id, **kwargs: _tree / "accounts" / "global-pay" / "pursuits" / "renewal.md",
+    )
+    write_opp = MagicMock()
+    monkeypatch.setattr("fieldkit.commands.sf.listview.sync_opportunity", write_opp)
+    before = {path.relative_to(_tree): None if path.is_dir() else path.read_bytes() for path in _tree.rglob("*")}
+
+    result = CliRunner().invoke(cli, ["global-pay", "--dry-run", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload == {
+        "status": "ok",
+        "updated": 0,
+        "would_update": 1,
+        "untracked": 0,
+        "errors": 0,
+        "dry_run": True,
+    }
+    write_opp.assert_called_once()
+    assert write_opp.call_args.kwargs["dry_run"] is True
+    after = {path.relative_to(_tree): None if path.is_dir() else path.read_bytes() for path in _tree.rglob("*")}
+    assert after == before
+
+
+def test_listview_dry_run_plain_output_never_claims_an_update(
+    orchestration_env: tuple[Path, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tree, _lv_mod = orchestration_env
+    sosl_result = [_make_opp(OPP_GPAY, "Renewal")]
+    monkeypatch.setattr("fieldkit.sf.client.SFDirectClient", lambda **kwargs: _make_mock_client(sosl_result))
+    monkeypatch.setattr(
+        "fieldkit.commands.sf.listview.match_pursuit",
+        lambda _pursuit_dir, _opp_id, **kwargs: tree / "accounts" / "global-pay" / "pursuits" / "renewal.md",
+    )
+    write_opp = MagicMock()
+    monkeypatch.setattr("fieldkit.commands.sf.listview.sync_opportunity", write_opp)
+
+    result = CliRunner().invoke(cli, ["global-pay", "--dry-run"])
+
+    assert result.exit_code == 0
+    assert "WOULD UPDATE" in result.output
+    assert "would_update=1" in result.output
+    assert "Would sync (pursuit file matched; no write)" in result.output
+    assert "updated=1" not in result.output
+    assert "Synced (pursuit file matched + written)" not in result.output
+    write_opp.assert_called_once()
+    assert write_opp.call_args.kwargs["dry_run"] is True
 
 
 def test_run_listview_territory_flag_bad_parameter_exits_nonzero() -> None:
@@ -922,12 +1024,12 @@ def test_run_listview_territory_flag_bad_parameter_exits_nonzero() -> None:
 def test_run_listview_process_opp_returns_none_for_missing_opp_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """_process_opp returns (0,0,0,None) when opportunity_id is missing from dict."""
+    """Missing remote identity produces one error without matching or updating."""
     opp = {"name": "No ID", "stage": "Negotiate"}  # no opportunity_id key
     u, unt, err, untracked = _process_opp(opp, "/fake/pursuits")
     assert u == 0
     assert unt == 0
-    assert err == 0
+    assert err == 1
     assert untracked is None
 
 
@@ -946,18 +1048,18 @@ def test_run_listview_skips_internal_accounts(
     untracked deals owned by this AE.
     """
     import fieldkit.commands.sf.listview as lv_mod
-    import fieldkit.commands.sf.sync as sync_mod
+    import fieldkit.commands.sf.listview as sync_mod
 
     (tmp_path / "accounts" / "global-pay" / "pursuits").mkdir(parents=True)
     (tmp_path / "accounts" / "internal-team" / "pursuits").mkdir(parents=True)
 
-    monkeypatch.setattr(sync_mod, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(sync_mod, "get_fieldkit_home", lambda: tmp_path)
     monkeypatch.setattr(lv_mod, "get_sf_session_id", lambda: "fakesid")
     monkeypatch.setattr(lv_mod, "get_sf_rest_base_url", lambda: "https://examplecrm.my.salesforce.com")
     monkeypatch.setattr(
         lv_mod,
         "get_accounts_config",
-        lambda: {
+        lambda **kwargs: {
             "accounts": {
                 "global-pay": {"keywords": ["Global Pay"]},
                 "internal-team": {
@@ -967,7 +1069,7 @@ def test_run_listview_skips_internal_accounts(
             }
         },
     )
-    monkeypatch.setattr(lv_mod, "get_account_names", lambda: ["global-pay", "internal-team"])
+    monkeypatch.setattr(lv_mod, "configured_accounts", lambda: ["global-pay", "internal-team"])
 
     sosl_calls: list[str] = []
 

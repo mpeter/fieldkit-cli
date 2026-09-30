@@ -102,13 +102,16 @@ def test_build_account_report_no_db_build_account_report_calls_direct_functions(
     ]
 
     with (
-        patch("fieldkit.commands.gmail.enrich_pursuits.connect", return_value=fake_conn) as mock_connect,
-        patch("fieldkit.commands.gmail.enrich_pursuits.query_blindspots", return_value=blindspots_data) as mock_bs,
+        patch("fieldkit.commands.gmail.enrich_pursuits.query_domain.connect", return_value=fake_conn) as mock_connect,
         patch(
-            "fieldkit.commands.gmail.enrich_pursuits.query_champion_signals",
+            "fieldkit.commands.gmail.enrich_pursuits.query_domain.query_blindspots",
+            return_value=blindspots_data,
+        ) as mock_bs,
+        patch(
+            "fieldkit.commands.gmail.enrich_pursuits.query_domain.query_champion_signals",
             return_value="Champion signal: Jane Doe\n  Threads initiated   : 3  (50% initiation rate)\n  Signal: INITIATOR",
         ) as mock_champ,
-        patch("fieldkit.commands.gmail.enrich_pursuits.query_dig", return_value=dig_data) as mock_dig,
+        patch("fieldkit.commands.gmail.enrich_pursuits.query_domain.query_dig", return_value=dig_data) as mock_dig,
     ):
         report = ep.build_account_report("test-acct")
 
@@ -118,7 +121,7 @@ def test_build_account_report_no_db_build_account_report_calls_direct_functions(
 
     # Direct query functions called with the shared connection.
     # since= is now a pre-converted epoch int (date_to_epoch(_since_date())).
-    from fieldkit.commands.gmail.query import date_to_epoch
+    from fieldkit.gmail.query_domain import date_to_epoch
 
     expected_since = date_to_epoch(ep._since_date())
     mock_bs.assert_called_once_with(fake_conn, "test-acct", since=expected_since, limit=None)
@@ -137,25 +140,27 @@ def test_build_account_report_sets_aside_suspected_masked_contacts(tmp_path, mon
     monkeypatch.setattr(
         ep,
         "get_accounts_config",
-        lambda: {"accounts": {"test-acct": {"domains": ["acme-corp.com"]}}},
+        lambda: {"accounts": {"test-acct": {"domains": ["acme-corp.example.com"]}}},
     )
     fake_conn = MagicMock(spec=sqlite3.Connection)
     contacts = [
-        ("alex.taylor@acme-corp.com", "Alex Taylor", 8, 1_748_000_000),
-        ("casey.morgan.q7zm@acme-corp.com", "Casey Morgan", 7, 1_747_000_000),
+        ("alex.taylor@acme-corp.example.com", "Alex Taylor", 8, 1_748_000_000),
+        ("casey.morgan.q7zm@acme-corp.example.com", "Casey Morgan", 7, 1_747_000_000),
     ]
 
     with (
-        patch("fieldkit.commands.gmail.enrich_pursuits.connect", return_value=fake_conn),
-        patch("fieldkit.commands.gmail.enrich_pursuits.query_blindspots", return_value=contacts),
-        patch("fieldkit.commands.gmail.enrich_pursuits.query_champion_signals", return_value="") as champion,
-        patch("fieldkit.commands.gmail.enrich_pursuits.query_dig", return_value=[]),
+        patch("fieldkit.commands.gmail.enrich_pursuits.query_domain.connect", return_value=fake_conn),
+        patch("fieldkit.commands.gmail.enrich_pursuits.query_domain.query_blindspots", return_value=contacts),
+        patch(
+            "fieldkit.commands.gmail.enrich_pursuits.query_domain.query_champion_signals", return_value=""
+        ) as champion,
+        patch("fieldkit.commands.gmail.enrich_pursuits.query_domain.query_dig", return_value=[]),
     ):
         report = ep.build_account_report("test-acct")
 
     assert isinstance(report, str)
-    assert "alex.taylor@acme-corp.com" in report
-    assert "casey.morgan.q7zm@acme-corp.com" not in report
+    assert "alex.taylor@acme-corp.example.com" in report
+    assert "casey.morgan.q7zm@acme-corp.example.com" not in report
     assert "Set aside 1 suspected masked address(es)" in report
     champion.assert_called_once_with(fake_conn, "alex.taylor")
 
@@ -172,8 +177,11 @@ def test_build_account_report_no_db_build_account_report_connection_closed_on_er
     fake_conn = MagicMock(spec=sqlite3.Connection)
 
     with (
-        patch("fieldkit.commands.gmail.enrich_pursuits.connect", return_value=fake_conn),
-        patch("fieldkit.commands.gmail.enrich_pursuits.query_blindspots", side_effect=RuntimeError("db error")),
+        patch("fieldkit.commands.gmail.enrich_pursuits.query_domain.connect", return_value=fake_conn),
+        patch(
+            "fieldkit.commands.gmail.enrich_pursuits.query_domain.query_blindspots",
+            side_effect=RuntimeError("db error"),
+        ),
         pytest.raises(RuntimeError, match="db error"),
     ):
         ep.build_account_report("test-acct")
@@ -194,10 +202,10 @@ def test_build_account_report_no_db_build_account_report_empty_blindspots(tmp_pa
     fake_conn = MagicMock(spec=sqlite3.Connection)
 
     with (
-        patch("fieldkit.commands.gmail.enrich_pursuits.connect", return_value=fake_conn),
-        patch("fieldkit.commands.gmail.enrich_pursuits.query_blindspots", return_value=[]),
-        patch("fieldkit.commands.gmail.enrich_pursuits.query_champion_signals", return_value=""),
-        patch("fieldkit.commands.gmail.enrich_pursuits.query_dig", return_value=[]),
+        patch("fieldkit.commands.gmail.enrich_pursuits.query_domain.connect", return_value=fake_conn),
+        patch("fieldkit.commands.gmail.enrich_pursuits.query_domain.query_blindspots", return_value=[]),
+        patch("fieldkit.commands.gmail.enrich_pursuits.query_domain.query_champion_signals", return_value=""),
+        patch("fieldkit.commands.gmail.enrich_pursuits.query_domain.query_dig", return_value=[]),
     ):
         report = ep.build_account_report("test-acct")
 

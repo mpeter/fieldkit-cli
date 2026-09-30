@@ -16,62 +16,61 @@ the module already holds a direct reference to the original function.
 import pytest
 
 from fieldkit.commands.gmail.apply_intel import _internal_domains
-from fieldkit.commands.gmail.query import _is_noise
 from fieldkit.gmail.decay_domain import is_internal_or_noise
+from fieldkit.gmail.query_domain import _is_noise
 
 pytestmark = pytest.mark.unit
 
 
 # ---------------------------------------------------------------------------
-# decay.is_internal_or_noise  (uses _internal_domain_set())
+# decay.is_internal_or_noise
 # ---------------------------------------------------------------------------
 
 
 # ── TestDecayDomainAtCallTime (flattened) ───────────────────────────────────
 
 
-def test_decay_domain_at_call_time_novel_domain_classified_internal_after_patch(monkeypatch):
-    """A domain not in any default list is recognised after patching."""
-    import fieldkit.gmail.decay_domain as decay_domain
-
-    monkeypatch.setattr(decay_domain, "get_internal_domains", lambda: ["internal.example.com"])
-
-    assert is_internal_or_noise("user@internal.example.com") is True
+def test_decay_domain_explicit_internal_domain_is_filtered() -> None:
+    assert is_internal_or_noise("user@internal.example.com", internal_domains=("internal.example.com",)) is True
 
 
-def test_decay_domain_at_call_time_previously_internal_domain_no_longer_internal_after_patch(monkeypatch):
-    """Removing a domain from the list takes effect on the next call."""
-    import fieldkit.gmail.decay_domain as decay_domain
-
-    # Patch to a list that excludes the external fixture domain.
-    monkeypatch.setattr(decay_domain, "get_internal_domains", lambda: ["internal.example.com"])
-
-    assert is_internal_or_noise("user@external.example.com") is False
+def test_decay_domain_external_domain_is_not_filtered() -> None:
+    assert is_internal_or_noise("user@external.example.com", internal_domains=("internal.example.com",)) is False
 
 
-def test_decay_domain_at_call_time_empty_list_returns_empty_internal(monkeypatch):
+def test_decay_domain_empty_internal_scope_still_filters_automation(monkeypatch: pytest.MonkeyPatch) -> None:
     """An empty list means no internal domains — external addresses are not filtered.
     org-agnostic-config: fallback to hardcoded org domains removed (task 1.3).
     AUTOMATION_NOISE_DOMAINS still filters automation noise regardless of org config."""
     import fieldkit.gmail.decay_domain as decay_domain
 
-    monkeypatch.setattr(decay_domain, "get_internal_domains", lambda: [])
     monkeypatch.setattr(decay_domain, "AUTOMATION_NOISE_DOMAINS", frozenset({"docusign.example.com"}))
 
     # External address — not filtered when no internal domains configured
-    assert is_internal_or_noise("cfo@globalpay.example.com") is False
+    assert is_internal_or_noise("cfo@globalpay.example.com", internal_domains=()) is False
     # Automation noise — still filtered via AUTOMATION_NOISE_DOMAINS (D2 split)
-    assert is_internal_or_noise("noreply@docusign.example.com") is True
+    assert is_internal_or_noise("noreply@docusign.example.com", internal_domains=()) is True
 
 
-def test_decay_domain_at_call_time_no_module_reload_needed(monkeypatch):
-    """Module already imported; patch still takes effect without reimport."""
-    import fieldkit.gmail.decay_domain as decay_domain  # already imported above
+def test_decay_domain_scope_changes_without_module_state() -> None:
+    assert is_internal_or_noise("boss@acme-corp.example.com", internal_domains=("acme-corp.example.com",)) is True
+    assert is_internal_or_noise("boss@acme-corp.example.com", internal_domains=()) is False
 
-    monkeypatch.setattr(decay_domain, "get_internal_domains", lambda: ["acme-corp.com"])
 
-    # acme-corp.com is not in any fallback list — proves live lookup
-    assert is_internal_or_noise("boss@acme-corp.com") is True
+@pytest.mark.parametrize(
+    ("email", "expected"),
+    [
+        ("employee@internal.example.com", True),
+        ("employee@dept.internal.example.com", True),
+        ("employee@evilinternal.example.com", False),
+        ("employee@internal.example.com.evil.example", False),
+    ],
+)
+def test_decay_domain_internal_boundary_matches_exact_domains_and_subdomains(
+    email: str,
+    expected: bool,
+) -> None:
+    assert is_internal_or_noise(email, internal_domains=("internal.example.com",)) is expected
 
 
 # ---------------------------------------------------------------------------
@@ -83,7 +82,7 @@ def test_decay_domain_at_call_time_no_module_reload_needed(monkeypatch):
 
 
 def test_query_domain_at_call_time_novel_domain_classified_noise_after_patch(monkeypatch):
-    import fieldkit.commands.gmail.query as query
+    import fieldkit.gmail.query_domain as query
 
     monkeypatch.setattr(query, "get_internal_domains", lambda: ["internal.example.com"])
 
@@ -92,7 +91,7 @@ def test_query_domain_at_call_time_novel_domain_classified_noise_after_patch(mon
 
 
 def test_query_domain_at_call_time_removed_domain_no_longer_noise(monkeypatch):
-    import fieldkit.commands.gmail.query as query
+    import fieldkit.gmail.query_domain as query
 
     monkeypatch.setattr(query, "get_internal_domains", lambda: ["example-internal.com"])
 

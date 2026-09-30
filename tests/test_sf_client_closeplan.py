@@ -11,7 +11,8 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-from fieldkit.sf.client import SFAPIError, SFAuthError, SFDirectClient
+from fieldkit.sf.client import SFDirectClient
+from fieldkit.sf.errors import SFAPIError, SFAuthError
 
 pytestmark = pytest.mark.unit
 
@@ -174,7 +175,7 @@ def test_fetch_closeplan_deal_connection_error_raises_api_error() -> None:
     """
     mock_instance = _make_mock_http_client()
     mock_instance.request.side_effect = httpx.ConnectError("refused")
-    with patch("httpx.Client", return_value=mock_instance), pytest.raises(SFAPIError, match="SF connection failed"):
+    with patch("httpx.Client", return_value=mock_instance), pytest.raises(SFAPIError, match="SF request failed"):
         _make_client().fetch_closeplan_deals(_CLOSEPLAN_DEAL__OPP_ID)
 
 
@@ -186,7 +187,7 @@ def test_fetch_closeplan_deal_request_error_raises_api_error() -> None:
     """
     mock_instance = _make_mock_http_client()
     mock_instance.request.side_effect = httpx.RequestError("kaboom")
-    with patch("httpx.Client", return_value=mock_instance), pytest.raises(SFAPIError, match="SF request error"):
+    with patch("httpx.Client", return_value=mock_instance), pytest.raises(SFAPIError, match="SF request failed"):
         _make_client().fetch_closeplan_deals(_CLOSEPLAN_DEAL__OPP_ID)
 
 
@@ -319,7 +320,7 @@ def test_fetch_closeplan_answers_connection_error_raises_api_error() -> None:
     """
     mock_instance = _make_mock_http_client()
     mock_instance.request.side_effect = httpx.ConnectError("refused")
-    with patch("httpx.Client", return_value=mock_instance), pytest.raises(SFAPIError, match="SF connection failed"):
+    with patch("httpx.Client", return_value=mock_instance), pytest.raises(SFAPIError, match="SF request failed"):
         _make_client().fetch_closeplan_questions(_CLOSEPLAN_ANSWERS__DEAL_ID)
 
 
@@ -331,7 +332,7 @@ def test_fetch_closeplan_answers_request_error_raises_api_error() -> None:
     """
     mock_instance = _make_mock_http_client()
     mock_instance.request.side_effect = httpx.RequestError("kaboom")
-    with patch("httpx.Client", return_value=mock_instance), pytest.raises(SFAPIError, match="SF request error"):
+    with patch("httpx.Client", return_value=mock_instance), pytest.raises(SFAPIError, match="SF request failed"):
         _make_client().fetch_closeplan_questions(_CLOSEPLAN_ANSWERS__DEAL_ID)
 
 

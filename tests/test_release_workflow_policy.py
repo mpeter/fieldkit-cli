@@ -1,6 +1,8 @@
 """Contracts for the least-privilege release workflow policy."""
 
+import json
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -77,7 +79,7 @@ def _workflow() -> dict[str, object]:
                         "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
                         "with": {
                             "name": "release-evidence-tools-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}",
-                            "path": "scripts/release_promotion_evidence.py scripts/release_bundle.py scripts/release_consumer.py scripts/release_wheelhouse.py pyproject.toml",
+                            "path": "scripts/release_promotion_evidence.py scripts/release_bundle.py scripts/runtime_license_inventory.py scripts/release_consumer.py scripts/release_wheelhouse.py pyproject.toml",
                             "if-no-files-found": "error",
                             "retention-days": "90",
                         },
@@ -98,7 +100,9 @@ def _workflow() -> dict[str, object]:
                             ".github/workflows/release-approval.yml@ "
                             "release-approval-input-${APPROVAL_RUN}-${approval_attempt}-${GITHUB_SHA} "
                             "timeout 60s gh api --paginate --slurp jq -r --arg name length == 1 actions/artifacts/$artifact_id/zip "
-                            "scripts/release_approval_archive.py scripts/release_approval_input.py "
+                            "scripts/release_approval_archive.py\n"
+                            "python scripts/release_approval_input.py --input approved-artifact/approval-input "
+                            "--controller-root controller --expected-selection expected.json\n"
                             "approved-artifact/approval-input/public-candidate/report.json "
                             "approved-artifact/approval-input/public-candidate/bundle"
                         )
@@ -265,6 +269,25 @@ def test_policy_accepts_separate_artifact_only_authority_jobs() -> None:
     assert report.findings == ()
 
 
+def test_policy_rejects_obsolete_build_verifier_invocation() -> None:
+    workflow = _workflow()
+    jobs = workflow["jobs"]
+    assert isinstance(jobs, dict)
+    build = jobs["build"]
+    assert isinstance(build, dict)
+    steps = build["steps"]
+    assert isinstance(steps, list)
+    step = steps[0]
+    assert isinstance(step, dict)
+    step["run"] = str(step["run"]).replace(
+        "--controller-root controller --expected-selection expected.json", "--repo-root ."
+    )
+
+    report = release_workflow_policy.validate_document(workflow)
+
+    assert ("RWF028", "build") in {(finding.code, finding.job) for finding in report.findings}
+
+
 def test_approval_policy_rejects_an_operator_supplied_archive_url() -> None:
     document = yaml.safe_load(
         (release_workflow_policy.REPO_ROOT / release_workflow_policy.APPROVAL_WORKFLOW_PATH).read_text(encoding="utf-8")
@@ -279,9 +302,222 @@ def test_approval_policy_rejects_an_operator_supplied_archive_url() -> None:
     assert ("RWA006", "approve") in {(finding.code, finding.job) for finding in report.findings}
 
 
+@pytest.mark.parametrize(
+    "predicate",
+    [
+        ".repository.id == 1378745365",
+        ".repository.owner.id == 1717694",
+        ".head_repository.id == 1378745365",
+        ".workflow_id == 362870199",
+        '.event == "workflow_dispatch"',
+        '.head_branch == "main"',
+        '.path == ".github/workflows/retain-release-input.yml@main"',
+        '.status == "completed" and .conclusion == "success"',
+    ],
+)
+def test_approval_policy_requires_exact_private_producer_run_identity(predicate: str) -> None:
+    document = yaml.load(
+        (release_workflow_policy.REPO_ROOT / release_workflow_policy.APPROVAL_WORKFLOW_PATH).read_text(
+            encoding="utf-8"
+        ),
+        Loader=yaml.BaseLoader,
+    )
+    steps = document["jobs"]["approve"]["steps"]
+    step = next(item for item in steps if "actions/runs/$SOURCE_RUN_ID" in item.get("run", ""))
+    assert predicate in step["run"]
+    step["run"] = step["run"].replace(predicate, "true")
+
+    report = release_workflow_policy.validate_approval_document(document)
+
+    assert ("RWA007", "approve") in {(finding.code, finding.job) for finding in report.findings}
+
+
+def test_approval_policy_rejects_identity_predicate_parked_in_comment() -> None:
+    document = yaml.load(
+        (release_workflow_policy.REPO_ROOT / release_workflow_policy.APPROVAL_WORKFLOW_PATH).read_text(
+            encoding="utf-8"
+        ),
+        Loader=yaml.BaseLoader,
+    )
+    steps = document["jobs"]["approve"]["steps"]
+    step = next(item for item in steps if "actions/runs/$SOURCE_RUN_ID" in item.get("run", ""))
+    predicate = ".repository.id == 1378745365"
+    step["run"] = step["run"].replace(predicate, "true", 1) + f"\n# {predicate}\n"
+
+    report = release_workflow_policy.validate_approval_document(document)
+
+    assert ("RWA007", "approve") in {(finding.code, finding.job) for finding in report.findings}
+
+
+def test_approval_policy_rejects_commented_out_source_run_filter() -> None:
+    document = yaml.load(
+        (release_workflow_policy.REPO_ROOT / release_workflow_policy.APPROVAL_WORKFLOW_PATH).read_text(
+            encoding="utf-8"
+        ),
+        Loader=yaml.BaseLoader,
+    )
+    steps = document["jobs"]["approve"]["steps"]
+    step = next(item for item in steps if "actions/runs/$SOURCE_RUN_ID" in item.get("run", ""))
+    assert "jq -e '\n" in step["run"]
+    step["run"] = step["run"].replace("jq -e '\n", "# jq -e '\n", 1)
+
+    report = release_workflow_policy.validate_approval_document(document)
+
+    assert ("RWA007", "approve") in {(finding.code, finding.job) for finding in report.findings}
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="jq is required to execute the workflow's filter")
+@pytest.mark.parametrize(
+    ("path", "replacement"),
+    [
+        (("repository", "id"), 1),
+        (("repository", "owner", "id"), 1),
+        (("head_repository", "id"), 1),
+        (("workflow_id",), 1),
+        (("event",), "push"),
+        (("head_branch",), "feature"),
+        (("path",), ".github/workflows/other.yml@main"),
+        (("path",), ".github/workflows/retain-release-input.yml@main-unapproved"),
+        (("status",), "in_progress"),
+        (("conclusion",), "failure"),
+        (("run_attempt",), "first"),
+        (("head_sha",), "invalid"),
+    ],
+)
+def test_approval_workflow_jq_rejects_wrong_source_run_identity(path: tuple[str, ...], replacement: object) -> None:
+    workflow = yaml.load(
+        (release_workflow_policy.REPO_ROOT / release_workflow_policy.APPROVAL_WORKFLOW_PATH).read_text(
+            encoding="utf-8"
+        ),
+        Loader=yaml.BaseLoader,
+    )
+    command = next(
+        step["run"]
+        for step in workflow["jobs"]["approve"]["steps"]
+        if "actions/runs/$SOURCE_RUN_ID" in step.get("run", "")
+    )
+    assert command.count("jq -e '") == 1
+    program = command.split("jq -e '", 1)[1].split('\' <<< "$run"', 1)[0]
+    run = {
+        "repository": {"id": 1378745365, "owner": {"id": 1717694}},
+        "head_repository": {"id": 1378745365},
+        "workflow_id": 362870199,
+        "event": "workflow_dispatch",
+        "head_branch": "main",
+        "path": ".github/workflows/retain-release-input.yml@main",
+        "status": "completed",
+        "conclusion": "success",
+        "run_attempt": 1,
+        "head_sha": "a" * 40,
+    }
+
+    accepted = subprocess.run(
+        ["jq", "-e", program], input=json.dumps(run), text=True, capture_output=True, timeout=5, check=False
+    )
+    assert accepted.returncode == 0
+
+    target = run
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = replacement
+    rejected = subprocess.run(
+        ["jq", "-e", program], input=json.dumps(run), text=True, capture_output=True, timeout=5, check=False
+    )
+    assert rejected.returncode != 0
+
+
+@pytest.mark.parametrize(
+    ("command", "expected_code"),
+    [
+        ("python scripts/release_approval_input.py --input approval-artifact/approval-input --repo-root .", "RWA009"),
+        (
+            "python scripts/release_approval_input.py --input approval-artifact/approval-input --controller-root controller",
+            "RWA009",
+        ),
+        (
+            "python scripts/release_approval_input.py --input approval-artifact/approval-input --controller-root . --expected-selection expected.json",
+            "RWA009",
+        ),
+    ],
+)
+def test_approval_policy_rejects_invalid_verifier_invocation(command: str, expected_code: str) -> None:
+    document = yaml.load(
+        (release_workflow_policy.REPO_ROOT / release_workflow_policy.APPROVAL_WORKFLOW_PATH).read_text(
+            encoding="utf-8"
+        ),
+        Loader=yaml.BaseLoader,
+    )
+    steps = document["jobs"]["approve"]["steps"]
+    step = next(item for item in steps if "scripts/release_approval_input.py" in item.get("run", ""))
+    step["run"] = step["run"].replace(
+        "python scripts/release_approval_input.py --input approval-artifact/approval-input --repo-root .", command
+    )
+
+    report = release_workflow_policy.validate_approval_document(document)
+
+    assert (expected_code, "approve") in {(finding.code, finding.job) for finding in report.findings}
+
+
+def test_approval_policy_accepts_structural_cli_without_granting_approval_authority() -> None:
+    document = yaml.load(
+        (release_workflow_policy.REPO_ROOT / release_workflow_policy.APPROVAL_WORKFLOW_PATH).read_text(
+            encoding="utf-8"
+        ),
+        Loader=yaml.BaseLoader,
+    )
+    steps = document["jobs"]["approve"]["steps"]
+    step = next(item for item in steps if "scripts/release_approval_input.py" in item.get("run", ""))
+    step["run"] = step["run"].replace(
+        "--repo-root .", "--controller-root controller --expected-selection expected.json"
+    )
+
+    report = release_workflow_policy.validate_approval_document(document)
+
+    assert report.ok is False
+    assert {(finding.code, finding.job) for finding in report.findings} == {("RWA010", "approve")}
+
+
+@pytest.mark.parametrize("environment", ["release-approval", {"name": "release-approval"}])
+def test_approval_policy_rejects_validation_inside_initial_protected_job(environment: object) -> None:
+    document = yaml.load(
+        (release_workflow_policy.REPO_ROOT / release_workflow_policy.APPROVAL_WORKFLOW_PATH).read_text(
+            encoding="utf-8"
+        ),
+        Loader=yaml.BaseLoader,
+    )
+    document["jobs"]["approve"]["environment"] = environment
+
+    report = release_workflow_policy.validate_approval_document(document)
+
+    assert report.ok is False
+    assert ("RWA010", "approve") in {(finding.code, finding.job) for finding in report.findings}
+
+
+def test_approval_policy_does_not_authorize_an_unimplemented_preflight() -> None:
+    document = yaml.load(
+        (release_workflow_policy.REPO_ROOT / release_workflow_policy.APPROVAL_WORKFLOW_PATH).read_text(
+            encoding="utf-8"
+        ),
+        Loader=yaml.BaseLoader,
+    )
+    document["jobs"]["preflight"] = {
+        "runs-on": "ubuntu-24.04",
+        "permissions": {"contents": "read"},
+        "steps": [{"run": "echo preflight"}],
+    }
+    document["jobs"]["approve"]["needs"] = ["preflight"]
+
+    report = release_workflow_policy.validate_approval_document(document)
+
+    assert report.ok is False
+    assert ("RWA003", "workflow") in {(finding.code, finding.job) for finding in report.findings}
+
+
 def test_policy_rejects_missing_nonempty_approval_tag_metadata_validation() -> None:
     workflow = _workflow()
-    context = workflow["jobs"]["context"]
+    jobs = workflow["jobs"]
+    assert isinstance(jobs, dict)
+    context = jobs["context"]
     assert isinstance(context, dict)
     steps = context["steps"]
     assert isinstance(steps, list)
@@ -296,7 +532,9 @@ def test_policy_rejects_missing_nonempty_approval_tag_metadata_validation() -> N
 
 def test_policy_rejects_production_acquisition_without_the_manifest_digest() -> None:
     workflow = _workflow()
-    build = workflow["jobs"]["build"]
+    jobs = workflow["jobs"]
+    assert isinstance(jobs, dict)
+    build = jobs["build"]
     assert isinstance(build, dict)
     steps = build["steps"]
     assert isinstance(steps, list)
@@ -311,7 +549,9 @@ def test_policy_rejects_production_acquisition_without_the_manifest_digest() -> 
 
 def test_policy_rejects_unbounded_approval_input_requests() -> None:
     workflow = _workflow()
-    build = workflow["jobs"]["build"]
+    jobs = workflow["jobs"]
+    assert isinstance(jobs, dict)
+    build = jobs["build"]
     assert isinstance(build, dict)
     steps = build["steps"]
     assert isinstance(steps, list)
@@ -483,7 +723,7 @@ def test_policy_rejects_scanner_install_to_its_extraction_directory() -> None:
     assert ("RWF022", "build") in {(finding.code, finding.job) for finding in report.findings}
 
 
-def test_repository_validator_accepts_checked_in_yaml_shape(tmp_path: Path) -> None:
+def test_repository_validator_rejects_checked_in_obsolete_approval_invocation(tmp_path: Path) -> None:
     workflow_path = tmp_path / ".github" / "workflows" / "release.yml"
     workflow_path.parent.mkdir(parents=True)
     workflow_path.write_text(yaml.dump(_workflow()), encoding="utf-8")
@@ -494,13 +734,17 @@ def test_repository_validator_accepts_checked_in_yaml_shape(tmp_path: Path) -> N
 
     report = release_workflow_policy.validate_repository(tmp_path)
 
-    assert report.ok is True
+    assert report.ok is False
+    assert ("RWA009", "approve") in {(finding.code, finding.job) for finding in report.findings}
 
 
-def test_checked_in_release_workflow_satisfies_policy() -> None:
+def test_checked_in_release_workflow_reports_obsolete_verifier_invocations() -> None:
     report = release_workflow_policy.validate_repository(release_workflow_policy.REPO_ROOT)
 
-    assert report.ok is True
+    assert report.ok is False
+    assert {("RWA009", "approve"), ("RWA010", "approve"), ("RWF028", "build")} <= {
+        (finding.code, finding.job) for finding in report.findings
+    }
 
 
 def test_checked_in_workflow_preserves_the_candidate_and_renderer_layout() -> None:
@@ -513,6 +757,7 @@ def test_checked_in_workflow_preserves_the_candidate_and_renderer_layout() -> No
         "candidate/",
         "scripts/check_release_consumer.py",
         "scripts/release_bundle.py",
+        "scripts/runtime_license_inventory.py",
         "scripts/release_consumer.py",
         "scripts/release_promotion_evidence.py",
         "scripts/release_wheelhouse.py",

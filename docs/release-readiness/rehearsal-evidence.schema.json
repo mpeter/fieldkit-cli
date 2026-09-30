@@ -1,121 +1,730 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/mpeter/fieldkit-cli/blob/main/docs/release-readiness/rehearsal-evidence.schema.json",
-  "title": "fieldkit release rehearsal evidence",
+  "title": "fieldkit phase-bound rehearsal observations (not proof approval)",
+  "description": "The initial public cutover identity is registered. Public-history subjects support private structural diagnostics only; a successor public observer remains unregistered and unsupported. No phase approves behavioral evidence or a runtime backend.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "subject", "environment", "artifacts", "verified_blocks", "scenarios", "review"],
+  "required": [
+    "schema_version",
+    "phase",
+    "subject",
+    "control",
+    "environment",
+    "artifacts",
+    "scenarios",
+    "review",
+    "members"
+  ],
   "properties": {
-    "schema_version": {"const": 1},
+    "schema_version": {
+      "const": 2
+    },
+    "phase": {
+      "enum": [
+        "private-candidate",
+        "public-release"
+      ]
+    },
     "subject": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["source_sha", "documentation_contract_sha256", "clean_export_tree", "repository", "public_commit_sha", "workflow_name", "workflow_path", "workflow_event", "workflow_run_id", "workflow_run_attempt"],
-      "properties": {
-        "source_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
-        "documentation_contract_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-        "clean_export_tree": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
-        "repository": {"const": "mpeter/fieldkit-cli"},
-        "public_commit_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
-        "workflow_name": {"const": "Cutover verification"},
-        "workflow_path": {"const": ".github/workflows/cutover.yml"},
-        "workflow_event": {"const": "push"},
-        "workflow_run_id": {"type": "integer", "minimum": 1},
-        "workflow_run_attempt": {"type": "integer", "minimum": 1}
-      }
+      "$ref": "#/$defs/subject"
+    },
+    "control": {
+      "$ref": "#/$defs/control"
     },
     "environment": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["os", "architecture", "python", "uv", "git", "make"],
+      "required": [
+        "os",
+        "architecture",
+        "python",
+        "uv",
+        "git",
+        "make"
+      ],
       "properties": {
-        "os": {"type": "string", "minLength": 1},
-        "architecture": {"type": "string", "minLength": 1},
-        "python": {"type": "string", "minLength": 1},
-        "uv": {"type": "string", "minLength": 1},
-        "git": {"type": "string", "minLength": 1},
-        "make": {"type": "string", "minLength": 1}
+        "os": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "architecture": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "python": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "uv": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "git": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "make": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
       }
     },
     "artifacts": {
       "type": "array",
       "minItems": 2,
+      "maxItems": 2,
       "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["name", "sha256"],
-        "properties": {
-          "name": {"type": "string", "minLength": 1},
-          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
-        }
+        "$ref": "#/$defs/artifact"
       }
-    },
-    "verified_blocks": {
-      "type": "array",
-      "minItems": 1,
-      "uniqueItems": true,
-      "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]*$"}
     },
     "scenarios": {
       "type": "array",
-      "minItems": 1,
+      "minItems": 0,
+      "maxItems": 57,
       "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["id", "actor", "proof_type", "documented_block_sha256", "status", "started_at", "duration_seconds", "verified_blocks", "commands"],
-        "properties": {
-          "id": {"type": "string", "minLength": 1},
-          "actor": {"enum": ["automated", "external_user", "external_contributor", "maintainer", "operator"]},
-          "proof_type": {"enum": ["credentialed-integration", "release-cutover"]},
-          "documented_block_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
-          "status": {"enum": ["pass", "fail"]},
-          "started_at": {"type": "string", "format": "date-time"},
-          "duration_seconds": {"type": "number", "minimum": 0},
-          "verified_blocks": {
-            "type": "array",
-            "uniqueItems": true,
-            "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]*$"}
-          },
-          "commands": {
-            "type": "array",
-            "minItems": 1,
-            "items": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": ["argv", "exit_code", "stdout", "stderr", "stdout_sha256", "stderr_sha256", "assertions"],
-              "properties": {
-                "argv": {"type": "array", "minItems": 1, "items": {"type": "string"}},
-                "exit_code": {"type": "integer"},
-                "stdout": {"type": "string", "maxLength": 4000},
-                "stderr": {"type": "string", "maxLength": 4000},
-                "stdout_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-                "stderr_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-                "assertions": {
-                  "type": "array",
-                  "items": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["stream", "contains"],
-                    "properties": {
-                      "stream": {"enum": ["stdout", "stderr"]},
-                      "contains": {"type": "string", "minLength": 1, "maxLength": 200}
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
+        "$ref": "#/$defs/scenario"
       }
     },
     "review": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["reviewer", "reviewed_at", "immutable_url"],
+      "required": [
+        "reviewer",
+        "reviewed_at",
+        "immutable_url"
+      ],
       "properties": {
-        "reviewer": {"type": "string", "minLength": 1},
-        "reviewed_at": {"type": "string", "format": "date-time"},
-        "immutable_url": {"type": "string", "pattern": "^https://"}
+        "reviewer": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "reviewed_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "immutable_url": {
+          "type": "string",
+          "pattern": "^https://",
+          "maxLength": 2048
+        }
+      }
+    },
+    "members": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": {
+        "$ref": "#/$defs/descriptor"
+      }
+    },
+    "public": {
+      "$ref": "#/$defs/public"
+    },
+    "private_receipt": {
+      "$ref": "#/$defs/descriptor"
+    }
+  },
+  "allOf": [
+    {
+      "not": {
+        "properties": {
+          "phase": {"const": "public-release"},
+          "subject": {"properties": {"source_kind": {"const": "public-history"}}, "required": ["source_kind"]}
+        },
+        "required": ["phase", "subject"]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "phase": {
+            "const": "private-candidate"
+          }
+        },
+        "required": [
+          "phase"
+        ]
+      },
+      "then": {
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "public"
+              ]
+            },
+            {
+              "required": [
+                "private_receipt"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "phase": {
+            "const": "public-release"
+          }
+        },
+        "required": [
+          "phase"
+        ]
+      },
+      "then": {
+        "required": [
+          "public",
+          "private_receipt"
+        ]
+      }
+    }
+  ],
+  "$defs": {
+    "descriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "sha256",
+        "size"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$",
+          "maxLength": 200
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "subject": {
+      "oneOf": [{"$ref": "#/$defs/initialExportSubject"}, {"$ref": "#/$defs/publicHistorySubject"}]
+    },
+    "publicHistorySubject": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source_kind", "repository", "repository_id", "source_commit", "source_tree", "version", "planned_tag", "source_sha256", "initial_commit", "initial_tree", "record_sha256", "documentation_contract_sha256"],
+      "properties": {
+        "source_kind": {"const": "public-history"},
+        "repository": {"const": "mpeter/fieldkit-cli"},
+        "repository_id": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+        "source_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "source_tree": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "version": {"type": "string", "maxLength": 32, "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$", "not": {"const": "1.0.0"}},
+        "planned_tag": {"type": "string", "maxLength": 33, "pattern": "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"},
+        "source_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "initial_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "initial_tree": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "record_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "documentation_contract_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "initialExportSubject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_kind",
+        "private_source_sha",
+        "private_source_tree",
+        "exported_tree",
+        "documentation_contract_sha256"
+      ],
+      "properties": {
+        "source_kind": {"const": "initial-export"},
+        "private_source_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "private_source_tree": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "exported_tree": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "documentation_contract_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "control": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "controller_revision",
+        "controller_set_sha256",
+        "registry_sha256",
+        "schema_sha256",
+        "toolchain_sha256",
+        "policy_sha256",
+        "selection_record_sha256"
+      ],
+      "properties": {
+        "controller_revision": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "controller_set_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "registry_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "schema_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "toolchain_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "policy_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "selection_record_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "kind",
+        "size",
+        "sha256"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+          "maxLength": 200
+        },
+        "kind": {
+          "enum": [
+            "wheel",
+            "sdist"
+          ]
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "stream": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "full_sha256",
+        "total_bytes",
+        "capture_limit_bytes",
+        "truncated",
+        "redacted",
+        "retained"
+      ],
+      "properties": {
+        "full_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "total_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "capture_limit_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "redacted": {
+          "type": "boolean"
+        },
+        "retained": {
+          "$ref": "#/$defs/descriptor"
+        }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "processes",
+        "memory_bytes",
+        "cpu_seconds",
+        "scratch_bytes",
+        "output_bytes",
+        "wall_seconds"
+      ],
+      "properties": {
+        "processes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "memory_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "cpu_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "scratch_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "output_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "wall_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "command": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "argv",
+        "started_at",
+        "finished_at",
+        "resources",
+        "process",
+        "timeout",
+        "policy",
+        "teardown",
+        "stdout",
+        "stderr",
+        "assertions",
+        "behavioral_assertions"
+      ],
+      "properties": {
+        "argv": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          }
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "finished_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "resources": {
+          "$ref": "#/$defs/resources"
+        },
+        "process": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "exit_code",
+            "signal"
+          ],
+          "properties": {
+            "exit_code": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0,
+              "maximum": 255
+            },
+            "signal": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 128
+            }
+          }
+        },
+        "timeout": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "triggered",
+            "deadline_seconds"
+          ],
+          "properties": {
+            "triggered": {
+              "type": "boolean"
+            },
+            "deadline_seconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          }
+        },
+        "policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "verdict",
+            "complete",
+            "lost_events",
+            "observation"
+          ],
+          "properties": {
+            "verdict": {
+              "enum": [
+                "allow",
+                "deny",
+                "unavailable"
+              ]
+            },
+            "complete": {
+              "type": "boolean"
+            },
+            "lost_events": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "observation": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/descriptor"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        "teardown": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "result",
+            "observation"
+          ],
+          "properties": {
+            "result": {
+              "enum": [
+                "verified-empty",
+                "failed",
+                "unavailable"
+              ]
+            },
+            "observation": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/descriptor"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        "stdout": {
+          "$ref": "#/$defs/stream"
+        },
+        "stderr": {
+          "$ref": "#/$defs/stream"
+        },
+        "assertions": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "stream",
+              "contains"
+            ],
+            "properties": {
+              "stream": {
+                "enum": [
+                  "stdout",
+                  "stderr"
+                ]
+              },
+              "contains": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            }
+          }
+        },
+        "behavioral_assertions": {
+          "type": "array",
+          "maxItems": 0
+        }
+      }
+    },
+    "scenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "precondition_id",
+        "documented_block_sha256",
+        "actor",
+        "commands"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9.:-]*$",
+          "maxLength": 200
+        },
+        "precondition_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "documented_block_sha256": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "actor": {
+          "enum": [
+            "maintainer",
+            "operator",
+            "external_user",
+            "external_contributor"
+          ]
+        },
+        "commands": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/command"
+          }
+        }
+      }
+    },
+    "public": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "repository_id",
+        "commit_sha",
+        "tree",
+        "cutover_run"
+      ],
+      "properties": {
+        "repository": {
+          "const": "mpeter/fieldkit-cli"
+        },
+        "repository_id": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "commit_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "tree": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "cutover_run": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "attempt",
+            "workflow_id",
+            "name",
+            "path",
+            "event",
+            "head_sha"
+          ],
+          "properties": {
+            "id": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "attempt": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "workflow_id": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "name": {
+              "const": "Cutover verification"
+            },
+            "path": {
+              "const": ".github/workflows/cutover.yml"
+            },
+            "event": {
+              "const": "push"
+            },
+            "head_sha": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}$"
+            }
+          }
+        }
       }
     }
   }

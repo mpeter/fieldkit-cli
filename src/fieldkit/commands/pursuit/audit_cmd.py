@@ -5,7 +5,7 @@ Usage:
     fieldkit pursuit audit <account-slug>
     fieldkit pursuit audit --account acme-bank
     fieldkit pursuit audit --fix
-    fieldkit pursuit audit --output /path/to/report.md
+    fieldkit pursuit audit --output custom-report.md
 """
 
 import dataclasses
@@ -20,16 +20,22 @@ import click
 from fieldkit.cli_exit import EXIT_DATA, EXIT_PARTIAL
 from fieldkit.cli_registry import declare_write
 from fieldkit.commands.pursuit.audit import (
+    AUDIT_SKIPPED_FILENAMES,
     AuditResult,
     Finding,
     apply_fixes,
     audit_directory,
     check_yaml_duplicates_directory,
     no_files_message,
+    pursuit_paths,
 )
 from fieldkit.config import get_fieldkit_home
+from fieldkit.errors import FrontmatterStalenessError
+from fieldkit.ingest.paths import validate_meeting_account
 from fieldkit.pursuit.enums import Stage
 from fieldkit.pursuit.stages import CLOSED_STAGES
+from fieldkit.util.atomic import PathLockTimeoutError, atomic_text_write
+from fieldkit.util.workspace_paths import resolve_workspace_output
 
 LOG_PREFIX = "[pursuit-audit]"
 log = logging.getLogger(__name__)
@@ -185,39 +191,77 @@ def _run_check_yaml(root: Path, account: str | None) -> None:
     raise SystemExit(EXIT_PARTIAL)
 
 
-def _run_fix(accounts_dir: Path, account: str | None, *, dry_run: bool = False, as_json: bool = False) -> None:
-    """Apply or preview auto-corrections to pursuit frontmatter."""
-    pattern = f"{account}/pursuits/*.md" if account else "*/pursuits/*.md"
-    fix_total = sum(
-        _fix_one_pursuit(path, accounts_dir, dry_run=dry_run, as_json=as_json)
-        for path in sorted(accounts_dir.glob(pattern))
-    )
+def _run_fix(paths: list[Path], accounts_dir: Path, *, dry_run: bool = False, as_json: bool = False) -> bool:
+    """Apply or preview corrections; return whether any repair failed."""
+    fix_total = 0
+    repair_failed = False
+    for path in paths:
+        changes, failed = _fix_one_pursuit(path, accounts_dir, dry_run=dry_run, as_json=as_json)
+        fix_total += changes
+        repair_failed = repair_failed or failed
     if fix_total:
         verb = "Would apply" if dry_run else "Applied"
         suffix = "" if dry_run else " Re-auditing..."
         click.echo(f"\n{LOG_PREFIX} {verb} {fix_total} auto-correction(s).{suffix}\n", err=as_json)
-    else:
+    elif not repair_failed:
         click.echo(f"{LOG_PREFIX} No auto-corrections needed.\n", err=as_json)
+    return repair_failed
 
 
-def _fix_one_pursuit(path: Path, accounts_dir: Path, *, dry_run: bool, as_json: bool) -> int:
-    """Apply or preview corrections for one pursuit and return its change count."""
-    if path.name == "gmail-intel.md":
-        return 0
+def _fix_one_pursuit(path: Path, accounts_dir: Path, *, dry_run: bool, as_json: bool) -> tuple[int, bool]:
+    """Return the completed change count and whether the repair failed."""
+    if path.name in AUDIT_SKIPPED_FILENAMES:
+        return 0, False
     try:
         fix_result = apply_fixes(path, dry_run=dry_run)
-    except ValueError as exc:
-        click.echo(f"  refused: {path.relative_to(accounts_dir)} ({exc})", err=as_json)
-        return 0
+    except FrontmatterStalenessError:
+        click.echo(f"  repair refused: {path.relative_to(accounts_dir)} (changed during repair)", err=as_json)
+        return 0, True
+    except PathLockTimeoutError:
+        click.echo(f"  repair failed: {path.relative_to(accounts_dir)} (repair lock timed out)", err=as_json)
+        return 0, True
+    except ValueError:
+        click.echo(f"  repair refused: {path.relative_to(accounts_dir)} (unsafe or invalid pursuit data)", err=as_json)
+        return 0, True
+    except OSError:
+        click.echo(f"  repair failed: {path.relative_to(accounts_dir)} (filesystem write failed)", err=as_json)
+        return 0, True
     if not fix_result.total_changes:
-        return 0
+        return 0, False
     action = "would fix" if dry_run else "fixed"
     click.echo(
         f"  {action}: {path.relative_to(accounts_dir)} "
         f"({fix_result.renames} renames, {fix_result.legacy_removed} removed)",
         err=as_json,
     )
-    return fix_result.total_changes
+    return fix_result.total_changes, False
+
+
+def _resolve_report_path(accounts_dir: Path, account: str | None, output: str | None, today: date) -> Path:
+    """Resolve one report destination beneath the workspace audit directory."""
+    workspace = accounts_dir.parent.resolve(strict=True)
+    audit_dir = resolve_workspace_output(workspace, "accounts/.audit")
+    if output is None:
+        audit_dir.mkdir(parents=True, exist_ok=True)
+        audit_dir = resolve_workspace_output(workspace, "accounts/.audit")
+        acct_suffix = f"-{account}" if account else ""
+        return resolve_workspace_output(
+            workspace,
+            f"accounts/.audit/pursuit-compliance-{today}{acct_suffix}.md",
+        )
+
+    requested = Path(output)
+    candidate = requested.absolute() if requested.is_absolute() else (audit_dir / requested).absolute()
+    try:
+        relative = candidate.relative_to(workspace).as_posix()
+    except ValueError:
+        raise ValueError("Audit report output must remain under accounts/.audit") from None
+    report_path = resolve_workspace_output(workspace, relative)
+    if not report_path.is_relative_to(audit_dir) or report_path == audit_dir:
+        raise ValueError("Audit report output must remain under accounts/.audit")
+    if not report_path.parent.is_dir():
+        raise ValueError("Audit report output parent must already exist")
+    return report_path
 
 
 def _write_audit_report(
@@ -228,22 +272,24 @@ def _write_audit_report(
     today: date,
 ) -> None:
     """Render and write the audit report to disk."""
-    if output:
-        report_path = Path(output)
-    else:
-        audit_dir = accounts_dir / ".audit"
-        audit_dir.mkdir(parents=True, exist_ok=True)
-        # Include account name in filename to prevent per-account runs from
-        # overwriting each other or the full-audit report.
-        acct_suffix = f"-{account}" if account else ""
-        report_path = audit_dir / f"pursuit-compliance-{today}{acct_suffix}.md"
+    try:
+        report_path = _resolve_report_path(accounts_dir, account, output, today)
+        report = _render_report(results, today)
+        if report_path.exists():
+            log.info("Overwriting existing audit report")
+        atomic_text_write(report_path, report)
+    except (OSError, ValueError):
+        click.echo(f"{LOG_PREFIX} Cannot safely write the audit report.", err=True)
+        raise SystemExit(EXIT_DATA) from None
+    workspace = accounts_dir.parent.resolve(strict=True)
+    click.echo(f"\nReport written to: {report_path.relative_to(workspace)}")
 
-    report = _render_report(results, today)
-    if report_path.exists():
-        # implementation change: demote to INFO — overwriting is normal during re-runs
-        log.info("Overwriting existing report: %s", report_path)
-    report_path.write_text(report, encoding="utf-8")
-    click.echo(f"\nReport written to: {report_path}")
+
+def _json_result(result: AuditResult) -> dict[str, object]:
+    """Return the public result envelope without its private absolute path."""
+    payload = dataclasses.asdict(result)
+    payload.pop("path", None)
+    return payload
 
 
 def _emit_results(
@@ -255,6 +301,7 @@ def _emit_results(
     today: date,
     as_json: bool,
     write_report: bool = True,
+    repair_failed: bool = False,
 ) -> None:
     """Emit audit results to stdout and raise SystemExit with the appropriate code.
 
@@ -267,11 +314,11 @@ def _emit_results(
     """
     if as_json:
         # cell-28b9dae2e9395288: machine-readable output suppresses table and report write.
-        click.echo(json.dumps([dataclasses.asdict(r) for r in results], indent=2, default=str))
+        click.echo(json.dumps([_json_result(r) for r in results], indent=2, default=str))
         errors_j = sum(1 for r in results if r.category == "ERROR")
         warnings_j = sum(1 for r in results if r.category == "WARNING")
         criticals_j = sum(len(r.criticals) for r in results)
-        raise SystemExit(1 if (criticals_j > 0 or warnings_j > 0 or errors_j > 0) else 0)
+        raise SystemExit(1 if (repair_failed or criticals_j > 0 or warnings_j > 0 or errors_j > 0) else 0)
 
     _print_summary_table(results)
     _maybe_write_report(results, accounts_dir, account, output, today, write_report=write_report)
@@ -283,7 +330,7 @@ def _emit_results(
     errors = sum(1 for r in results if r.category == "ERROR")
     warnings_count = sum(1 for r in results if r.category == "WARNING")
     criticals = sum(len(r.criticals) for r in results)
-    if criticals > 0 or warnings_count > 0 or errors > 0:
+    if repair_failed or criticals > 0 or warnings_count > 0 or errors > 0:
         raise SystemExit(EXIT_PARTIAL)
     raise SystemExit(0)
 
@@ -312,6 +359,8 @@ def _validate_dry_run(fix: bool, dry_run: bool, check_yaml: bool, as_json: bool,
         raise click.UsageError("--dry-run cannot be combined with --json")
     if dry_run and output is not None:
         raise click.UsageError("--dry-run cannot be combined with --output")
+    if fix and check_yaml:
+        raise click.UsageError("--fix cannot be combined with --check-yaml")
 
 
 @declare_write("workspace")
@@ -329,7 +378,7 @@ def _validate_dry_run(fix: bool, dry_run: bool, check_yaml: bool, as_json: bool,
     "--output",
     "-o",
     default=None,
-    help="Write report to this path (default: <data-root>/accounts/.audit/pursuit-compliance-YYYY-MM-DD.md).",
+    help="Write beneath <data-root>/accounts/.audit/ (default: pursuit-compliance-YYYY-MM-DD.md).",
 )
 @click.option(
     "--check-yaml",
@@ -383,20 +432,34 @@ def cli(
     root = _data_root()
     today = datetime.now(tz=UTC).date()
 
-    accounts_dir = root / "accounts"
+    try:
+        if account is not None:
+            validate_meeting_account(account)
+        accounts_dir = resolve_workspace_output(root, "accounts")
+    except ValueError:
+        click.echo(f"{LOG_PREFIX} Invalid or unsafe account scope.", err=True)
+        raise SystemExit(EXIT_DATA) from None
+
     if not accounts_dir.is_dir():
         click.echo(f"{LOG_PREFIX} Accounts directory not found. Run 'fieldkit init' to initialize.", err=True)
+        raise SystemExit(EXIT_DATA) from None
+
+    try:
+        scoped_paths = pursuit_paths(root, account)
+    except ValueError:
+        click.echo(f"{LOG_PREFIX} Invalid or unsafe account scope.", err=True)
         raise SystemExit(EXIT_DATA) from None
 
     if check_yaml:
         _run_check_yaml(root, account)
         return  # sys.exit called inside
 
+    repair_failed = False
     if fix:
-        _run_fix(accounts_dir, account, dry_run=dry_run, as_json=as_json)
+        repair_failed = _run_fix(scoped_paths, accounts_dir, dry_run=dry_run, as_json=as_json)
 
     if account is not None and not (accounts_dir / account).is_dir():
-        click.echo(f"{LOG_PREFIX} Account directory not found: {accounts_dir / account}", err=True)
+        click.echo(f"{LOG_PREFIX} Account directory not found: {account}", err=True)
         raise SystemExit(EXIT_DATA) from None
 
     results = audit_directory(root, account_filter=account, today=today)
@@ -413,4 +476,5 @@ def cli(
         today=today,
         as_json=as_json,
         write_report=not dry_run,
+        repair_failed=repair_failed,
     )

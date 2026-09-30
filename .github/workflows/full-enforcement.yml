@@ -26,7 +26,9 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked --all-extras --dev
       - name: Run complete quality gate
-        run: make quality-full
+        run: >-
+          uv run python scripts/quality_gate.py run --tier full --workers 4
+          --receipt reports/quality-full.json
       - name: Summarize full-repository coverage
         if: always()
         run: >-
@@ -36,8 +38,16 @@ jobs:
           --step-summary "$GITHUB_STEP_SUMMARY"
           --source-revision "$GITHUB_SHA"
           --scope full-repository
-          --command 'make quality-full'
+          --command 'uv run python scripts/quality_gate.py run --tier full --workers 4 --receipt reports/quality-full.json'
           --minimum-percent 80
+      - name: Upload full quality-controller receipt
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: quality-full-receipt-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          path: reports/quality-full.json
+          retention-days: 30
+          if-no-files-found: error
       - name: Upload full-repository coverage evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1

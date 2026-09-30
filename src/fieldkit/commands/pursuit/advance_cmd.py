@@ -29,9 +29,12 @@ from fieldkit.config import get_accounts_root
 from fieldkit.pursuit import parse_frontmatter, write_frontmatter_raw
 from fieldkit.pursuit.enums import Stage
 from fieldkit.pursuit.gate_criteria import ALLOWED_GATE_STATUSES, GatePolicyDecision, evaluate_gate_policy
+from fieldkit.pursuit.io import read_pursuit_text_snapshot, render_frontmatter_raw
+from fieldkit.pursuit.paths import PursuitPathError, resolve_pursuit_file
 from fieldkit.pursuit.stages import ALL_STAGES as ALLOWED_STAGES
 from fieldkit.pursuit.stages import CLOSED_STAGES
 from fieldkit.pursuit.stages import PIPELINE_STAGES as _STAGE_ORDER
+from fieldkit.util.text_snapshot import TextSnapshot
 
 LOG_PREFIX = "[pursuit-advance]"
 _BACKWARD_OVERRIDE_REASON = "Backward transitions require an explicit override reason"
@@ -41,7 +44,8 @@ def _next_stage(current: str) -> str | None:
     """Return the next stage in the sequence, or None if at the end."""
     try:
         idx = _STAGE_ORDER.index(current)
-        return _STAGE_ORDER[idx + 1] if idx + 1 < len(_STAGE_ORDER) else Stage.CLOSED_WON
+        next_stage = _STAGE_ORDER[idx + 1] if idx + 1 < len(_STAGE_ORDER) else Stage.CLOSED_WON
+        return str(next_stage)
     except ValueError:
         return None
 
@@ -57,11 +61,18 @@ def _read_frontmatter(path: Path) -> tuple[dict[str, Any], str]:
     Returns (frontmatter_dict, raw_body_after_second_delimiter).
     Raises ValueError if no frontmatter found.
     """
-    text = path.read_text(encoding="utf-8")
-    result = parse_frontmatter(text)
+    frontmatter, body, _source = _read_frontmatter_snapshot(path)
+    return frontmatter, body
+
+
+def _read_frontmatter_snapshot(path: Path) -> tuple[dict[str, Any], str, TextSnapshot]:
+    """Parse one bounded, no-follow source and retain its exact identity."""
+    source = read_pursuit_text_snapshot(path)
+    result = parse_frontmatter(source.content)
     if result is None:
-        raise ValueError(f"No YAML frontmatter in {path}")
-    return result
+        raise ValueError("No YAML frontmatter in pursuit source")
+    frontmatter, body = result
+    return frontmatter, body, source
 
 
 def _apply_transition(
@@ -73,6 +84,7 @@ def _apply_transition(
     note: str,
     *,
     expected_mtime: float | None = None,
+    expected_source_content: str | None = None,
 ) -> None:
     """Write the new stage, gate-status, last-transition, and transition-history entry."""
     if gate_status not in ALLOWED_GATE_STATUSES:
@@ -98,56 +110,22 @@ def _apply_transition(
     )
     fm["transition-history"] = history
 
-    write_frontmatter_raw(path, fm, body, expected_mtime=expected_mtime)
+    validated_content = None
+    if expected_source_content is not None:
+        validated_content = render_frontmatter_raw(path, fm, body, expected_mtime=expected_mtime)
+    write_frontmatter_raw(
+        path,
+        fm,
+        body,
+        expected_mtime=expected_mtime,
+        validated_content=validated_content,
+        validated_source_content=expected_source_content,
+    )
 
 
 def _resolve_pursuit_spec(spec: str) -> Path:
-    """Resolve a pursuit spec string to an existing Path.
-
-    implementation change: Supports shorthand like '<account>/<slug>' in addition to full paths.
-
-    Resolution order:
-      1. Path(spec) — if it exists as-is, return it.
-      2. accounts_root / spec — if it exists as a file, return it.
-      3. 2-part shorthand [account, slug]: accounts_root / account / "pursuits" / (slug + ".md")
-      4. 1-part: accounts_root / part / "pursuits" / (part + ".md") as fallback.
-
-    Uses Path(spec).parts for safe cross-platform segment splitting — avoids
-    index errors on short/long paths and handles all path separators correctly.
-
-    Raises:
-        click.ClickException: when no matching file is found.
-    """
-    accounts_root = get_accounts_root()
-
-    # Strategy 1: exact path
-    direct = Path(spec)
-    if direct.exists():
-        return direct
-
-    # Strategy 2: relative to accounts root (e.g. "acme/pursuits/deal.md")
-    relative = accounts_root / spec
-    if relative.is_file():
-        return relative
-
-    # Strategy 3+: shorthand using path parts
-    parts = Path(spec).parts
-    if len(parts) == 2:
-        account, slug = parts[0], parts[1]
-        candidate = accounts_root / account / "pursuits" / f"{slug}.md"
-        if candidate.is_file():
-            return candidate
-    elif len(parts) == 1:
-        part = parts[0]
-        candidate = accounts_root / part / "pursuits" / f"{part}.md"
-        if candidate.is_file():
-            return candidate
-
-    raise click.ClickException(
-        f"Cannot find pursuit: {spec!r}\n"
-        f"  Tried: {accounts_root}/<account>/pursuits/<slug>.md\n"
-        f"  Pass the full path or use <account>/<slug> shorthand."
-    )
+    """Resolve a pursuit selector within the configured workspace."""
+    return resolve_pursuit_file(get_accounts_root().parent, spec)
 
 
 def _resolve_target_stage(current_stage: str, target_stage: str | None) -> str | None:
@@ -265,8 +243,7 @@ def _resolve_advance_target(
 
     Raises:
         click.UsageError: on invalid flag combinations or missing arguments.
-        click.ClickException: when the pursuit file cannot be found.
-        SystemExit(3): on unexpected resolution errors.
+        SystemExit(3): when the pursuit does not resolve safely.
     """
     # implementation change: resolve pursuit from either positional or --account/--name flags.
     if account is not None and name is not None:
@@ -278,13 +255,13 @@ def _resolve_advance_target(
     elif pursuit_spec is None:
         raise click.UsageError("Provide PURSUIT_SPEC or use --account and --name together.")
 
-    # implementation change: resolve shorthand spec to a full path before reading frontmatter.
     try:
         return _resolve_pursuit_spec(pursuit_spec)
-    except click.ClickException:
-        raise
-    except Exception as exc:  # noqa: BLE001
-        click.echo(f"{LOG_PREFIX} ERROR: {exc}", err=True)
+    except PursuitPathError:
+        click.echo(
+            f"{LOG_PREFIX} ERROR: pursuit must be an existing file in the configured workspace",
+            err=True,
+        )
         raise SystemExit(EXIT_DATA) from None
 
 
@@ -366,10 +343,9 @@ def advance_cmd(
     pursuit_file = _resolve_advance_target(pursuit_spec, account, name)
 
     try:
-        expected_mtime = pursuit_file.stat().st_mtime
-        fm, body = _read_frontmatter(pursuit_file)
-    except (ValueError, OSError) as exc:
-        click.echo(f"{LOG_PREFIX} ERROR: {exc}", err=True)
+        fm, body, source = _read_frontmatter_snapshot(pursuit_file)
+    except (ValueError, OSError):
+        click.echo(f"{LOG_PREFIX} ERROR: pursuit source is not bounded UTF-8 frontmatter", err=True)
         raise SystemExit(EXIT_DATA) from None
 
     current_stage = str(fm.get("stage", "")).lower()
@@ -448,7 +424,8 @@ def advance_cmd(
         target_stage,
         gate_status,
         note,
-        expected_mtime=expected_mtime,
+        expected_mtime=source.info.st_mtime,
+        expected_source_content=source.content,
     )
     if as_json:
         _emit(advanced=True)

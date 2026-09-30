@@ -6,17 +6,8 @@
 #   - Grade density: fail if weighted violations/10k tokens exceeds ceiling (2.7)
 #   - Grade floor: fail if grade drops below A
 #
-# Baseline (.skillsaw-baseline.json) — ceiling-mode ratchet on 6 accepted warnings:
-#   content-critical-position (2) — AGENTS.md has MUST instructions in attention
-#     dead zone; these are deliberate structural choices (file is too long to fix
-#     without breaking the attention-zone rule regardless of placement).
-#   content-critical-position (1) — pursuit-review/SKILL.md same reason.
-#   content-critical-position (2) — managing-google-workspace reference files.
-#   context-budget (1)            — managing-google-workspace/SKILL.md is an
-#     intentionally detailed reference skill (3,832 tokens).
-#
-# ceiling mode: numeric violations (token counts) can only decrease, never increase.
-# To update after intentional changes: uvx skillsaw==0.16.0 baseline .
+# The public export has no baseline suppressions. Private agent-adapter exceptions
+# stay outside the export under the versioned public-tree policy.
 
 version: "0.14.0"
 

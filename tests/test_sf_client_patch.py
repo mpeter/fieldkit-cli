@@ -14,15 +14,22 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-from fieldkit.sf.client import (
-    SFAPIError,
-    SFAuthError,
-    SFConditionalWriteConflict,
-    SFConditionalWriteOutcomeUnknown,
-    SFDirectClient,
-)
+from fieldkit.config.retry import RETRY_MAX_ATTEMPTS, RETRY_TRANSIENT_STATUSES
+from fieldkit.sf import _transport
+from fieldkit.sf.client import SFDirectClient
+from fieldkit.sf.errors import SFAPIError, SFAuthError, SFConditionalWriteConflict, SFConditionalWriteOutcomeUnknown
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.fixture(autouse=True)
+def _zero_retry_waits(monkeypatch: pytest.MonkeyPatch) -> None:
+    with_policy = vars(_transport._sf_request_idempotent)["with_policy"]
+    assert callable(with_policy)
+    request = with_policy(wait_min=0, wait_max=0)
+    assert callable(request)
+    monkeypatch.setattr(_transport, "_sf_request_idempotent", request)
+
 
 # ---------------------------------------------------------------------------
 # Shared constants and helpers
@@ -155,26 +162,63 @@ def test_update_opportunity_fields_403_raises_sfapierror() -> None:
 
 
 def test_update_opportunity_fields_connect_error_raises_sfapierror() -> None:
-    """httpx.ConnectError → raises SFAPIError.
-
-    Surprise: update_opportunity_fields() calls _request_with_retry() which
-    does NOT wrap ConnectError — it propagates out of the retry loop.
-    The ConnectError is then caught by the caller's exception handler in
-    update_opportunity_fields(), which does NOT have a try/except around
-    _request_with_retry. So ConnectError propagates as-is.
-
-    Actually: _request_with_retry calls self._client.request() directly.
-    ConnectError from self._client.request() propagates out of _request_with_retry
-    because _request_with_retry has no ConnectError handler (unlike sosl_search).
-    update_opportunity_fields() also has no ConnectError handler.
-    So ConnectError propagates to the test.
-    """
+    """Exhausted ordinary PATCH connection failures become fixed SFAPIError guidance."""
     mock_http = _make_mock_http_client()
     mock_http.request.side_effect = httpx.ConnectError("connection refused")
     with patch("httpx.Client", return_value=mock_http):
         client = _make_client()
-        with pytest.raises(httpx.ConnectError, match="connection refused"):
+        with pytest.raises(SFAPIError, match="SF request failed") as caught:
             client.update_opportunity_fields(_OPP_ID, {"StageName": "Closed Won"})
+    assert str(caught.value) == "SF request failed; check Salesforce availability and configuration."
+    assert mock_http.request.call_count == RETRY_MAX_ATTEMPTS
+
+
+@pytest.mark.parametrize(
+    ("status", "failure"),
+    [
+        (200, None),
+        (204, None),
+        (401, SFAuthError),
+        (412, SFConditionalWriteConflict),
+        (400, SFAPIError),
+        (403, SFAPIError),
+    ]
+    + [(status, SFConditionalWriteOutcomeUnknown) for status in sorted(RETRY_TRANSIENT_STATUSES)],
+)
+def test_guarded_patch_has_one_attempt_for_every_response(status: int, failure: type[Exception] | None) -> None:
+    transport = _make_mock_http_client(status_code=status)
+    with patch("httpx.Client", return_value=transport), SFDirectClient(session_id=_SID, base_url=_BASE_URL) as client:
+        if failure is None:
+            result = client.conditional_update_sobject_fields(
+                _SOBJECT_TYPE, _RECORD_ID, {"Name": "synthetic"}, if_unmodified_since="2026-09-15T12:00:00Z"
+            )
+            assert result is None
+        else:
+            with pytest.raises(failure, match=r"SF|Salesforce") as caught:
+                client.conditional_update_sobject_fields(
+                    _SOBJECT_TYPE, _RECORD_ID, {"Name": "synthetic"}, if_unmodified_since="2026-09-15T12:00:00Z"
+                )
+            assert isinstance(caught.value, failure)
+    assert transport.request.call_count == 1
+
+
+@pytest.mark.parametrize("failure", [httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.RequestError])
+def test_guarded_patch_transport_error_has_no_cause_and_one_attempt(failure: type[httpx.RequestError]) -> None:
+    transport = _make_mock_http_client()
+    error = failure("private-transport-sentinel")
+    error.__cause__ = ValueError("private-cause-sentinel")
+    transport.request.side_effect = error
+    with (
+        patch("httpx.Client", return_value=transport),
+        SFDirectClient(session_id=_SID, base_url=_BASE_URL) as client,
+        pytest.raises(SFConditionalWriteOutcomeUnknown, match="reread") as caught,
+    ):
+        client.conditional_update_sobject_fields(
+            _SOBJECT_TYPE, _RECORD_ID, {"Name": "synthetic"}, if_unmodified_since="2026-09-15T12:00:00Z"
+        )
+    assert caught.value.__cause__ is None
+    assert caught.value.__suppress_context__
+    assert transport.request.call_count == 1
 
 
 def test_update_opportunity_fields_retries_on_503_then_succeeds() -> None:

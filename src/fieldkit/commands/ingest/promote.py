@@ -9,43 +9,25 @@ Usage:
 """
 
 import re
+from collections.abc import Mapping
+from datetime import date
 from pathlib import Path
 from typing import Any
 
 import click
 import yaml
 
-from fieldkit.cli_exit import EXIT_PARTIAL
+from fieldkit.cli_exit import EXIT_DATA, EXIT_PARTIAL
+from fieldkit.config import get_fieldkit_data
+from fieldkit.ingest.note_effect import MAX_NOTE_BYTES
+from fieldkit.ingest.paths import recent_meeting_paths, resolve_promote_input
+from fieldkit.ingest.writeback import build_pursuit_label
 from fieldkit.pursuit.io import extract_frontmatter_text
-
-# ---------------------------------------------------------------------------
-# Rendering helpers
-# ---------------------------------------------------------------------------
-
-_DISPLAY_OVERRIDES: dict[str, str] = {
-    "globalpay": "GlobalPay",
-    "rhoai": "RHOAI",
-    "aep": "AEP",
-    "eda": "EDA",
-    "aap": "AAP",
-    "ocp": "OCP",
-    "eap": "EAP",
-    "hcs": "HCS",
-    "ads": "ADS",
-    "sow": "SOW",
-}
-
-
-def _display(slug: str) -> str:
-    return " ".join(_DISPLAY_OVERRIDES.get(p.lower(), p.title()) for p in slug.replace("-", " ").split())
-
-
-def _pursuit_label(account: str, pursuits: list[str]) -> str:
-    acct = _DISPLAY_OVERRIDES.get(account.lower(), account.replace("-", " ").title())
-    if pursuits:
-        return f"{acct} / {_display(pursuits[0])}"
-    return acct
-
+from fieldkit.tasks.classifier import ClassifiedItem, ItemClass
+from fieldkit.tasks.effects import TaskEffect, validate_task_source_id
+from fieldkit.tasks.writer import append_to_tasks
+from fieldkit.util.atomic import PathLockTimeoutError
+from fieldkit.util.text_snapshot import read_text_snapshot
 
 # ---------------------------------------------------------------------------
 # Suggestion engine — lightweight, no classification machinery
@@ -137,49 +119,47 @@ def _prompt_item(idx: int, total: int, item: str, suggestion: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _write_active(tasks_path: Path, item: str, pursuit_label: str) -> None:
-    content = tasks_path.read_text(encoding="utf-8")
-    tag = f"**[{pursuit_label}]** " if pursuit_label else ""
-    entry = f"- {tag}{item}"
-    if item[:60] in content:
+def _write_active(tasks_path: Path, item: str, pursuit_label: str, *, source_id: str, position: int) -> bool:
+    """Persist a confirmed personal task through the shared task writer."""
+    added, _ = append_to_tasks(
+        [TaskEffect(source_id, position, ClassifiedItem(item, ItemClass.MY_TASK, "", "User confirmed", pursuit_label))],
+        tasks_path,
+        meeting_date="",
+        meeting_title="",
+        runtime_root=get_fieldkit_data(),
+    )
+    if not added:
         click.echo("         → already in TASKS.md, skipped")
-        return
-    m = re.search(r"^## Active\s*$", content, re.MULTILINE)
-    if m:
-        insert = m.end()
-        rest = content[insert:]
-        cm = re.match(r"\n<!--[^\n]*-->\n?", rest)
-        if cm:
-            insert += cm.end()
-        content = content[:insert] + "\n" + entry + content[insert:]
-    else:
-        content += f"\n## Active\n{entry}\n"
-    tasks_path.write_text(content, encoding="utf-8")
+    return bool(added)
 
 
-def _write_waiting(tasks_path: Path, item: str, pursuit_label: str, meeting_title: str, meeting_date: str) -> None:
-    content = tasks_path.read_text(encoding="utf-8")
-    tag = f"**[{pursuit_label}]** " if pursuit_label else ""
-    # Strip owner prefix for the "re:" description
-    topic = re.sub(r"^[A-Z][a-zA-Z]+(?: [A-Z][a-zA-Z]+)*\s*[:\-]\s*", "", item).strip()
-    # Extract owner
+def _write_waiting(
+    tasks_path: Path,
+    item: str,
+    pursuit_label: str,
+    *,
+    meeting_title: str,
+    meeting_date: str,
+    source_id: str,
+    position: int,
+) -> bool:
+    """Persist a confirmed waiting-on task through the shared task writer."""
     om = re.match(r"^([A-Z][a-zA-Z]+(?: [A-Z][a-zA-Z]+)*)\s*[:\-]", item)
-    owner_str = f" {om.group(1)}" if om else ""
-    entry = f"- {tag}Waiting on{owner_str} re: {topic} — from {meeting_title} ({meeting_date})"
-    if item[:60] in content:
+    owner = om.group(1) if om else "Unknown"
+    _, added = append_to_tasks(
+        [
+            TaskEffect(
+                source_id, position, ClassifiedItem(item, ItemClass.WAITING_ON, owner, "User confirmed", pursuit_label)
+            )
+        ],
+        tasks_path,
+        meeting_date=meeting_date,
+        meeting_title=meeting_title,
+        runtime_root=get_fieldkit_data(),
+    )
+    if not added:
         click.echo("         → already in TASKS.md, skipped")
-        return
-    m = re.search(r"^## Waiting On\s*$", content, re.MULTILINE)
-    if m:
-        insert = m.end()
-        rest = content[insert:]
-        cm = re.match(r"\n<!--[^\n]*-->\n?", rest)
-        if cm:
-            insert += cm.end()
-        content = content[:insert] + "\n" + entry + content[insert:]
-    else:
-        content += f"\n## Waiting On\n{entry}\n"
-    tasks_path.write_text(content, encoding="utf-8")
+    return bool(added)
 
 
 # ---------------------------------------------------------------------------
@@ -187,33 +167,65 @@ def _write_waiting(tasks_path: Path, item: str, pursuit_label: str, meeting_titl
 # ---------------------------------------------------------------------------
 
 
+def _metadata_text(metadata: Mapping[str, object], key: str, default: str) -> str:
+    """Read text without coercion; YAML calendar dates have one explicit representation."""
+    if key not in metadata:
+        return default
+    value = metadata[key]
+    if key == "meeting_date" and type(value) is date:
+        value = value.isoformat()
+    if not isinstance(value, str) or not value.strip() or len(value) > 8192:
+        raise ValueError("Invalid meeting metadata")
+    if key == "meeting_date" and date.fromisoformat(value).isoformat() != value:
+        raise ValueError("Invalid meeting date")
+    return value
+
+
+def _metadata_strings(metadata: Mapping[str, object], key: str, limit: int) -> list[str]:
+    """Require bounded string sequences before prompting or making durable writes."""
+    value = metadata.get(key, [])
+    if not isinstance(value, list) or len(value) > limit:
+        raise ValueError("Invalid meeting metadata")
+    result: list[str] = []
+    for item in value:
+        if not isinstance(item, str) or not item.strip() or len(item) > 8192:
+            raise ValueError("Invalid meeting metadata")
+        result.append(item)
+    return result
+
+
 def _promote_file(meeting_path: Path, tasks_path: Path, user_name: str, user_email: str) -> bool:
     """Interactively promote action items from one meeting note.
 
     Returns True if the user chose to quit early.
     """
-    text = meeting_path.read_text(encoding="utf-8")
+    try:
+        text = read_text_snapshot(meeting_path, max_bytes=MAX_NOTE_BYTES).content
+    except FileNotFoundError:
+        raise ValueError("Meeting note is unavailable") from None
     fm_text = extract_frontmatter_text(text)
     if not fm_text:
-        click.echo(f"  No frontmatter found in {meeting_path.name}", err=True)
-        return False
+        raise ValueError("Invalid meeting frontmatter")
 
     try:
-        fm: dict[str, Any] = yaml.safe_load(fm_text) or {}
-    except yaml.YAMLError as exc:
-        click.echo(f"  YAML error in {meeting_path.name}: {exc}", err=True)
-        return False
+        fm: dict[str, Any] = yaml.safe_load(fm_text)
+    except (yaml.YAMLError, RecursionError):
+        raise ValueError("Invalid meeting frontmatter") from None
 
-    action_items = [str(a) for a in (fm.get("action_items") or [])]
+    if not isinstance(fm, dict):
+        raise ValueError("Invalid meeting metadata")
+    action_items = _metadata_strings(fm, "action_items", 2000)
     if not action_items:
         click.echo(f"  {meeting_path.name}: no action items, skipping.")
         return False
 
-    account = str(fm.get("account", "unknown"))
-    pursuits_list = [str(p) for p in (fm.get("pursuits") or [])]
-    meeting_title = str(fm.get("meeting_title", meeting_path.stem))
-    meeting_date = str(fm.get("meeting_date", ""))
-    label = _pursuit_label(account, pursuits_list)
+    source_id = validate_task_source_id(fm.get("source_id"))
+
+    account = _metadata_text(fm, "account", "unknown")
+    pursuits_list = _metadata_strings(fm, "pursuits", 1000)
+    meeting_title = _metadata_text(fm, "meeting_title", meeting_path.stem)
+    meeting_date = _metadata_text(fm, "meeting_date", "")
+    label = build_pursuit_label(account, pursuits_list)
 
     click.echo("")
     click.echo(click.style("━" * 70, fg="bright_black"))
@@ -231,13 +243,25 @@ def _promote_file(meeting_path: Path, tasks_path: Path, user_name: str, user_ema
             click.echo("  Quitting. Progress saved.")
             return True
         elif choice == "m":
-            _write_active(tasks_path, item, label)
-            click.echo("         → added to Active")
-            n_mine += 1
+            if _write_active(tasks_path, item, label, source_id=source_id, position=i - 1):
+                click.echo("         → added to Active")
+                n_mine += 1
+            else:
+                n_skip += 1
         elif choice == "w":
-            _write_waiting(tasks_path, item, label, meeting_title, meeting_date)
-            click.echo("         → added to Waiting On")
-            n_wait += 1
+            if _write_waiting(
+                tasks_path,
+                item,
+                label,
+                meeting_title=meeting_title,
+                meeting_date=meeting_date,
+                source_id=source_id,
+                position=i - 1,
+            ):
+                click.echo("         → added to Waiting On")
+                n_wait += 1
+            else:
+                n_skip += 1
         else:
             n_skip += 1
 
@@ -276,6 +300,24 @@ def _help_callback(ctx: click.Context, _param: click.Parameter, val: bool) -> No
 def cli(meeting_file: Path | None, recent: int, account: str | None) -> None:
     """Interactively promote meeting action items to TASKS.md.
 
+    Meeting notes need a stable, unique source_id and a list of action_items.
+    For manually authored notes, choose an ID using letters, digits, underscores,
+    hyphens, or colons (at most 256 characters); never reuse it for another note.
+    Keep action-item order and source_id unchanged while retrying promotion.
+
+    Task provenance comments preserve edited tasks on identical retries. Keep
+    those comments when editing or checking off a task. Conflicting decisions
+    and matching unmarked legacy tasks are refused, not overwritten. To keep an
+    existing task, rerun and skip that action item; edit the existing task by
+    hand while retaining its provenance instead of promoting a replacement.
+
+    Exit 1 means TASKS.md is missing or busy, or no meeting input was selected.
+    Create the task file, select a meeting file or --recent N, or wait for the
+    other writer as directed. Exit 3 means invalid metadata or ambiguous
+    provenance; correct the note or restore
+    its original provenance from your backup before retrying. Earlier confirmed
+    items may already have been saved when a later item fails.
+
     Review each action item from a processed meeting note and choose:
 
     \b
@@ -305,15 +347,19 @@ def cli(meeting_file: Path | None, recent: int, account: str | None) -> None:
         click.echo(f"Error: TASKS.md not found at {tasks_path}", err=True)
         raise SystemExit(EXIT_PARTIAL)
 
-    # Resolve which files to process
-    if meeting_file:
-        files = [meeting_file]
-    elif recent > 0:
-        pattern = "accounts/*/meetings/*.md" if not account else f"accounts/{account}/meetings/*.md"
-        candidates = [f for f in data_root.glob(pattern) if f.name != ".gitkeep" and not f.name.startswith(".")]
-        # Sort by mtime descending — most recently written first
-        candidates.sort(key=lambda f: f.stat().st_mtime, reverse=True)
-        files = candidates[:recent]
+    try:
+        if meeting_file:
+            files = [resolve_promote_input(data_root, meeting_file)]
+        elif recent > 0:
+            files = recent_meeting_paths(data_root, account=account, limit=recent)
+        else:
+            click.echo("Provide a MEETING_FILE or use --recent N.", err=True)
+            raise SystemExit(EXIT_PARTIAL)
+    except ValueError:
+        click.echo("Cannot safely select meeting notes; use a literal account slug and non-redirected paths.", err=True)
+        raise SystemExit(EXIT_DATA) from None
+
+    if not meeting_file:
         if not files:
             click.echo("No meeting files found.")
             raise SystemExit(0)
@@ -323,16 +369,23 @@ def cli(meeting_file: Path | None, recent: int, account: str | None) -> None:
             + ":"
         )
         for f in files:
-            click.echo(f"  {f.relative_to(data_root)}")
-    else:
-        click.echo("Provide a MEETING_FILE or use --recent N.", err=True)
-        raise SystemExit(EXIT_PARTIAL)
+            click.echo(f"  {f.relative_to(data_root.resolve())}")
 
     # Process each file
-    for f in files:
-        quit_early = _promote_file(f, tasks_path, user_name, user_email)
-        if quit_early:
-            break
+    try:
+        for f in files:
+            quit_early = _promote_file(resolve_promote_input(data_root, f), tasks_path, user_name, user_email)
+            if quit_early:
+                break
+    except PathLockTimeoutError:
+        click.echo("TASKS.md is busy; retry promotion after the current writer finishes.", err=True)
+        raise SystemExit(EXIT_PARTIAL) from None
+    except ValueError:
+        click.echo(
+            "Promotion refused ambiguous metadata or task provenance; reconcile the meeting and TASKS.md before retrying.",
+            err=True,
+        )
+        raise SystemExit(EXIT_DATA) from None
 
     click.echo("")
     click.echo("✓ Promotion complete. Review TASKS.md to verify.")

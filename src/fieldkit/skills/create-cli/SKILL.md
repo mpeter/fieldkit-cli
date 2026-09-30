@@ -15,11 +15,21 @@ metadata:
 Define the observable interface before implementation. Keep the result compact
 and specific to the requested command.
 
+This is a contributor agent workflow, not a fieldkit command that generates or
+installs code. It requires an authorized source checkout of the revision being
+changed. A packaged skill installation alone is not that checkout.
+
 ## Establish the local contract
 
-Read the repository [agent guide](../../../../AGENTS.md) and
-[exit codes](../../../../docs/reference/exit-codes.md). Inspect the live Click tree and adjacent
-commands. Those public sources override generic CLI advice. In particular, fieldkit's
+Identify the checkout and its revision with the operator. Read its `AGENTS.md`
+and `docs/reference/exit-codes.md`; do not resolve these paths relative to the
+installed skill directory or assume a private maintainer checkout exists.
+If the source or required contract is unavailable, report that prerequisite
+as pending rather than inventing the current interface.
+
+Inspect that checkout's live Click tree and adjacent commands. An independently
+installed command may run a different revision, so it is not source-candidate
+proof. Those sources override generic CLI advice. In particular, fieldkit's
 top-level handler maps Click usage errors to data error status 3.
 
 Clarify only decisions that would change the interface. Infer the rest from
@@ -50,6 +60,9 @@ the same result and failure meaning as human mode without mixing diagnostics
 into stdout. Secrets do not belong in argv.
 
 Stop after the interface contract unless implementation was also requested.
+Do not edit code, stage changes, create issues, publish a package, or alter
+repository settings merely because the skill was invoked. A proposal is not
+an implemented feature or a passing acceptance test.
 
 ## Provenance
 

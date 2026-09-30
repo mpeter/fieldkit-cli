@@ -4,6 +4,9 @@ import json
 
 import click
 
+from fieldkit.cli_exit import EXIT_DATA, EXIT_PARTIAL
+from fieldkit.errors import SQLiteSnapshotError
+
 # ---------------------------------------------------------------------------
 # Core logic
 # ---------------------------------------------------------------------------
@@ -18,19 +21,32 @@ def _run_status(account: str | None = None, as_json: bool = False) -> None:
     db_exists = False
 
     try:
-        from fieldkit.ingest.db import get_db
+        from fieldkit.ingest.db import get_db_read_only
 
-        conn = get_db()
-        db_exists = True
-        for row in conn.execute("SELECT pipeline_id, COUNT(*) AS n FROM sources GROUP BY pipeline_id"):
-            db_counts.setdefault(row["pipeline_id"], {})["sources"] = row["n"]
-        for row in conn.execute("SELECT pipeline_id, COUNT(*) AS n FROM artifacts GROUP BY pipeline_id"):
-            db_counts.setdefault(row["pipeline_id"], {})["artifacts"] = row["n"]
-        conn.close()
+        conn = get_db_read_only()
+        try:
+            for row in conn.execute("SELECT pipeline_id, COUNT(*) AS n FROM sources GROUP BY pipeline_id"):
+                db_counts.setdefault(row["pipeline_id"], {})["sources"] = row["n"]
+            for row in conn.execute("SELECT pipeline_id, COUNT(*) AS n FROM artifacts GROUP BY pipeline_id"):
+                db_counts.setdefault(row["pipeline_id"], {})["artifacts"] = row["n"]
+            db_exists = True
+        finally:
+            conn.close()
     except FileNotFoundError:
         db_exists = False
-    except Exception as exc:  # noqa: BLE001 — surface db open error to user
-        click.echo(f"[warn] Could not open pipeline.db: {exc}", err=True)
+    except SQLiteSnapshotError as exc:
+        if exc.reason == "active":
+            click.echo("Error: pipeline.db is active; retry after current writers finish.", err=True)
+            raise SystemExit(EXIT_PARTIAL) from exc
+        click.echo("Error: Could not verify pipeline.db safely; inspect the database before retrying.", err=True)
+        raise SystemExit(EXIT_DATA) from exc
+    except Exception as exc:
+        click.echo(
+            "Error: Could not read pipeline.db safely; verify that it is a valid initialized "
+            "database and retry when writers have stopped.",
+            err=True,
+        )
+        raise SystemExit(EXIT_DATA) from exc
 
     if as_json:
         items = [

@@ -1,5 +1,6 @@
 """Tests for fieldkit.pursuit.advance_cmd — branch coverage for advance_cmd."""
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,14 @@ from fieldkit.errors import FrontmatterStalenessError
 from fieldkit.pursuit import load_pursuit, write_frontmatter, write_frontmatter_raw
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.fixture(autouse=True)
+def _confine_advance_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "fieldkit.commands.pursuit.advance_cmd.get_accounts_root",
+        lambda: tmp_path / "accounts",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -39,7 +48,8 @@ def _make_pursuit(
         "meddpicc": meddpicc or {},
     }
     content = f"---\n{yaml.dump(fm)}---\n\n# Deal Title\n"
-    path = tmp_path / name
+    path = tmp_path / "accounts" / "acme" / "pursuits" / name
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
     return path
 
@@ -279,6 +289,30 @@ def test_apply_transition_refuses_stale_frontmatter(tmp_path: Path) -> None:
     assert path.read_text(encoding="utf-8") == concurrent
 
 
+def test_apply_transition_refuses_same_mtime_content_replacement(tmp_path: Path) -> None:
+    path = _make_pursuit(tmp_path, stage="discover")
+    source = path.read_text(encoding="utf-8")
+    expected_mtime = path.stat().st_mtime
+    fm, body = _read_frontmatter(path)
+    concurrent = source.replace("# Deal Title", "# Concurrent owner edit")
+    path.write_text(concurrent, encoding="utf-8")
+    os.utime(path, (expected_mtime, expected_mtime))
+
+    with pytest.raises(FrontmatterStalenessError, match="changed after frontmatter validation"):
+        _apply_transition(
+            path,
+            fm,
+            body,
+            "validate",
+            "pass",
+            "Gate passed",
+            expected_mtime=expected_mtime,
+            expected_source_content=source,
+        )
+
+    assert path.read_text(encoding="utf-8") == concurrent
+
+
 def test_apply_transition_invalid_gate_status_raises(tmp_path: Path) -> None:
     path = _make_pursuit(tmp_path, stage="qualify")
     fm, body = _read_frontmatter(path)
@@ -461,7 +495,8 @@ def test_advance_cmd_rejects_whitespace_only_override(tmp_path: Path) -> None:
 
 def test_advance_cmd_meddpicc_none_treated_as_empty(tmp_path: Path) -> None:
     """A former null scorecard cannot change the pending policy decision."""
-    path = tmp_path / "null-meddpicc.md"
+    path = tmp_path / "accounts" / "acme" / "pursuits" / "null-meddpicc.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
     content = "---\nstage: discover\nmeddpicc: null\n---\n\n# Deal\n"
     path.write_text(content, encoding="utf-8")
     runner = CliRunner()

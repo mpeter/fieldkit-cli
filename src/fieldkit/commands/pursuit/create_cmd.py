@@ -96,7 +96,7 @@ def _emit_created(target: Path, account: str, slug: str, as_json: bool) -> None:
 
 @declare_write("workspace")
 @click.command(name="create")
-@click.option("--account", "-a", required=True, help="Account directory name (e.g. acme, globalpay).")
+@click.option("--account", "-a", required=True, help="Account directory name (e.g. acme-corp).")
 @click.option(
     "--name",
     "-n",

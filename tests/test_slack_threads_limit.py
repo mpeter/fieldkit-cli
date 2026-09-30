@@ -49,7 +49,7 @@ def _call_scan(
             mock_scan,
         ),
         patch("fieldkit.watch.slack_threads.append_thread_alert"),
-        patch("fieldkit.watch.slack_threads.write_auth_error_alert"),
+        patch("fieldkit.watch.slack_threads.write_slack_error_alert"),
         patch("fieldkit.watch.slack_threads._save_auth_error_state"),
     ):
         _scan_all_accounts(

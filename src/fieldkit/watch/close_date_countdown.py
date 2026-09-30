@@ -33,7 +33,7 @@ from fieldkit.watch.dedup import alert_block_exists
 from fieldkit.watch.logging import watcher_logging
 from fieldkit.watch.state import merge_state
 from fieldkit.watch.state import state_write_failed as _state_write_failed
-from fieldkit.watch.status import WatcherOutcome, write_run_status
+from fieldkit.watch.status import WatcherRunResult, classify_watcher_outcome, write_run_status
 
 
 @cache
@@ -397,9 +397,9 @@ def _run_countdown(
     account_filter: str | None,
     dry_run: bool,
     as_json: bool = False,
-) -> int:
-    """Core logic; returns POSIX exit code."""
-    with watcher_logging("close-date-countdown"):
+) -> WatcherRunResult:
+    """Run the watcher and return this invocation's execution facts."""
+    with watcher_logging("close-date-countdown", enabled=not dry_run):
         return _run_countdown_inner(
             threshold_red=threshold_red,
             threshold_yellow=threshold_yellow,
@@ -482,8 +482,8 @@ def _run_countdown_inner(
     account_filter: str | None,
     dry_run: bool,
     as_json: bool = False,
-) -> int:
-    """Inner logic (separated for testability); returns POSIX exit code.
+) -> WatcherRunResult:
+    """Inner logic (separated for testability); returns execution facts.
 
     ``as_json`` emits the run-status document on stdout; the exit code is unaffected.
     """
@@ -494,7 +494,7 @@ def _run_countdown_inner(
 
     _accounts, err = _validate_accounts_config(account_filter)
     if err:
-        return err
+        return WatcherRunResult("fatal", False, None)
 
     state = _load_state()
     checked, alerted, skipped, failures, updated_state = _prune_and_scan_pursuits(
@@ -523,8 +523,9 @@ def _run_countdown_inner(
         elapsed,
         dry_run,
     )
-    outcome: WatcherOutcome = "fatal" if state_write_failed or (checked == 0 and failures > 0) else "ok"
-    write_run_status(
+    outcome = "fatal" if state_write_failed else classify_watcher_outcome(checked=checked, failures=failures)
+    failures += int(state_write_failed)
+    status_result = write_run_status(
         watcher="close-date-countdown",
         outcome=outcome,
         records_checked=checked,
@@ -533,15 +534,19 @@ def _run_countdown_inner(
         elapsed_seconds=elapsed,
         dry_run=dry_run,
     )
+    if status_result == "failed":
+        failures += 1
+        outcome = "fatal"
+    result = WatcherRunResult(outcome, True, status_result)
     if as_json:
         # The run happened — emit the outcome even when it is fatal, which is
         # exactly when a caller needs the detail. historic regression: `outcome` is reported
-        # verbatim; only "fatal" denotes a failed run.
+        # verbatim so partial and fatal failures remain observable.
         print(
             json.dumps(
                 {
                     "watcher": "close-date-countdown",
-                    "outcome": outcome,
+                    "outcome": result.outcome,
                     "records_checked": checked,
                     "alerts_generated": alerted,
                     "failures": failures,
@@ -552,7 +557,7 @@ def _run_countdown_inner(
                 default=str,
             )
         )
-    return 1 if outcome == "fatal" else 0
+    return result
 
 
 __all__ = [

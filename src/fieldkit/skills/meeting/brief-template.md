@@ -1,6 +1,10 @@
 # Meeting Brief — Output Template
 
-```
+Fill from available, authorized sources. For each material claim, record its
+source and date. Mark a missing signal unavailable. Do not infer a health score,
+commitment, competitor position, or customer priority from an absent integration.
+Keep internal preparation separate from any customer-facing draft.
+
 # Meeting Prep — [Account] — [Meeting Type]
 Date: YYYY-MM-DD  Time: [time + timezone]
 
@@ -18,15 +22,18 @@ Date: YYYY-MM-DD  Time: [time + timezone]
 **Recent News:** [anything material — earnings, exec changes, industry news]
 **Deal Stage:** [current stage from Salesforce/pursuit file]
 
-### Backstory Signals
+### Optional Account Intelligence
 
-> *[Source: Backstory — verify before presenting as fact]*
+Include this subsection only when an authorized account-intelligence source was
+inspected. Otherwise write "unavailable" and continue with local meeting and
+account evidence. Treat its suggestions as leads to verify, not established facts.
 
-**Account Health:** [health score and sentiment from get_account_status]
-**Active Risks:** [risks flagged by Backstory — surface before they do]
-**Recent Activity (30 days):** [key topics and contacts from get_recent_account_activity]
-**Company News:** [trigger events or pressures from account_company_news — public cos only]
-**Backstory Next Steps:** [committed actions surfaced by Backstory]
+**Source and date:** [product or document, observed date]
+**Account Health:** [reported signal and its meaning, or unavailable]
+**Active Risks:** [source-attributed suggestions to verify, or unavailable]
+**Recent Activity:** [dated topics and contacts, or unavailable]
+**Company News:** [dated public source, or unavailable]
+**Suggested Next Steps:** [unverified suggestions, not customer commitments]
 
 ## Meeting Objective
 
@@ -89,4 +96,3 @@ Date: YYYY-MM-DD  Time: [time + timezone]
 ## Recommended Close / Next Step
 
 [What to ask for at the end of this meeting — be specific]
-```

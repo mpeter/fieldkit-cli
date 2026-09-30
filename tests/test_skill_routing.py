@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from fieldkit.errors import LLMError
+from fieldkit.errors import LLMError, RoutingInputError
 from fieldkit.skill.routing import (
     RoutingCase,
     SkillCandidate,
@@ -33,7 +33,7 @@ def _write_fixtures(tmp_path: Path, cases: list[dict[str, str]], *, version: int
 def test_validate_skill_corpus_sorts_and_rejects_duplicates() -> None:
     result = validate_skill_corpus(tuple(reversed(_CANDIDATES)))
     assert result == _CANDIDATES
-    with pytest.raises(LLMError, match="duplicate name"):
+    with pytest.raises(RoutingInputError, match="duplicate name"):
         validate_skill_corpus((_CANDIDATES[0], _CANDIDATES[0]))
 
 
@@ -53,7 +53,7 @@ def test_load_routing_cases_rejects_unsupported_version(tmp_path: Path, version:
     (tmp_path / "skill-routing-evals.json").write_text(json.dumps({"version": version, "cases": []}), encoding="utf-8")
     with (
         patch("fieldkit.skill.routing.importlib.resources.files", return_value=tmp_path),
-        pytest.raises(LLMError, match="version-1 schema"),
+        pytest.raises(RoutingInputError, match="version-1 schema"),
     ):
         load_routing_cases(_CANDIDATES)
 
@@ -71,7 +71,7 @@ def test_load_routing_cases_rejects_invalid_cases(tmp_path: Path, cases: list[di
     _write_fixtures(tmp_path, cases)
     with (
         patch("fieldkit.skill.routing.importlib.resources.files", return_value=tmp_path),
-        pytest.raises(LLMError, match=message),
+        pytest.raises(RoutingInputError, match=message),
     ):
         load_routing_cases(_CANDIDATES)
 
@@ -87,7 +87,7 @@ def test_build_prompt_uses_full_corpus_and_does_not_depend_on_answer_key() -> No
 
 
 def test_judge_routing_case_stub_exercises_typed_result(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("NO_LLM", "1")
+    monkeypatch.setenv("FIELDKIT_NO_LLM", "1")
     result = judge_routing_case(RoutingCase("stub-case", "route me", "alpha"), _CANDIDATES)
     assert result.passed is True
     assert result.stub is True
@@ -95,7 +95,7 @@ def test_judge_routing_case_stub_exercises_typed_result(monkeypatch: pytest.Monk
 
 
 def test_judge_routing_case_parses_live_response(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("NO_LLM", raising=False)
+    monkeypatch.delenv("FIELDKIT_NO_LLM", raising=False)
     with patch(
         "fieldkit.skill.routing.synthesize",
         return_value='{"selected_skill":"bravo","reason":"Best trigger match."}',
@@ -108,7 +108,7 @@ def test_judge_routing_case_parses_live_response(monkeypatch: pytest.MonkeyPatch
 
 
 def test_judge_routing_case_retries_invalid_response(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("NO_LLM", raising=False)
+    monkeypatch.delenv("FIELDKIT_NO_LLM", raising=False)
     with patch(
         "fieldkit.skill.routing.synthesize",
         side_effect=["not-json", '{"selected_skill":"alpha","reason":"Recovered."}'],
@@ -120,7 +120,7 @@ def test_judge_routing_case_retries_invalid_response(monkeypatch: pytest.MonkeyP
 
 
 def test_judge_routing_case_records_environment_model(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("NO_LLM", raising=False)
+    monkeypatch.delenv("FIELDKIT_NO_LLM", raising=False)
     monkeypatch.setenv("FIELDKIT_LLM_MODEL", "vertex_ai/environment-model")
     with patch(
         "fieldkit.skill.routing.synthesize",
@@ -132,7 +132,7 @@ def test_judge_routing_case_records_environment_model(monkeypatch: pytest.Monkey
 
 
 def test_judge_routing_case_rejects_unknown_selection_after_retry(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("NO_LLM", raising=False)
+    monkeypatch.delenv("FIELDKIT_NO_LLM", raising=False)
     reply = '{"selected_skill":"unknown","reason":"No match."}'
     with (
         patch("fieldkit.skill.routing.synthesize", return_value=reply),

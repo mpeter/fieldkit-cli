@@ -1,4 +1,4 @@
-"""Unit tests for lib/watcher_status.py.
+"""Unit tests for the canonical fieldkit.watch.status module.
 
 Regression focus: path resolution must use get_fieldkit_home(), never __file__-
 relative inference. A custom data root (via monkeypatched get_fieldkit_home) must
@@ -8,7 +8,11 @@ package tree.
 
 import json
 import typing
+from collections.abc import Callable
+from dataclasses import FrozenInstanceError
 from pathlib import Path
+from typing import Literal
+from unittest.mock import patch
 
 import pytest
 
@@ -18,11 +22,213 @@ from fieldkit.watch.status import WatcherOutcome, write_run_status
 pytestmark = pytest.mark.unit
 
 
+@pytest.mark.parametrize(
+    ("outcome", "completed", "status_write", "failure_code", "exit_code", "eligible"),
+    [
+        ("ok", True, "written", 1, 0, False),
+        ("ok", True, "skipped", 1, 0, False),
+        ("ok", True, None, 1, 0, False),
+        ("ok", False, None, 1, 0, False),
+        ("partial", True, "written", 1, 1, True),
+        ("partial", False, "written", 1, 1, False),
+        ("partial", True, "skipped", 1, 1, False),
+        ("partial", True, None, 1, 1, False),
+        ("partial", True, "written", 2, 2, False),
+        ("fatal", True, "written", 1, 1, False),
+        ("fatal", True, "failed", 1, 1, False),
+        ("fatal", False, None, 2, 2, False),
+        ("fatal", False, None, 3, 3, False),
+    ],
+)
+def test_watcher_run_result_preserves_invocation_facts(
+    outcome: WatcherOutcome,
+    completed: bool,
+    status_write: ws_mod.RunStatusWriteResult | None,
+    failure_code: Literal[1, 2, 3],
+    exit_code: int,
+    eligible: bool,
+) -> None:
+    result = ws_mod.WatcherRunResult(outcome, completed, status_write, failure_code)
+
+    assert result == ws_mod.WatcherRunResult(outcome, completed, status_write, failure_code)
+    assert result.outcome == outcome
+    assert result.completed is completed
+    assert result.status_write == status_write
+    assert result.failure_code == failure_code
+    assert result.exit_code == exit_code
+    assert result.completed_partial is eligible
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("outcome", "ok"), ("completed", False), ("status_write", None), ("failure_code", 2)],
+)
+def test_watcher_run_result_is_frozen_and_defaults_to_retryable(field: str, value: object) -> None:
+    result = ws_mod.WatcherRunResult("partial", True, "written")
+
+    assert result.failure_code == 1
+    with pytest.raises(FrozenInstanceError, match="cannot assign to field"):
+        setattr(result, field, value)
+    assert result.completed is True
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("outcome", "unknown"),
+        ("outcome", None),
+        ("outcome", True),
+        ("status_write", "unknown"),
+        ("status_write", True),
+        ("completed", 1),
+        ("completed", 0),
+        ("completed", "true"),
+        ("completed", None),
+        ("failure_code", True),
+        ("failure_code", False),
+        ("failure_code", 1.0),
+        ("failure_code", 0),
+        ("failure_code", 4),
+        ("failure_code", "1"),
+        ("failure_code", None),
+    ],
+)
+def test_watcher_run_result_rejects_invalid_runtime_facts(field: str, value: object) -> None:
+    result = ws_mod.WatcherRunResult("partial", True, "written")
+
+    assert result.exit_code == 1
+    facts: dict[str, object] = {"outcome": "partial", "completed": True, "status_write": "written"}
+    facts[field] = value
+    with pytest.raises(ValueError, match=field):
+        _runtime_result_constructor()(**facts)
+
+
+def _runtime_result_constructor() -> Callable[..., ws_mod.WatcherRunResult]:
+    return ws_mod.WatcherRunResult
+
+
+@pytest.mark.parametrize("outcome", ["ok", "partial"])
+def test_watcher_run_result_rejects_nonfatal_failed_persistence(outcome: WatcherOutcome) -> None:
+    with pytest.raises(ValueError, match="failed status write requires fatal outcome"):
+        ws_mod.WatcherRunResult(outcome, True, "failed")
+
+
 # ── helpers ────────────────────────────────────────────────────────────────
 
 
+@pytest.mark.parametrize("invalid", [0, 1, 2, 3, -1, 4, False, None, "ok", object()])
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_validate_watcher_result_rejects_foreign_contracts(invalid: object, dry_run: bool) -> None:
+    result = ws_mod.validate_watcher_result(invalid, dry_run=dry_run)
+
+    assert result == ws_mod.WatcherRunResult("fatal", False, None)
+    assert result.exit_code == 1
+    assert result.completed_partial is False
+
+
+class _MissingEvidenceResult(ws_mod.WatcherRunResult):
+    @property
+    def completed_partial(self) -> bool:
+        return True
+
+
+class _WrongCodeResult(ws_mod.WatcherRunResult):
+    @property
+    def exit_code(self) -> Literal[0, 1, 2, 3]:
+        return 0
+
+
+class _UnvalidatedResult(ws_mod.WatcherRunResult):
+    def __post_init__(self) -> None:
+        pass
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        _MissingEvidenceResult("partial", False, None),
+        _WrongCodeResult("fatal", False, None, 3),
+        _UnvalidatedResult("ok", True, "failed"),
+    ],
+)
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_validate_watcher_result_rejects_overridden_contracts(invalid: ws_mod.WatcherRunResult, dry_run: bool) -> None:
+    result = ws_mod.validate_watcher_result(invalid, dry_run=dry_run)
+
+    assert result == ws_mod.WatcherRunResult("fatal", False, None)
+    assert type(result) is ws_mod.WatcherRunResult
+    assert result.exit_code == 1
+    assert result.completed_partial is False
+
+
+@pytest.mark.parametrize("outcome", ["ok", "partial"])
+@pytest.mark.parametrize("status_write", [None, "skipped"])
+@pytest.mark.parametrize("failure_code", [1, 2, 3])
+def test_validate_watcher_result_requires_live_completed_persistence(
+    outcome: WatcherOutcome,
+    status_write: ws_mod.RunStatusWriteResult | None,
+    failure_code: Literal[1, 2, 3],
+) -> None:
+    original = ws_mod.WatcherRunResult(outcome, True, status_write, failure_code)
+
+    result = ws_mod.validate_watcher_result(original, dry_run=False)
+
+    assert result == ws_mod.WatcherRunResult("fatal", True, status_write, failure_code)
+    assert result.exit_code == failure_code
+    assert result.completed_partial is False
+    assert original.outcome == outcome
+
+
+@pytest.mark.parametrize(
+    ("outcome", "completed", "status_write"),
+    [
+        ("ok", True, "written"),
+        ("partial", True, "written"),
+        ("ok", False, None),
+        ("ok", False, "written"),
+        ("partial", False, None),
+        ("fatal", True, "failed"),
+    ],
+)
+def test_validate_watcher_result_preserves_valid_live_facts(
+    outcome: WatcherOutcome, completed: bool, status_write: ws_mod.RunStatusWriteResult | None
+) -> None:
+    original = ws_mod.WatcherRunResult(outcome, completed, status_write)
+
+    assert ws_mod.validate_watcher_result(original, dry_run=False) is original
+
+
+def test_validate_watcher_result_rejects_skipped_live_daily_writer() -> None:
+    original = ws_mod.WatcherRunResult("ok", False, "skipped")
+
+    result = ws_mod.validate_watcher_result(original, dry_run=False)
+
+    assert result == ws_mod.WatcherRunResult("fatal", False, "skipped")
+    assert result.exit_code == 1
+
+
+@pytest.mark.parametrize("outcome", ["ok", "partial", "fatal"])
+@pytest.mark.parametrize("status_write", [None, "skipped"])
+def test_validate_watcher_result_preserves_preview_facts(
+    outcome: WatcherOutcome, status_write: ws_mod.RunStatusWriteResult | None
+) -> None:
+    original = ws_mod.WatcherRunResult(outcome, True, status_write)
+
+    assert ws_mod.validate_watcher_result(original, dry_run=True) is original
+
+
+@pytest.mark.parametrize(
+    ("checked", "failures", "expected"),
+    [(0, 0, "ok"), (3, 0, "ok"), (0, 1, "fatal"), (3, 1, "partial")],
+)
+def test_classify_watcher_outcome_preserves_partial_failures(
+    checked: int, failures: int, expected: WatcherOutcome
+) -> None:
+    assert ws_mod.classify_watcher_outcome(checked=checked, failures=failures) == expected
+
+
 def _package_path() -> Path:
-    """Return the directory that contains lib/watcher_status.py."""
+    """Return the directory that contains the canonical watcher status module."""
     return Path(ws_mod.__file__).resolve().parent
 
 
@@ -103,7 +309,7 @@ def test_write_run_status_dry_run_skips_write(tmp_path: Path, monkeypatch: pytes
     """dry_run=True must not create any file."""
     monkeypatch.setattr(ws_mod, "get_fieldkit_home", lambda: tmp_path)
 
-    write_run_status(
+    result = write_run_status(
         watcher="morning-brief",
         outcome="ok",
         records_checked=2,
@@ -114,7 +320,61 @@ def test_write_run_status_dry_run_skips_write(tmp_path: Path, monkeypatch: pytes
     )
 
     status_file = tmp_path / "watchers" / "watcher-run-status.json"
+    assert result == "skipped"
     assert not status_file.exists()
+
+
+def test_write_run_status_reports_disk_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ws_mod, "get_fieldkit_home", lambda: Path("/bounded-test-root"))
+    monkeypatch.setattr(ws_mod, "locked_json_update", lambda _path: _RaisingStatusContext())
+
+    result = write_run_status(
+        watcher="slack-threads",
+        outcome="fatal",
+        records_checked=1,
+        alerts_generated=0,
+        failures=1,
+        elapsed_seconds=0.1,
+        dry_run=False,
+    )
+
+    assert result == "failed"
+
+
+@pytest.mark.parametrize("contents", ["{broken", "[]"])
+def test_write_run_status_reports_corrupt_existing_state_without_payload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    contents: str,
+) -> None:
+    monkeypatch.setattr(ws_mod, "get_fieldkit_home", lambda: tmp_path)
+    status_file = tmp_path / "watchers" / "watcher-run-status.json"
+    status_file.parent.mkdir(parents=True)
+    status_file.write_text(contents, encoding="utf-8")
+
+    with caplog.at_level("WARNING"):
+        result = write_run_status(
+            watcher="slack-threads",
+            outcome="fatal",
+            records_checked=0,
+            alerts_generated=0,
+            failures=1,
+            elapsed_seconds=0.1,
+            dry_run=False,
+        )
+
+    assert result == "failed"
+    assert str(status_file) not in caplog.text
+    assert "Traceback" not in caplog.text
+
+
+class _RaisingStatusContext:
+    def __enter__(self) -> dict[str, object]:
+        raise OSError("disk full")
+
+    def __exit__(self, *_args: object) -> None:
+        return None
 
 
 # ── JSON content correctness ────────────────────────────────────────────────
@@ -234,6 +494,27 @@ def test_outcome_parameter_typed_with_literal() -> None:
 
 
 # ── was_run_today and get_last_run_outcome direct coverage ──────────────────
+
+
+@pytest.mark.parametrize(
+    "entry", [None, [], 1, {"last_run": None, "outcome": "ok"}, {"last_run": [], "outcome": "partial"}]
+)
+def test_daily_snapshot_handles_invalid_record_types(entry: object) -> None:
+    with patch.object(ws_mod, "_load_run_status", return_value={"pursuit-stalls": entry}) as load:
+        result = ws_mod.get_daily_run_snapshot("pursuit-stalls")
+    assert isinstance(result, ws_mod.WatcherDailySnapshot)
+    assert result.ran_today is False
+    load.assert_called_once_with()
+
+
+def test_daily_snapshot_retains_outcome_from_an_older_record() -> None:
+    record = {"last_run": "2000-01-01T00:00:00Z", "outcome": "partial"}
+    with patch.object(ws_mod, "_load_run_status", return_value={"pursuit-stalls": record}) as load:
+        result = ws_mod.get_daily_run_snapshot("pursuit-stalls")
+        assert result == ws_mod.WatcherDailySnapshot(False, "partial")
+        load.assert_called_once_with()
+        assert ws_mod.get_last_run_outcome("pursuit-stalls") == "partial"
+        assert ws_mod.was_run_today("pursuit-stalls") is False
 
 
 def test_load_run_status_returns_empty_when_no_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

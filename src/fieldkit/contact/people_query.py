@@ -5,9 +5,10 @@ separate concern owned by the ``sync`` pipeline (see ``fieldkit.datasync``), nev
 triggered implicitly by a read.
 """
 
-import sqlite3
 from pathlib import Path
 from typing import Any
+
+from fieldkit.gmail.query_domain import connect as connect_gmail_cache
 
 _COLUMNS = (
     "email",
@@ -40,9 +41,8 @@ def list_people(
     Returns:
         A list of dicts (one per person), each with the columns in ``_COLUMNS``.
     """
-    conn = sqlite3.connect(db_path)
+    conn = connect_gmail_cache(Path(db_path))
     try:
-        conn.row_factory = sqlite3.Row
         cols = ", ".join(_COLUMNS)
         query = f"SELECT {cols} FROM people"
         params: list[str] = []

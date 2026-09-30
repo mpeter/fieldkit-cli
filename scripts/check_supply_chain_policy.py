@@ -10,44 +10,20 @@ import os
 import re
 import sys
 from datetime import date
-from importlib import metadata
+from importlib.machinery import ModuleSpec
+from importlib.util import module_from_spec
 from pathlib import Path
 
-import _supply_chain_policy as policy_check
+if __package__ in {None, ""}:
+    scripts_spec = ModuleSpec("scripts", loader=None, is_package=True)
+    scripts_spec.submodule_search_locations = [str(Path(__file__).resolve().parent)]
+    sys.modules["scripts"] = module_from_spec(scripts_spec)
 
-_PINNED_REQUIREMENT = re.compile(r"^(?P<name>[A-Za-z0-9_.-]+)==(?P<version>[A-Za-z0-9_.!+-]+)(?:\s*;.*)?(?:\s+\\)?$")
+from scripts import _supply_chain_policy as policy_check
+from scripts import runtime_license_inventory as inventory
 
-_LICENSE_FIELD_EXPRESSIONS = {
-    "apache 2.0": "Apache-2.0",
-    "apache license 2.0": "Apache-2.0",
-    "apache license, version 2.0": "Apache-2.0",
-    "apache software license": "Apache-2.0",
-    "bsd": "BSD-3-Clause",
-    "bsd license": "BSD-3-Clause",
-    "3-clause bsd license": "BSD-3-Clause",
-    "mit": "MIT",
-    "mit license": "MIT",
-    "apache-2.0 and mit": "Apache-2.0 AND MIT",
-    "apache-2.0": "Apache-2.0",
-    "bsd-2-clause": "BSD-2-Clause",
-    "bsd-3-clause": "BSD-3-Clause",
-    "bsd 3-clause or apache-2.0": "BSD-3-Clause OR Apache-2.0",
-    "mit or apache-2.0": "MIT OR Apache-2.0",
-    "mpl-2.0 and mit": "MPL-2.0 AND MIT",
-}
-
-_MIT_LICENSE_SIGNATURE = "permission is hereby granted, free of charge"
-_APACHE_LICENSE_SIGNATURE = "licensed under the apache license, version 2.0"
-_BSD_3_CLAUSE_SIGNATURE = "redistribution and use in source and binary forms"
-_BSD_3_CLAUSE_NAME_CLAUSE = "neither the name of the"
-
-_LICENSE_CLASSIFIER_EXPRESSIONS = {
-    "License :: OSI Approved :: Apache Software License": "Apache-2.0",
-    "License :: OSI Approved :: BSD License": "BSD-3-Clause",
-    "License :: OSI Approved :: MIT License": "MIT",
-    "License :: OSI Approved :: Mozilla Public License 2.0 (MPL 2.0)": "MPL-2.0",
-    "License :: OSI Approved :: Python Software Foundation License": "PSF-2.0",
-}
+_EXACT_PYPI_PURL = re.compile(r"^pkg:pypi/(?P<name>[a-z0-9]+(?:-[a-z0-9]+)*)@(?P<version>[A-Za-z0-9_.!+-]+)$")
+_UNPROJECTABLE_MARKER = re.compile(r"\b(?:extra|extras|dependency_groups)\b")
 
 
 def _write_json(path: Path, payload: dict[str, object]) -> None:
@@ -88,6 +64,8 @@ def _parser() -> argparse.ArgumentParser:
     licenses.add_argument("--export-policy-sha256", required=True)
     licenses.add_argument("--sbom", type=Path, required=True)
     licenses.add_argument("--platform-requirements", type=Path, required=True)
+    licenses.add_argument("--observations", type=Path, required=True)
+    licenses.add_argument("--observations-sha256", required=True)
     return parser
 
 
@@ -131,92 +109,9 @@ def _run_audit_report(args: argparse.Namespace) -> int:
     return 0 if evidence.status == "pass" else 1
 
 
-def _license_expression(distribution: metadata.Distribution) -> str:
-    """Return one deterministic SPDX expression from installed package metadata.
-
-    PEP 639 metadata is authoritative. Older distributions commonly expose a
-    normalized License field or exactly one Trove classifier; ambiguous or
-    unrecognized metadata deliberately remains UNKNOWN for policy review.
-    """
-    headers = distribution.metadata.json
-    expression = headers.get("license_expression")
-    if isinstance(expression, str) and expression.strip():
-        return expression
-    license_field = headers.get("license")
-    if isinstance(license_field, str):
-        normalized = " ".join(license_field.casefold().split())
-        if normalized in _LICENSE_FIELD_EXPRESSIONS:
-            return _LICENSE_FIELD_EXPRESSIONS[normalized]
-        if normalized.startswith("mit license ") and _MIT_LICENSE_SIGNATURE in normalized:
-            return "MIT"
-    get_all = getattr(distribution.metadata, "get_all", None)
-    classifiers = (get_all("Classifier") or []) if callable(get_all) else []
-    mapped = {
-        _LICENSE_CLASSIFIER_EXPRESSIONS[classifier]
-        for classifier in classifiers
-        if classifier in _LICENSE_CLASSIFIER_EXPRESSIONS
-    }
-    if len(mapped) == 1:
-        return mapped.pop()
-    declared_license_files = (get_all("License-File") or []) if callable(get_all) else []
-    declared_license_paths = {
-        declared_path.replace("\\", "/").lstrip("/")
-        for declared_path in declared_license_files
-        if isinstance(declared_path, str) and declared_path.strip()
-    }
-    detected_licenses: set[str] = set()
-    for file in distribution.files or ():
-        package_path = str(file).replace("\\", "/")
-        if not any(
-            package_path == declared_path or package_path.endswith(f"/{declared_path}")
-            for declared_path in declared_license_paths
-        ):
-            continue
-        path = distribution.locate_file(file)
-        if not path.is_file():
-            continue
-        try:
-            contents = path.read_text(encoding="utf-8").casefold()
-        except OSError:
-            continue
-        if _APACHE_LICENSE_SIGNATURE in contents:
-            detected_licenses.add("Apache-2.0")
-        if _BSD_3_CLAUSE_SIGNATURE in contents and _BSD_3_CLAUSE_NAME_CLAUSE in contents:
-            detected_licenses.add("BSD-3-Clause")
-        if _MIT_LICENSE_SIGNATURE in contents:
-            detected_licenses.add("MIT")
-    if detected_licenses:
-        return " AND ".join(sorted(detected_licenses))
-    return "UNKNOWN"
-
-
-def _resolved_package_metadata() -> list[dict[str, str]]:
-    """Collect the installed distributions that the locked candidate environment resolved."""
-    packages: list[dict[str, str]] = []
-    observed_packages: set[tuple[str, str, str]] = set()
-    for distribution in metadata.distributions():
-        name = distribution.metadata.json.get("name")
-        version = distribution.version
-        if not isinstance(name, str) or not name.strip() or not isinstance(version, str) or not version.strip():
-            raise ValueError("installed distribution metadata must include a name and version")
-        license_expression = _license_expression(distribution)
-        package = (name, version, license_expression)
-        if package in observed_packages:
-            continue
-        observed_packages.add(package)
-        packages.append(
-            {
-                "name": name,
-                "version": version,
-                "license_expression": license_expression,
-            }
-        )
-    return packages
-
-
 def _sbom_package_urls(path: Path) -> tuple[tuple[str, ...], str]:
     """Read exact PyPI component identities from uv's locked CycloneDX output."""
-    contents = path.read_bytes()
+    contents = inventory.read_snapshot(path)
     document = json.loads(contents)
     if not isinstance(document, dict):
         raise ValueError("locked SBOM must be an object")
@@ -228,22 +123,54 @@ def _sbom_package_urls(path: Path) -> tuple[tuple[str, ...], str]:
         if not isinstance(value, dict) or set(value).isdisjoint({"purl"}):
             raise ValueError(f"locked SBOM component {index} must contain a purl")
         package_url = value["purl"]
-        if not isinstance(package_url, str):
-            raise ValueError(f"locked SBOM component {index} purl must be a string")
+        if not isinstance(package_url, str) or _EXACT_PYPI_PURL.fullmatch(package_url) is None:
+            raise ValueError(f"locked SBOM component {index} must contain a canonical exact-version PyPI purl")
         package_urls.append(package_url)
-    return tuple(package_urls), hashlib.sha256(contents).hexdigest()
+    if not package_urls or len(package_urls) != len(set(package_urls)):
+        raise ValueError("locked SBOM must contain a nonempty unique package inventory")
+    return tuple(sorted(package_urls)), hashlib.sha256(contents).hexdigest()
 
 
-def _locked_requirements_package_urls(path: Path) -> tuple[str, ...]:
-    """Read exact package URLs from uv's lock-derived requirements export."""
+def _requirements_package_urls(contents: str, *, target_environment: dict[str, str] | None) -> tuple[str, ...]:
+    """Project one requirements snapshot without rereading a mutable export."""
+    try:
+        from packaging.requirements import Requirement
+        from packaging.version import Version
+    except ImportError as exc:
+        raise ValueError("license evidence requires packaging in the QA environment") from exc
+
     package_urls: list[str] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line or line[0].isspace() or line.startswith("#"):
+    target_names: set[str] = set()
+    for line in contents.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
             continue
-        match = _PINNED_REQUIREMENT.fullmatch(line)
-        if match is None:
+        if line[0].isspace() and re.fullmatch(r"--hash=sha256:[a-f0-9]{64}(?:\s+\\)?", stripped):
+            continue
+        requirement = Requirement(stripped.removesuffix("\\").rstrip())
+        specifiers = list(requirement.specifier)
+        if (
+            requirement.url is not None
+            or requirement.extras
+            or len(specifiers) != 1
+            or specifiers[0].operator != "=="
+            or "*" in specifiers[0].version
+        ):
             raise ValueError("platform requirements must pin every package to exactly one version")
-        package_urls.append(policy_check.package_url(match["name"], match["version"]))
+        version = specifiers[0].version
+        if str(Version(version)) != version:
+            raise ValueError("platform requirements must use canonical package versions")
+        if requirement.marker is not None:
+            if _UNPROJECTABLE_MARKER.search(str(requirement.marker)):
+                raise ValueError("platform requirements must resolve extras and dependency groups before export")
+            if target_environment is not None and not requirement.marker.evaluate(environment=target_environment):
+                continue
+        package_url = inventory.package_url(requirement.name, version)
+        normalized_name = package_url.removeprefix("pkg:pypi/").split("@", 1)[0]
+        if target_environment is not None and normalized_name in target_names:
+            raise ValueError("platform requirements select duplicate or ambiguous target package versions")
+        target_names.add(normalized_name)
+        package_urls.append(package_url)
     if len(package_urls) != len(set(package_urls)):
         raise ValueError("platform requirements must contain unique package URLs")
     return tuple(sorted(package_urls))
@@ -251,15 +178,28 @@ def _locked_requirements_package_urls(path: Path) -> tuple[str, ...]:
 
 def _run_license_evidence(args: argparse.Namespace) -> int:
     policy = policy_check.load_policy(args.policy)
-    _, sbom_sha256 = _sbom_package_urls(args.sbom)
-    expected_package_urls = _locked_requirements_package_urls(args.platform_requirements)
+    observation_contents = inventory.read_snapshot(args.observations)
+    observation_digest = hashlib.sha256(observation_contents).hexdigest()
+    if observation_digest != args.observations_sha256:
+        raise ValueError("runtime license observations do not match their captured digest")
+    packages, environment = inventory.parse_observations(observation_contents)
+    sbom_package_urls, sbom_sha256 = _sbom_package_urls(args.sbom)
+    requirements_bytes = inventory.read_snapshot(args.platform_requirements)
+    requirements_contents = requirements_bytes.decode("utf-8")
+    union_package_urls = _requirements_package_urls(requirements_contents, target_environment=None)
+    if sbom_package_urls != union_package_urls:
+        raise ValueError("locked SBOM inventory must exactly match the cross-platform requirements inventory")
+    expected_package_urls = _requirements_package_urls(requirements_contents, target_environment=environment)
     evidence = policy_check.build_license_evidence(
-        _resolved_package_metadata(),
+        packages,
         policy,
         scope=args.scope,
         revision=args.revision,
         export_policy_sha256=args.export_policy_sha256,
         sbom_sha256=sbom_sha256,
+        observations_sha256=observation_digest,
+        platform_requirements_sha256=hashlib.sha256(requirements_bytes).hexdigest(),
+        marker_environment=environment,
         expected_package_urls=expected_package_urls,
     )
     _write_json(args.output, evidence.to_dict())

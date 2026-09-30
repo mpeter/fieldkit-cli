@@ -6,6 +6,7 @@ distinction (proctor C1), and the write-before-journal ordering (proctor C2).
 
 import json
 import subprocess
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
@@ -13,22 +14,58 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from fieldkit.commands.companion.cli import _act_policy_validation
 from fieldkit.companion import loop as loop_module
 from fieldkit.companion.decide import ProposedAction
 from fieldkit.companion.feed import FeedParseError, get_feed
+from fieldkit.companion.gate import NO_ACT_POLICY, ValidatedActPolicy
 from fieldkit.companion.llm_decide import DecisionResult
 from fieldkit.companion.loop import run_once
 from fieldkit.companion.outbox import list_proposals, outbox_dir
 from fieldkit.companion.suppress import DEFAULT_COOLDOWN, retired_item_ids
+from fieldkit.errors import FieldkitError
 from fieldkit.watch.constants import KNOWN_WATCHERS
 
 pytestmark = pytest.mark.unit
+
+_CONFIGURED_ALLOWLIST: list[str] = []
+
+
+@pytest.fixture(autouse=True)
+def _configured_authority(monkeypatch: pytest.MonkeyPatch) -> None:
+    _CONFIGURED_ALLOWLIST.clear()
+    monkeypatch.setattr("fieldkit.config.get_companion_tier", lambda: "act")
+    monkeypatch.setattr("fieldkit.config.get_companion_act_allowlist", lambda: list(_CONFIGURED_ALLOWLIST))
+
+
+def _act_policy(entries: list[str]) -> ValidatedActPolicy:
+    _CONFIGURED_ALLOWLIST[:] = entries
+    validation = _act_policy_validation("act", entries)
+    assert validation.policy is not None
+    return validation.policy
+
+
+def test_invalid_policy_fails_before_feed_or_state_writes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    home = tmp_path / "home"
+    data = tmp_path / "data"
+    forged = replace(
+        NO_ACT_POLICY,
+        _entries=frozenset({("watch", "run", "pursuit-stalls", "--dry-run")}),
+    )
+    get_feed = MagicMock()
+    monkeypatch.setattr("fieldkit.companion.loop.get_feed", get_feed)
+
+    with pytest.raises(FieldkitError, match="invalid companion action authority"):
+        run_once(home, data, tier="act", policy=forged)
+
+    get_feed.assert_not_called()
+    assert not data.exists()
 
 
 @pytest.fixture(autouse=True)
 def _disable_live_llm(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep loop unit tests offline unless they replace the decision boundary."""
-    monkeypatch.setenv("NO_LLM", "1")
+    monkeypatch.setenv("FIELDKIT_NO_LLM", "1")
 
 
 # Two dated stall blocks, each carrying an Account bullet, so the feed yields two
@@ -87,7 +124,7 @@ def test_propose_writes_outbox_and_journals(tmp_path: Path, monkeypatch: pytest.
     home, data = _make_home(tmp_path), _make_data(tmp_path)
     spawn = _patch_subprocess(monkeypatch, returncode=0, stdout="HEALTH-JSON")
 
-    result = run_once(home, data, tier="propose", allowlist=[])
+    result = run_once(home, data, tier="propose", policy=NO_ACT_POLICY)
     assert result.proposed == 2  # return-bound var asserted first (gaze CR-014)
     assert result.enriched == 2
     assert result.acted == 0
@@ -109,7 +146,7 @@ def test_read_tier_triages_without_outbox(tmp_path: Path, monkeypatch: pytest.Mo
     home, data = _make_home(tmp_path), _make_data(tmp_path)
     _patch_subprocess(monkeypatch, returncode=0, stdout="ctx")
 
-    result = run_once(home, data, tier="read", allowlist=[])
+    result = run_once(home, data, tier="read", policy=NO_ACT_POLICY)
     assert result.triaged == 2
     assert result.proposed == 0
     assert not outbox_dir(data).exists()
@@ -131,7 +168,7 @@ def _llm_candidate(item: object, baseline: ProposedAction, _enrichment: str | No
 def test_propose_writes_llm_candidate_without_executing_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     home, data = _make_home(tmp_path), _make_data(tmp_path)
     spawn = _patch_subprocess(monkeypatch, returncode=0, stdout="HEALTH-JSON")
-    result = run_once(home, data, tier="propose", allowlist=[], decision_fn=_llm_candidate)
+    result = run_once(home, data, tier="propose", policy=NO_ACT_POLICY, decision_fn=_llm_candidate)
 
     assert result.proposed == 2
     assert result.llm_attempts == 2
@@ -143,7 +180,7 @@ def test_propose_writes_llm_candidate_without_executing_it(tmp_path: Path, monke
 
 @pytest.mark.parametrize(
     "allowlist,expected_acted,expected_denied,expected_spawns",
-    [([], 0, 2, 2), (["pursuit advance --dry-run"], 2, 0, 4)],
+    [([], 0, 2, 2), (["pursuit advance acme --dry-run", "pursuit advance globex --dry-run"], 2, 0, 4)],
 )
 def test_act_still_applies_existing_gate_to_llm_candidate(
     allowlist: list[str],
@@ -155,7 +192,7 @@ def test_act_still_applies_existing_gate_to_llm_candidate(
 ) -> None:
     home, data = _make_home(tmp_path), _make_data(tmp_path)
     spawn = _patch_subprocess(monkeypatch, returncode=0, stdout="ok")
-    result = run_once(home, data, tier="act", allowlist=allowlist, decision_fn=_llm_candidate)
+    result = run_once(home, data, tier="act", policy=_act_policy(allowlist), decision_fn=_llm_candidate)
 
     assert result.acted == expected_acted
     assert result.denied == expected_denied
@@ -186,7 +223,7 @@ def test_act_journals_auth_failed_enrichment_before_distinct_candidate(
         home,
         data,
         tier="act",
-        allowlist=["pursuit advance --dry-run"],
+        policy=_act_policy(["pursuit advance acme --dry-run", "pursuit advance globex --dry-run"]),
         decision_fn=_llm_candidate,
     )
 
@@ -211,7 +248,7 @@ def test_run_once_keeps_unresolved_items_live_without_action_artifacts(
 """
     home, data = _make_home(tmp_path, alerts=alerts), _make_data(tmp_path)
 
-    result = run_once(home, data, tier=tier, allowlist=[])
+    result = run_once(home, data, tier=tier, policy=NO_ACT_POLICY)
 
     assert result.unresolved == 1
     assert result.handled == 1
@@ -223,7 +260,7 @@ def test_run_once_keeps_unresolved_items_live_without_action_artifacts(
     assert _read_journal(data) == []
     assert retired_item_ids(data) == set()
 
-    next_result = run_once(home, data, tier=tier, allowlist=[])
+    next_result = run_once(home, data, tier=tier, policy=NO_ACT_POLICY)
     assert next_result.unresolved == 1
 
 
@@ -231,8 +268,8 @@ def test_second_pass_is_idempotent(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     home, data = _make_home(tmp_path), _make_data(tmp_path)
     _patch_subprocess(monkeypatch, returncode=0, stdout="ctx")
 
-    run_once(home, data, tier="propose", allowlist=[])
-    second = run_once(home, data, tier="propose", allowlist=[])
+    run_once(home, data, tier="propose", policy=NO_ACT_POLICY)
+    second = run_once(home, data, tier="propose", policy=NO_ACT_POLICY)
     assert second.handled == 0
     assert second.proposed == 0
     assert len(list_proposals(data)) == 2  # no new proposals
@@ -248,14 +285,14 @@ def test_auth_failure_leaves_the_item_live_for_the_next_pass(tmp_path: Path, mon
     home, data = _make_home(tmp_path), _make_data(tmp_path)
     _patch_subprocess(monkeypatch, returncode=2)
 
-    first = run_once(home, data, tier="read", allowlist=[])
+    first = run_once(home, data, tier="read", policy=NO_ACT_POLICY)
 
     assert first.auth_failures == 2
     assert len(_read_journal(data)) == 2  # recorded as evidence
     assert retired_item_ids(data) == set()  # but not retired
 
     _patch_subprocess(monkeypatch, returncode=0, stdout="ctx")
-    second = run_once(home, data, tier="read", allowlist=[])
+    second = run_once(home, data, tier="read", policy=NO_ACT_POLICY)
     assert second.triaged == 2
 
 
@@ -264,7 +301,7 @@ def test_enrich_failure_leaves_the_item_live(tmp_path: Path, monkeypatch: pytest
     home, data = _make_home(tmp_path), _make_data(tmp_path)
     _patch_subprocess(monkeypatch, returncode=1)
 
-    result = run_once(home, data, tier="read", allowlist=[])
+    result = run_once(home, data, tier="read", policy=NO_ACT_POLICY)
 
     assert result.enrich_failures == 2
     assert retired_item_ids(data) == set()
@@ -277,7 +314,7 @@ def test_pursuit_health_exit_1_remains_a_visible_enrichment_failure(
     home, data = _make_home(tmp_path), _make_data(tmp_path)
     _patch_subprocess(monkeypatch, returncode=1, stdout='[{"risk_tier": "HIGH"}]')
 
-    result = run_once(home, data, tier="propose", allowlist=[])
+    result = run_once(home, data, tier="propose", policy=NO_ACT_POLICY)
 
     assert result.enriched == 0
     assert result.enrich_failures == 2
@@ -293,12 +330,12 @@ def test_read_tier_retires_only_until_the_cooldown_expires(tmp_path: Path, monke
     home, data = _make_home(tmp_path), _make_data(tmp_path)
     _patch_subprocess(monkeypatch, returncode=0, stdout="ctx")
 
-    first = run_once(home, data, tier="read", allowlist=[])
+    first = run_once(home, data, tier="read", policy=NO_ACT_POLICY)
 
     assert first.triaged == 2
     assert len(retired_item_ids(data)) == 2
 
-    second = run_once(home, data, tier="read", allowlist=[])
+    second = run_once(home, data, tier="read", policy=NO_ACT_POLICY)
     assert second.handled == 0  # not re-spawned during the cooldown
 
     later = datetime.now(tz=UTC) + DEFAULT_COOLDOWN + timedelta(minutes=1)
@@ -309,14 +346,14 @@ def test_malformed_feed_raises_feedparseerror(tmp_path: Path) -> None:
     home, data = _make_home(tmp_path), _make_data(tmp_path)
     (home / "watchers" / "watcher-run-status.json").write_text("{bad json", encoding="utf-8")
     with pytest.raises(FeedParseError, match="unparseable"):
-        run_once(home, data, tier="read", allowlist=[])
+        run_once(home, data, tier="read", policy=NO_ACT_POLICY)
 
 
 def test_enrichment_failure_degrades_to_partial(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     home, data = _make_home(tmp_path), _make_data(tmp_path)
     _patch_subprocess(monkeypatch, returncode=1, stdout="")
 
-    result = run_once(home, data, tier="propose", allowlist=[])
+    result = run_once(home, data, tier="propose", policy=NO_ACT_POLICY)
     assert result.enrich_failures == 2  # return-bound var asserted first
     assert result.partial is True
     assert result.auth_failures == 0
@@ -330,7 +367,7 @@ def test_auth_failure_is_distinct_not_partial(tmp_path: Path, monkeypatch: pytes
     home, data = _make_home(tmp_path), _make_data(tmp_path)
     _patch_subprocess(monkeypatch, returncode=2, stdout="")
 
-    result = run_once(home, data, tier="propose", allowlist=[])
+    result = run_once(home, data, tier="propose", policy=NO_ACT_POLICY)
     assert result.auth_failures == 2  # return-bound var asserted first
     assert result.enrich_failures == 0
     assert result.partial is False
@@ -345,7 +382,7 @@ def test_write_failure_leaves_item_unjournaled(tmp_path: Path, monkeypatch: pyte
     monkeypatch.setattr(loop_module, "write_proposal", MagicMock(side_effect=OSError("disk full")))
 
     with pytest.raises(OSError, match="disk full"):
-        run_once(home, data, tier="propose", allowlist=[])
+        run_once(home, data, tier="propose", policy=NO_ACT_POLICY)
     # Nothing journaled → the item is not suppressed → it is retried next pass.
     assert _read_journal(data) == []
 
@@ -360,7 +397,7 @@ def test_act_runs_allowlisted_mutation(tmp_path: Path, monkeypatch: pytest.Monke
     monkeypatch.setattr(loop_module, "propose_for", lambda _item: mutating)
     spawn = _patch_subprocess(monkeypatch, returncode=0, stdout="")
 
-    result = run_once(home, data, tier="act", allowlist=["pursuit advance --dry-run"])
+    result = run_once(home, data, tier="act", policy=_act_policy(["pursuit advance acme --dry-run"]))
     assert result.acted == 2  # return-bound var asserted first
     assert result.denied == 0
     assert result.enriched == 0
@@ -377,7 +414,7 @@ def test_act_denies_non_allowlisted_mutation(tmp_path: Path, monkeypatch: pytest
     monkeypatch.setattr(loop_module, "propose_for", lambda _item: mutating)
     spawn = _patch_subprocess(monkeypatch, returncode=0, stdout="")
 
-    result = run_once(home, data, tier="act", allowlist=[])
+    result = run_once(home, data, tier="act", policy=NO_ACT_POLICY)
     assert result.denied == 2  # return-bound var asserted first
     assert result.acted == 0
     spawn.assert_not_called()  # denial never spawns a subprocess
@@ -388,7 +425,7 @@ def test_dry_run_has_no_side_effects(tmp_path: Path, monkeypatch: pytest.MonkeyP
     home, data = _make_home(tmp_path), _make_data(tmp_path)
     spawn = _patch_subprocess(monkeypatch, returncode=0, stdout="")
 
-    result = run_once(home, data, tier="propose", allowlist=[], dry_run=True)
+    result = run_once(home, data, tier="propose", policy=NO_ACT_POLICY, dry_run=True)
     assert result.proposed == 2
     spawn.assert_not_called()
     assert not outbox_dir(data).exists()
@@ -399,7 +436,7 @@ def test_dry_run_does_not_invoke_decision_provider(tmp_path: Path) -> None:
     home, data = _make_home(tmp_path), _make_data(tmp_path)
     decision = MagicMock()
 
-    result = run_once(home, data, tier="propose", allowlist=[], dry_run=True, decision_fn=decision)
+    result = run_once(home, data, tier="propose", policy=NO_ACT_POLICY, dry_run=True, decision_fn=decision)
 
     assert result.llm_attempts == 0
     assert result.llm_fallbacks == 2
@@ -422,7 +459,7 @@ def test_feed_is_capped_at_max_items_per_pass(tmp_path: Path, monkeypatch: pytes
     )
     monkeypatch.setattr(loop_module, "propose_for", propose_spy)
 
-    result = run_once(home, data, tier="read", allowlist=[])
+    result = run_once(home, data, tier="read", policy=NO_ACT_POLICY)
     assert result.unresolved == loop_module._MAX_ITEMS_PER_PASS
     assert result.dropped == 5
 
@@ -445,7 +482,7 @@ def test_feed_overflow_logs_a_warning(
     )
 
     with caplog.at_level("WARNING", logger=loop_module.__name__):
-        run_once(home, data, tier="read", allowlist=[])
+        run_once(home, data, tier="read", policy=NO_ACT_POLICY)
     assert any("dropping 5" in record.message for record in caplog.records)
 
 
@@ -453,7 +490,7 @@ def test_feed_under_cap_does_not_log_or_drop(tmp_path: Path, monkeypatch: pytest
     home, data = _make_home(tmp_path), _make_data(tmp_path)
     _patch_subprocess(monkeypatch, returncode=0, stdout="ctx")
 
-    result = run_once(home, data, tier="read", allowlist=[])
+    result = run_once(home, data, tier="read", policy=NO_ACT_POLICY)
     assert result.dropped == 0
 
 
@@ -496,7 +533,7 @@ def test_round_robin_gives_every_severity_tier_a_share_each_pass(
 
     seen_so_far = 0
     for _ in range(3):
-        result = run_once(home, data, tier="read", allowlist=[])
+        result = run_once(home, data, tier="read", policy=NO_ACT_POLICY)
         assert result.dropped == 2  # 9 items over a cap of 7, every pass (nothing ever cools down)
         journal = _read_journal(data)
         this_pass_ids = {r["item_id"] for r in journal[seen_so_far:]}
@@ -508,12 +545,12 @@ def test_round_robin_gives_every_severity_tier_a_share_each_pass(
 def test_duplicate_command_argv_runs_subprocess_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """implementation note: two items with identical command_argv must not spawn two subprocesses."""
     home, data = _make_home(tmp_path), _make_data(tmp_path)
-    shared_cmd = ("pursuit", "health", "acme", "--json")
+    shared_cmd = ("pursuit", "health", "--account", "acme", "--json")
     shared_action = ProposedAction(skill=None, rationale="r", enrichment_argv=None, command_argv=shared_cmd)
     monkeypatch.setattr(loop_module, "propose_for", lambda _item: shared_action)
     spawn = _patch_subprocess(monkeypatch, returncode=0, stdout="HEALTH-JSON")
 
-    result = run_once(home, data, tier="read", allowlist=[])
+    result = run_once(home, data, tier="read", policy=NO_ACT_POLICY)
 
     assert result.enriched == 2  # both items received enrichment context (gaze CR-014)
     assert spawn.call_count == 1  # deduplicated: one subprocess for the shared command_argv
@@ -528,12 +565,12 @@ def test_duplicate_command_argv_failure_not_cached_for_retry(tmp_path: Path, mon
     failure, and both failures must be counted and journaled per-item.
     """
     home, data = _make_home(tmp_path), _make_data(tmp_path)
-    shared_cmd = ("pursuit", "health", "acme", "--json")
+    shared_cmd = ("pursuit", "health", "--account", "acme", "--json")
     shared_action = ProposedAction(skill=None, rationale="r", enrichment_argv=None, command_argv=shared_cmd)
     monkeypatch.setattr(loop_module, "propose_for", lambda _item: shared_action)
     spawn = _patch_subprocess(monkeypatch, returncode=1)
 
-    result = run_once(home, data, tier="read", allowlist=[])
+    result = run_once(home, data, tier="read", policy=NO_ACT_POLICY)
 
     assert result.enrich_failures == 2  # both items independently failed, none reused a cached failure
     assert spawn.call_count == 2  # not deduplicated: a failed result gives no chance-to-succeed to skip
@@ -558,7 +595,7 @@ def test_duplicate_command_argv_denial_reused_with_correct_per_item_counters(
     monkeypatch.setattr("fieldkit.companion.runner.is_allowed", lambda *_a, **_kw: False)
     spawn = _patch_subprocess(monkeypatch, returncode=0, stdout="HEALTH-JSON")
 
-    result = run_once(home, data, tier="act", allowlist=[])
+    result = run_once(home, data, tier="act", policy=NO_ACT_POLICY)
 
     assert result.denied == 2  # both items counted as denied, not just the first
     assert spawn.call_count == 0  # denial never reaches the subprocess, cached or not

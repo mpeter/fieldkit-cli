@@ -1,56 +1,68 @@
-# AGENTS.md — Salesforce Client (`sf/`)
+# fieldkit Salesforce contributor guide
 
-Thin synchronous httpx client for the Salesforce REST API. Sole SF data access path since Playwright scraping was retired (D009/D010).
+Use `SFDirectClient` for synchronous Salesforce REST access. It owns connection
+lifetime, authentication headers, request retries, and response validation.
+Use it as a context manager so the httpx connection closes.
+The client owns lifetime and operation orchestration. Its private
+`_transport.py` module owns request dispatch under the shared retry policy;
+`_responses.py` owns response validation and UI API projections. Extend those
+homes rather than copying helpers into consumers or adding client re-exports.
+`fieldkit.sf.client.API_VERSION` is the canonical REST version for client calls
+and session probes; do not maintain a separate probe version.
 
-## Authentication boundaries
+## Authentication and errors
 
-fieldkit supports an explicitly supplied Salesforce `sid` cookie. It does not
-ship an OAuth connected app or attempt to mint credentials for a contributor.
+Import Salesforce exceptions from `fieldkit.sf.errors`. This lightweight leaf
+does not import the HTTP client or optional dependencies, so error handling need
+not initialize an integration. The package and client do not re-export errors.
 
-Ask the user for a REST-capable `sid` cookie from an authorized Salesforce
-session. Run `fieldkit auth sf` to store it in fieldkit's active
-configuration root. `client.py` picks it up automatically. The hostname comes
-from `salesforce.org_url` in `accounts.yaml`.
+The supported credential is an explicitly supplied, REST-capable Salesforce
+`sid` from an authorized session. `fieldkit auth sf` stores it in the active
+configuration root. `fieldkit.config.get_sf_rest_base_url()` owns organization
+URL selection and REST normalization: `sf_org_url` in `config.yaml` takes
+precedence over `salesforce.org_url` in account configuration. Reuse that
+accessor rather than duplicating precedence in consumers.
+Session lifetime depends on the deployment's policy;
+do not promise a fixed duration or assume a browser session grants REST access.
 
-Session lifespan: 8–24 hours. On HTTP 401, `SFAuthError` is raised — callers should prompt the user to re-run `fieldkit auth sf`.
+The client sends the credential as a Bearer authorization header. Do not log
+that header, the cookie, or raw session data. fieldkit does not ship an OAuth
+connected app or mint a contributor's Salesforce credentials.
 
-## Query compatibility
+`SFAuthError` inherits from `fieldkit.errors.AuthError` and reaches the top-level
+CLI handler as exit 2. Preserve authentication failures even when fetching
+supplemental data: an empty result must not disguise an expired session.
+`SFNotFoundError` distinguishes missing records, and `SFDataAccessError`
+distinguishes denied data access where a method supports it. Consult the called
+method's contract before interpreting an empty collection as complete.
 
-fieldkit uses SOSL, direct sObject GET, and UI API relationship routes so it can
-operate in Salesforce deployments whose policy blocks SOQL or CPQ child queries.
+## Query and deployment boundaries
 
-Allowed patterns:
-- **SOSL search** (multi-record): `GET /services/data/v59.0/search/?q=FIND+{term}+IN+NAME+FIELDS+RETURNING+Opportunity(...)`
-- **Direct sObject REST GET** (single record): `GET /services/data/v59.0/sobjects/<Object>/<id>?fields=F1,F2`
-- **UI API child-relationships** (deal splits): `GET /services/data/v59.0/ui-api/records/<id>/child-relationships/<rel>`
-- **UI API related-list-records** (CPQ quote lines, quotes-on-opp): `GET /services/data/v59.0/ui-api/related-list-records/<parentId>/<relatedListId>` — the only working parent→child route for CPQ objects (`SBQQ__Quote__c`, `SBQQ__QuoteLine__c`). `record-ui?childRelationships=true` and `OpportunityLineItems` both fail on CPQ objects (0 keys and HTTP 400 respectively).
+The client uses SOSL, direct sObject REST requests, and UI API relationship
+routes. Reuse the existing methods rather than adding a second transport or
+assuming a deployment permits SOQL. Keep opportunity searches scoped to
+`IN NAME FIELDS`; searching all fields can match another account mentioned
+inside free-text next steps.
 
-Use `IN NAME FIELDS` (not `IN ALL FIELDS`) for opportunity searches — `IN ALL FIELDS` also searches `Next_Steps__c` and causes false-positive account matches when next-steps text mentions another account's name (implementation change).
+`fetch_record()` targets opportunities; `fetch_sobject()` accepts an object
+type. UI API collection results can carry completeness and issue information.
+Preserve that information through consumers rather than converting an incomplete
+response into a successful empty list.
 
-## Services Filter (R21)
+The current services filter uses the custom fields `Consulting_Total_USD__c`
+and `Training_Total_USD__c`. These are deployment-specific assumptions, not
+standard Salesforce fields or a portable definition of services revenue.
+Keep the filter in its canonical client constant; do not duplicate it in
+commands. Changes require fixtures covering the supported deployment mapping,
+including accounts with no matching services opportunities.
 
-**CONSTRAINT:** Use `Consulting_Total_USD__c > 0 OR Training_Total_USD__c > 0` to identify services opportunities.
+## Request policy
 
-Do NOT use `pse__Is_Services_Opportunity__c` — it is `True` on pure subscription renewals (confirmed on <account-slug> accounts during 2026-05-29 audit).
+Reuse the client's retry and timeout behavior. Authentication failures must
+escape without retrying them as transient network failures. Do not layer a
+second retry loop around client calls or narrow the shared transient-status
+policy to make a test pass.
 
-TAM SKUs roll into `Subscription_Total_USD__c`, not `Services_Total_USD__c`. The constant `_SERVICES_FILTER` in `client.py` encodes this correctly — do not change it.
-
-## Exception Hierarchy
-
-- `SFAuthError` — HTTP 401; user must re-auth. Exit code 2.
-- `SFNotFoundError` — HTTP 404; record does not exist.
-- `SFAPIError` — all other HTTP/network errors. Exit code 3.
-
-Never catch `SFAuthError` silently in the primary data path — it must propagate to `cli_main()` for correct exit code mapping (exit code 2). Exception: supplemental/graceful-degradation helpers (e.g. `_fetch_deal_splits`, `_fetch_quote_lines`) may swallow `SFAuthError` and return an empty result when the supplemental data is non-critical and the header is still useful. These helpers MUST return `[]` / empty and MUST NOT silently suppress — log a `WARNING` for `SFAPIError`; for `SFAuthError`, returning `[]` is acceptable since the primary fetch will also fail and propagate the error.
-
-## Key Implementation Notes
-
-- `fetch_record()` fetches `Opportunity` sObjects. `fetch_sobject()` is the generic form for any object type.
-- `fetch_deal_splits()` uses the UI API child-relationships endpoint — the only way to get deal splits without SOQL.
-- Retry logic: 3 attempts on HTTP 429/500/502/503/504 with exponential backoff + jitter. `_RETRY_STATUSES` in `client.py` covers gateway errors Salesforce returns under load — do not narrow it.
-- `SFDirectClient` is a context manager — always use `with SFDirectClient(...) as client:` to ensure the httpx connection is closed.
-- Auth header is `Authorization: Bearer <sid>` (not `Cookie: sid=<sid>`). Both work; Bearer is what `client.py` uses.
-
-## Exception Tach Note (implementation note/implementation note)
-
-`SFAuthError` now inherits from `AuthError` (from `fieldkit.errors`), which `cli_exit.py` catches directly. The old `type(exc).__name__ == "SFAuthError"` workaround was removed. If you add a new auth exception in `sf/`, inherit from `AuthError` — it is automatically routed to EXIT_AUTH (2) without any change to `cli_exit.py`.
+New domain authentication exceptions inherit from `AuthError`; CLI adapters
+must not recognize them by class-name strings or implement their own exit-code
+mapping.

@@ -5,14 +5,16 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shlex
 import sys
+import textwrap
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
-if __package__:
+if TYPE_CHECKING or __package__:
     from scripts.public_tree_scan import GITLEAKS_LINUX_X64_SHA256, GITLEAKS_VERSION
 else:
     from public_tree_scan import GITLEAKS_LINUX_X64_SHA256, GITLEAKS_VERSION
@@ -90,6 +92,7 @@ _CONTEXT_EVIDENCE_PATHS = frozenset(
     {
         "scripts/release_promotion_evidence.py",
         "scripts/release_bundle.py",
+        "scripts/runtime_license_inventory.py",
         "scripts/release_consumer.py",
         "scripts/release_wheelhouse.py",
         "pyproject.toml",
@@ -382,6 +385,60 @@ def _validates_approved_input_acquisition(build: dict[str, Any]) -> bool:
     )
 
 
+def _validates_approval_input_invocation(job: dict[str, Any], *, allow_uv: bool) -> bool:
+    """Check the verifier CLI shape; its arguments do not establish release authority."""
+    lines = [
+        line.strip()
+        for step in _steps(job)
+        if isinstance(command := step.get("run"), str)
+        for line in command.splitlines()
+        if "scripts/release_approval_input.py" in line
+    ]
+    if len(lines) != 1:
+        return False
+    try:
+        tokens = shlex.split(lines[0])
+    except ValueError:
+        return False
+    prefix = ["uv", "run", "python"] if allow_uv and tokens[:3] == ["uv", "run", "python"] else ["python"]
+    if tokens[: len(prefix) + 1] != [*prefix, "scripts/release_approval_input.py"]:
+        return False
+    arguments = tokens[len(prefix) + 1 :]
+    if len(arguments) != 6 or arguments[::2] != ["--input", "--controller-root", "--expected-selection"]:
+        return False
+    return all(value not in {"", "."} and not value.startswith("-") for value in arguments[1::2])
+
+
+_SOURCE_RUN_FILTER = """\
+.repository.id == 1378745365 and
+.repository.owner.id == 1717694 and
+.head_repository.id == 1378745365 and
+.workflow_id == 362870199 and
+.event == "workflow_dispatch" and
+.head_branch == "main" and
+.path == ".github/workflows/retain-release-input.yml@main" and
+.status == "completed" and .conclusion == "success" and
+(.run_attempt | type == "number") and
+(.head_sha | test("^[0-9a-f]{40}$"))"""
+
+
+def _validates_source_run_filter(job: dict[str, Any]) -> bool:
+    """Require the effective jq filter, not inert copies of its predicates."""
+    commands = [
+        command
+        for step in _steps(job)
+        if isinstance(command := step.get("run"), str) and "actions/runs/$SOURCE_RUN_ID" in command
+    ]
+    if len(commands) != 1:
+        return False
+    matches = re.findall(
+        r'^[ \t]*jq -e \'\n(.*?)^[ \t]*\' <<< "\$run" > /dev/null$',
+        commands[0],
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    return len(matches) == 1 and textwrap.dedent(matches[0]).strip() == _SOURCE_RUN_FILTER
+
+
 def _validate_consumer_job(job: dict[str, Any], findings: list[Finding]) -> None:
     """Require the post-publication verifier to consume only retained inputs."""
     steps = _steps(job)
@@ -498,6 +555,14 @@ def validate_approval_document(document: object) -> Report:
         _add(findings, "RWA003", "workflow", "approval workflow must have exactly one protected reader job")
         return Report(tuple(sorted(set(findings))))
     job = _mapping(jobs["approve"])
+    environment = job.get("environment")
+    if environment == "release-approval" or _mapping(environment).get("name") == "release-approval":
+        _add(
+            findings,
+            "RWA010",
+            "approve",
+            "protected approval precedes independent preflight validation in the sole reader job",
+        )
     if (
         job.get("runs-on") != "ubuntu-24.04"
         or _integer(job.get("timeout-minutes")) != 15
@@ -529,6 +594,14 @@ def validate_approval_document(document: object) -> Report:
         "SOURCE_RUN_ID",
         '[[ "$SOURCE_RUN_ID" =~ ^[1-9][0-9]*$ ]]',
         "actions/runs/$SOURCE_RUN_ID",
+        ".repository.id == 1378745365",
+        ".repository.owner.id == 1717694",
+        ".head_repository.id == 1378745365",
+        ".workflow_id == 362870199",
+        '.event == "workflow_dispatch"',
+        '.head_branch == "main"',
+        '.path == ".github/workflows/retain-release-input.yml@main"',
+        '.status == "completed" and .conclusion == "success"',
         "release-approval-source-${SOURCE_RUN_ID}-${attempt}-${head_sha}",
         "timeout 60s gh api --paginate --slurp",
         "jq -r --arg name",
@@ -539,12 +612,15 @@ def validate_approval_document(document: object) -> Report:
     )
     if (
         not all(fragment in commands for fragment in required_commands)
+        or not _validates_source_run_filter(job)
         or not _all_gh_requests_are_bounded(commands)
         or any(forbidden in commands for forbidden in ("approval_input_url", "curl ", "tar --extract"))
     ):
         _add(
             findings, "RWA007", "approve", "approval reader must derive and safely verify exactly one retained artifact"
         )
+    if not _validates_approval_input_invocation(job, allow_uv=False):
+        _add(findings, "RWA009", "approve", "approval verifier invocation must match its current structural CLI")
     upload = [
         _mapping(step.get("with"))
         for step in steps
@@ -595,6 +671,8 @@ def validate_document(document: object) -> Report:
         _add(
             findings, "RWF026", "build", "production builds must acquire only the signed tag's verified approval input"
         )
+    if not _validates_approval_input_invocation(build, allow_uv=True):
+        _add(findings, "RWF028", "build", "release verifier invocation must match its current structural CLI")
     if not _validates_signed_production_tag(context):
         _add(findings, "RWF012", "context", "production tags must be verified through GitHub's signed-tag record")
     if not _requires_main_for_dispatch(context):

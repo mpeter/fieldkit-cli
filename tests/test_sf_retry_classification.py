@@ -19,7 +19,7 @@ import httpx
 import pytest
 
 from fieldkit.config.retry import RETRY_MAX_ATTEMPTS
-from fieldkit.sf.client import _sf_request
+from fieldkit.sf._transport import _sf_request
 
 pytestmark = pytest.mark.unit
 

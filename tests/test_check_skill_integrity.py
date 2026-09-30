@@ -676,10 +676,10 @@ def test_r002_known_mcpjungle_group_no_violation(tmp_path: Path, capsys: pytest.
     assert "R002" not in out
 
 
-def test_r005_data_repo_path_excluded(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """R005 is NOT emitted for paths starting with data-repo prefixes (accounts/, pursuits/, etc.)."""
+def test_r005_workspace_path_excluded(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """R005 is NOT emitted for workspace prefixes such as accounts/ and pursuits/."""
     _minimal_corpus(tmp_path)
-    # accounts/ is a data-repo prefix — must be excluded from R005
+    # accounts/ is a workspace prefix — must be excluded from R005
     body = "See `accounts/acme-corp/account.md` for account details.\n"
     make_fieldkit_skill(tmp_path, "my-skill", body=body)
     context = _context(tmp_path)

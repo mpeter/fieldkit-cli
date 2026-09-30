@@ -19,10 +19,12 @@ import click
 from fieldkit.cli_exit import EXIT_AUTH, EXIT_DATA, EXIT_PARTIAL, cli_main
 from fieldkit.cli_registry import declare_write
 from fieldkit.companion.gate import TIER_ORDER, Tier
+from fieldkit.errors import FieldkitError
 
 if TYPE_CHECKING:
     from fieldkit.companion.decide import ProposedAction
     from fieldkit.companion.feed import AttentionItem
+    from fieldkit.companion.gate import ActPolicyValidation, ValidatedActPolicy
     from fieldkit.companion.llm_decide import DecisionResult
 
 # Exit code for gate denial: EXIT_DATA — denial is permanent, not retriable.
@@ -33,19 +35,95 @@ _EXIT_DENIED = 3
 _TIER_RANK: dict[str, int] = {tier: rank for rank, tier in enumerate(TIER_ORDER)}
 
 
-def _validate_act_allowlist(tier: str, allowlist: list[str]) -> None:
-    """Reject invalid configured actions before a companion execution path starts."""
+class _TargetCommand(click.Command):
+    """Parse companion options separately from an unchanged target argv."""
+
+    def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
+        if args in (["--help"], ["-h"]):
+            return super().parse_args(ctx, args)
+        with cli_main():
+            if "--" not in args:
+                raise FieldkitError("target command requires an explicit -- separator")
+            boundary = args.index("--")
+            target = args[boundary + 1 :]
+            remaining = super().parse_args(ctx, args[:boundary])
+            if ctx.params["command"] or not target:
+                raise FieldkitError("only companion options may precede the -- separator; a target must follow")
+            ctx.params["command"] = tuple(target)
+            return remaining
+        return []  # cli_main exits on invalid input
+
+
+def _act_policy_validation(tier: str, allowlist: list[str]) -> "ActPolicyValidation":
+    """Build the typed policy consumed by every companion execution path."""
+    from fieldkit.companion.gate import NO_ACT_POLICY, ActPolicyValidation
+
     if tier != "act" or not allowlist:
-        return
+        return ActPolicyValidation(NO_ACT_POLICY, ())
 
-    from fieldkit.companion.gate import validate_allowlist
-    from fieldkit.companion.mapping import DRY_RUN_CAPABLE
+    from fieldkit.cli_registry import walk_cli
+    from fieldkit.companion.gate import PreviewCommandPolicy, _compile_act_policy
+    from fieldkit.companion.mapping import ACT_PREVIEW_DENIED_OPTIONS, DRY_RUN_CAPABLE
 
-    problems = validate_allowlist(allowlist, set(DRY_RUN_CAPABLE))
-    if problems:
-        for problem in problems:
+    commands: dict[str, PreviewCommandPolicy] = {}
+    verified: set[str] = set()
+    for node in walk_cli(sorted({path.split()[0] for path in DRY_RUN_CAPABLE})):
+        if node.full_name not in DRY_RUN_CAPABLE:
+            continue
+        preview_option = next(
+            (
+                parameter
+                for parameter in node.command.params
+                if isinstance(parameter, click.Option) and "--dry-run" in parameter.opts
+            ),
+            None,
+        )
+        if (
+            preview_option is None
+            or preview_option.name is None
+            or not preview_option.is_bool_flag
+            or preview_option.secondary_opts
+            or preview_option.callback is not None
+            or callable(preview_option.default)
+            or preview_option.prompt
+        ):
+            raise FieldkitError("reviewed action command no longer supports --dry-run")
+        probe = click.Command("preview-flag", params=[preview_option])
+        with probe.make_context("preview-flag", ["--dry-run"]) as context:
+            if context.params.get(preview_option.name) is not True:
+                raise FieldkitError("reviewed action flag does not enable dry-run")
+        verified.add(node.full_name)
+        is_group = isinstance(node.command, click.Group)
+        if isinstance(node.command, click.Group) and (
+            not node.command.invoke_without_command
+            or any(isinstance(parameter, click.Argument) for parameter in node.command.params)
+        ):
+            raise FieldkitError("previewable group has an unsupported command boundary")
+        commands[node.full_name] = PreviewCommandPolicy(
+            {
+                option: 0 if parameter.is_flag else parameter.nargs
+                for parameter in node.command.params
+                if isinstance(parameter, click.Option)
+                for option in parameter.opts
+            },
+            is_group=is_group,
+            denied_options=ACT_PREVIEW_DENIED_OPTIONS.get(node.full_name, frozenset()),
+        )
+    if verified != DRY_RUN_CAPABLE:
+        raise FieldkitError("reviewed action command is absent from the CLI registry")
+    return _compile_act_policy(allowlist, commands)
+
+
+def _validated_act_policy(tier: str, allowlist: list[str]) -> "ValidatedActPolicy":
+    """Reject invalid configuration and return the only executable policy type."""
+
+    validation = _act_policy_validation(tier, allowlist)
+    if validation.problems:
+        for problem in validation.problems:
             click.echo(f"act_allowlist config error: {problem}", err=True)
         raise SystemExit(EXIT_DATA)
+    assert validation.policy is not None
+    return validation.policy
 
 
 def _llm_decision(item: "AttentionItem", baseline: "ProposedAction", enrichment: str | None) -> "DecisionResult":
@@ -190,7 +268,7 @@ def reconcile_invalid(limit: int, confirm: bool, dry_run: bool, as_json: bool) -
         )
 
 
-@cli.command("allowed", context_settings={"ignore_unknown_options": True})
+@cli.command("allowed", cls=_TargetCommand, context_settings={"ignore_unknown_options": True})
 @click.argument("command", nargs=-1, type=click.UNPROCESSED)
 @click.option("--json", "as_json", is_flag=True, default=False, help="Machine-readable JSON output.")
 def allowed(command: tuple[str, ...], as_json: bool) -> None:
@@ -198,7 +276,7 @@ def allowed(command: tuple[str, ...], as_json: bool) -> None:
 
     Exit 0 = permitted; exit 3 = denied (EXIT_DATA — denial is permanent,
     so exit 1 'retry may help' would mislead orchestrators). A malformed
-    act_allowlist entry is also a denial: it is checked here before the
+    act_allowlist entry at act tier is also a denial: it is checked here before the
     per-invocation question, so a typo'd or non-previewable allowlist entry
     is caught the first time anyone asks what's permitted, not silently at
     execution time.
@@ -209,30 +287,30 @@ def allowed(command: tuple[str, ...], as_json: bool) -> None:
     Example: fieldkit companion allowed -- pursuit advance acme/deal --dry-run
     """
     with cli_main():
-        from fieldkit.companion.gate import is_allowed, validate_allowlist
-        from fieldkit.companion.mapping import DRY_RUN_CAPABLE
+        from fieldkit.companion.gate import is_allowed
         from fieldkit.config import get_companion_act_allowlist, get_companion_tier
 
         allowlist = get_companion_act_allowlist()
         argv = list(command)
         tier = get_companion_tier()
 
-        problems = validate_allowlist(allowlist, set(DRY_RUN_CAPABLE))
-        if problems:
+        validation = _act_policy_validation(tier, allowlist)
+        if validation.problems:
             if as_json:
                 click.echo(
                     json.dumps(
-                        {"allowed": False, "tier": tier, "command": argv, "error": problems},
+                        {"allowed": False, "tier": tier, "command": argv, "error": validation.problems},
                         indent=2,
                         default=str,
                     )
                 )
             else:
-                for problem in problems:
+                for problem in validation.problems:
                     click.echo(f"act_allowlist config error: {problem}", err=True)
             raise SystemExit(_EXIT_DENIED)
 
-        permitted = is_allowed(argv, tier, allowlist)
+        assert validation.policy is not None
+        permitted = is_allowed(argv, tier, validation.policy)
 
         if as_json:
             # Denial is an answer, not a failure, so the document is emitted on
@@ -241,13 +319,13 @@ def allowed(command: tuple[str, ...], as_json: bool) -> None:
         elif permitted:
             click.echo(f"allowed (tier: {tier})")
         else:
-            click.echo(f"denied (tier: {tier}): {' '.join(argv)}", err=True)
+            click.echo(f"denied (tier: {tier}): {json.dumps(argv, ensure_ascii=True)}", err=True)
 
         if not permitted:
             raise SystemExit(_EXIT_DENIED)
 
 
-@cli.command("run", context_settings={"ignore_unknown_options": True})
+@cli.command("run", cls=_TargetCommand, context_settings={"ignore_unknown_options": True})
 @click.option("--item-id", default="", help="Attention item this action addresses (journaled).")
 @click.argument("command", nargs=-1, type=click.UNPROCESSED)
 def run(item_id: str, command: tuple[str, ...]) -> None:
@@ -263,22 +341,18 @@ def run(item_id: str, command: tuple[str, ...]) -> None:
         from fieldkit.config import get_companion_act_allowlist, get_companion_tier, get_fieldkit_data
 
         argv = list(command)
-        if not argv:
-            click.echo("no command given — usage: fieldkit companion run -- <command…>", err=True)
-            raise SystemExit(EXIT_DATA)
-
         tier = get_companion_tier()
         allowlist = get_companion_act_allowlist()
-        _validate_act_allowlist(tier, allowlist)
+        policy = _validated_act_policy(tier, allowlist)
         result = run_action(
             argv,
             tier=tier,
-            allowlist=allowlist,
+            policy=policy,
             data_path=get_fieldkit_data(),
             item_id=item_id,
         )
         if result.denied:
-            click.echo(f"denied: {' '.join(argv)}", err=True)
+            click.echo(f"denied: {json.dumps(argv, ensure_ascii=True)}", err=True)
             raise SystemExit(_EXIT_DENIED)
         if result.stdout:
             click.echo(result.stdout, nl=False)
@@ -313,7 +387,7 @@ def loop(once: bool, dry_run: bool, tier_override: str | None, as_json: bool) ->
     ``companion.tier`` (read/propose/act); ``--tier`` can only LOWER it. At
     propose tier, writes one companion-outbox proposal per item without running
     its candidate command. At act tier, the candidate still must pass the exact
-    configured allowlist before execution. Read tier and ``NO_LLM=1`` retain
+    configured allowlist before execution. Read tier and ``FIELDKIT_NO_LLM=1`` retain
     deterministic behavior.
 
     Exit codes: 0 — success; 1 — partial (a best-effort context read failed);
@@ -344,12 +418,12 @@ def loop(once: bool, dry_run: bool, tier_override: str | None, as_json: bool) ->
         if effective not in TIER_ORDER:  # defensive; get_companion_tier fails closed to a valid tier
             effective = "read"
         allowlist = get_companion_act_allowlist()
-        _validate_act_allowlist(effective, allowlist)
+        policy = _validated_act_policy(effective, allowlist)
         result = run_once(
             get_fieldkit_home(),
             get_fieldkit_data(),
             tier=cast(Tier, effective),
-            allowlist=allowlist,
+            policy=policy,
             dry_run=dry_run,
             decision_fn=_llm_decision,
         )

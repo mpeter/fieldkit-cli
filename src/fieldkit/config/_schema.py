@@ -3,6 +3,15 @@
 from pydantic import BaseModel, ConfigDict
 
 
+class _McpEndpointsConfig(BaseModel):
+    """Explicit full endpoints for optional MCP-backed workflows."""
+
+    model_config = ConfigDict(extra="forbid")
+    backstory: str | None = None
+    calendar: str | None = None
+    draft_queue: str | None = None
+
+
 class _ShadowbotConfig(BaseModel):
     """Schema for the optional ``shadowbot:`` section in config.yaml."""
 
@@ -26,7 +35,6 @@ class _FieldkitConfig(BaseModel):
     fieldkit_home: str | None = None
     fieldkit_data: str | None = None
     fieldkit_root: str | None = None
-    data_repo: str | None = None
     email: str | None = None
     email_domain: str | None = None
     vertex_location: str | None = None
@@ -39,3 +47,4 @@ class _FieldkitConfig(BaseModel):
     pipeline_quota: dict[str, object] | None = None
     territory_accounts: dict[str, str] | None = None
     mcp_gateway_url: str | None = None
+    mcp_endpoints: _McpEndpointsConfig | None = None

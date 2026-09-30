@@ -9,7 +9,7 @@ The system SHALL compute a deterministic action first and MAY refine it with one
 
 #### Scenario: LLM-disabled proposal
 
-- **GIVEN** `NO_LLM=1` and a routable attention item
+- **GIVEN** `FIELDKIT_NO_LLM=1` and a routable attention item
 - **WHEN** the companion runs at propose tier
 - **THEN** it writes a deterministic proposal without making a provider call
 - **AND** the proposal records deterministic provenance and an LLM-disabled fallback category

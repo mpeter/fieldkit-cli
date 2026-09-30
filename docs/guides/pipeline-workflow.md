@@ -1,9 +1,19 @@
 ---
-last_reviewed: 2026-09-12
+last_reviewed: 2026-09-29
 covers:
+  - src/fieldkit/commands/datasync/cli.py
   - src/fieldkit/commands/pursuit/
   - src/fieldkit/pursuit/
+  - src/fieldkit/commands/pipeline/cli.py
+  - src/fieldkit/pipeline/
   - src/fieldkit/commands/sf/
+  - src/fieldkit/sf/quota.py
+  - src/fieldkit/commands/ingest/run.py
+  - src/fieldkit/ingest/replay.py
+  - src/fieldkit/ingest/prepared.py
+  - src/fieldkit/commands/ingest/reprocess.py
+  - src/fieldkit/ingest/reprocess_replay.py
+  - src/fieldkit/ingest/reprocess_journal.py
 audience: ae-user
 ---
 
@@ -14,12 +24,13 @@ audience: ae-user
 The pipeline workflow is a four-step sequence for keeping your pursuit files
 accurate and your forecast current:
 
-1. **Sync** — pull the latest data from Salesforce and Gmail into your workspace
+1. **Sync** — process local ingest data and optionally refresh configured providers
 2. **Audit** — validate pursuit structure and qualification-independent timeline risks
 3. **Advance** — evaluate current stage policy, then move a pursuit or record an override
 4. **Forecast** — generate a pipeline forecast from your pursuit files
 
-Run these steps in order. Each step depends on the output of the previous one.
+Use the steps that match your task. Audit and forecast can run on existing local
+pursuits without syncing a provider or advancing a stage first.
 
 ## Step 1: Sync your data
 
@@ -27,21 +38,80 @@ Run these steps in order. Each step depends on the output of the previous one.
 fieldkit sync
 ```
 
-This runs a multi-phase pipeline: Gmail sync (incremental), ingest discovery and
-processing, and watcher updates. By default it does **not** include Salesforce
-listview — add `--sf` to include it.
+Sync plans transcript ingest discovery and processing plus the local
+pursuit-stall watcher. Selected-provider preflight must succeed before steps run. Gmail runs only when its integration is configured,
+Backstory health runs only when its explicit endpoint is configured, and the
+summary identifies optional inputs that were not run. Salesforce and Slack are
+never inferred from credentials or account text; select them explicitly with
+`--sf` and `--slack`.
 
 Key flags:
 
-- `--quick` — skip the Gmail sync phases (SF and ingest only)
+- `--quick` — skip configured Gmail phases
 - `--sf` — include `fieldkit sf listview` as a final step
-- `--dry-run` — show what would run without executing
-- `--account SLUG` — scope to a single account
-- `--verbose` — show full step output (truncated to last 100 lines per step)
+- `--slack` — include the optional Slack thread watcher
+- `--dry-run` — show what would run without reading credentials, contacting providers, or executing steps
+- `--account SLUG` — scope people-index rebuilding, Gmail account tagging and
+  enrichment, and selected watchers to one account; it does not scope Gmail sync,
+  transcript discovery or processing, or the optional Salesforce listview step
+- `--verbose` — show a bounded tail of subprocess stdout/stderr (up to 100 lines and 16,384 characters per stream)
 
 Output is a step-by-step table showing each phase and its result, followed by a
-summary line. Runtime depends on account count and Gmail volume (typically 60–180
-seconds for a full run).
+summary line. Provider runtime depends on only the integrations selected for
+that run; the local base path has no provider-duration estimate.
+
+### Resume interrupted transcript ingestion
+
+Run `fieldkit ingest run --pipeline transcript-ingest` again after an interrupted
+run. Only one transcript run may use a given pipeline database at a time. A busy
+run exits `1`; wait for the active run to finish rather than deleting its lock.
+
+Before writing output, transcript ingestion saves the prepared note and exact
+task decisions in the local pipeline database. A non-dry rerun reclaims
+interrupted sources. Sources with retained prepared output replay those saved
+decisions without fetching the document, calling an LLM, or reclassifying tasks.
+Sources interrupted before preparation still need the normal processing inputs
+and credentials. Dry runs do not reclaim interrupted sources.
+
+Completion requires the meeting note, every selected pursuit update, and the
+saved active-task updates to succeed. Waiting-on decisions are not automatically
+added to `TASKS.md`; use `fieldkit ingest promote` to triage them. A failed output
+write leaves the prepared intent available for retry and makes the run exit `1`.
+Other sources may already have completed.
+
+Keep the ownership comments in generated notes, pursuit activity entries, and
+tasks. Matching ownership lets a retry preserve your edited text; missing,
+conflicting, or ambiguous ownership can stop replay. Restore a missing selected
+pursuit or repair the reported output conflict before retrying. Do not delete
+prepared checkpoints to force completion. See
+[troubleshooting](../reference/troubleshooting.md) for recovery guidance and
+[privacy](../privacy.md) for retained local content.
+
+This recovers from process interruption. It is not an atomic transaction across
+all files and does not promise recovery from power loss.
+
+### Resume interrupted meeting-note reprocessing
+
+Retry `fieldkit ingest reprocess --pipeline transcript-ingest` with the original
+`--from-version` selection after an interrupted replacement. Reprocessing saves
+the exact replacement in the pipeline database before publishing it. Retained
+replacements finish before fresh provider work; recovery does not fetch the
+document or call an LLM. If the replacement was already written, recovery verifies
+its exact contents and permissions before completing the database update.
+
+The selection must include every retained replacement. If `--account`,
+`--from-version`, or `--limit` excludes pending recovery, the command exits `1`
+without applying replacements. Account selection matches a literal,
+case-sensitive path segment. A skipped or failed recovery stops the batch;
+any failed fresh artifact also stops further processing. A dry-run with retained
+recovery exits `1` and leaves it pending.
+
+Repair conflicting file contents, ownership, permissions, or workspace paths
+before retrying; do not remove the recovery journal. If saved replacements target
+an older pipeline version than the installed pipeline, recovery finishes those
+replacements and exits `1`; invoke reprocessing again for newer work. File
+replacement and database completion are not one atomic transaction, and this
+does not promise power-loss recovery.
 
 ### Import ambient transcripts
 
@@ -74,18 +144,29 @@ risks. It does not score qualification from local MEDDPICC data. Current native
 qualification is reported as `unavailable` because the audit does not perform a
 live ClosePlan read.
 
-Output format:
+For one local pursuit at `acme-corp/pursuits/acme-corp-q3.md` with stage
+`discover`, gate status `pending`, a null `last-transition`, an empty
+`transition-history`, and no other findings, the summary is:
 
 ```
-Files scanned : 12
-Compliant     : 10
-Errors        : 1
-Warnings      : 1
+Files scanned : 1
+Compliant     : 1
+  closed-won  : 0
+Errors        : 0
+Warnings      : 0
 Critical flags: 0
 
-✗ acme-corp-q3: close date in 12d but stage='discover'  [WARNING]
-✓ globalpay-renewal: current qualification unavailable  [COMPLIANT]
+Details:
+  ✓ acme-corp/pursuits/acme-corp-q3.md — qualification unavailable (0 finding(s))
 ```
+
+The default command also writes a non-empty Markdown report beneath the
+workspace's `accounts/.audit/` directory and prints its location after the
+summary. It does not change pursuit files unless `--fix` is requested. Use
+`--json` for machine-readable results without the report write. Exit `0` means
+no findings, `1` means findings need attention, and `3` means invalid
+configuration or no pursuit files in the selected scope. Compliance does not
+prove current qualification.
 
 **Reading audit output:**
 
@@ -108,7 +189,7 @@ Additional flags:
 ## Step 3: Advance a pursuit
 
 ```
-fieldkit pursuit advance PURSUIT_SPEC
+fieldkit pursuit advance PURSUIT_SPEC --dry-run
 ```
 
 where `PURSUIT_SPEC` is the full file path or `<account>/<slug>` shorthand. This
@@ -125,10 +206,10 @@ Key flags:
 Stage sequence:
 `pre-pipeline → prospect → qualify → discover → validate → propose → negotiate → closed-won`
 
-Example output:
+For the same `discover` pursuit, the preview exits `1` and leaves files unchanged.
+After the line identifying the resolved pursuit path, it prints:
 
 ```
-Pursuit: accounts/acme-corp/pursuits/acme-corp-q3.md
 Current:  discover
 Target:   validate
 
@@ -138,8 +219,9 @@ Gate: … PENDING — current qualification policy unavailable:
 [dry-run] Gate pending — would NOT advance (use --override REASON to force)
 ```
 
-The `stage` field in the pursuit frontmatter is updated (not `sf_stage`). The command
-also writes to `last-transition` and appends to `transition-history`. Transitions
+After reviewing the preview, remove `--dry-run` only when you intend to apply the
+transition. A successful write updates `stage` (not `sf_stage`), updates
+`last-transition`, and appends to `transition-history`. Transitions
 that formerly depended on local 0–3 scores remain `pending` until a native policy is
 ratified; historical scores never make them pass. Qualification-independent
 transitions retain their existing behavior. Use `--dry-run` first, and provide an
@@ -154,23 +236,30 @@ fieldkit pursuit forecast
 This reads all pursuit files and generates a pipeline forecast with weighted and
 scenario views.
 
-Output format:
+For three fictional pursuits with standard contract types, the following
+illustrative calculation shows the scenario totals. This is not literal terminal
+formatting; the command also displays pursuit paths, close dates, and the current
+date. Commit includes the full ACV of negotiate and closed-won pursuits, whereas
+weighted applies each stage's probability.
 
 ```
-| Deal              | Stage     | Weight | ACV        | Close      |
-|-------------------|-----------|--------|------------|------------|
-| acme-corp-q3      | propose   |  50%   | $450,000   | 2026-08-31 |
-| midwestins-expand | propose   |  50%   | $120,000   | 2026-09-15 |
-| globalpay-renewal | negotiate |  75%   | $800,000   | 2026-07-31 |
+| Deal                | Stage     | Weight | ACV      |
+|---------------------|-----------|--------|----------|
+| acme-corp-expansion | propose   | 50%    | $450,000 |
+| midwestins-expand   | propose   | 50%    | $120,000 |
+| globalpay-renewal   | negotiate | 75%    | $800,000 |
 
-Commit      : $600,000  (negotiate + closed-won)
-Weighted    : $685,000
+Commit      : $800,000  (negotiate + closed-won)
+Weighted    : $885,000
 Best Case   : $1,370,000
 Closed Won  : $0
 ```
 
-ACV is resolved from `sf_consulting_acv`, then `sf_acv`, then `sf_arr` in the
-pursuit frontmatter.
+For standard or unknown contract types, ACV is resolved from `sf_consulting_acv`,
+then `sf_acv`, then `sf_arr` in the pursuit frontmatter. A `fixed_price` contract
+prefers `sf_acv` before `sf_consulting_acv`, then falls back to `sf_arr`. Explicit
+zero values are preserved. Best Case includes active deals but excludes
+closed-won and closed-lost pursuits; Closed Won reports won ACV separately.
 
 Key flags:
 
@@ -184,7 +273,11 @@ Key flags:
 fieldkit pipeline quota
 ```
 
-Set your quota in `~/.config/fieldkit/config.yaml` first:
+Set your quota in the active fieldkit `config.yaml` first. By default that is
+`~/.config/fieldkit/config.yaml`; with an absolute `XDG_CONFIG_HOME`, use
+`$XDG_CONFIG_HOME/fieldkit/config.yaml`. Replace this example's target and period
+with your own reporting values; the period accepts a calendar half-year
+(`YYYY-H1` or `YYYY-H2`) or quarter (`YYYY-Q1` through `YYYY-Q4`):
 
 ```yaml
 pipeline:
@@ -193,15 +286,25 @@ pipeline:
     period: "2026-H2"
 ```
 
-Expected output:
+With no local pursuit files, the output after its period/date heading is:
 
 ```
-Quota Gap (2026-H2)
-  Target      : $5,000,000
-  Closed-won  : $620,000
-  Weighted    : $685,000
-  Gap         : $4,315,000
+  Weighted pipeline                     : $0
+  Closed-won (configured pursuits only) : $0
+  Quota target                          : $5,000,000
+
+  Attainment gap: n/a — pursuit-scope closed-won is not comparable
+  to a full-book quota. Pass --source sf to pull live
+  territory-scoped attainment from Salesforce.
 ```
+
+The default source reads local pursuits only. Its closed-won total is not a
+full-book attainment figure, so the human-readable report deliberately omits a
+numeric attainment gap and JSON output returns `gap: null`. The optional
+`--source sf` mode requires authorized
+Salesforce access and territory configuration; it uses live fiscal-year,
+territory-scoped closed-won revenue for that gap. A zero local total does not
+prove that Salesforce has no closed-won revenue.
 
 ## SF listview
 
@@ -209,11 +312,13 @@ Quota Gap (2026-H2)
 fieldkit sf listview
 ```
 
-This pulls your current pipeline view directly from Salesforce and prints a summary
-of open opportunities to stderr. Use it to spot opportunities that are in Salesforce
-but not yet tracked as pursuit files in your workspace.
+This reads your current Salesforce pipeline, matches opportunities to local pursuits,
+and by default updates their cache and Salesforce frontmatter before printing a
+summary. Add `--dry-run` to read and match without those local writes; it still
+contacts Salesforce. Use the untracked-opportunity summary to spot records not yet
+represented locally.
 
-Add `--json` to redirect output to stdout in machine-readable format.
+Add `--json` for machine-readable results; it does not disable writes.
 
 ## Pipeline review
 
@@ -255,11 +360,18 @@ record. Find it in the Salesforce UI from the Quote record's URL (the ID segment
 after `/lightning/r/SBQQ__Quote__c/` and before `/view`), or from the Opportunity's
 related Quotes list.
 
-When a CPQ object does not support SOQL or SOSL, fieldkit fetches quote lines
-through the UI API `related-list-records` route rather than a query. That behavior
-is expected and is not an error.
+fieldkit always fetches quote lines through the UI API `related-list-records`
+route, without first attempting SOQL or SOSL. This supports CPQ objects that do
+not allow queries; the route is not a query-error fallback.
 
 Add `--json` for machine-readable output.
+
+A successful read exits 0, including a quote with no line items. Missing session
+or organization configuration, or authentication failure during either lookup,
+exits 2; refresh credentials with `fieldkit auth sf` when needed. If the header
+or quote-line API lookup fails, the command exits 1 with retry guidance and emits
+no successful summary or JSON payload. A failed lookup is never presented as an
+empty quote.
 
 ## SF meddpicc
 
@@ -288,7 +400,7 @@ prefixes, and reports one of four aggregate states:
 
 - `unpopulated` — no score or answer exists;
 - `answered_unscored` — answer text exists but the score is blank;
-- `scored_zero` — at least one score is explicitly zero and no score is positive;
+- `scored_zero` — at least one score is recorded and every recorded score is zero;
 - `scored` — at least one score is nonzero.
 
 The element's `complete` flag and `unanswered_question_ids` keep an unanswered
@@ -312,10 +424,11 @@ maxima are the native contributions and must sum to the template's calculated
 total when both are complete. The JSON contract therefore preserves `weight` as
 `null` instead of inventing a fieldkit weight.
 
-Only `Mode = Answers` is eligible for the first guarded score writer, and only
-when the complete native choice collection also proves the proposed score plus
-ownership, maximum, version, and updateability metadata. Every other mode remains
-readable and read-only. The current command itself performs no mutation.
+For a separately reviewed guarded score writer, `Mode = Answers` is the required
+initial policy, together with complete native choices and proven score,
+ownership, maximum, version, and updateability metadata. This is a writer-design
+constraint, not a mutation capability of this reader. All modes remain readable
+and read-only; the current command performs no mutation.
 
 The UI API requests the endpoint-supported maximum page size (100) and accepts a
 deal, question, or template-answer collection as complete only when
@@ -328,10 +441,10 @@ no invented continuation-token contract.
 
 `LastModifiedDate` is exposed only as weak timestamp evidence for Salesforce
 REST's documented `If-Unmodified-Since` conditional request. A separately
-approved disposable-record probe established that a stale exact-record PATCH is
-rejected with HTTP 412 and a fresh conditional PATCH can succeed. The timestamp
-is not represented as an ETag or a strong token, and the reader still reports
-`mutation_enabled: false`; writes require the separately reviewed guarded writer.
+reviewed guarded writer is required before any mutation. The timestamp is not
+represented as an ETag or a strong token, and the reader reports
+`mutation_enabled: false`. The read command does not prove that a conditional
+write will succeed against a live service.
 See Salesforce's
 [conditional request](https://developer.salesforce.com/docs/platform/api-rest/guide/intro-rest-conditional-requests.html)
 and [sObject Rows](https://developer.salesforce.com/docs/platform/api-rest/guide/resources-sobject-retrieve-patch.html)

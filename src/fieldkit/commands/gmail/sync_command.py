@@ -32,31 +32,19 @@ def cli(db: str, max_messages: int, full: bool, since: datetime | None, as_json:
         raise click.UsageError("--full and --since cannot be used together")
 
     db_path = Path(db).expanduser().resolve()
-    with gmail_sync_lock(db_path):
-        from fieldkit.gmail.auth import get_gmail_service
-        from fieldkit.gmail.sync_engine import (
-            _FULL_PAGE_TOKEN_KEY,
-            _SINCE_PAGE_TOKEN_KEY,
-            _run_sync,
-            db_init,
-            get_sync_checkpoint,
-        )
+    from fieldkit.gmail.auth import get_gmail_service
+    from fieldkit.gmail.sync_engine import run_published_sync
 
-        conn = db_init(db_path)
-        try:
-            summary = _run_sync(
-                service_factory=get_gmail_service,
-                conn=conn,
-                full=full,
-                since=since,
-                max_messages=max_messages,
-            )
-            retry_key = (
-                _SINCE_PAGE_TOKEN_KEY if since is not None else _FULL_PAGE_TOKEN_KEY if full else "last_history_id"
-            )
-            retry_boundary = get_sync_checkpoint(conn, retry_key) if summary.unresolved else None
-        finally:
-            conn.close()
+    service = get_gmail_service()
+    with gmail_sync_lock(db_path):
+        result = run_published_sync(
+            service_factory=lambda: service,
+            db_path=db_path,
+            full=full,
+            since=since,
+            max_messages=max_messages,
+        )
+    summary = result.summary
 
     log.info(
         "Sync summary: %d added, %d failed (%d not found, %d unresolved)",
@@ -69,8 +57,7 @@ def cli(db: str, max_messages: int, full: bool, since: datetime | None, as_json:
         click.echo(
             json.dumps(
                 {
-                    "mode": "since" if since is not None else "full" if full else "incremental",
-                    "database": str(db_path),
+                    "mode": result.mode,
                     "added": summary.added,
                     "failed": summary.failed,
                     "not_found": summary.not_found,
@@ -78,8 +65,8 @@ def cli(db: str, max_messages: int, full: bool, since: datetime | None, as_json:
                     "partial": summary.failed > 0,
                     "retry": {
                         "required": summary.unresolved > 0,
-                        "checkpoint_key": retry_key if summary.unresolved else None,
-                        "checkpoint": retry_boundary,
+                        "checkpoint_key": result.checkpoint_key,
+                        "checkpoint": result.checkpoint,
                     },
                 },
                 sort_keys=True,
@@ -88,4 +75,4 @@ def cli(db: str, max_messages: int, full: bool, since: datetime | None, as_json:
     from fieldkit.gmail.sync_store import raise_partial_sync
 
     raise_partial_sync(summary)
-    log.info("Done. DB at %s", db_path)
+    log.info("Gmail cache synchronized.")

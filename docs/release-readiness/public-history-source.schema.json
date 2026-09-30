@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mpeter/fieldkit-cli/blob/main/docs/release-readiness/public-history-source.schema.json",
+  "title": "fieldkit complete public descendant source",
+  "description": "Retained local identity, not live repository authentication or release approval. The caller must supply an independently approved anchor.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "source_kind", "anchor", "repository", "repository_id", "source_commit", "source_tree", "version", "planned_tag", "policy_path", "policy_oid", "policy_sha256", "entries"],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1},
+    "source_kind": {"const": "public-history"},
+    "anchor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "repository_id", "initial_commit", "initial_tree", "record_sha256"],
+      "properties": {
+        "repository": {"$ref": "#/$defs/repository"},
+        "repository_id": {"$ref": "#/$defs/repository_id"},
+        "initial_commit": {"$ref": "#/$defs/git_oid"},
+        "initial_tree": {"$ref": "#/$defs/git_oid"},
+        "record_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "repository": {"$ref": "#/$defs/repository"},
+    "repository_id": {"$ref": "#/$defs/repository_id"},
+    "source_commit": {"$ref": "#/$defs/git_oid"},
+    "source_tree": {"$ref": "#/$defs/git_oid"},
+    "version": {"type": "string", "maxLength": 32, "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"},
+    "planned_tag": {"type": "string", "maxLength": 33, "pattern": "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"},
+    "policy_path": {"const": "docs/release-readiness/public-tree-policy.json"},
+    "policy_oid": {"$ref": "#/$defs/git_oid"},
+    "policy_sha256": {"$ref": "#/$defs/sha256"},
+    "entries": {"type": "array", "minItems": 1, "maxItems": 100000, "items": {"$ref": "#/$defs/tree_entry"}}
+  },
+  "$defs": {
+    "repository": {"type": "string", "maxLength": 128, "pattern": "^[a-z0-9-]+/fieldkit-cli$"},
+    "repository_id": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+    "git_oid": {"type": "string", "maxLength": 40, "pattern": "^[0-9a-f]{40}$"},
+    "sha256": {"type": "string", "maxLength": 64, "pattern": "^[0-9a-f]{64}$"},
+    "tree_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "mode", "oid", "category", "rule_id"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "mode": {"enum": ["100644", "100755"]},
+        "oid": {"$ref": "#/$defs/git_oid"},
+        "category": {"type": "string", "maxLength": 128, "pattern": "^[a-z][a-z0-9_]*$"},
+        "rule_id": {"type": "string", "maxLength": 128, "pattern": "^[a-z0-9-]+$"}
+      }
+    }
+  }
+}

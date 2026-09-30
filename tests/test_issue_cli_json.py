@@ -11,12 +11,10 @@ asserted across all twelve commands rather than command by command:
      still put prose on stderr and leave stdout empty — a consumer parses stdout
      iff the exit code is 0.
 
-One deliberate exception to (2): `sync-milestone` exits 1 on *partial success* —
-some candidate issues advanced, some did not — and still emits its full document
-on stdout, because the `advanced`/`failed` breakdown is exactly what a caller
-needs in that case. Partial success is not an error path. Consumers of that one
-command parse stdout on exit 0 and exit 1 alike; `_ERROR_CASES` below covers the
-genuine error paths, and sync-milestone is deliberately not among them.
+One deliberate exception to (2): `sync-milestone` can exit non-zero after some
+candidate issues advanced and still emits its full document on stdout, because
+the bounded `advanced`/`failed` breakdown is what a caller needs to reconcile.
+Consumers of that command parse stdout on every documented batch exit.
 """
 
 import json
@@ -27,7 +25,7 @@ import pytest
 from click.testing import CliRunner, Result
 
 from fieldkit.commands.issue.cli import cli
-from fieldkit.commands.issue.gh_store import GHIssue
+from fieldkit.issue import GHIssue
 
 pytestmark = pytest.mark.unit
 
@@ -156,13 +154,12 @@ _ERROR_CASES = [
     pytest.param(["note", "historic regression", "text"], None, 3, id="note-missing"),
     pytest.param(["link", "historic regression", "M001"], None, 3, id="link-missing"),
     pytest.param(["edit", "historic regression", "--title", "x"], None, 3, id="edit-missing"),
-    pytest.param(["close", "historic regression"], "open", 1, id="close-unverified"),
-    pytest.param(["fix", "historic regression"], "closed", 1, id="fix-already-closed"),
-    pytest.param(["plan", "historic regression"], "planned", 1, id="plan-already-planned"),
+    pytest.param(["close", "historic regression"], "open", 3, id="close-unverified"),
+    pytest.param(["fix", "historic regression"], "wont-fix", 3, id="fix-wont-fix"),
     pytest.param(
-        ["create", "--type", "bug", "--title", "t", "--module", "bogus"], "open", 1, id="create-unknown-module"
+        ["create", "--type", "bug", "--title", "t", "--module", "bogus"], "open", 2, id="create-unknown-module"
     ),
-    pytest.param(["edit", "historic regression", "--module", "bogus"], "open", 1, id="edit-unknown-module"),
+    pytest.param(["edit", "historic regression", "--module", "bogus"], "open", 2, id="edit-unknown-module"),
 ]
 
 
@@ -277,30 +274,30 @@ def test_sync_milestone_dry_run_json_advances_nothing() -> None:
     payload = json.loads(result.stdout)
     assert payload["dry_run"] is True
     assert payload["advanced"] == 0
-    assert len(payload["candidates"]) == 1
+    assert payload["candidates"] == [{"id": "historic regression", "status": "open"}]
+    assert "Body text." not in result.stdout
     store.update_status.assert_not_called()
 
 
-def test_sync_milestone_json_reports_failed_updates() -> None:
+def test_sync_milestone_json_reports_disappeared_issue_as_data_failure() -> None:
     store = _mock_store(_make_issue(status="open"))
     store.update_status.return_value = None
 
     with patch("fieldkit.commands.issue.cli._store", return_value=store):
         result = CliRunner().invoke(cli, ["sync-milestone", "M001", "--state", "queued", "--json"])
 
-    assert result.exit_code == 1, result.output
+    assert result.exit_code == 3, result.output
     payload = json.loads(result.stdout)
-    assert payload["failed"] == ["historic regression"]
+    assert payload["failed"] == [{"id": "historic regression", "category": "missing"}]
     assert payload["advanced"] == 0
 
 
-def test_sync_milestone_json_partial_success_still_emits_the_document_on_exit_1() -> None:
-    """Partial success exits 1 *and* leaves the full document on stdout.
+def test_sync_milestone_json_partial_success_still_emits_the_document_on_exit_3() -> None:
+    """Partial success with a missing issue exits 3 and leaves the full document.
 
     This is the documented exception to the --json error contract described in
-    this module's docstring: `sync-milestone` is the one command whose stdout a
-    consumer parses on exit 1 as well as exit 0, because the advanced/failed
-    breakdown is exactly what it needs to recover.
+    this module's docstring: `sync-milestone` preserves the bounded outcome
+    document on non-zero batch exits so the caller can reconcile safely.
 
     Pinned because the obvious refactor — raising as soon as a failure is seen,
     or returning early — produces the right exit code with an empty stdout, and
@@ -317,11 +314,11 @@ def test_sync_milestone_json_partial_success_still_emits_the_document_on_exit_1(
     with patch("fieldkit.commands.issue.cli._store", return_value=store):
         result = CliRunner().invoke(cli, ["sync-milestone", "M001", "--state", "queued", "--json"])
 
-    assert result.exit_code == 1, result.output
+    assert result.exit_code == 3, result.output
     assert result.stdout.strip(), "partial success must still emit the document on stdout"
     payload = json.loads(result.stdout)
     assert payload["advanced"] == 1
-    assert payload["failed"] == ["historic regression"]
+    assert payload["failed"] == [{"id": "historic regression", "category": "missing"}]
 
 
 def test_sync_milestone_json_when_linked_issues_are_all_past_the_target() -> None:

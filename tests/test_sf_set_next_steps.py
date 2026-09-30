@@ -3,7 +3,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
-from click.testing import CliRunner
+from click.testing import CliRunner, Result
 
 from fieldkit.commands.sf.set_next_steps import cli
 
@@ -27,10 +27,10 @@ def _make_client(name: str = "ACME Deal", current_value: str = "Schedule demo") 
 # ── TestSetNextStepsCli (flattened) ─────────────────────────────────────────
 
 
-def _set_next_steps_cli_invoke(args: list[str], client: MagicMock | None = None, **patch_kwargs: object) -> object:
+def _set_next_steps_cli_invoke(args: list[str], client: MagicMock | None = None) -> Result:
     runner = CliRunner()
-    sid = patch_kwargs.pop("sid", "test-sid")
-    base_url = patch_kwargs.pop("base_url", "https://examplecrm.my.salesforce.com")
+    sid = "test-sid"
+    base_url = "https://examplecrm.my.salesforce.com"
     _client = client or _make_client()
 
     with (
@@ -38,7 +38,7 @@ def _set_next_steps_cli_invoke(args: list[str], client: MagicMock | None = None,
         patch("fieldkit.commands.sf.set_next_steps.get_sf_rest_base_url", return_value=base_url),
         patch("fieldkit.commands.sf.set_next_steps.SFDirectClient", return_value=_client),
     ):
-        return runner.invoke(cli, args, catch_exceptions=False, **patch_kwargs)
+        return runner.invoke(cli, args, catch_exceptions=False)
 
 
 def test_set_next_steps_cli_empty_text_raises_usage_error() -> None:
@@ -86,7 +86,7 @@ def test_set_next_steps_cli_empty_current_shows_empty_label() -> None:
 
 
 def test_set_next_steps_cli_not_found_exits_1() -> None:
-    from fieldkit.sf.client import SFNotFoundError
+    from fieldkit.sf.errors import SFNotFoundError
 
     client = _make_client()
     client.fetch_record.side_effect = SFNotFoundError("not found")
@@ -101,7 +101,7 @@ def test_set_next_steps_cli_auth_error_on_fetch_exits_2() -> None:
     After historic regression migration, SFAuthError re-raises instead of sys.exit(2).
     CliRunner catch_exceptions=False (via _set_next_steps_cli_invoke) lets it propagate.
     """
-    from fieldkit.sf.client import SFAuthError
+    from fieldkit.sf.errors import SFAuthError
 
     client = _make_client()
     client.fetch_record.side_effect = SFAuthError("session expired")
@@ -110,7 +110,7 @@ def test_set_next_steps_cli_auth_error_on_fetch_exits_2() -> None:
 
 
 def test_set_next_steps_cli_api_error_on_fetch_exits_1() -> None:
-    from fieldkit.sf.client import SFAPIError
+    from fieldkit.sf.errors import SFAPIError
 
     client = _make_client()
     client.fetch_record.side_effect = SFAPIError("500 server error")
@@ -193,7 +193,7 @@ def test_set_next_steps_cli_auth_error_on_update_exits_2() -> None:
     After historic regression migration, SFAuthError re-raises instead of sys.exit(2).
     CliRunner catch_exceptions=False lets it propagate.
     """
-    from fieldkit.sf.client import SFAuthError
+    from fieldkit.sf.errors import SFAuthError
 
     client = _make_client()
     client.update_opportunity_fields.side_effect = SFAuthError("token expired")
@@ -214,7 +214,7 @@ def test_set_next_steps_cli_auth_error_on_update_exits_2() -> None:
 
 
 def test_set_next_steps_cli_api_error_on_update_exits_1() -> None:
-    from fieldkit.sf.client import SFAPIError
+    from fieldkit.sf.errors import SFAPIError
 
     client = _make_client()
     client.update_opportunity_fields.side_effect = SFAPIError("422 unprocessable")

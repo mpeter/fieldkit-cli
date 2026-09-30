@@ -10,8 +10,56 @@ from unittest.mock import patch
 import pytest
 
 from fieldkit.watch import close_date_countdown as cdc
+from fieldkit.watch.status import RunStatusWriteResult, WatcherOutcome, WatcherRunResult
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.mark.parametrize("outcome", ["ok", "partial", "fatal"])
+def test_adapter_uses_result_exit_code(outcome: WatcherOutcome) -> None:
+    from click.testing import CliRunner
+
+    from fieldkit.commands.watch import close_date_countdown as adapter
+
+    result = WatcherRunResult(outcome, True, "written")
+    with patch.object(adapter, "_run_countdown", return_value=result):
+        invocation = CliRunner().invoke(adapter.cli, [])
+    assert invocation.exit_code == result.exit_code
+
+
+@pytest.mark.parametrize(
+    ("checked", "failures", "status_write", "dry_run", "expected"),
+    [
+        (0, 0, "written", False, WatcherRunResult("ok", True, "written")),
+        (1, 1, "written", False, WatcherRunResult("partial", True, "written")),
+        (0, 1, "written", False, WatcherRunResult("fatal", True, "written")),
+        (1, 0, "failed", False, WatcherRunResult("fatal", True, "failed")),
+        (1, 1, "skipped", True, WatcherRunResult("partial", True, "skipped")),
+    ],
+)
+def test_execution_facts_match_json(
+    checked: int,
+    failures: int,
+    status_write: RunStatusWriteResult,
+    dry_run: bool,
+    expected: WatcherRunResult,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import json
+
+    with (
+        patch.object(cdc, "_validate_accounts_config", return_value=({"acme": {}}, 0)),
+        patch.object(cdc, "_load_state", return_value={}),
+        patch.object(cdc, "_prune_and_scan_pursuits", return_value=(checked, 0, failures, failures, {})),
+        patch.object(cdc, "_save_state"),
+        patch.object(cdc, "write_run_status", return_value=status_write) as writer,
+    ):
+        result = cdc._run_countdown_inner(**{**_KWARGS, "dry_run": dry_run, "as_json": True})
+    assert result == expected
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["outcome"] == result.outcome
+    assert payload["failures"] == failures + int(status_write == "failed")
+    assert writer.call_args.kwargs["dry_run"] is dry_run
 
 
 # ---------------------------------------------------------------------------
@@ -63,7 +111,7 @@ def _patch_run(
         patch.object(cdc, "iterate_pursuits", return_value=iter(pursuits)),
         patch.object(cdc, "load_pursuit", side_effect=lambda p: (fm_map[p], "", datetime.datetime(2026, 6, 6))),
         patch.object(cdc, "extract_champion_name", return_value="Jane Doe"),
-        patch.object(cdc, "write_run_status"),
+        patch.object(cdc, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(cdc, "_load_state", return_value=state or {}),
         patch.object(cdc, "_save_state"),
     ]
@@ -80,13 +128,13 @@ def _patch_run(
 def test_empty_accounts_empty_accounts_returns_1(tmp_path: Path) -> None:
     with patch.object(cdc, "get_accounts_config", return_value={"accounts": {}}):
         rc = cdc._run_countdown_inner(**_KWARGS)
-    assert rc == 1
+    assert rc == WatcherRunResult("fatal", False, None)
 
 
 def test_empty_accounts_accounts_not_dict_returns_1(tmp_path: Path) -> None:
     with patch.object(cdc, "get_accounts_config", return_value={"accounts": "not-a-dict"}):
         rc = cdc._run_countdown_inner(**_KWARGS)
-    assert rc == 1
+    assert rc.exit_code == 1
 
 
 # ---------------------------------------------------------------------------
@@ -106,7 +154,7 @@ def test_account_filter_unknown_unknown_account_filter_returns_1(tmp_path: Path)
             account_filter="nonexistent",
             dry_run=False,
         )
-    assert rc == 1
+    assert rc.exit_code == 1
 
 
 def test_account_filter_unknown_known_account_filter_runs(tmp_path: Path) -> None:
@@ -124,7 +172,7 @@ def test_account_filter_unknown_known_account_filter_runs(tmp_path: Path) -> Non
     finally:
         for p in reversed(patchers):
             p.__exit__(None, None, None)
-    assert rc == 0
+    assert rc.exit_code == 0
 
 
 # ---------------------------------------------------------------------------
@@ -147,7 +195,7 @@ def test_bad_pursuit_path_makes_an_otherwise_empty_run_fatal(tmp_path: Path) -> 
     finally:
         for p in reversed(patchers):
             p.__exit__(None, None, None)
-    assert rc == 1
+    assert rc.exit_code == 1
 
 
 # ---------------------------------------------------------------------------
@@ -174,7 +222,7 @@ def test_account_filter_excludes_others_non_matching_account_not_alerted(tmp_pat
         patch.object(cdc, "iterate_pursuits", return_value=iter([path])),
         patch.object(cdc, "load_pursuit", return_value=(fm, "", datetime.datetime(2026, 6, 6))),
         patch.object(cdc, "extract_champion_name", return_value="Jane"),
-        patch.object(cdc, "write_run_status"),
+        patch.object(cdc, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(cdc, "_load_state", return_value={}),
         patch.object(cdc, "_save_state"),
         patch.object(cdc, "append_countdown_alert", side_effect=lambda r, dr: alerted.append(r)),
@@ -208,13 +256,13 @@ def test_load_failure_makes_an_otherwise_empty_run_fatal(tmp_path: Path) -> None
         patch.object(cdc, "_state_file", return_value=tmp_path / "watchers" / "state.json"),
         patch.object(cdc, "iterate_pursuits", return_value=iter([path])),
         patch.object(cdc, "load_pursuit", side_effect=ValueError("bad yaml")),
-        patch.object(cdc, "write_run_status"),
+        patch.object(cdc, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(cdc, "_load_state", return_value={}),
         patch.object(cdc, "_save_state"),
         patch.object(cdc, "append_countdown_alert") as mock_alert,
     ):
         rc = cdc._run_countdown_inner(**_KWARGS)
-    assert rc == 1
+    assert rc.exit_code == 1
     mock_alert.assert_not_called()
 
 
@@ -244,7 +292,7 @@ def test_next_steps_section_fallback_next_steps_section_heading_used(tmp_path: P
         patch.object(cdc, "iterate_pursuits", return_value=iter([path])),
         patch.object(cdc, "load_pursuit", return_value=(fm, body, datetime.datetime(2026, 6, 6))),
         patch.object(cdc, "extract_champion_name", return_value="Jane"),
-        patch.object(cdc, "write_run_status"),
+        patch.object(cdc, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(cdc, "_load_state", return_value={}),
         patch.object(cdc, "_save_state"),
         patch.object(cdc, "append_countdown_alert", side_effect=lambda r, dr: captured.append(r)),
@@ -273,7 +321,7 @@ def test_next_steps_section_fallback_next_steps_none_when_no_body_content(tmp_pa
         patch.object(cdc, "iterate_pursuits", return_value=iter([path])),
         patch.object(cdc, "load_pursuit", return_value=(fm, body, datetime.datetime(2026, 6, 6))),
         patch.object(cdc, "extract_champion_name", return_value="Jane"),
-        patch.object(cdc, "write_run_status"),
+        patch.object(cdc, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(cdc, "_load_state", return_value={}),
         patch.object(cdc, "_save_state"),
         patch.object(cdc, "append_countdown_alert", side_effect=lambda r, dr: captured.append(r)),
@@ -302,7 +350,7 @@ def test_state_save_failure_is_fatal(tmp_path: Path) -> None:
     finally:
         for p in reversed(patchers):
             p.__exit__(None, None, None)
-    assert rc == 1
+    assert rc.exit_code == 1
 
 
 # ---------------------------------------------------------------------------
@@ -328,13 +376,13 @@ def test_out_of_range_dates_far_future_date_not_alerted(tmp_path: Path) -> None:
         patch.object(cdc, "iterate_pursuits", return_value=iter([path])),
         patch.object(cdc, "load_pursuit", return_value=(fm, "", datetime.datetime(2026, 6, 6))),
         patch.object(cdc, "extract_champion_name", return_value="Jane"),
-        patch.object(cdc, "write_run_status"),
+        patch.object(cdc, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(cdc, "_load_state", return_value={}),
         patch.object(cdc, "_save_state"),
         patch.object(cdc, "append_countdown_alert") as mock_alert,
     ):
         rc = cdc._run_countdown_inner(**_KWARGS)
-    assert rc == 0
+    assert rc.exit_code == 0
     mock_alert.assert_not_called()
 
 
@@ -362,7 +410,7 @@ def test_no_meddpicc_no_meddpicc_zero_score(tmp_path: Path) -> None:
         patch.object(cdc, "iterate_pursuits", return_value=iter([path])),
         patch.object(cdc, "load_pursuit", return_value=(fm, "", datetime.datetime(2026, 6, 6))),
         patch.object(cdc, "extract_champion_name", return_value=None),
-        patch.object(cdc, "write_run_status"),
+        patch.object(cdc, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(cdc, "_load_state", return_value={}),
         patch.object(cdc, "_save_state"),
         patch.object(cdc, "append_countdown_alert", side_effect=lambda r, dr: captured.append(r)),

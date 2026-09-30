@@ -15,6 +15,7 @@
         "additionalProperties": false,
         "required": ["evidence", "paths"],
         "properties": {
+          "phase": {"enum": ["leaf", "contributor_journey"]},
           "evidence": {"type": "string", "minLength": 1},
           "paths": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
         }
@@ -28,6 +29,7 @@
         "additionalProperties": false,
         "required": ["classification", "evidence", "mode"],
         "properties": {
+          "phase": {"enum": ["leaf", "contributor_journey"]},
           "classification": {
             "enum": [
               "safe_automated_command",

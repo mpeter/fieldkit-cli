@@ -137,62 +137,6 @@ def test_ingest_subcommand_nonzero_propagated() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Task 6.6 — _sync_action_items_to_tasks: missing TASKS.md logs warning, no crash
-# ---------------------------------------------------------------------------
-
-
-def test_sync_action_items_to_tasks_no_tasks_md(
-    tmp_path: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """_sync_action_items_to_tasks does not raise when TASKS.md is absent.
-
-    The function wraps its entire body in ``except Exception`` to avoid blocking
-    the ingest pipeline.  We stub the lazy fieldkit imports it pulls in, point
-    data_root at a tmp dir with no TASKS.md, and verify no exception escapes.
-    """
-    import sys
-    import types
-
-    from fieldkit.ingest.writeback import _sync_action_items_to_tasks
-
-    # Stub the fieldkit modules imported lazily inside _sync_action_items_to_tasks.
-    # classify_action_items returns an empty list → append_to_tasks is never called,
-    # so the missing TASKS.md is never touched.  The function must still not raise.
-    fake_classifier = types.ModuleType("fieldkit.tasks.classifier")
-    fake_classifier.classify_action_items = lambda *a, **kw: []  # type: ignore[attr-defined]
-
-    fake_writer = types.ModuleType("fieldkit.tasks.writer")
-    fake_writer.append_to_tasks = lambda *a, **kw: (0, 0)  # type: ignore[attr-defined]
-
-    # fieldkit.config is already imported; patch the functions it exposes
-    import fieldkit.config as aeos_config
-
-    monkeypatch.setattr(aeos_config, "get_user_name", lambda: "Test User", raising=False)
-    monkeypatch.setattr(aeos_config, "get_user_email", lambda: "test@example.com", raising=False)  # pii-guard: ignore
-    monkeypatch.setattr(aeos_config, "get_accounts_config", lambda: {}, raising=False)
-
-    monkeypatch.setitem(sys.modules, "fieldkit.tasks.classifier", fake_classifier)
-    monkeypatch.setitem(sys.modules, "fieldkit.tasks.writer", fake_writer)
-
-    # data_root has no TASKS.md — the function must swallow any resulting error
-    data_root = tmp_path  # type: ignore[assignment]
-    vault_path = data_root / "accounts" / "acme" / "meetings" / "2026-06-01-test.md"  # type: ignore[operator]
-
-    try:
-        _sync_action_items_to_tasks(
-            action_items=["Send the proposal"],
-            pursuits=[],
-            account="acme",
-            meeting_date="2026-06-01",
-            meeting_title="Test Meeting",
-            data_root=data_root,  # type: ignore[arg-type]
-            vault_path=vault_path,  # type: ignore[arg-type]
-        )
-    except Exception as exc:
-        pytest.fail(f"_sync_action_items_to_tasks raised unexpectedly: {exc}")
-
-
-# ---------------------------------------------------------------------------
 # Task 6.7 — _process_one_source returns False on pipeline failure
 # ---------------------------------------------------------------------------
 
@@ -207,6 +151,7 @@ def test_process_one_source_returns_error_on_failure(monkeypatch: pytest.MonkeyP
 
     # _fetch_doc_for_run returning None signals a fetch failure
     monkeypatch.setattr(run_mod, "_fetch_doc_for_run", lambda *args, **kwargs: None)
+    monkeypatch.setattr(run_mod, "load_prepared", lambda *args: None)
 
     source = SourceRecord(
         source_id="doc-abc123",
@@ -266,6 +211,7 @@ def test_run_processing_loop_returns_zero_on_all_success(monkeypatch: pytest.Mon
     # Patch get_fieldkit_home inside the run module
     monkeypatch.setattr("fieldkit.config.get_fieldkit_home", lambda: pathlib.Path("/tmp/fake-data"))
 
+    monkeypatch.setattr(run_mod, "load_prepared", lambda conn, source_id: None)
     # _process_one_source always succeeds
     monkeypatch.setattr(
         run_mod,
@@ -296,8 +242,8 @@ def test_run_processing_loop_returns_zero_on_all_success(monkeypatch: pytest.Mon
     assert rc == 0, f"_run_processing_loop must return 0 on success, got {rc}"
 
 
-def test_run_processing_loop_preserves_human_exit_on_item_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Human mode preserves its historical zero exit after reporting item failures."""
+def test_run_processing_loop_reports_partial_failure_on_item_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Human mode reports an unsuccessful source through its exit status."""
     import sys
     import types
 
@@ -315,6 +261,7 @@ def test_run_processing_loop_preserves_human_exit_on_item_failure(monkeypatch: p
     monkeypatch.setattr("fieldkit.ingest.sources.claim_pending_source", lambda conn, source_id: True)
     monkeypatch.setattr("fieldkit.config.get_fieldkit_home", lambda: __import__("pathlib").Path("/tmp/fake-data"))
 
+    monkeypatch.setattr(run_mod, "load_prepared", lambda conn, source_id: None)
     # _process_one_source always fails (returns False)
     monkeypatch.setattr(
         run_mod,
@@ -342,292 +289,4 @@ def test_run_processing_loop_preserves_human_exit_on_item_failure(monkeypatch: p
     )
     conn.close()
 
-    assert rc == 0
-
-
-# ---------------------------------------------------------------------------
-# Additional _sync_action_items_to_tasks branch-coverage tests
-# ---------------------------------------------------------------------------
-
-
-def _make_vault_file(tmp_path: pytest.TempPathFactory, rh_attendees: list, customer_attendees: list) -> object:
-    """Create a minimal vault .md file with frontmatter attendee lists."""
-
-    vault_path = tmp_path / "accounts" / "acme" / "meetings" / "2026-06-01-test.md"  # type: ignore[operator]
-    vault_path.parent.mkdir(parents=True, exist_ok=True)  # type: ignore[union-attr]
-
-    rh_yaml = "\n".join(f"  - {n}" for n in rh_attendees) if rh_attendees else ""
-    cust_yaml = "\n".join(f"  - {n}" for n in customer_attendees) if customer_attendees else ""
-
-    content = "---\n"
-    if rh_attendees:
-        content += f"attendees_internal:\n{rh_yaml}\n"
-    if customer_attendees:
-        content += f"attendees_external:\n{cust_yaml}\n"
-    content += "---\nMeeting content here.\n"
-
-    vault_path.write_text(content, encoding="utf-8")  # type: ignore[union-attr]
-    return vault_path
-
-
-def test_sync_action_items_reads_attendees_from_vault(
-    tmp_path: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """_sync_action_items_to_tasks reads attendee lists from vault frontmatter."""
-    import sys
-    import types
-
-    from fieldkit.ingest.writeback import _sync_action_items_to_tasks
-
-    # Track what classify_action_items was called with
-    captured_kwargs: dict = {}
-
-    def _fake_classify(items, **kwargs):  # type: ignore[no-untyped-def]
-        captured_kwargs.update(kwargs)
-        return []
-
-    fake_classifier = types.ModuleType("fieldkit.tasks.classifier")
-    fake_classifier.classify_action_items = _fake_classify  # type: ignore[attr-defined]
-    fake_writer = types.ModuleType("fieldkit.tasks.writer")
-    fake_writer.append_to_tasks = lambda *a, **kw: (0, 0)  # type: ignore[attr-defined]
-
-    import fieldkit.config as aeos_config
-
-    monkeypatch.setattr(aeos_config, "get_user_name", lambda: "Test User", raising=False)
-    monkeypatch.setattr(aeos_config, "get_user_email", lambda: "test@example.com", raising=False)  # pii-guard: ignore
-    monkeypatch.setattr(aeos_config, "get_accounts_config", lambda: {}, raising=False)
-    monkeypatch.setitem(sys.modules, "fieldkit.tasks.classifier", fake_classifier)
-    monkeypatch.setitem(sys.modules, "fieldkit.tasks.writer", fake_writer)
-
-    vault_path = _make_vault_file(
-        tmp_path,  # type: ignore[arg-type]
-        rh_attendees=["Dave Rh"],
-        customer_attendees=["Alice Customer"],
-    )
-
-    _sync_action_items_to_tasks(
-        action_items=["Send the proposal"],
-        pursuits=["acme-deal"],
-        account="acme",
-        meeting_date="2026-06-01",
-        meeting_title="Test Meeting",
-        data_root=tmp_path,  # type: ignore[arg-type]
-        vault_path=vault_path,  # type: ignore[arg-type]
-    )
-
-    # Verify attendee lists were extracted from vault frontmatter
-    assert "Dave Rh" in captured_kwargs.get("internal_team_names", [])
-    assert "Alice Customer" in captured_kwargs.get("stakeholder_names", [])
-
-
-def test_sync_action_items_with_pursuit_label_override(
-    tmp_path: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """_sync_action_items_to_tasks builds pursuit_label with display overrides."""
-    import sys
-    import types
-
-    from fieldkit.ingest.writeback import _sync_action_items_to_tasks
-
-    captured_kwargs: dict = {}
-
-    def _fake_classify(items, **kwargs):  # type: ignore[no-untyped-def]
-        captured_kwargs.update(kwargs)
-        return []
-
-    fake_classifier = types.ModuleType("fieldkit.tasks.classifier")
-    fake_classifier.classify_action_items = _fake_classify  # type: ignore[attr-defined]
-    fake_writer = types.ModuleType("fieldkit.tasks.writer")
-    fake_writer.append_to_tasks = lambda *a, **kw: (0, 0)  # type: ignore[attr-defined]
-
-    import fieldkit.config as aeos_config
-
-    monkeypatch.setattr(aeos_config, "get_user_name", lambda: "Test User", raising=False)
-    monkeypatch.setattr(aeos_config, "get_user_email", lambda: "test@example.com", raising=False)  # pii-guard: ignore
-    monkeypatch.setattr(aeos_config, "get_accounts_config", lambda: {}, raising=False)
-    monkeypatch.setitem(sys.modules, "fieldkit.tasks.classifier", fake_classifier)
-    monkeypatch.setitem(sys.modules, "fieldkit.tasks.writer", fake_writer)
-
-    vault_path = tmp_path / "meetings" / "test.md"  # type: ignore[operator]
-    vault_path.parent.mkdir(parents=True, exist_ok=True)  # type: ignore[union-attr]
-    vault_path.write_text("---\n---\nContent\n", encoding="utf-8")  # type: ignore[union-attr]
-
-    _sync_action_items_to_tasks(
-        action_items=["Send the proposal"],
-        pursuits=["rhoai"],  # known abbreviation override
-        account="acme",
-        meeting_date="2026-06-01",
-        meeting_title="Test Meeting",
-        data_root=tmp_path,  # type: ignore[arg-type]
-        vault_path=vault_path,  # type: ignore[arg-type]
-    )
-
-    # "rhoai" should be display-overridden to "RHOAI"
-    label = captured_kwargs.get("pursuit_label", "")
-    assert "RHOAI" in label
-
-
-def test_sync_action_items_no_pursuits_uses_account_display(
-    tmp_path: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """When pursuits list is empty, pursuit_label uses account display name only."""
-    import sys
-    import types
-
-    from fieldkit.ingest.writeback import _sync_action_items_to_tasks
-
-    captured_kwargs: dict = {}
-
-    def _fake_classify(items, **kwargs):  # type: ignore[no-untyped-def]
-        captured_kwargs.update(kwargs)
-        return []
-
-    fake_classifier = types.ModuleType("fieldkit.tasks.classifier")
-    fake_classifier.classify_action_items = _fake_classify  # type: ignore[attr-defined]
-    fake_writer = types.ModuleType("fieldkit.tasks.writer")
-    fake_writer.append_to_tasks = lambda *a, **kw: (0, 0)  # type: ignore[attr-defined]
-
-    import fieldkit.config as aeos_config
-
-    monkeypatch.setattr(aeos_config, "get_user_name", lambda: "Test User", raising=False)
-    monkeypatch.setattr(aeos_config, "get_user_email", lambda: "test@example.com", raising=False)  # pii-guard: ignore
-    monkeypatch.setattr(aeos_config, "get_accounts_config", lambda: {}, raising=False)
-    monkeypatch.setitem(sys.modules, "fieldkit.tasks.classifier", fake_classifier)
-    monkeypatch.setitem(sys.modules, "fieldkit.tasks.writer", fake_writer)
-
-    vault_path = tmp_path / "meetings" / "test.md"  # type: ignore[operator]
-    vault_path.parent.mkdir(parents=True, exist_ok=True)  # type: ignore[union-attr]
-    vault_path.write_text("---\n---\nContent\n", encoding="utf-8")  # type: ignore[union-attr]
-
-    _sync_action_items_to_tasks(
-        action_items=["Send the proposal"],
-        pursuits=[],  # empty pursuits
-        account="acme-corp",
-        meeting_date="2026-06-01",
-        meeting_title="Test Meeting",
-        data_root=tmp_path,  # type: ignore[arg-type]
-        vault_path=vault_path,  # type: ignore[arg-type]
-    )
-
-    # With no pursuits, label should just be the account display name
-    label = captured_kwargs.get("pursuit_label", "")
-    assert "/" not in label  # no pursuit suffix
-    assert "Acme" in label or "acme" in label.lower()
-
-
-def test_sync_action_items_my_task_items_written_to_tasks_md(
-    tmp_path: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """MY_TASK items from classify_action_items are written to TASKS.md."""
-    import sys
-    import types
-
-    from fieldkit.ingest.writeback import _sync_action_items_to_tasks
-    from fieldkit.tasks.classifier import ClassifiedItem, ItemClass
-
-    my_task_item = ClassifiedItem(
-        text="Send the proposal to Alice",
-        cls=ItemClass.MY_TASK,
-        owner="Test User",
-        rationale="Owner matches AE",
-        pursuit_label="Acme / RHOAI",
-    )
-
-    fake_classifier = types.ModuleType("fieldkit.tasks.classifier")
-    fake_classifier.classify_action_items = lambda *a, **kw: [my_task_item]  # type: ignore[attr-defined]
-    fake_classifier.ClassifiedItem = ClassifiedItem  # type: ignore[attr-defined]
-    fake_classifier.ItemClass = ItemClass  # type: ignore[attr-defined]
-
-    append_calls: list = []
-
-    def _fake_append(items, path, **kwargs):  # type: ignore[no-untyped-def]
-        append_calls.append((items, path))
-        return (1, 0)
-
-    fake_writer = types.ModuleType("fieldkit.tasks.writer")
-    fake_writer.append_to_tasks = _fake_append  # type: ignore[attr-defined]
-
-    import fieldkit.config as aeos_config
-
-    monkeypatch.setattr(aeos_config, "get_user_name", lambda: "Test User", raising=False)
-    monkeypatch.setattr(aeos_config, "get_user_email", lambda: "test@example.com", raising=False)  # pii-guard: ignore
-    monkeypatch.setattr(aeos_config, "get_accounts_config", lambda: {}, raising=False)
-    monkeypatch.setitem(sys.modules, "fieldkit.tasks.classifier", fake_classifier)
-    monkeypatch.setitem(sys.modules, "fieldkit.tasks.writer", fake_writer)
-
-    vault_path = tmp_path / "meetings" / "test.md"  # type: ignore[operator]
-    vault_path.parent.mkdir(parents=True, exist_ok=True)  # type: ignore[union-attr]
-    vault_path.write_text("---\n---\nContent\n", encoding="utf-8")  # type: ignore[union-attr]
-
-    _sync_action_items_to_tasks(
-        action_items=["Send the proposal to Alice"],
-        pursuits=["rhoai"],
-        account="acme",
-        meeting_date="2026-06-01",
-        meeting_title="Test Meeting",
-        data_root=tmp_path,  # type: ignore[arg-type]
-        vault_path=vault_path,  # type: ignore[arg-type]
-    )
-
-    # append_to_tasks should have been called with the MY_TASK item
-    assert len(append_calls) == 1
-    items_passed, _ = append_calls[0]
-    assert any(i.cls == ItemClass.MY_TASK for i in items_passed)
-
-
-def test_sync_action_items_drop_items_not_written(
-    tmp_path: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """DROP items from classify_action_items are NOT written to TASKS.md."""
-    import sys
-    import types
-
-    from fieldkit.ingest.writeback import _sync_action_items_to_tasks
-    from fieldkit.tasks.classifier import ClassifiedItem, ItemClass
-
-    drop_item = ClassifiedItem(
-        text="Team: update Jira sprint board",
-        cls=ItemClass.DROP,
-        owner="Team",
-        rationale="Internal mechanics",
-        pursuit_label="Acme / RHOAI",
-    )
-
-    fake_classifier = types.ModuleType("fieldkit.tasks.classifier")
-    fake_classifier.classify_action_items = lambda *a, **kw: [drop_item]  # type: ignore[attr-defined]
-    fake_classifier.ClassifiedItem = ClassifiedItem  # type: ignore[attr-defined]
-    fake_classifier.ItemClass = ItemClass  # type: ignore[attr-defined]
-
-    append_calls: list = []
-
-    def _fake_append(items, path, **kwargs):  # type: ignore[no-untyped-def]
-        append_calls.append(items)
-        return (0, 0)
-
-    fake_writer = types.ModuleType("fieldkit.tasks.writer")
-    fake_writer.append_to_tasks = _fake_append  # type: ignore[attr-defined]
-
-    import fieldkit.config as aeos_config
-
-    monkeypatch.setattr(aeos_config, "get_user_name", lambda: "Test User", raising=False)
-    monkeypatch.setattr(aeos_config, "get_user_email", lambda: "test@example.com", raising=False)  # pii-guard: ignore
-    monkeypatch.setattr(aeos_config, "get_accounts_config", lambda: {}, raising=False)
-    monkeypatch.setitem(sys.modules, "fieldkit.tasks.classifier", fake_classifier)
-    monkeypatch.setitem(sys.modules, "fieldkit.tasks.writer", fake_writer)
-
-    vault_path = tmp_path / "meetings" / "test.md"  # type: ignore[operator]
-    vault_path.parent.mkdir(parents=True, exist_ok=True)  # type: ignore[union-attr]
-    vault_path.write_text("---\n---\nContent\n", encoding="utf-8")  # type: ignore[union-attr]
-
-    _sync_action_items_to_tasks(
-        action_items=["Team: update Jira sprint board"],
-        pursuits=["rhoai"],
-        account="acme",
-        meeting_date="2026-06-01",
-        meeting_title="Test Meeting",
-        data_root=tmp_path,  # type: ignore[arg-type]
-        vault_path=vault_path,  # type: ignore[arg-type]
-    )
-
-    # append_to_tasks should NOT have been called (no MY_TASK items)
-    assert len(append_calls) == 0
+    assert rc == 1

@@ -14,6 +14,7 @@ import json
 import os
 import sys
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 import click
@@ -21,9 +22,26 @@ import click
 from fieldkit.cli_exit import EXIT_AUTH
 from fieldkit.config import get_cookie_file, get_salesforce_org_url, get_sf_rest_base_url
 from fieldkit.config._loader import ConfigError
+from fieldkit.config.salesforce_cookie import (
+    MAX_COOKIE_FILE_BYTES,
+    MAX_COOKIES,
+    normalize_salesforce_cookie_domain,
+    validate_salesforce_sid,
+)
+from fieldkit.errors import AuthError
 from fieldkit.protected_input import SecretInputError, read_secret_file
+from fieldkit.util.json_decode import unique_json_object
+from fieldkit.util.text_snapshot import read_text_snapshot
 
 LOG_PREFIX = "[auth-sf]"
+
+
+@dataclass(frozen=True, repr=False)
+class _CookieState:
+    """Prior credential state retained only for validation rollback."""
+
+    path: Path
+    contents: bytes | None
 
 
 def _status_payload() -> dict[str, object]:
@@ -69,14 +87,25 @@ def _restore_cookie_file(cookie_file: Path, previous_contents: bytes | None) -> 
     _replace_cookie_file(cookie_file, previous_contents)
 
 
-def _write_sid_cookie(sid: str) -> None:
+def _previous_cookie_contents(cookie_file: Path) -> bytes | None:
+    """Capture bounded regular UTF-8 credential bytes without following redirects."""
+    try:
+        return read_text_snapshot(cookie_file, max_bytes=MAX_COOKIE_FILE_BYTES).content.encode("utf-8")
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        raise AuthError(
+            "Cannot safely read the existing cookie file; restore a regular UTF-8 file before reauthenticating."
+        ) from None
+
+
+def _write_sid_cookie(sid: str) -> _CookieState:
     """Write the sid cookie to the configured cookie file (0o600 permissions).
 
-    Reads existing cookies first and updates any existing sid cookie for
-    my.salesforce.com, or appends a new one.
+    Replaces all old SID entries with one configured-domain session. Safely
+    decoded non-SID entries are preserved; malformed JSON is explicitly replaced.
     """
     cookie_file = get_cookie_file()
-    cookie_file.parent.mkdir(parents=True, exist_ok=True)
 
     base_url = get_sf_rest_base_url()
     if not base_url:
@@ -84,35 +113,44 @@ def _write_sid_cookie(sid: str) -> None:
             "Salesforce org URL is not configured. "
             "Set salesforce.org_url in accounts.yaml or sf_org_url in config.yaml."
         )
-    domain = base_url.removeprefix("https://").removeprefix("http://")
+    domain = normalize_salesforce_cookie_domain(base_url.removeprefix("https://"))
+    if domain is None:
+        raise ConfigError("Configure a REST-capable my.salesforce.com organization URL before authenticating.")
+    try:
+        validate_salesforce_sid(sid)
+    except ValueError:
+        raise AuthError(
+            "Invalid Salesforce sid; supply a bounded credential without whitespace or control characters."
+        ) from None
 
     existing_cookies: list[dict[str, object]] = []
-    if cookie_file.exists():
+    previous = _previous_cookie_contents(cookie_file)
+    if previous is not None:
         try:
-            data = json.loads(cookie_file.read_text(encoding="utf-8"))
-            existing_cookies = data.get("cookies", []) if isinstance(data, dict) else []
-        except (json.JSONDecodeError, OSError):
-            pass  # fresh file
+            data = json.loads(previous, object_pairs_hook=unique_json_object)
+            cookies = data.get("cookies", []) if isinstance(data, dict) else None
+            if (
+                not isinstance(cookies, list)
+                or len(cookies) > MAX_COOKIES
+                or any(not isinstance(c, dict) for c in cookies)
+            ):
+                raise ValueError("Invalid cookie collection")
+            existing_cookies = cookies
+        except (ValueError, RecursionError):
+            click.echo(f"{LOG_PREFIX} Replacing malformed cookie data with the supplied session.", err=True)
 
     canonical = _build_sid_cookie(sid, domain)
-    updated = False
-    new_cookies: list[dict[str, object]] = []
-    for cookie in existing_cookies:
-        if not isinstance(cookie, dict):
-            new_cookies.append(cookie)
-            continue
-        if cookie.get("name") == "sid" and "my.salesforce.com" in str(cookie.get("domain", "")):
-            new_cookies.append({**cookie, "value": sid})
-            updated = True
-        else:
-            new_cookies.append(cookie)
-    if not updated:
-        new_cookies.append(canonical)
+    new_cookies = [cookie for cookie in existing_cookies if cookie.get("name") != "sid"]
+    new_cookies.append(canonical)
 
     encoded = json.dumps({"cookies": new_cookies}, indent=2).encode("utf-8")
+    if len(new_cookies) > MAX_COOKIES or len(encoded) > MAX_COOKIE_FILE_BYTES:
+        raise AuthError(
+            "Cookie file would exceed supported limits; remove unneeded non-session entries before retrying."
+        )
+    cookie_file.parent.mkdir(parents=True, exist_ok=True)
     _replace_cookie_file(cookie_file, encoded)
-
-    click.echo(f"{LOG_PREFIX} sid written to {cookie_file}", err=True)
+    return _CookieState(cookie_file, previous)
 
 
 def _prompt_for_sid() -> str:
@@ -151,10 +189,8 @@ def _prompt_for_sid() -> str:
     try:
         sid = str(click.prompt("Paste sid value", hide_input=True, err=True)).strip()
     except (click.Abort, EOFError, KeyboardInterrupt):
-        # historic regression: Ctrl+C should be a clean exit (0), not an error (2).
-        # Interactive cancellation is user-initiated, not a command failure.
         click.echo(f"\n{LOG_PREFIX} Cancelled.", err=True)
-        raise SystemExit(0) from None
+        raise SystemExit(EXIT_AUTH) from None
 
     return sid
 
@@ -195,22 +231,25 @@ def _session_check() -> tuple[bool, str]:
     return check_sf_session()
 
 
-def _authenticate_injected_sid(sid: str) -> None:
-    """Write, validate, and roll back a directly supplied Salesforce SID."""
-    _warn_if_unusual_sid(sid, strict=False)
-    cookie_file = get_cookie_file()
-    previous_contents = cookie_file.read_bytes() if cookie_file.exists() else None
-    _write_sid_cookie(sid)
-    click.echo(f"{LOG_PREFIX} Validating session against Salesforce API...", err=True)
-    alive, msg = _session_check()
-    if alive:
-        click.echo(f"{LOG_PREFIX} Session valid — {msg}", err=True)
-        return
-    _restore_cookie_file(cookie_file, previous_contents)
-    click.echo(f"{LOG_PREFIX} ERROR: session check failed — {msg}", err=True)
-    click.echo(f"{LOG_PREFIX} Previous credential state was restored.", err=True)
-    click.echo(f"{LOG_PREFIX} Re-run: fieldkit auth sf", err=True)
-    raise SystemExit(EXIT_AUTH)
+def _authenticate_sid(sid: str, *, strict: bool) -> None:
+    """Install one candidate and roll back every unsuccessful validation path."""
+    _warn_if_unusual_sid(sid, strict=strict)
+    previous = _write_sid_cookie(sid)
+    validated = False
+    try:
+        click.echo(f"{LOG_PREFIX} sid stored in fieldkit configuration", err=True)
+        click.echo(f"{LOG_PREFIX} Validating session against Salesforce API...", err=True)
+        alive, msg = _session_check()
+        if not alive:
+            click.echo(f"{LOG_PREFIX} ERROR: session check failed — {msg}", err=True)
+            raise SystemExit(EXIT_AUTH)
+        validated = True
+    finally:
+        if not validated:
+            _restore_cookie_file(previous.path, previous.contents)
+            click.echo(f"{LOG_PREFIX} Previous credential state was restored. Re-run: fieldkit auth sf", err=True)
+    click.echo(f"{LOG_PREFIX} Session valid — {msg}", err=True)
+    click.echo(f"{LOG_PREFIX} Done.", err=True)
 
 
 def _require_interactive_sid() -> str:
@@ -223,22 +262,6 @@ def _require_interactive_sid() -> str:
         f"{LOG_PREFIX} Automation may use an owner-only sid file with: fieldkit auth sf --sid-file PATH", err=True
     )
     raise SystemExit(EXIT_AUTH)
-
-
-def _authenticate_prompted_sid() -> None:
-    """Prompt for, write, and validate a human-supplied Salesforce SID."""
-    prompted_sid = _require_interactive_sid()
-    _warn_if_unusual_sid(prompted_sid, strict=True)
-    _write_sid_cookie(prompted_sid)
-    click.echo(f"{LOG_PREFIX} Validating session against Salesforce API...", err=True)
-    alive, msg = _session_check()
-    if not alive:
-        click.echo(f"{LOG_PREFIX} ERROR: session check failed — {msg}", err=True)
-        click.echo(f"{LOG_PREFIX} The sid you entered may be expired or invalid.", err=True)
-        click.echo(f"{LOG_PREFIX} Re-run: fieldkit auth sf", err=True)
-        raise SystemExit(EXIT_AUTH)
-    click.echo(f"{LOG_PREFIX} Session valid — {msg}", err=True)
-    click.echo(f"{LOG_PREFIX} Done. Cookie file: {get_cookie_file()}", err=True)
 
 
 @click.command(name="sf")
@@ -265,9 +288,9 @@ def auth_sf_cmd(sid_file: Path | None, as_json: bool) -> None:
 
     if sid_file is not None:
         try:
-            _authenticate_injected_sid(read_secret_file(sid_file, label="Salesforce sid"))
+            _authenticate_sid(read_secret_file(sid_file, label="Salesforce sid"), strict=False)
         except SecretInputError as exc:
             raise click.UsageError(str(exc)) from exc
         return
 
-    _authenticate_prompted_sid()
+    _authenticate_sid(_require_interactive_sid(), strict=True)

@@ -97,6 +97,16 @@ def test_resolve_opp_id_from_number_returns_none_on_empty_results() -> None:
     assert result is None
 
 
+@pytest.mark.parametrize("record_id", ["001000000000001AAA", "invalid", 12345, None])
+def test_resolve_opportunity_number_rejects_invalid_provider_identity(record_id: object) -> None:
+    client = MagicMock()
+    client.sosl_search.return_value = [{"Id": record_id}]
+
+    result = resolve_opportunity_reference(client, "71721820")
+
+    assert result is None
+
+
 def test_resolve_opportunity_reference_validates_direct_id_without_sosl() -> None:
     client = MagicMock()
     result = resolve_opportunity_reference(client, "006Pe000012n2GkIAI")
@@ -134,7 +144,7 @@ def test_resolve_opp_id_from_number_rejects_non_digit_input(bad_input: str) -> N
 
 def test_resolve_opp_id_from_number_returns_none_on_api_error() -> None:
     """SFAPIError during SOSL lookup returns None (non-fatal)."""
-    from fieldkit.sf.client import SFAPIError
+    from fieldkit.sf.errors import SFAPIError
 
     client = MagicMock()
     client.sosl_search.side_effect = SFAPIError("timeout")

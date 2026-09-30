@@ -1,9 +1,6 @@
 """fieldkit.gmail — Gmail discovery and name resolution."""
 
 from fieldkit.gmail.discover import (
-    NOISE_REGEX as NOISE_REGEX,
-)
-from fieldkit.gmail.discover import (
     GmailCandidate as GmailCandidate,
 )
 from fieldkit.gmail.discover import (
@@ -20,7 +17,6 @@ from fieldkit.gmail.names import (
 )
 
 __all__ = [
-    "NOISE_REGEX",
     "GmailCandidate",
     "clear_gmail_caches",
     "get_gmail_db_path",

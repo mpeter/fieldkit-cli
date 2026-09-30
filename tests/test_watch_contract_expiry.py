@@ -21,6 +21,7 @@ import pytest
 
 import fieldkit.watch.contract_expiry as ce
 from fieldkit.commands.watch.contract_expiry import cli  # noqa: F401
+from fieldkit.watch.status import WatcherRunResult
 
 pytestmark = pytest.mark.unit
 
@@ -293,7 +294,7 @@ def _run(
     account_filter: str | None = None,
     dry_run: bool = False,
     state: dict[str, Any] | None = None,
-) -> tuple[int, dict[str, Any]]:
+) -> tuple[WatcherRunResult, dict[str, Any]]:
     """Run _run_contract_expiry with data_root=tmp_path; return (exit_code, saved_state)."""
     saved: dict[str, Any] = {}
 
@@ -307,7 +308,7 @@ def _run(
         patch.object(ce, "_state_file", return_value=tmp_path / "watchers" / "state.json"),
         patch.object(ce, "_load_state", return_value=state or {}),
         patch.object(ce, "_save_state", side_effect=_fake_save_state),
-        patch.object(ce, "write_run_status", return_value=None),
+        patch.object(ce, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
     ):
         # Clear functools.cache so _data_root monkeypatching works transitively
         rc = ce._run_contract_expiry(account_filter=account_filter, dry_run=dry_run)
@@ -321,7 +322,7 @@ def test_run_contract_expiry_red_tier_fires_alert(tmp_path: Path) -> None:
     _make_project_file(tmp_path, "acme", "hcs-drawdown", _FM_RED)
     with patch.object(ce, "append_alert") as mock_alert:
         rc, _ = _run(tmp_path)
-    assert rc == 0
+    assert rc.exit_code == 0
     mock_alert.assert_called_once()
     result = mock_alert.call_args[0][0]
     assert result["tier"] == "red"
@@ -333,7 +334,7 @@ def test_run_contract_expiry_yellow_tier_fires_alert(tmp_path: Path) -> None:
     _make_project_file(tmp_path, "acme", "hcs-drawdown", _FM_YELLOW)
     with patch.object(ce, "append_alert") as mock_alert:
         rc, _ = _run(tmp_path)
-    assert rc == 0
+    assert rc.exit_code == 0
     mock_alert.assert_called_once()
     assert mock_alert.call_args[0][0]["tier"] == "yellow"
 
@@ -434,7 +435,7 @@ def test_run_contract_expiry_dry_run_no_state_save(tmp_path: Path) -> None:
         patch.object(ce, "_state_file", return_value=tmp_path / "watchers" / "state.json"),
         patch.object(ce, "_load_state", return_value={}),
         patch.object(ce, "_save_state", side_effect=save_mock),
-        patch.object(ce, "write_run_status", return_value=None),
+        patch.object(ce, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(ce, "append_alert"),
     ):
         ce._run_contract_expiry(account_filter=None, dry_run=True)
@@ -480,7 +481,7 @@ def test_run_contract_expiry_excludes_template_and_support_pursuits(tmp_path: Pa
 def test_run_contract_expiry_no_projects_dir_returns_error(tmp_path: Path) -> None:
     # No accounts dir at all → should log and return 1
     rc, _ = _run(tmp_path)
-    assert rc == 1
+    assert rc.exit_code == 1
 
 
 def test_run_contract_expiry_two_projects_two_alerts(tmp_path: Path) -> None:
@@ -686,7 +687,7 @@ def test_template_dot_dir_project_excluded(tmp_path: Path) -> None:
     _make_project_file(tmp_path, ".template", "some-project", _FM_RED)
     with patch.object(ce, "append_alert") as mock_alert:
         rc, _ = _run(tmp_path)
-    assert rc == 0
+    assert rc.exit_code == 0
     # Only the real project fires; .template/ is excluded by dot-directory guard
     assert mock_alert.call_count == 1
     assert mock_alert.call_args[0][0]["account"] == "acme"
@@ -747,7 +748,7 @@ def test_suppresses_already_alerted_contract(tmp_path: Path) -> None:
     ):
         rc, _ = _run(tmp_path, state=state)
 
-    assert rc == 0
+    assert rc.exit_code == 0
     mock_alert.assert_not_called(), ("Alert must be suppressed when the same tier was already alerted in state")
 
 
@@ -777,7 +778,7 @@ def test_emits_alert_for_expiring_contract(tmp_path: Path) -> None:
     ):
         rc, _ = _run(tmp_path, state={})
 
-    assert rc == 0
+    assert rc.exit_code == 0
     mock_alert.assert_called_once(), "Alert must fire for a contract in the red tier with no prior state"
     result = mock_alert.call_args[0][0]
     assert result["tier"] == "red"
@@ -821,20 +822,18 @@ def test_load_state_missing_returns_empty(tmp_path: Path) -> None:
 
 
 def test_save_state_oserror_propagates(tmp_path: Path) -> None:
-    """Lines 139-147: _save_state raises OSError when write fails."""
+    """Persistence failures propagate from the shared state writer."""
     watchers_dir = tmp_path / "watchers"
     watchers_dir.mkdir()
     state_file = watchers_dir / "state.json"
-    tmp_file = watchers_dir / "state.json.tmp"
 
     with (
         patch.object(ce, "_state_file", return_value=state_file),
-        patch.object(ce, "get_watchers_dir", return_value=watchers_dir),
-        # Patch Path.open on the tmp file to raise OSError
-        patch.object(tmp_file.__class__, "open", side_effect=OSError("disk full")),
+        patch.object(ce, "merge_state", side_effect=OSError("disk full")) as merge,
         pytest.raises(OSError, match="disk full"),
     ):
         ce._save_state({"key": "value"}, previous_state={})
+    merge.assert_called_once_with(state_file, {"key": "value"}, {})
 
 
 def test_pursuit_read_error_is_fatal(tmp_path: Path) -> None:
@@ -854,14 +853,14 @@ def test_pursuit_read_error_is_fatal(tmp_path: Path) -> None:
         patch.object(ce, "_state_file", return_value=tmp_path / "watchers" / "state.json"),
         patch.object(ce, "_load_state", return_value={}),
         patch.object(ce, "_save_state", return_value=None),
-        patch.object(ce, "write_run_status", return_value=None),
+        patch.object(ce, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         # Simulate read failure
         patch("fieldkit.watch.contract_expiry.Path.read_text", side_effect=OSError("permission denied")),
         patch.object(ce, "append_alert") as mock_alert,
     ):
         rc = ce._run_contract_expiry_inner(account_filter=None, dry_run=False)
 
-    assert rc == 1
+    assert rc.exit_code == 1
     mock_alert.assert_not_called()
 
 
@@ -876,7 +875,7 @@ def test_unparseable_contract_end_is_skipped(tmp_path: Path) -> None:
     with patch.object(ce, "append_alert") as mock_alert:
         rc, _ = _run(tmp_path)
 
-    assert rc == 1
+    assert rc.exit_code == 1
     mock_alert.assert_not_called()
 
 
@@ -891,12 +890,12 @@ def test_state_write_failure_is_fatal(tmp_path: Path) -> None:
         patch.object(ce, "_state_file", return_value=tmp_path / "watchers" / "state.json"),
         patch.object(ce, "_load_state", return_value={}),
         patch.object(ce, "_save_state", side_effect=OSError("disk full")),
-        patch.object(ce, "write_run_status", return_value=None),
+        patch.object(ce, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(ce, "append_alert"),
     ):
         rc = ce._run_contract_expiry_inner(account_filter=None, dry_run=False)
 
-    assert rc == 1
+    assert rc.exit_code == 1
 
 
 def test_frontmatter_none_result_is_skipped(tmp_path: Path) -> None:
@@ -907,7 +906,7 @@ def test_frontmatter_none_result_is_skipped(tmp_path: Path) -> None:
     with patch.object(ce, "append_alert") as mock_alert:
         rc, _ = _run(tmp_path)
 
-    assert rc == 1
+    assert rc.exit_code == 1
     mock_alert.assert_not_called()
 
 
@@ -921,7 +920,7 @@ def test_orange_tier_fires_alert(tmp_path: Path) -> None:
     _make_project_file(tmp_path, "acme", "orange-proj", fm)
     with patch.object(ce, "append_alert") as mock_alert:
         rc, _ = _run(tmp_path)
-    assert rc == 0
+    assert rc.exit_code == 0
     mock_alert.assert_called_once()
     assert mock_alert.call_args[0][0]["tier"] == "orange"
 
@@ -936,7 +935,7 @@ def test_sf_opportunity_id_fallback(tmp_path: Path) -> None:
     _make_project_file(tmp_path, "acme", "opp-id-proj", fm)
     with patch.object(ce, "append_alert") as mock_alert:
         rc, _ = _run(tmp_path)
-    assert rc == 0
+    assert rc.exit_code == 0
     mock_alert.assert_called_once()
     result = mock_alert.call_args[0][0]
     assert result["sf_opportunity"] == "OPP-ID-001"
@@ -951,5 +950,5 @@ def test_closed_stage_skipped(tmp_path: Path) -> None:
     _make_project_file(tmp_path, "acme", "closed-proj", fm)
     with patch.object(ce, "append_alert") as mock_alert:
         rc, _ = _run(tmp_path)
-    assert rc == 0
+    assert rc.exit_code == 0
     mock_alert.assert_not_called()

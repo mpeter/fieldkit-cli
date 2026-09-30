@@ -6,20 +6,160 @@ against the consolidated fieldkit.commands.auth.sf module.
 """
 
 import json
+import os
+import re
+import textwrap
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import click
+import httpx
 import pytest
 from click.testing import CliRunner
 
 from fieldkit.commands.auth.sf import (
     _build_sid_cookie,
     _validate_sid_format,
+    _warn_if_unusual_sid,
     _write_sid_cookie,
     auth_sf_cmd,
 )
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.mark.parametrize("injected", [False, True])
+@pytest.mark.parametrize("existing", [False, True])
+@pytest.mark.parametrize("failure", ["rejected", "exception", "interrupt"])
+def test_authentication_rolls_back_every_unsuccessful_validation(
+    tmp_path: Path, injected: bool, existing: bool, failure: str
+) -> None:
+    cookie_file = tmp_path / "cookies.json"
+    original = b'{"cookies": [{"name":"sid","domain":"org.my.salesforce.com","value":"old"}]}\n'
+    if existing:
+        cookie_file.write_bytes(original)
+    sid = "00D000000000000!new-session"
+    error = (
+        RuntimeError("validation failed")
+        if failure == "exception"
+        else KeyboardInterrupt()
+        if failure == "interrupt"
+        else None
+    )
+    with (
+        patch("fieldkit.commands.auth.sf.get_cookie_file", return_value=cookie_file),
+        patch("fieldkit.commands.auth.sf.get_sf_rest_base_url", return_value="https://org.my.salesforce.com"),
+        patch("fieldkit.commands.auth.sf._require_interactive_sid", return_value=sid),
+        patch("fieldkit.commands.auth.sf._session_check", return_value=(False, "Rejected"), side_effect=error),
+    ):
+        args = ["--sid-file", str(_sid_file(tmp_path, sid))] if injected else []
+        result = CliRunner().invoke(auth_sf_cmd, args)
+    assert result.exit_code != 0
+    if existing:
+        assert cookie_file.read_bytes() == original
+        assert cookie_file.stat().st_mode & 0o777 == 0o600
+    else:
+        assert not cookie_file.exists()
+
+
+@pytest.mark.parametrize("kind", ["fifo", "symlink", "oversized", "utf8"])
+def test_reauthentication_refuses_unsafe_existing_file(tmp_path: Path, kind: str) -> None:
+    from fieldkit.__main__ import main
+    from fieldkit.config.salesforce_cookie import MAX_COOKIE_FILE_BYTES
+
+    cookie_file = tmp_path / "cookies.json"
+    if kind == "fifo":
+        os.mkfifo(cookie_file)
+    elif kind == "symlink":
+        target = tmp_path / "original.json"
+        target.write_text('{"cookies": []}', encoding="utf-8")
+        cookie_file.symlink_to(target)
+    elif kind == "oversized":
+        cookie_file.write_bytes(b" " * (MAX_COOKIE_FILE_BYTES + 1))
+    else:
+        cookie_file.write_bytes(b"\xff")
+    before = cookie_file.lstat()
+    with (
+        patch("fieldkit.commands.auth.sf.get_cookie_file", return_value=cookie_file),
+        patch("fieldkit.commands.sf.session_check.httpx.get") as request,
+        patch("fieldkit.commands.auth.sf.get_sf_rest_base_url", return_value="https://org.my.salesforce.com"),
+    ):
+        result = main(["auth", "sf", "--sid-file", str(_sid_file(tmp_path, "new!sid"))])
+    assert result == 2
+    request.assert_not_called()
+    after = cookie_file.lstat()
+    assert (after.st_ino, after.st_size, after.st_mtime_ns) == (before.st_ino, before.st_size, before.st_mtime_ns)
+
+
+@pytest.mark.parametrize("domains", [[".org.my.salesforce.com", ".other.my.salesforce.com"], ["evilmy.salesforce.com"]])
+@pytest.mark.parametrize("injected", [False, True])
+def test_reauthentication_replaces_ambiguous_or_lookalike_sessions(
+    tmp_path: Path, domains: list[str], injected: bool
+) -> None:
+    cookie_file = tmp_path / "cookies.json"
+    cookie_file.write_text(
+        json.dumps({"cookies": [{"name": "sid", "value": "old", "domain": domain} for domain in domains]}),
+        encoding="utf-8",
+    )
+    sid = "00D000000000000!new-session"
+    with (
+        patch("fieldkit.commands.auth.sf.get_cookie_file", return_value=cookie_file),
+        patch("fieldkit.commands.sf.session_check.get_cookie_file", return_value=cookie_file),
+        patch("fieldkit.commands.auth.sf.get_sf_rest_base_url", return_value="https://org.my.salesforce.com"),
+        patch("fieldkit.commands.auth.sf._require_interactive_sid", return_value=sid),
+        patch("fieldkit.commands.sf.session_check.httpx.get", return_value=httpx.Response(200)) as request,
+    ):
+        args = ["--sid-file", str(_sid_file(tmp_path, sid))] if injected else []
+        result = CliRunner().invoke(auth_sf_cmd, args)
+    assert result.exit_code == 0, result.output
+    cookies = json.loads(cookie_file.read_text(encoding="utf-8"))["cookies"]
+    assert str(tmp_path) not in result.output
+    assert len(cookies) == 1
+    assert cookies[0]["domain"] == ".org.my.salesforce.com"
+    assert cookies[0]["value"] == sid
+    assert cookie_file.stat().st_mode & 0o777 == 0o600
+    request.assert_called_once()
+    assert request.call_args.args[0].startswith("https://org.my.salesforce.com/")
+
+
+@pytest.mark.parametrize(
+    ("sid", "strict", "warns"),
+    [
+        ("missing-separator", True, True),
+        ("short!value", True, True),
+        ("missing-separator", False, True),
+        ("short!value", False, False),
+    ],
+)
+def test_documentation_suspicious_sid_warning(
+    sid: str, strict: bool, warns: bool, capsys: pytest.CaptureFixture[str]
+) -> None:
+    document = Path("docs/guides/salesforce-auth.md").read_text(encoding="utf-8")
+    section = document.split("**Suspicious sid format:**", 1)[1]
+    match = re.search(r"```\n(.*?)```", section, flags=re.DOTALL)
+    assert match is not None
+    assert _warn_if_unusual_sid(sid, strict=strict) is None
+    captured = capsys.readouterr()
+    assert captured.err == (match.group(1) if warns else "")
+    assert captured.out == ""
+
+
+def test_documentation_interactive_auth_success_transcript(tmp_path: Path) -> None:
+    document = Path("docs/guides/salesforce-auth.md").read_text(encoding="utf-8")
+    match = re.search(r"Expected output \(on stderr\):\s+```(.*?)```", document, flags=re.DOTALL)
+    assert match is not None
+    cookie_file = tmp_path / "sf-cookies.json"
+    with (
+        patch("fieldkit.commands.auth.sf.get_cookie_file", return_value=cookie_file),
+        patch("fieldkit.commands.auth.sf.get_sf_rest_base_url", return_value="https://yourorg.my.salesforce.com"),
+        patch("fieldkit.commands.auth.sf._require_interactive_sid", return_value="fictional-session!example-value"),
+        patch("fieldkit.commands.auth.sf._session_check", return_value=(True, "Salesforce API session is active.")),
+    ):
+        result = CliRunner().invoke(auth_sf_cmd, [])
+    assert result.exit_code == 0, result.output
+    assert result.stderr.replace(str(cookie_file), "<cookie-file>").strip() == textwrap.dedent(match.group(1)).strip()
+    assert cookie_file.stat().st_mode & 0o777 == 0o600
+    assert "fictional-session!example-value" not in result.output
 
 
 def _sid_file(tmp_path: Path, sid: str) -> Path:
@@ -74,6 +214,47 @@ def test_build_sid_cookie_domain_has_leading_dot() -> None:
 # ---------------------------------------------------------------------------
 # _write_sid_cookie
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "raw", ["private-malformed-sentinel", '{"cookies": [], "cookies": []}', '{"cookies": [null]}', "[]"]
+)
+def test_write_sid_cookie_recovers_malformed_json(tmp_path: Path, capsys: pytest.CaptureFixture[str], raw: str) -> None:
+    from fieldkit.config.salesforce_cookie import read_salesforce_cookie
+
+    cookie_file = tmp_path / "cookies.json"
+    cookie_file.write_text(raw, encoding="utf-8")
+    with (
+        patch("fieldkit.commands.auth.sf.get_cookie_file", return_value=cookie_file),
+        patch("fieldkit.commands.auth.sf.get_sf_rest_base_url", return_value="https://org.my.salesforce.com"),
+    ):
+        result = _write_sid_cookie("NEW!sid")
+    assert result.path == cookie_file
+    assert result.contents == raw.encode("utf-8")
+    recovered = read_salesforce_cookie(cookie_file)
+    assert recovered is not None
+    assert recovered.sid == "NEW!sid"
+    assert recovered.domain == "org.my.salesforce.com"
+    captured = capsys.readouterr()
+    assert "Replacing malformed cookie data" in captured.err
+    assert "private-malformed-sentinel" not in captured.err
+
+
+@pytest.mark.parametrize(
+    ("domain", "sid"), [("https://example.com", "new!sid"), ("https://org.my.salesforce.com", "bad\r\nsid")]
+)
+def test_invalid_credential_does_not_create_parent(tmp_path: Path, domain: str, sid: str) -> None:
+    from fieldkit.config._loader import ConfigError
+    from fieldkit.errors import AuthError
+
+    cookie_file = tmp_path / "absent" / "cookies.json"
+    with (
+        patch("fieldkit.commands.auth.sf.get_cookie_file", return_value=cookie_file),
+        patch("fieldkit.commands.auth.sf.get_sf_rest_base_url", return_value=domain),
+        pytest.raises((ConfigError, AuthError), match=r"Configure|Invalid Salesforce sid"),
+    ):
+        _write_sid_cookie(sid)
+    assert not cookie_file.parent.exists()
 
 
 def test_write_sid_cookie_creates_cookie_file_fresh(tmp_path: Path) -> None:
@@ -293,8 +474,9 @@ def test_auth_sf_cmd_direct_sid_removes_new_cookie_when_validation_fails(tmp_pat
 # ---------------------------------------------------------------------------
 
 
-def test_auth_sf_cmd_cancel_on_prompt_exits_0(tmp_path: Path) -> None:
-    """historic regression: Ctrl+C during the prompt is a clean cancel — exit 0."""
+@pytest.mark.parametrize("error", [click.Abort, EOFError, KeyboardInterrupt])
+def test_auth_sf_cmd_cancel_requires_authentication(tmp_path: Path, error: type[BaseException]) -> None:
+    """Cancellation cannot claim authentication succeeded or write credentials."""
     cookie_file = tmp_path / "cookies.json"
     runner = CliRunner()
     with (
@@ -302,11 +484,15 @@ def test_auth_sf_cmd_cancel_on_prompt_exits_0(tmp_path: Path) -> None:
         patch("fieldkit.commands.auth.sf.get_sf_rest_base_url", return_value="https://org.my.salesforce.com"),
         patch("fieldkit.commands.auth.sf.get_salesforce_org_url", return_value=""),
         patch("fieldkit.commands.auth.sf.stdin_is_interactive", return_value=True),
-        patch("fieldkit.commands.auth.sf._prompt_for_sid", side_effect=SystemExit(0)),
+        patch("fieldkit.commands.auth.sf.click.prompt", side_effect=error),
+        patch("fieldkit.commands.auth.sf._session_check") as session_check,
     ):
         result = runner.invoke(auth_sf_cmd, catch_exceptions=False)
 
-    assert result.exit_code == 0
+    assert result.exit_code == 2
+    assert "Cancelled" in result.output
+    assert not cookie_file.exists()
+    session_check.assert_not_called()
 
 
 def test_auth_sf_cmd_noninteractive_reauthorization_does_not_prompt_or_write() -> None:
@@ -337,7 +523,7 @@ def test_auth_sf_cmd_bad_session_exits_2(tmp_path: Path) -> None:
     with (
         patch("fieldkit.commands.auth.sf._prompt_for_sid", return_value="00D!validformat"),
         patch("fieldkit.commands.auth.sf.stdin_is_interactive", return_value=True),
-        patch("fieldkit.commands.auth.sf._write_sid_cookie"),
+        patch("fieldkit.commands.auth.sf.get_sf_rest_base_url", return_value="https://org.my.salesforce.com"),
         patch("fieldkit.commands.auth.sf.get_cookie_file", return_value=cookie_file),
         patch.dict("sys.modules", {"fieldkit.commands.sf.session_check": mock_session_check_mod}),
     ):

@@ -4,9 +4,11 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-import yaml
-
+from fieldkit.commands.init.paths import bind_initialization_workspace
 from fieldkit.config import ConfigError
+from fieldkit.config._loader import MAX_CONFIG_UPDATE_BYTES
+from fieldkit.util.strict_yaml import load_strict_yaml
+from fieldkit.util.text_snapshot import read_text_snapshot
 
 DEFAULT_ROLE = "Account Engineer"
 DEFAULT_COMPANY = ""
@@ -23,7 +25,6 @@ _ANSWERS_KEYS = frozenset(
         "salesforce_user_id",
         "data_dir",
         "accounts",
-        "gcp_project",
         "oauth_client_id",
         "oauth_client_secret",
         "shadowbot_assistant_id",
@@ -43,7 +44,6 @@ class InitInputs:
     salesforce_user_id: str
     data_dir: Path
     account_names: tuple[str, ...]
-    gcp_project: str
     oauth_id: str
     oauth_secret: str
     shadowbot_assistant_id: str
@@ -67,16 +67,16 @@ def account_key(name: str) -> str:
     """Return a safe workspace key for a human-readable account name."""
     key = name.strip().lower().replace(" ", "-")
     if not _ACCOUNT_KEY_RE.fullmatch(key):
-        raise ConfigError(f"Account name cannot be converted to a safe slug: {name!r}")
+        raise ConfigError("Account name cannot be converted to a safe slug")
     return key
 
 
 def load_answers(path: Path) -> InitInputs:
     """Parse and validate an unattended-init YAML document."""
     try:
-        loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError) as exc:
-        raise ConfigError(f"Could not read init answers from {path}: {exc}") from exc
+        loaded = load_strict_yaml(read_text_snapshot(path, max_bytes=MAX_CONFIG_UPDATE_BYTES).content)
+    except (OSError, ValueError):
+        raise ConfigError("Could not read init answers as bounded UTF-8 YAML") from None
     if not isinstance(loaded, dict):
         raise ConfigError("Init answers document must contain a YAML mapping")
     if any(not isinstance(key, str) for key in loaded):
@@ -85,7 +85,7 @@ def load_answers(path: Path) -> InitInputs:
     data: dict[str, object] = loaded
     unknown = sorted(set(data) - _ANSWERS_KEYS)
     if unknown:
-        raise ConfigError(f"Unknown init answers key(s): {', '.join(unknown)}")
+        raise ConfigError("Unknown init answers key(s)")
 
     raw_accounts = data.get("accounts", [])
     if not isinstance(raw_accounts, list):
@@ -112,9 +112,8 @@ def load_answers(path: Path) -> InitInputs:
         email=_required_answer(data, "email"),
         territory=_optional_answer(data, "territory"),
         salesforce_user_id=_optional_answer(data, "salesforce_user_id"),
-        data_dir=Path(_required_answer(data, "data_dir")).expanduser().resolve(),
+        data_dir=bind_initialization_workspace(Path(_required_answer(data, "data_dir"))),
         account_names=account_names,
-        gcp_project=_optional_answer(data, "gcp_project"),
         oauth_id=oauth_id,
         oauth_secret=oauth_secret,
         shadowbot_assistant_id=shadowbot_assistant_id,

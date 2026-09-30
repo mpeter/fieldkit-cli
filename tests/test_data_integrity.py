@@ -48,7 +48,7 @@ def test_normalize_monetary_no_warning_for_valid_float() -> None:
 
     with warnings.catch_warnings():
         warnings.simplefilter("error", UserWarning)
-        model = PursuitFrontmatter(stage="qualify", sf_arr=500000.0)
+        model = PursuitFrontmatter.model_validate({"stage": "qualify", "sf_arr": 500000.0})
     assert model.sf_arr == 500000.0
 
 
@@ -72,7 +72,7 @@ def test_normalize_monetary_no_warning_for_none() -> None:
 
     with warnings.catch_warnings():
         warnings.simplefilter("error", UserWarning)
-        model = PursuitFrontmatter(stage="qualify", sf_arr=None)
+        model = PursuitFrontmatter.model_validate({"stage": "qualify", "sf_arr": None})
     assert model.sf_arr is None
 
 
@@ -112,7 +112,7 @@ def test_stage1_bypass_empty_transcript() -> None:
 
 def test_stage1_no_bypass_for_long_transcript(monkeypatch: pytest.MonkeyPatch) -> None:
     """Long transcript (≥ 100 chars) does NOT trigger bypass."""
-    monkeypatch.setenv("NO_LLM", "1")
+    monkeypatch.setenv("FIELDKIT_NO_LLM", "1")
     from fieldkit.ingest.pipeline import stage1_clean
 
     long_text = "Alice: Let's talk strategy.\nBob: Agreed on the roadmap.\n" * 5
@@ -178,7 +178,7 @@ def test_transition_entry_schema_a_only_valid() -> None:
     """TransitionEntry with only stage= (Schema A) is valid."""
     from fieldkit.pursuit.models import TransitionEntry
 
-    entry = TransitionEntry(stage="Proposal")
+    entry = TransitionEntry.model_validate({"stage": "Proposal"})
     assert entry.stage == "Proposal"
     assert entry.from_ is None
     assert entry.to is None
@@ -201,14 +201,14 @@ def test_transition_entry_stage_and_to_raises() -> None:
     from fieldkit.pursuit.models import TransitionEntry
 
     with pytest.raises(ValidationError, match=r"Schema A"):
-        TransitionEntry(stage="Proposal", to="Qualify")
+        TransitionEntry.model_validate({"stage": "Proposal", "to": "Qualify"})
 
 
 def test_transition_entry_all_none_valid() -> None:
     """TransitionEntry with all fields None is valid (historical entries may be sparse)."""
     from fieldkit.pursuit.models import TransitionEntry
 
-    entry = TransitionEntry()
+    entry = TransitionEntry.model_validate({})
     assert entry.stage is None
     assert entry.from_ is None
     assert entry.to is None
@@ -231,10 +231,10 @@ def test_normalize_monetary_no_warning_for_empty_string() -> None:
     assert model.sf_arr is None
 
 
-def test_stage2_extract_accepts_plain_str(monkeypatch: pytest.MonkeyPatch) -> None:
-    """stage2_extract() accepts a plain str for backwards compat (notes_text fallback path)."""
-    monkeypatch.setenv("NO_LLM", "1")
-    from fieldkit.ingest.pipeline import TranscriptMeta, stage2_extract
+def test_stage2_extract_accepts_stage1_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The extraction API receives the typed cleaning result, including notes-only inputs."""
+    monkeypatch.setenv("FIELDKIT_NO_LLM", "1")
+    from fieldkit.ingest.pipeline import Stage1Result, TranscriptMeta, stage2_extract
 
-    result = stage2_extract("some meeting notes text")
+    result = stage2_extract(Stage1Result("some meeting notes text"))
     assert isinstance(result, TranscriptMeta)

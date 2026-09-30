@@ -1,13 +1,17 @@
 """Unit tests for fieldkit.ingest.status — in-process coverage.
 
 Supplements the subprocess smoke tests in test_ingest_cli.py.
-All tests mock lib.ingest_db.get_db so no real pipeline.db is needed.
+All tests mock the read-only database opener so no real pipeline.db is needed.
 """
 
+import json
 import sqlite3
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+
+from fieldkit.errors import SQLiteSnapshotError, SQLiteSnapshotReason
 
 pytestmark = pytest.mark.unit
 
@@ -82,7 +86,7 @@ def test_status_no_db_returns_0(capsys: pytest.CaptureFixture[str]) -> None:
     """main([]) returns 0 when pipeline.db does not exist."""
     from fieldkit.commands.ingest.status import main
 
-    with patch("fieldkit.ingest.db.get_db", side_effect=FileNotFoundError("not found")):
+    with patch("fieldkit.ingest.db.get_db_read_only", side_effect=FileNotFoundError("not found")):
         rc = main([])
 
     assert rc == 0
@@ -95,7 +99,7 @@ def test_status_no_db_lists_all_pipelines(capsys: pytest.CaptureFixture[str]) ->
     """Without a DB, all 3 pipeline IDs appear in output."""
     from fieldkit.commands.ingest.status import main
 
-    with patch("fieldkit.ingest.db.get_db", side_effect=FileNotFoundError("not found")):
+    with patch("fieldkit.ingest.db.get_db_read_only", side_effect=FileNotFoundError("not found")):
         main([])
 
     captured = capsys.readouterr()
@@ -108,7 +112,7 @@ def test_status_no_db_lists_version(capsys: pytest.CaptureFixture[str]) -> None:
     """Without a DB, version '0.1.0' appears in output."""
     from fieldkit.commands.ingest.status import main
 
-    with patch("fieldkit.ingest.db.get_db", side_effect=FileNotFoundError("not found")):
+    with patch("fieldkit.ingest.db.get_db_read_only", side_effect=FileNotFoundError("not found")):
         main([])
 
     captured = capsys.readouterr()
@@ -119,7 +123,7 @@ def test_status_no_db_no_sources_artifacts_columns(capsys: pytest.CaptureFixture
     """Without a DB, SOURCES/ARTIFACTS columns do not appear in the header."""
     from fieldkit.commands.ingest.status import main
 
-    with patch("fieldkit.ingest.db.get_db", side_effect=FileNotFoundError("not found")):
+    with patch("fieldkit.ingest.db.get_db_read_only", side_effect=FileNotFoundError("not found")):
         main([])
 
     captured = capsys.readouterr()
@@ -141,7 +145,7 @@ def test_status_with_db_shows_connected(capsys: pytest.CaptureFixture[str]) -> N
         sources=[("transcript-ingest", 5)],
         artifacts=[("transcript-ingest", 2)],
     )
-    with patch("fieldkit.ingest.db.get_db", return_value=conn):
+    with patch("fieldkit.ingest.db.get_db_read_only", return_value=conn):
         rc = main([])
 
     assert rc == 0
@@ -149,12 +153,34 @@ def test_status_with_db_shows_connected(capsys: pytest.CaptureFixture[str]) -> N
     assert "connected" in captured.out
 
 
+def test_status_reads_a_fresh_initialized_database_without_mutation(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from fieldkit.commands.ingest.registry import PIPELINES
+    from fieldkit.commands.ingest.status import main
+    from fieldkit.ingest.db import init_db
+
+    db_path = tmp_path / "pipeline.db"
+    writer = init_db(db_path, pipelines=PIPELINES)
+    writer.close()
+    before = (db_path.read_bytes(), db_path.stat().st_mtime_ns, {path.name for path in tmp_path.iterdir()})
+
+    with patch("fieldkit.ingest.db.get_db_path", return_value=db_path):
+        rc = main(["--json"])
+
+    payload = json.loads(capsys.readouterr().out)
+    after = (db_path.read_bytes(), db_path.stat().st_mtime_ns, {path.name for path in tmp_path.iterdir()})
+    assert rc == 0
+    assert payload["db_connected"] is True
+    assert after == before
+
+
 def test_status_with_db_shows_sources_count(capsys: pytest.CaptureFixture[str]) -> None:
     """DB-connected output includes the source row count for a pipeline."""
     from fieldkit.commands.ingest.status import main
 
     conn = _make_conn(sources=[("transcript-ingest", 7)])
-    with patch("fieldkit.ingest.db.get_db", return_value=conn):
+    with patch("fieldkit.ingest.db.get_db_read_only", return_value=conn):
         main([])
 
     captured = capsys.readouterr()
@@ -169,7 +195,7 @@ def test_status_with_db_shows_artifacts_count(capsys: pytest.CaptureFixture[str]
         sources=[("transcript-ingest", 1)],
         artifacts=[("transcript-ingest", 3)],
     )
-    with patch("fieldkit.ingest.db.get_db", return_value=conn):
+    with patch("fieldkit.ingest.db.get_db_read_only", return_value=conn):
         main([])
 
     captured = capsys.readouterr()
@@ -183,7 +209,7 @@ def test_status_with_db_zero_counts_for_unregistered_pipeline(
     from fieldkit.commands.ingest.status import main
 
     conn = _make_conn()  # empty DB
-    with patch("fieldkit.ingest.db.get_db", return_value=conn):
+    with patch("fieldkit.ingest.db.get_db_read_only", return_value=conn):
         main([])
 
     captured = capsys.readouterr()
@@ -198,7 +224,7 @@ def test_status_with_db_header_includes_sources_artifacts(
     from fieldkit.commands.ingest.status import main
 
     conn = _make_conn()
-    with patch("fieldkit.ingest.db.get_db", return_value=conn):
+    with patch("fieldkit.ingest.db.get_db_read_only", return_value=conn):
         main([])
 
     captured = capsys.readouterr()
@@ -211,17 +237,59 @@ def test_status_with_db_header_includes_sources_artifacts(
 # ---------------------------------------------------------------------------
 
 
-def test_status_db_error_prints_warning(capsys: pytest.CaptureFixture[str]) -> None:
-    """A generic DB open exception prints a [warn] message to stderr and continues."""
+def test_status_db_error_is_non_passing_and_does_not_disclose_path(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A malformed or unstable database must not look like an empty success."""
     from fieldkit.commands.ingest.status import main
 
-    with patch("fieldkit.ingest.db.get_db", side_effect=RuntimeError("disk full")):
+    private_path = "/fictional-private/operator/private-customer/pipeline.db"
+    with patch(
+        "fieldkit.ingest.db.get_db_read_only",
+        side_effect=ValueError(f"malformed database at {private_path}"),
+    ):
         rc = main([])
 
-    assert rc == 0
+    assert rc == 3
     captured = capsys.readouterr()
-    assert "[warn]" in captured.err
-    assert "disk full" in captured.err
+    assert "Error" in captured.err
+    assert "valid initialized database" in captured.err
+    assert private_path not in captured.err
+
+
+@pytest.mark.parametrize(
+    ("reason", "expected_exit"),
+    [("active", 1), ("journal", 3), ("unverified", 3)],
+)
+def test_status_routes_snapshot_failure_without_disclosing_detail(
+    capsys: pytest.CaptureFixture[str], reason: SQLiteSnapshotReason, expected_exit: int
+) -> None:
+    from fieldkit.commands.ingest.status import main
+
+    private_detail = "/fictional-private/operator/private-customer/pipeline.db"
+    with patch(
+        "fieldkit.ingest.db.get_db_read_only",
+        side_effect=SQLiteSnapshotError(private_detail, reason=reason),
+    ):
+        rc = main([])
+
+    assert rc == expected_exit
+    captured = capsys.readouterr()
+    assert private_detail not in captured.err
+
+
+def test_status_query_failure_closes_connection(capsys: pytest.CaptureFixture[str]) -> None:
+    from fieldkit.commands.ingest.status import main
+
+    conn = _make_conn()
+    conn.execute("DROP TABLE sources")
+    with patch("fieldkit.ingest.db.get_db_read_only", return_value=conn):
+        rc = main([])
+
+    assert rc == 3
+    assert "Error" in capsys.readouterr().err
+    with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+        conn.execute("SELECT 1")
 
 
 # ---------------------------------------------------------------------------
@@ -233,7 +301,7 @@ def test_run_status_no_db_lists_pipeline_ids(capsys: pytest.CaptureFixture[str])
     """_run_status() lists known pipeline IDs even when no pipeline.db exists."""
     from fieldkit.commands.ingest.status import _run_status
 
-    with patch("fieldkit.ingest.db.get_db", side_effect=FileNotFoundError):
+    with patch("fieldkit.ingest.db.get_db_read_only", side_effect=FileNotFoundError):
         _run_status()
 
     out = capsys.readouterr().out
@@ -246,7 +314,7 @@ def test_run_status_with_db_shows_counts(capsys: pytest.CaptureFixture[str]) -> 
     from fieldkit.commands.ingest.status import _run_status
 
     conn = _make_conn(sources=[("transcript-ingest", 3)], artifacts=[("transcript-ingest", 1)])
-    with patch("fieldkit.ingest.db.get_db", return_value=conn):
+    with patch("fieldkit.ingest.db.get_db_read_only", return_value=conn):
         _run_status()
 
     out = capsys.readouterr().out

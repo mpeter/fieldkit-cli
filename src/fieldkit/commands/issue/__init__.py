@@ -1,1 +1,1 @@
-"""fieldkit issue — Local issue tracker for bugs and enhancement requests."""
+"""Thin CLI adapters for the GitHub-backed fieldkit issue domain."""

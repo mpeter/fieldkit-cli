@@ -17,7 +17,8 @@ module with its ``sf components`` command and ``--services-only`` sweep.
 import logging
 from typing import Any, Literal, TypedDict
 
-from fieldkit.sf.client import SFAPIError, SFAuthError, SFDirectClient
+from fieldkit.sf.client import SFDirectClient
+from fieldkit.sf.errors import SFAPIError, SFAuthError
 
 logger = logging.getLogger(__name__)
 
@@ -216,8 +217,8 @@ def opp_contract_type(client: SFDirectClient, opp_id: str) -> ContractType:
         lines = fetch_opp_component_lines(client, opp_id)
     except SFAuthError:
         raise
-    except SFAPIError as exc:
-        logger.warning("opp_contract_type: quote-line walk failed for %s: %s — treating as standard", opp_id, exc)
+    except SFAPIError:
+        logger.warning("opp_contract_type: quote-line walk failed — treating as standard")
         return "standard"
     for line in lines:
         if _is_fixed_price_family(line["product_family"]):

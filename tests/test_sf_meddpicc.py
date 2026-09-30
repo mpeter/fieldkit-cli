@@ -20,7 +20,8 @@ from fieldkit.commands.sf.meddpicc import (
     fetch_meddpicc_scorecard,
     print_scorecard,
 )
-from fieldkit.sf.client import SFAuthError
+from fieldkit.sf import errors as sf_errors
+from fieldkit.sf.errors import SFAuthError
 from fieldkit.sf.meddpicc import normalize_questions
 from fieldkit.sf.types import MeddpiccDeal, MeddpiccQuestion, MeddpiccReadResult, UIAPIRecordCollection
 
@@ -629,14 +630,13 @@ def test_fetch_meddpicc_scorecard_marks_missing_deal_value_envelope_incomplete()
 
 def test_fetch_meddpicc_scorecard_propagates_auth_error() -> None:
     """SFAuthError propagates to the caller (cli_main maps it to EXIT_AUTH 2)."""
-    import fieldkit.sf.client as _sf
 
-    cm = _make_client_mock(deal_side_effect=_sf.SFAuthError("session expired"))
+    cm = _make_client_mock(deal_side_effect=sf_errors.SFAuthError("session expired"))
     with (
         patch("fieldkit.commands.sf.meddpicc.get_sf_session_id", return_value="fake-sid"),
         patch("fieldkit.commands.sf.meddpicc.get_sf_rest_base_url", return_value="https://org.my.salesforce.com"),
         patch("fieldkit.sf.client.SFDirectClient", return_value=cm),
-        pytest.raises(_sf.SFAuthError, match="session expired"),
+        pytest.raises(sf_errors.SFAuthError, match="session expired"),
     ):
         fetch_meddpicc_scorecard(_OPP_ID)
 
@@ -656,14 +656,13 @@ def test_fetch_meddpicc_scorecard_propagates_describe_auth_error() -> None:
 
 def test_fetch_meddpicc_scorecard_propagates_api_error() -> None:
     """SFAPIError propagates to the caller (cli_main maps it to EXIT_DATA 3)."""
-    import fieldkit.sf.client as _sf
 
-    cm = _make_client_mock(deal_side_effect=_sf.SFAPIError("connection refused"))
+    cm = _make_client_mock(deal_side_effect=sf_errors.SFAPIError("connection refused"))
     with (
         patch("fieldkit.commands.sf.meddpicc.get_sf_session_id", return_value="fake-sid"),
         patch("fieldkit.commands.sf.meddpicc.get_sf_rest_base_url", return_value="https://org.my.salesforce.com"),
         patch("fieldkit.sf.client.SFDirectClient", return_value=cm),
-        pytest.raises(_sf.SFAPIError, match="connection refused"),
+        pytest.raises(sf_errors.SFAPIError, match="connection refused"),
     ):
         fetch_meddpicc_scorecard(_OPP_ID)
 
@@ -919,12 +918,11 @@ def test_cli_exits_3_for_invalid_deal_id() -> None:
 
 def test_cli_exits_2_when_auth_error_raised() -> None:
     """SFAuthError raised by fetch_meddpicc_scorecard maps to exit code 2 via cli_main."""
-    import fieldkit.sf.client as _sf
 
     runner = CliRunner()
     with patch(
         "fieldkit.commands.sf.meddpicc.fetch_meddpicc_scorecard",
-        side_effect=_sf.SFAuthError("session expired"),
+        side_effect=sf_errors.SFAuthError("session expired"),
     ):
         result = runner.invoke(cli, [_OPP_ID])
 

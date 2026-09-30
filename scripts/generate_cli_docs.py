@@ -8,22 +8,15 @@ Run after any CLI change that adds/removes/modifies commands or options:
 The output file is committed to the repo. Any drift between the code and the
 doc is caught by `make quality` (which runs this script and diffs the result).
 
-This is the second consumer of `fieldkit.cli_registry.walk_cli()` — D4's "one
-mechanism, two consumers". `fieldkit commands --json` reads the leaves of that
-same walk; this renders help for every node of it. A second, private traversal
-here would drift from the registry silently, and the drift would surface as
-documentation that disagrees with the machine-readable surface agents route on.
-
-It previously shelled out to `fieldkit <group> [<sub>] --help`, ~111 spawns each
-paying full interpreter and import-graph startup, with the group-help loop run
-twice per group. That cost ~25s. In-process it is ~1s.
+The shared `fieldkit.cli_registry.walk_cli()` supplies every command node.
+Task and authentication guidance lives in the linked user guides, not in this
+generated reference. Check mode always compares rendered content with the file.
 """
 
 from __future__ import annotations
 
-import re
+import argparse
 import sys
-from datetime import date
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).parent.parent
@@ -56,9 +49,7 @@ _PREFERRED_ORDER = [
     "gmail",
     "pursuit",
     "shadowbot",
-    "docs",
     "watch",
-    "enrich",
     "ingest",
     "sync",
     "issue",
@@ -68,28 +59,13 @@ _PREFERRED_ORDER = [
     "pipeline",
     "version",
 ]
-GROUPS = [g for g in _PREFERRED_ORDER if g in _COMMANDS_DICT] + sorted(
-    g for g in _COMMANDS_DICT if g not in _PREFERRED_ORDER
-)
 
-# Auth/session notes injected after specific sections
-AUTH_NOTES = {
-    "sf": """
-> **Auth:** Salesforce uses the `sid` session cookie.
-> - Authenticate: `fieldkit auth sf` (or use `--sid-file PATH` for an owner-only secret file)
-> - Get `sid`: Chrome DevTools → Application → Cookies → your configured `my.salesforce.com` host
-> - Check validity: `fieldkit sf session-check`
-> - `set-next-steps` and `set-field` are **dry-run by default** — pass `--confirm` to write.
-""",
-    "shadowbot": """
-> **Auth:** ShadowBot uses silent Chrome-cookie OIDC auth (Linux; requires `fieldkit-cli[chrome-auth]`).
-> - **Primary:** Chrome Default profile must be logged into your configured ShadowBot host.
-> - **Fallback (Linux/SSH/headless):** `fieldkit auth shadowbot --refresh-token-file PATH`
->   Get JWT: Chrome DevTools → Network → filter `openid-connect/token` → Response → `refresh_token`
-> - **Config override:** `shadowbot.chrome_cookies_path` in `~/.config/fieldkit/config.yaml`
-> - **Session expiry:** determined by the configured identity provider; recover by logging in again.
-""",
-}
+
+def command_groups() -> list[str]:
+    """Order the current registered groups without copying the command inventory."""
+    return [g for g in _PREFERRED_ORDER if g in _COMMANDS_DICT] + sorted(
+        g for g in _COMMANDS_DICT if g not in _PREFERRED_ORDER
+    )
 
 
 def render_help(node: CommandNode) -> str:
@@ -126,8 +102,13 @@ def generate() -> str:
         "",
         derived_doc_banner(),
         "",
-        f"> Auto-generated {date.today()} from `fieldkit --help`. Do not edit manually.",
+        "> Generated from the registered CLI command tree. Do not edit manually.",
         "> Re-generate: `uv run python scripts/generate_cli_docs.py`",
+        "",
+        "For setup and workflows, see the [user guide](user-guide.md),",
+        "[Salesforce authentication](guides/salesforce-auth.md),",
+        "[ShadowBot authentication](guides/shadowbot-auth.md), and",
+        "[pipeline workflow](guides/pipeline-workflow.md).",
         "",
         "## Quick reference",
         "",
@@ -138,9 +119,10 @@ def generate() -> str:
     # One walk feeds both the quick-reference table and the per-group sections.
     # The subprocess version walked twice — once for each — which is why every
     # group's --help was spawned twice per run.
-    nodes = walk_cli(GROUPS)
+    groups = command_groups()
+    nodes = walk_cli(groups)
 
-    for group in GROUPS:
+    for group in groups:
         subs = child_names(nodes, group)
         lines.append(f"| `fieldkit {group}` | {', '.join(f'`{s}`' for s in subs)} |")
 
@@ -153,102 +135,24 @@ def generate() -> str:
         heading = "#" * (node.depth + 2)
         lines += [f"{heading} `fieldkit {node.full_name}`", "", "```", render_help(node), "```", ""]
 
-        if node.depth == 0 and node.full_name in AUTH_NOTES:
-            lines.append(AUTH_NOTES[node.full_name])
-
-    lines += [
-        "---",
-        "",
-        "## Common patterns",
-        "",
-        "### Update SF Next Steps",
-        "```bash",
-        'fieldkit sf set-next-steps <OPP_ID> "Next steps text here" --confirm',
-        "```",
-        "",
-        "### Write any other approved SF field",
-        "```bash",
-        "fieldkit sf set-field --list-fields          # see what's allowed",
-        'fieldkit sf set-field <OPP_ID> Next_Steps__c "text" --confirm',
-        'fieldkit sf set-field <QUOTE_ID> Approval_Comments__c "justification" --sobject SBQQ__Quote__c --confirm',
-        "```",
-        "",
-        "### Refresh SF auth",
-        "```bash",
-        "# 1. Get sid from Chrome DevTools → your my.salesforce.com host → Cookies → sid",
-        "fieldkit auth sf",
-        "fieldkit sf session-check",
-        "```",
-        "",
-        "### Refresh ShadowBot auth",
-        "```bash",
-        "# Primary: Chrome Default profile must be logged into your configured ShadowBot host",
-        "fieldkit auth shadowbot   # checks auth status; auto-refreshes via Chrome cookies (Linux)",
-        "",
-        "# Fallback (SSH/headless/macOS): inject refresh token from DevTools",
-        "# Chrome DevTools → Network → filter openid-connect/token → Response → refresh_token",
-        "fieldkit auth shadowbot --refresh-token-file PATH",
-        "fieldkit shadowbot query 'test query'",
-        "```",
-        "",
-        "### Daily data refresh",
-        "```bash",
-        "fieldkit gmail sync",
-        "fieldkit gmail account-tags",
-        "fieldkit gmail enrich-pursuits",
-        "fieldkit sf listview",
-        "fieldkit watch run backstory-health",
-        "fieldkit watch run pursuit-stalls",
-        "fieldkit watch run slack-threads",
-        "fieldkit brief generate",
-        "```",
-        "",
-        "### Pipeline review",
-        "```bash",
-        "fieldkit pursuit health",
-        "fieldkit pursuit forecast",
-        "fieldkit pursuit audit",
-        "```",
-    ]
-
-    return "\n".join(lines) + "\n"
+    return "\n".join(lines).rstrip() + "\n"
 
 
-def _source_mtime() -> float:
-    """Return the newest mtime across all CLI source files."""
-    candidates = list((REPO_ROOT / "src" / "fieldkit").rglob("*.py"))
-    candidates += [REPO_ROOT / "scripts" / "generate_cli_docs.py"]
-    return max((p.stat().st_mtime for p in candidates if p.exists()), default=0.0)
+def main(argv: list[str] | None = None) -> int:
+    """Generate the reference or verify its content without modifying it."""
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
+    parser.add_argument("--check", action="store_true")
+    check_mode = parser.parse_args(argv).check
 
-
-def _normalize_generated_date(text: str) -> str:
-    """Replace the generation date in the header with a fixed placeholder.
-
-    The header embeds the date the doc was written, which made --check
-    time-dependent: any PR built the day after the last regeneration failed
-    the freshness gate on a pure date mismatch (no content change).
-    """
-    return re.sub(r"^> Auto-generated \d{4}-\d{2}-\d{2} ", "> Auto-generated DATE ", text, count=1, flags=re.M)
-
-
-if __name__ == "__main__":
-    check_mode = "--check" in sys.argv
-
-    if check_mode:
-        if not OUTPUT.exists():
-            print("ERROR: docs/cli-reference.md does not exist — run 'make docs'", file=sys.stderr)
-            sys.exit(1)
-        # Fast path: skip full generation if output is newer than all sources.
-        if OUTPUT.stat().st_mtime > _source_mtime():
-            print("docs/cli-reference.md is up to date ✓", file=sys.stderr)
-            sys.exit(0)
+    if check_mode and not OUTPUT.exists():
+        print("ERROR: docs/cli-reference.md does not exist — run 'make docs'", file=sys.stderr)
+        return 1
 
     print("Generating CLI reference...", file=sys.stderr)
     content = generate()
 
     if check_mode:
-        existing = _normalize_generated_date(OUTPUT.read_text())
-        content = _normalize_generated_date(content)
+        existing = OUTPUT.read_text(encoding="utf-8")
         if existing != content:
             # Show which lines changed
             import difflib
@@ -262,9 +166,14 @@ if __name__ == "__main__":
             if len(diff) > 40:
                 print(f"... and {len(diff) - 40} more lines", file=sys.stderr)
             print("ERROR: docs/cli-reference.md is stale — run 'make docs' to regenerate", file=sys.stderr)
-            sys.exit(1)
+            return 1
         print("docs/cli-reference.md is up to date ✓", file=sys.stderr)
     else:
         OUTPUT.parent.mkdir(parents=True, exist_ok=True)
-        OUTPUT.write_text(content)
+        OUTPUT.write_text(content, encoding="utf-8")
         print(f"Written to {OUTPUT}", file=sys.stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

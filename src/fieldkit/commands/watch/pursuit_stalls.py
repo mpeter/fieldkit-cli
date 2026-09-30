@@ -102,6 +102,9 @@ def cli(
       ack <account>/<pursuit>  Snooze re-alerting for a pursuit for 7 days.
     """
     if ctx.invoked_subcommand is None:
+        if dry_run and scrub_duplicates:
+            click.echo("--dry-run cannot be combined with --scrub-duplicates", err=True)
+            raise SystemExit(EXIT_DATA)
         # implementation note: --scrub-duplicates deduplicates the alerts file then exits
         if scrub_duplicates:
             removed = scrub_duplicate_alerts(_alerts_file())
@@ -111,7 +114,9 @@ def cli(
         if verbose:
             # Elevate debug-level skip reasons to INFO so they appear on stderr
             logging.getLogger("pursuit_stalls").setLevel(logging.DEBUG)
-        raise SystemExit(_run_pursuit_stalls(threshold=threshold, account=account, dry_run=dry_run, force=force))
+        raise SystemExit(
+            _run_pursuit_stalls(threshold=threshold, account=account, dry_run=dry_run, force=force).exit_code
+        )
 
 
 @cli.command("ack")

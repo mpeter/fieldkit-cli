@@ -41,8 +41,4 @@ from fieldkit.watch.waiting_on_tracker import _DEFAULT_THRESHOLD_DAYS, _run
 @click.option("--json", "as_json", is_flag=True, default=False, help="Emit the run outcome as JSON.")
 def cli(threshold: int, dry_run: bool, as_json: bool) -> None:
     """Waiting-on tracker — escalate TASKS.md items silent beyond threshold."""
-    raise SystemExit(_run(threshold=threshold, dry_run=dry_run, as_json=as_json))
-
-
-if __name__ == "__main__":
-    raise SystemExit(cli())
+    raise SystemExit(_run(threshold=threshold, dry_run=dry_run, as_json=as_json).exit_code)

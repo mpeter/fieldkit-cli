@@ -2,95 +2,30 @@
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import stat
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    from scripts.public_history_source import ApprovedCutoverAnchor, PublicHistorySource
+
+from scripts import _release_bundle_evidence
+from scripts.json_policy import load_json_bytes
 
 _POLICY_KEYS = {"schema_version", "candidate", "roles", "support", "external_controls"}
 _PLANNED_CANDIDATE_KEYS = {"repository", "package", "planned_tag"}
 _EVIDENCE_CANDIDATE_KEYS = {"repository", "revision", "package", "planned_tag"}
-_ROLE_KEYS = {"preparer", "approver", "incident"}
+_ROLE_KEYS = {"preparer", "approver", "approver_login", "incident"}
 _SUPPORT_KEYS = {"compatibility_policy", "supported_line"}
 _CONTROL_KEYS = {"id", "status", "evidence"}
 _EVIDENCE_KEYS = {"candidate", "record"}
 _REVISION = re.compile(r"[0-9a-f]{40}")
-_SHA256 = re.compile(r"[0-9a-f]{64}")
 _REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 _CONTROL_ID = re.compile(r"[a-z0-9][a-z0-9-]*")
 _REQUIRED_CONTROL_IDS = frozenset({"github-release-environment", "pypi-trusted-publisher"})
-_CANDIDATE_REPORT_KEYS = {
-    "schema_version",
-    "status",
-    "expected_repository",
-    "package",
-    "planned_tag",
-    "export_manifest",
-    "artifact_validation",
-    "license_evidence",
-    "runtime_requirements",
-    "release_build_requirements",
-    "runtime_wheelhouse",
-    "scan",
-}
-_EXPORT_MANIFEST_KEYS = {
-    "schema_version",
-    "source_commit",
-    "source_tree",
-    "policy_path",
-    "policy_oid",
-    "policy_sha256",
-    "expected_repository",
-    "planned_tag",
-    "exported_tree",
-    "included",
-    "excluded",
-}
-_ARTIFACT_VALIDATION_KEYS = {"schema_version", "status", "source_revision", "artifacts"}
-_LICENSE_EVIDENCE_KEYS = {
-    "schema_version",
-    "status",
-    "scope",
-    "revision",
-    "export_policy_sha256",
-    "sbom_sha256",
-    "observed_packages",
-    "packages",
-    "findings",
-}
-_SCAN_KEYS = {
-    "schema_version",
-    "source_commit",
-    "source_tree",
-    "exported_tree",
-    "expected_repository",
-    "planned_tag",
-    "export_policy_oid",
-    "export_policy_sha256",
-    "scan_policy_oid",
-    "scan_policy_sha256",
-    "identity_policy_oid",
-    "identity_policy_sha256",
-    "scanned_entries",
-    "scanned_artifact_entries",
-    "scanned_text_entries",
-    "approved_binary_entries",
-    "classified_matches",
-    "gitleaks_version",
-    "gitleaks_findings",
-    "artifacts",
-    "findings",
-    "status",
-    "artifact_coverage",
-}
-_ARTIFACT_KEYS = {"name", "kind", "sha256", "criteria", "status"}
-_CRITERION_KEYS = {"criterion_id", "status", "diagnostics"}
-_SCAN_ARTIFACT_KEYS = {"name", "kind", "sha256", "member_count", "total_uncompressed_bytes"}
-_TREE_ENTRY_KEYS = {"path", "mode", "oid", "category", "rule_id"}
-_REQUIRED_ARTIFACT_KINDS = frozenset({"wheel", "sdist"})
 _MAX_JSON_BYTES = 5 * 1024 * 1024
 
 
@@ -152,16 +87,29 @@ class GovernanceReport:
         }
 
 
-def _reject_duplicate_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
-    result: dict[str, object] = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError(f"duplicate JSON key: {key}")
-        result[key] = value
-    return result
+@dataclass(frozen=True)
+class PublicHistoryGovernanceReport(GovernanceReport):
+    """Successor preparation identity with unimplemented approval kept pending."""
+
+    source: PublicHistorySource
+    source_sha256: str
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            **super().to_dict(),
+            "source_kind": "public-history",
+            "source_sha256": self.source_sha256,
+            "anchor": asdict(self.source.anchor),
+            "repository": self.source.repository,
+            "repository_id": self.source.repository_id,
+            "source_commit": self.source.source_commit,
+            "source_tree": self.source.source_tree,
+            "version": self.source.version,
+            "planned_tag": self.source.planned_tag,
+        }
 
 
-def _load_json(path: Path) -> dict[str, object]:
+def _load_bytes(path: Path) -> bytes:
     try:
         flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
         descriptor = os.open(path, flags)
@@ -172,10 +120,13 @@ def _load_json(path: Path) -> dict[str, object]:
             raw_bytes = stream.read(_MAX_JSON_BYTES + 1)
         if len(raw_bytes) > _MAX_JSON_BYTES:
             raise ValueError(f"{path} exceeds the {_MAX_JSON_BYTES}-byte JSON limit")
-        raw = json.loads(raw_bytes.decode("utf-8"), object_pairs_hook=_reject_duplicate_pairs)
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError) as exc:
+    except (OSError, ValueError) as exc:
         raise ValueError(f"cannot load {path}: {exc}") from exc
-    return _object(raw, str(path))
+    return raw_bytes
+
+
+def _load_json(path: Path) -> dict[str, object]:
+    return _object(load_json_bytes(_load_bytes(path)), "release governance JSON")
 
 
 def _object(value: object, subject: str) -> dict[str, Any]:
@@ -224,189 +175,17 @@ def _evidence_candidate(value: object, subject: str) -> CandidateIdentity:
     return CandidateIdentity(repository, revision, package, planned_tag)
 
 
-def _artifact_identities(value: object, subject: str, *, validation: bool) -> frozenset[tuple[str, str, str]]:
-    if not isinstance(value, list) or not value:
-        raise ValueError(f"{subject} must include artifacts")
-    identities: set[tuple[str, str, str]] = set()
-    for index, item in enumerate(value):
-        artifact_subject = f"{subject}[{index}]"
-        artifact = _object(item, artifact_subject)
-        _exact_keys(artifact, _ARTIFACT_KEYS if validation else _SCAN_ARTIFACT_KEYS, artifact_subject)
-        name = _string(artifact["name"], f"{artifact_subject}.name")
-        kind = artifact["kind"]
-        digest = artifact["sha256"]
-        if not isinstance(kind, str) or kind not in _REQUIRED_ARTIFACT_KINDS:
-            raise ValueError(f"{artifact_subject}.kind must be wheel or sdist")
-        if not isinstance(digest, str) or _SHA256.fullmatch(digest) is None:
-            raise ValueError(f"{artifact_subject}.sha256 must be a lowercase SHA-256")
-        if validation:
-            if artifact["status"] != "pass":
-                raise ValueError(f"{artifact_subject}.status must pass")
-            criteria = artifact["criteria"]
-            if not isinstance(criteria, list) or not criteria:
-                raise ValueError(f"{artifact_subject}.criteria must be a non-empty list")
-            for criterion_index, criterion_value in enumerate(criteria):
-                criterion_subject = f"{artifact_subject}.criteria[{criterion_index}]"
-                criterion = _object(criterion_value, criterion_subject)
-                _exact_keys(criterion, _CRITERION_KEYS, criterion_subject)
-                _string(criterion["criterion_id"], f"{criterion_subject}.criterion_id")
-                if criterion["status"] != "pass":
-                    raise ValueError(f"{criterion_subject}.status must pass")
-                if not isinstance(criterion["diagnostics"], list) or criterion["diagnostics"]:
-                    raise ValueError(f"{criterion_subject}.diagnostics must be an empty list")
-        else:
-            for field in ("member_count", "total_uncompressed_bytes"):
-                if not isinstance(artifact[field], int) or isinstance(artifact[field], bool) or artifact[field] < 0:
-                    raise ValueError(f"{artifact_subject}.{field} must be a non-negative integer")
-        identities.add((kind, name, digest))
-    if (
-        len(value) != len(_REQUIRED_ARTIFACT_KINDS)
-        or {identity[0] for identity in identities} != _REQUIRED_ARTIFACT_KINDS
-    ):
-        raise ValueError(f"{subject} must contain one wheel and one sdist")
-    return frozenset(identities)
-
-
-def _tree_entries(value: object, subject: str) -> None:
-    if not isinstance(value, list):
-        raise ValueError(f"{subject} must be a list")
-    for index, item in enumerate(value):
-        entry_subject = f"{subject}[{index}]"
-        entry = _object(item, entry_subject)
-        _exact_keys(entry, _TREE_ENTRY_KEYS, entry_subject)
-        for field in ("path", "category", "rule_id"):
-            _string(entry[field], f"{entry_subject}.{field}")
-        if not isinstance(entry["mode"], str) or entry["mode"] not in {"100644", "100755", "120000"}:
-            raise ValueError(f"{entry_subject}.mode is unsupported")
-        oid = entry["oid"]
-        if not isinstance(oid, str) or _REVISION.fullmatch(oid) is None:
-            raise ValueError(f"{entry_subject}.oid must be a full lowercase Git SHA")
-
-
 def _candidate_report(path: Path, candidate: PlannedCandidate) -> CandidateIdentity:
-    raw = _load_json(path)
-    _exact_keys(raw, _CANDIDATE_REPORT_KEYS, "candidate report")
-    if raw["schema_version"] != 6:
-        raise ValueError("candidate report schema_version must be 6")
-    if raw.get("status") != "pass":
-        raise ValueError("candidate report must have pass status")
-    if raw.get("expected_repository") != candidate.repository:
+    inputs = _release_bundle_evidence._candidate_inputs(_load_bytes(path))
+    raw = inputs.report
+    if raw["expected_repository"] != candidate.repository:
         raise ValueError("candidate report repository does not bind the policy candidate")
-    if raw.get("planned_tag") != candidate.planned_tag:
+    if raw["planned_tag"] != candidate.planned_tag:
         raise ValueError("candidate report planned tag does not bind the policy candidate")
-    if raw.get("package") != candidate.package:
+    if raw["package"] != candidate.package:
         raise ValueError("candidate report package does not bind the policy candidate")
-    export_manifest = _object(raw["export_manifest"], "candidate report export_manifest")
-    _exact_keys(export_manifest, _EXPORT_MANIFEST_KEYS, "candidate report export_manifest")
-    revision = export_manifest["source_commit"]
-    if not isinstance(revision, str) or _REVISION.fullmatch(revision) is None:
-        raise ValueError("candidate report source_commit must be a full lowercase Git SHA")
-    if export_manifest["schema_version"] != 1:
-        raise ValueError("candidate report export manifest schema_version must be 1")
-    for field in ("source_tree", "policy_oid", "exported_tree"):
-        value = export_manifest[field]
-        if not isinstance(value, str) or _REVISION.fullmatch(value) is None:
-            raise ValueError(f"candidate report export manifest {field} must be a full lowercase Git SHA")
-    if export_manifest["policy_path"] != "docs/release-readiness/public-tree-policy.json":
-        raise ValueError("candidate report export manifest policy path is unsupported")
-    if (
-        not isinstance(export_manifest["policy_sha256"], str)
-        or _SHA256.fullmatch(export_manifest["policy_sha256"]) is None
-    ):
-        raise ValueError("candidate report export manifest policy SHA-256 is invalid")
-    _tree_entries(export_manifest["included"], "candidate report export_manifest.included")
-    _tree_entries(export_manifest["excluded"], "candidate report export_manifest.excluded")
-    if (
-        export_manifest["expected_repository"] != candidate.repository
-        or export_manifest["planned_tag"] != candidate.planned_tag
-    ):
-        raise ValueError("candidate report export manifest does not bind the policy candidate")
-    artifact_validation = _object(raw["artifact_validation"], "candidate report artifact_validation")
-    _exact_keys(artifact_validation, _ARTIFACT_VALIDATION_KEYS, "candidate report artifact_validation")
-    if artifact_validation["schema_version"] != 1 or artifact_validation["status"] != "pass":
-        raise ValueError("candidate report artifact validation must pass")
-    if artifact_validation["source_revision"] != revision:
-        raise ValueError("candidate report artifact validation does not bind the source revision")
-    validation_artifacts = _artifact_identities(
-        artifact_validation["artifacts"], "candidate report artifact_validation.artifacts", validation=True
-    )
-    license_evidence = _object(raw["license_evidence"], "candidate report license_evidence")
-    _exact_keys(license_evidence, _LICENSE_EVIDENCE_KEYS, "candidate report license_evidence")
-    if license_evidence["schema_version"] != 1 or license_evidence["status"] != "pass":
-        raise ValueError("candidate report license evidence must pass")
-    if license_evidence["revision"] != revision:
-        raise ValueError("candidate report license evidence does not bind the source revision")
-    if license_evidence["scope"] != "runtime-all-extras":
-        raise ValueError("candidate report license evidence scope is unsupported")
-    if license_evidence["export_policy_sha256"] != export_manifest["policy_sha256"]:
-        raise ValueError("candidate report license evidence does not bind the export policy")
-    if (
-        not isinstance(license_evidence["sbom_sha256"], str)
-        or _SHA256.fullmatch(license_evidence["sbom_sha256"]) is None
-    ):
-        raise ValueError("candidate report license evidence SBOM SHA-256 is invalid")
-    if (
-        not isinstance(license_evidence["observed_packages"], int)
-        or isinstance(license_evidence["observed_packages"], bool)
-        or license_evidence["observed_packages"] < 0
-        or not isinstance(license_evidence["packages"], list)
-        or not all(isinstance(package, dict) for package in license_evidence["packages"])
-        or not isinstance(license_evidence["findings"], list)
-        or license_evidence["observed_packages"] != len(license_evidence["packages"])
-        or license_evidence["findings"]
-    ):
-        raise ValueError("candidate report license evidence must be internally passing")
-    runtime_requirements = _object(raw["runtime_requirements"], "candidate report runtime_requirements")
-    _exact_keys(runtime_requirements, {"name", "sha256"}, "candidate report runtime_requirements")
-    if runtime_requirements["name"] != "runtime-requirements.txt":
-        raise ValueError("candidate report runtime requirements filename is unsupported")
-    if not isinstance(runtime_requirements["sha256"], str) or _SHA256.fullmatch(runtime_requirements["sha256"]) is None:
-        raise ValueError("candidate report runtime requirements SHA-256 is invalid")
-    build_requirements = _object(raw["release_build_requirements"], "candidate report release build requirements")
-    _exact_keys(build_requirements, {"name", "sha256"}, "candidate report release build requirements")
-    if build_requirements["name"] != "release-build-requirements.txt":
-        raise ValueError("candidate report release build requirements filename is unsupported")
-    if not isinstance(build_requirements["sha256"], str) or _SHA256.fullmatch(build_requirements["sha256"]) is None:
-        raise ValueError("candidate report release build requirements SHA-256 is invalid")
-    runtime_wheelhouse = _object(raw["runtime_wheelhouse"], "candidate report runtime_wheelhouse")
-    _exact_keys(runtime_wheelhouse, {"name", "sha256"}, "candidate report runtime_wheelhouse")
-    if runtime_wheelhouse["name"] != "runtime-wheelhouse.zip":
-        raise ValueError("candidate report runtime wheelhouse filename is unsupported")
-    if not isinstance(runtime_wheelhouse["sha256"], str) or _SHA256.fullmatch(runtime_wheelhouse["sha256"]) is None:
-        raise ValueError("candidate report runtime wheelhouse SHA-256 is invalid")
-    scan = _object(raw["scan"], "candidate report scan")
-    _exact_keys(scan, _SCAN_KEYS, "candidate report scan")
-    if scan["schema_version"] != 1 or scan["status"] != "pass" or scan["artifact_coverage"] != "pass":
-        raise ValueError("candidate report scan must pass with complete artifact coverage")
-    if scan["source_commit"] != revision:
-        raise ValueError("candidate report scan does not bind the source revision")
-    if scan["expected_repository"] != candidate.repository or scan["planned_tag"] != candidate.planned_tag:
-        raise ValueError("candidate report scan does not bind the policy candidate")
-    for scan_field, manifest_field in (
-        ("source_tree", "source_tree"),
-        ("exported_tree", "exported_tree"),
-        ("export_policy_oid", "policy_oid"),
-        ("export_policy_sha256", "policy_sha256"),
-    ):
-        if scan[scan_field] != export_manifest[manifest_field]:
-            raise ValueError(f"candidate report scan does not bind the export manifest {manifest_field}")
-    if scan["findings"] or not isinstance(scan["findings"], list):
-        raise ValueError("candidate report scan findings must be an empty list")
-    if scan["gitleaks_version"] != "8.30.1" or scan["gitleaks_findings"] != 0:
-        raise ValueError("candidate report scan must include a clean pinned secret scan")
-    for field in (
-        "scanned_entries",
-        "scanned_artifact_entries",
-        "scanned_text_entries",
-        "approved_binary_entries",
-        "classified_matches",
-        "gitleaks_findings",
-    ):
-        if not isinstance(scan[field], int) or isinstance(scan[field], bool) or scan[field] < 0:
-            raise ValueError(f"candidate report scan {field} must be a non-negative integer")
-    scan_artifacts = _artifact_identities(scan["artifacts"], "candidate report scan.artifacts", validation=False)
-    if scan_artifacts != validation_artifacts:
-        raise ValueError("candidate report scan artifacts do not match artifact validation")
+    manifest = _object(raw["export_manifest"], "candidate export manifest")
+    revision = _string(manifest["source_commit"], "candidate source commit")
     return CandidateIdentity(candidate.repository, revision, candidate.package, candidate.planned_tag)
 
 
@@ -414,13 +193,15 @@ def load_policy(path: Path) -> GovernancePolicy:
     """Load and strictly validate one checked-in release-governance policy."""
     raw = _load_json(path)
     _exact_keys(raw, _POLICY_KEYS, str(path))
-    if raw["schema_version"] != 1:
+    if type(raw["schema_version"]) is not int or raw["schema_version"] != 1:
         raise ValueError("release governance policy schema_version must be 1")
     candidate = _planned_candidate(raw["candidate"], "candidate")
 
     raw_roles = _object(raw["roles"], "roles")
     _exact_keys(raw_roles, _ROLE_KEYS, "roles")
     roles = {name: _string(raw_roles[name], f"roles.{name}") for name in sorted(_ROLE_KEYS)}
+    if re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?", roles["approver_login"]) is None:
+        raise ValueError("roles.approver_login must be a GitHub login")
 
     support = _object(raw["support"], "support")
     _exact_keys(support, _SUPPORT_KEYS, "support")
@@ -461,12 +242,65 @@ def load_policy(path: Path) -> GovernancePolicy:
     return GovernancePolicy(candidate, roles, compatibility_policy, supported_line, tuple(controls))
 
 
-def validate(policy_path: Path, candidate_report_path: Path) -> GovernanceReport:
+def validate(
+    policy_path: Path,
+    candidate_report_path: Path,
+    *,
+    expected_anchor: ApprovedCutoverAnchor | None = None,
+    cutover_record: bytes | None = None,
+) -> GovernanceReport:
     """Validate policy and candidate evidence without contacting external services."""
     policy = load_policy(policy_path)
-    candidate = _candidate_report(candidate_report_path, policy.candidate)
+    prepared = None
+    successor_pending_controls: tuple[str, ...] = ()
+    if expected_anchor is not None or cutover_record is not None:
+        if expected_anchor is None or cutover_record is None:
+            raise ValueError("successor governance requires independent anchor and exact cutover record")
+        from scripts import _public_history_bundle, public_history_source, release_bundle
+
+        successor_pending_controls = _public_history_bundle.PENDING_CONTROLS
+        descriptor = release_bundle._open_directory(candidate_report_path.parent)
+        try:
+            prepared = _public_history_bundle.candidate_inputs(
+                release_bundle._safe_bytes_at(descriptor, candidate_report_path.name),
+                release_bundle._safe_bytes_at(
+                    descriptor,
+                    "manifest.json",
+                    maximum_bytes=public_history_source.MAX_SOURCE_BYTES,
+                ),
+                expected_anchor=expected_anchor,
+                cutover_record=cutover_record,
+            )
+        finally:
+            os.close(descriptor)
+        report = prepared.inputs.report
+        if (report["expected_repository"], report["package"], report["planned_tag"]) != (
+            policy.candidate.repository,
+            policy.candidate.package,
+            policy.candidate.planned_tag,
+        ):
+            raise ValueError("successor report does not bind the policy candidate")
+        candidate = CandidateIdentity(
+            policy.candidate.repository,
+            prepared.source.source_commit,
+            policy.candidate.package,
+            policy.candidate.planned_tag,
+        )
+    else:
+        candidate = _candidate_report(candidate_report_path, policy.candidate)
     for control in policy.controls:
         if control.status == "evidenced" and control.evidence != candidate:
             raise ValueError(f"external control {control.identifier} evidence does not bind the policy candidate")
     pending = tuple(sorted(control.identifier for control in policy.controls if control.status == "pending"))
+    if prepared is not None:
+        from scripts import _release_bundle_evidence
+
+        return PublicHistoryGovernanceReport(
+            2,
+            "pending",
+            False,
+            tuple(sorted((*pending, *successor_pending_controls))),
+            prepared.source,
+            _release_bundle_evidence._digest(prepared.source_bytes),
+        )
     return GovernanceReport(1, "pending" if pending else "pass", not pending, pending)

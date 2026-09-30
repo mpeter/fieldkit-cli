@@ -21,11 +21,14 @@ and zero those attributes, so a worktree is used instead.
 The assessment reports are written back into the real repo's ``.agentready/``
 directory via ``--output-dir`` so ``check_agentready.py`` can read them.
 
-The pinned ``uvx`` package spec (e.g. ``agentready==2.49.0``) is passed as the
-sole argument so the version stays managed where every other tool pin lives —
-inline in the Makefile and CI workflow — rather than duplicated in source.
+The caller passes the package spec as an explicit assertion. It must match
+the canonical AgentReady policy used to verify report versions and scores;
+an unsupported version is rejected before execution.
 
-Exit code is whatever ``agentready assess`` returns (0 on success).
+Exit 0 requires successful assessment, worktree cleanup, and fresh report
+publication. Operational or evidence errors return 1; invalid arguments return
+2. Nonzero Git creation/cleanup or assessor exit codes are forwarded, with
+cleanup failures taking precedence over the assessment result.
 """
 
 from __future__ import annotations
@@ -34,6 +37,13 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+if __package__:
+    from scripts import agentready_output, agentready_policy, git_worktree
+else:
+    import agentready_output
+    import agentready_policy
+    import git_worktree
 
 # Generous ceilings; assess walks the whole tree and shells out to uvx.
 _GIT_TIMEOUT_SECONDS = 120
@@ -63,15 +73,22 @@ def _cleanup_failed_creation(worktree: Path) -> str:
 
 
 def main() -> None:
-    """Assess a clean HEAD worktree and forward agentready's exit code."""
-    if len(sys.argv) != 2 or not sys.argv[1].startswith("agentready=="):
+    """Assess clean HEAD and publish fresh evidence only after successful cleanup."""
+    if len(sys.argv) != 2 or sys.argv[1] != agentready_policy.PACKAGE_SPEC:
         print(
             "usage: agentready_assess.py agentready==<version>\n"
-            "The version is pinned by the caller (Makefile / CI), not this script.",
+            "The caller must use the version required by the canonical AgentReady policy.",
             file=sys.stderr,
         )
         raise SystemExit(2)
-    package_spec = sys.argv[1]
+    package_spec = agentready_policy.PACKAGE_SPEC
+
+    try:
+        git_worktree.require_clean_worktree(_REPO_ROOT)
+        run_output = agentready_output.begin_run(_OUTPUT_DIR)
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        print(f"agentready_assess: {error}", file=sys.stderr)
+        raise SystemExit(1) from error
 
     with tempfile.TemporaryDirectory(prefix="agentready-clean-") as tmp:
         # git worktree add wants a non-existent leaf path.
@@ -112,7 +129,7 @@ def main() -> None:
                         "--config",
                         str(_CONFIG),
                         "--output-dir",
-                        str(_OUTPUT_DIR),
+                        str(run_output),
                     ],
                     timeout=_ASSESS_TIMEOUT_SECONDS,
                     cwd=worktree,
@@ -156,6 +173,12 @@ def main() -> None:
     if assessed is None:
         print("agentready_assess: assessment produced no result", file=sys.stderr)
         raise SystemExit(1)
+    if assessed.returncode == 0:
+        try:
+            agentready_output.publish_run(run_output, _OUTPUT_DIR)
+        except (OSError, ValueError) as error:
+            print(f"agentready_assess: no fresh report: {error}", file=sys.stderr)
+            raise SystemExit(1) from error
     raise SystemExit(assessed.returncode)
 
 

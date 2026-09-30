@@ -3,7 +3,6 @@
 import json
 import os
 from pathlib import Path
-from typing import ClassVar
 from unittest.mock import patch
 
 import pytest
@@ -76,6 +75,18 @@ def test_get_fieldkit_home_tilde_expansion(tmp_path: Path, monkeypatch: pytest.M
     assert result == Path("~/work/fieldkit-data").expanduser().resolve()
 
 
+@pytest.mark.parametrize("value", ["workspace", "./workspace", "../workspace", "."])
+def test_workspace_root_rejects_relative_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+    """Configured workspace roots cannot depend on the caller's working directory."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(f"fieldkit_home: {value!r}\n", encoding="utf-8")
+    monkeypatch.setattr(fieldkit.config._loader, "CONFIG_PATH", cfg)
+    clear_config_caches()
+
+    with pytest.raises(ConfigError, match=r"fieldkit_home.*must be an absolute path"):
+        get_fieldkit_home()
+
+
 def test_get_fieldkit_home_missing_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     missing = tmp_path / "does-not-exist.yaml"
     monkeypatch.setattr(fieldkit.config._loader, "CONFIG_PATH", missing)
@@ -93,7 +104,7 @@ def test_get_fieldkit_home_malformed_yaml(tmp_path: Path, monkeypatch: pytest.Mo
         get_fieldkit_home()
 
 
-def test_get_fieldkit_home_missing_data_repo_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_get_fieldkit_home_missing_canonical_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_file = tmp_path / "config.yaml"
     config_file.write_text("other_key: some_value\n", encoding="utf-8")
     monkeypatch.setattr(fieldkit.config._loader, "CONFIG_PATH", config_file)
@@ -111,13 +122,13 @@ def test_get_fieldkit_home_non_dict_yaml(tmp_path: Path, monkeypatch: pytest.Mon
         get_fieldkit_home()
 
 
-def test_get_fieldkit_home_missing_fieldkit_home_key_includes_migration_hint(tmp_path: Path) -> None:
-    """ConfigError when fieldkit_home absent includes migration hint."""
+def test_get_fieldkit_home_missing_fieldkit_home_key_names_required_key(tmp_path: Path) -> None:
+    """A missing workspace root names the one supported configuration key."""
     cfg = tmp_path / "config.yaml"
     cfg.write_text("other_key: value\n", encoding="utf-8")
     with (
         patch("fieldkit.config._loader.CONFIG_PATH", cfg),
-        pytest.raises(ConfigError, match=r"data_repo.*renamed.*fieldkit_home"),
+        pytest.raises(ConfigError, match=r"missing required key 'fieldkit_home'"),
     ):
         get_fieldkit_home()
 
@@ -205,6 +216,40 @@ def test_get_fieldkit_data_fieldkit_home_absent_fieldkit_data_absent_raises_conf
         pytest.raises(ConfigError, match="fieldkit_home"),
     ):
         get_fieldkit_data()  # no fieldkit_data key → falls back to get_fieldkit_home() / "data"
+
+
+@pytest.mark.parametrize("source", ["config", "environment"])
+@pytest.mark.parametrize("value", ["data", "./data", "../data"])
+def test_data_root_rejects_relative_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source: str, value: str
+) -> None:
+    """Runtime roots must not silently depend on the process working directory."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(f"fieldkit_data: {value!r}\n", encoding="utf-8")
+    monkeypatch.setattr(fieldkit.config._loader, "CONFIG_PATH", cfg)
+    monkeypatch.delenv("FIELDKIT_DATA_DIR", raising=False)
+    if source == "environment":
+        monkeypatch.setenv("FIELDKIT_DATA_DIR", value)
+    clear_config_caches()
+
+    with pytest.raises(ConfigError, match="must be an absolute path"):
+        get_fieldkit_data()
+
+
+@pytest.mark.parametrize("source", ["config", "environment"])
+def test_data_root_expands_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source: str) -> None:
+    """Home-relative configuration remains a supported absolute-root shorthand."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("fieldkit_data: '~/runtime-data'\n", encoding="utf-8")
+    monkeypatch.setattr(fieldkit.config._loader, "CONFIG_PATH", cfg)
+    monkeypatch.delenv("FIELDKIT_DATA_DIR", raising=False)
+    if source == "environment":
+        monkeypatch.setenv("FIELDKIT_DATA_DIR", "~/runtime-data")
+    clear_config_caches()
+
+    result = get_fieldkit_data()
+
+    assert result == Path.home() / "runtime-data"
 
 
 def test_get_fieldkit_data_respects_env_var_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -789,7 +834,7 @@ def test_get_email_domain_returns_none_when_config_missing(tmp_path: Path, monke
 
 _GET_CONFIG_PATH__EXPECTED_COUNT = 7
 
-_GET_CONFIG_PATH__EXPECTED_NAMES: ClassVar[set[str]] = {
+_GET_CONFIG_PATH__EXPECTED_NAMES: set[str] = {
     "get_fieldkit_home",
     "_get_fieldkit_data_from_config",
     "_load_accounts_yaml",

@@ -13,6 +13,9 @@ _COMMANDS: dict[str, LazyCommand] = {
     "enrich-pursuits": LazyCommand(
         "fieldkit.commands.gmail.enrich_pursuits", description="Enrich pursuits from the local Gmail cache"
     ),
+    "import-cache": LazyCommand(
+        "fieldkit.commands.gmail.import_cache", description="Import a legacy cache into managed storage"
+    ),
     "query": LazyCommand("fieldkit.commands.gmail.query", description="Query the local Gmail cache"),
     "sync": LazyCommand(
         "fieldkit.commands.gmail.sync_command",

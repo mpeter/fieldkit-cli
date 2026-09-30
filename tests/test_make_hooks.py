@@ -68,6 +68,7 @@ def _make(*arguments: str, cwd: Path, env: dict[str, str] | None = None) -> subp
         installer.parent.mkdir(exist_ok=True)
         shutil.copy2(INSTALL_SCRIPT, installer)
         shutil.copy2(RUNTIME_SCRIPT, installer.parent / "hook_install_runtime.py")
+        shutil.copy2(ROOT / "scripts" / "process_supervision.py", installer.parent / "process_supervision.py")
     if env is None:
         env = _isolated_env(cwd / ".test-home")
     return _run(
@@ -225,6 +226,7 @@ def test_hooks_recipe_does_not_evaluate_checkout_path_as_shell(tmp_path: Path) -
     _prepare_sources(linked)
     shutil.copy2(INSTALL_SCRIPT, linked / "scripts" / "install_git_hooks.py")
     shutil.copy2(RUNTIME_SCRIPT, linked / "scripts" / "hook_install_runtime.py")
+    shutil.copy2(ROOT / "scripts" / "process_supervision.py", linked / "scripts" / "process_supervision.py")
     copied_makefile = linked / "Makefile"
     shutil.copy2(MAKEFILE, copied_makefile)
     hooks_dir = primary / ".git" / "hooks"
@@ -457,8 +459,8 @@ def test_git_query_timeout_reports_cleanup_errors(tmp_path: Path, monkeypatch: p
     process = TimedOutProcess()
     monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: process)
     monkeypatch.setattr(
-        hook_install_runtime,
-        "_terminate_process_group",
+        hook_install_runtime.process_supervision,
+        "terminate_process_group",
         lambda *args, **kwargs: [PermissionError("cannot signal process group")],
     )
 
@@ -841,7 +843,7 @@ def test_failure_description_preserves_nested_notes_and_cause() -> None:
     failure = hook_install_runtime.InstallError("cleanup failed")
     failure.__cause__ = cause
 
-    description = hook_install_runtime._failure_description(failure)
+    description = hook_install_runtime.process_supervision.failure_description(failure)
 
     assert "InstallError: cleanup failed" in description
     assert "OSError: disk failure" in description

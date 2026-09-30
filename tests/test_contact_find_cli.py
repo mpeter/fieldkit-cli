@@ -5,12 +5,45 @@ contact_resolver.resolve and scan_pursuit_affiliations so no real DB access occu
 """
 
 import json
+from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
 import pytest
 
+from fieldkit.errors import SQLiteSnapshotError
+
 pytestmark = pytest.mark.unit
+
+
+def test_missing_database_is_non_passing_and_not_created(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    from fieldkit.commands.contact.find_cmd import cli
+
+    db_path = tmp_path / "missing.db"
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(args=["Alice", "--db", str(db_path)], standalone_mode=False)
+
+    assert exc_info.value.code == 1
+    assert "fieldkit gmail sync" in capsys.readouterr().err
+    assert not db_path.exists()
+
+
+def test_active_database_is_retryable_without_private_detail(capsys: pytest.CaptureFixture[str]) -> None:
+    from fieldkit.commands.contact.find_cmd import cli
+
+    private_detail = "/fictional-private/operator/private-customer/gmail.db"
+    with (
+        patch(
+            "fieldkit.commands.contact.find_cmd.resolve",
+            side_effect=SQLiteSnapshotError(private_detail, reason="active"),
+        ),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        cli.main(args=["Alice"], standalone_mode=False)
+
+    assert exc_info.value.code == 1
+    assert private_detail not in capsys.readouterr().err
+
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -373,12 +406,12 @@ def test_main_without_affiliations_flag_does_not_call_scan() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_main_db_flag_passed_to_resolve(tmp_path: pytest.TempPathFactory) -> None:
+def test_main_db_flag_passed_to_resolve(tmp_path: Path) -> None:
     from pathlib import Path
 
     from fieldkit.commands.contact.find_cmd import cli
 
-    db_path = str(tmp_path / "custom.db") if hasattr(tmp_path, "__truediv__") else "/tmp/custom.db"
+    db_path = str(tmp_path / "custom.db")
 
     with patch("fieldkit.commands.contact.find_cmd.resolve", return_value=_NOT_FOUND_RESULT) as mock_resolve:
         cli.main(args=["alice@acme.example.com", "--db", db_path], standalone_mode=False)

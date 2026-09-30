@@ -7,15 +7,11 @@ from pathlib import Path
 import pytest
 import yaml
 
-from tests.conftest import DATA_ROOT, needs_data
-
 pytestmark = pytest.mark.unit
 
 FIXTURES = Path(__file__).parent / "fixtures"
 PURSUIT_SIMPLE = FIXTURES / "pursuit_simple.md"
 PURSUIT_FULL = FIXTURES / "pursuit_full.md"
-_DATA = DATA_ROOT or Path("/nonexistent")
-BANK_ADS = _DATA / "accounts" / "acme-corp" / "pursuits" / "ads-repave-services.md"  # pii-guard: ignore
 
 
 # ── TestImportSmoke (flattened) ─────────────────────────────────────────────
@@ -31,7 +27,7 @@ def test_import_smoke_import():
 # ── TestLoadPursuit (flattened) ─────────────────────────────────────────────
 
 
-@pytest.mark.integration  # skips when real account file not available
+@pytest.mark.integration
 def test_load_pursuit_simple_fixture_stage():
     from fieldkit.pursuit.io import load_pursuit
 
@@ -39,7 +35,7 @@ def test_load_pursuit_simple_fixture_stage():
     assert model.stage == "discover"
 
 
-@pytest.mark.integration  # skips when real account file not available
+@pytest.mark.integration
 def test_load_pursuit_full_fixture_does_not_invent_legacy_composite():
     from fieldkit.pursuit.io import load_pursuit
 
@@ -48,7 +44,7 @@ def test_load_pursuit_full_fixture_does_not_invent_legacy_composite():
     assert "composite" not in model.legacy_meddpicc.model_dump(exclude_unset=True)
 
 
-@pytest.mark.integration  # skips when real account file not available
+@pytest.mark.integration
 def test_load_pursuit_full_fixture_returns_tuple():
     from fieldkit.pursuit.io import load_pursuit
     from fieldkit.pursuit.models import PursuitFrontmatter
@@ -62,18 +58,15 @@ def test_load_pursuit_full_fixture_returns_tuple():
     assert isinstance(mtime, float)
 
 
-@pytest.mark.integration  # skips when real account file not available
-@needs_data
-def test_load_pursuit_real_acme_corp_file_stage():
-    import pytest
-
+@pytest.mark.integration
+def test_load_pursuit_populated_salesforce_file_stage(sf_pursuit: Path) -> None:
     from fieldkit.pursuit.io import load_pursuit
 
-    if not BANK_ADS.exists():
-        pytest.skip("Real account file not available in this environment")
-    model, _body, _ = load_pursuit(BANK_ADS)
-    # Stage may change as the deal progresses — just verify it's a non-empty string.
-    assert isinstance(model.stage, str) and model.stage
+    result = load_pursuit(sf_pursuit)
+    assert len(result) == 3
+    model, body, _mtime = result
+    assert model.stage == "propose"
+    assert body.startswith("\n\n# Service Expansion")
 
 
 # ── TestWriteFrontmatter (flattened) ────────────────────────────────────────
@@ -174,23 +167,20 @@ def test_round_trip_idempotent_double_write_simple_is_identical(tmp_path):
     assert after_first == after_second
 
 
-# ── TestRealFileRoundTrip (flattened) ───────────────────────────────────────
+# ── Populated Salesforce round-trip contracts ─────────────────────────────
 
 
-@needs_data
-@pytest.mark.integration  # requires real account files via DATA_ROOT
-def test_real_file_round_trip_acme_corp_sf_fields_preserved(tmp_path):
+@pytest.mark.integration
+def test_populated_file_round_trip_sf_fields_preserved(sf_pursuit: Path) -> None:
     from fieldkit.pursuit.io import load_pursuit, write_frontmatter
 
-    if not BANK_ADS.exists():
-        pytest.skip("Real account file not available in this environment")
-
-    dst = tmp_path / "ads-repave-services.md"
-    shutil.copy(BANK_ADS, dst)
-
-    model1, body1, _ = load_pursuit(dst)
-    write_frontmatter(dst, model1, body1)
-    model2, _body2, _ = load_pursuit(dst)
+    result = load_pursuit(sf_pursuit)
+    assert len(result) == 3
+    model1, body1, _mtime = result
+    assert model1.sf_close_date == "2026-12-15"
+    assert model1.sf_next_steps == "Review: scope #1 with sponsor"
+    write_frontmatter(sf_pursuit, model1, body1)
+    model2, body2, _ = load_pursuit(sf_pursuit)
 
     assert model1.sf_opportunity_id == model2.sf_opportunity_id
     assert model1.sf_stage == model2.sf_stage
@@ -199,56 +189,37 @@ def test_real_file_round_trip_acme_corp_sf_fields_preserved(tmp_path):
     assert model1.sf_owner == model2.sf_owner
     assert model1.sf_next_steps == model2.sf_next_steps
     assert model1.sf_last_pulled == model2.sf_last_pulled
+    assert body1 == body2
 
 
-@needs_data
-@pytest.mark.integration  # requires real account files via DATA_ROOT
-def test_real_file_round_trip_acme_corp_body_starts_with_expected_heading(tmp_path):
+@pytest.mark.integration
+def test_populated_file_round_trip_body_starts_with_expected_heading(sf_pursuit: Path) -> None:
     from fieldkit.pursuit.io import load_pursuit, write_frontmatter
 
-    if not BANK_ADS.exists():
-        pytest.skip("Real account file not available in this environment")
+    result = load_pursuit(sf_pursuit)
+    assert len(result) == 3
+    model, body, _mtime = result
+    write_frontmatter(sf_pursuit, model, body)
+    _model2, body2, _ = load_pursuit(sf_pursuit)
 
-    dst = tmp_path / "ads-repave-services.md"
-    shutil.copy(BANK_ADS, dst)
-
-    model, body, _ = load_pursuit(dst)
-    write_frontmatter(dst, model, body)
-    _model2, body2, _ = load_pursuit(dst)
-
-    assert "\n# ADS Repave" in body2
+    assert body2.startswith("\n\n# Service Expansion")
+    assert "Fictional scope: consulting services for Acme Corp." in body2
 
 
-@needs_data
-@pytest.mark.integration  # requires real account files via DATA_ROOT
-def test_real_file_round_trip_acme_corp_file_unchanged_after_round_trip(tmp_path):
-    """load → write leaves file byte-for-byte identical (acceptance test).
-
-    NOTE: This test may fail if the real account file has been updated
-    with content that requires different YAML quoting on write (e.g. strings
-    containing colons). That is expected behavior, not a regression.
-    """
-    import pytest
-
+@pytest.mark.integration
+def test_populated_file_canonical_round_trip_is_byte_identical(sf_pursuit: Path) -> None:
+    """Canonical writing is idempotent after normalizing hand-authored YAML."""
     from fieldkit.pursuit.io import load_pursuit, write_frontmatter
 
-    if not BANK_ADS.exists():
-        pytest.skip("Real account file not available in this environment")
+    result = load_pursuit(sf_pursuit)
+    assert len(result) == 3
+    model, body, _mtime = result
+    write_frontmatter(sf_pursuit, model, body)
+    canonical = sf_pursuit.read_bytes()
+    model2, body2, _ = load_pursuit(sf_pursuit)
+    write_frontmatter(sf_pursuit, model2, body2)
 
-    dst = tmp_path / "ads-repave-services.md"
-    shutil.copy(BANK_ADS, dst)
-
-    original = dst.read_text(encoding="utf-8")
-    model, body, _ = load_pursuit(dst)
-    write_frontmatter(dst, model, body)
-    after = dst.read_text(encoding="utf-8")
-
-    if original != after:
-        pytest.xfail(
-            "Round-trip not byte-for-byte identical — real file may have "
-            "content requiring YAML quoting changes (e.g. colon in string value). "
-            "This is expected behavior, not a regression."
-        )
+    assert sf_pursuit.read_bytes() == canonical
 
 
 # ── TestYAMLCoercion (flattened) ────────────────────────────────────────────

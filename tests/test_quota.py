@@ -1,11 +1,12 @@
 """Tests for calculate_quota_gap arithmetic and edge cases."""
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from fieldkit.commands.pipeline.quota import _collect_pursuits_for_quota
+from fieldkit.pipeline.quota import _collect_pursuits_for_quota
 from fieldkit.watch.morning_brief_render import calculate_quota_gap
 
 # ---------------------------------------------------------------------------
@@ -195,11 +196,11 @@ def test_consulting_acv_zero_collect_pursuits_consulting_acv_zero_not_fallthroug
 
     with (
         patch(
-            "fieldkit.commands.pipeline.quota.iterate_pursuits",
+            "fieldkit.pipeline.quota.iterate_pursuits",
             return_value=[fake_path],
         ),
         patch(
-            "fieldkit.commands.pipeline.quota.load_pursuit",
+            "fieldkit.pipeline.quota.load_pursuit",
             return_value=(fake_fm, "", 0.0),
         ),
     ):
@@ -255,3 +256,134 @@ def test_quota_cmd_set_valid_writes_quota() -> None:
 
     assert result.exit_code == 0
     mock_write.assert_called_once_with(target=500_000, period="2026-H2")
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("as_json", [False, True])
+@pytest.mark.parametrize(
+    "period",
+    [
+        "2026-H3",
+        "2026-H4",
+        "0000-H1",
+        "\uff12\uff10\uff12\uff16-H1",
+        "26-H1",
+        "10000-Q4",
+        "2026-Q0",
+        "2026-H2junk",
+        " 2026-H1",
+        "private-period-sentinel",
+    ],
+)
+def test_quota_set_rejects_invalid_period_before_write(
+    period: str, as_json: bool, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from fieldkit.__main__ import main
+
+    writer = MagicMock()
+    monkeypatch.setattr("fieldkit.__main__.load_dotenv_safe", lambda: None)
+    monkeypatch.setattr("fieldkit.commands.pipeline.cli.write_pipeline_quota", writer)
+
+    argv = ["pipeline", "quota", "--set", "100000", "--period", period]
+    if as_json:
+        argv.append("--json")
+
+    result = main(argv)
+
+    assert result == 3
+    writer.assert_not_called()
+    output = capsys.readouterr()
+    if as_json:
+        assert json.loads(output.out) == {"outcome": "invalid", "error": "invalid_usage", "exit_code": 3}
+        assert not output.err
+    else:
+        assert not output.out
+        assert "Invalid quota period" in output.err
+    assert period not in output.out
+    assert period not in output.err
+    assert "Traceback" not in output.err
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("unit", ["H1", "H2", "Q1", "Q2", "Q3", "Q4"])
+def test_quota_set_accepts_each_calendar_unit(unit: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    from fieldkit.__main__ import main
+
+    writer = MagicMock()
+    monkeypatch.setattr("fieldkit.__main__.load_dotenv_safe", lambda: None)
+    monkeypatch.setattr("fieldkit.commands.pipeline.cli.write_pipeline_quota", writer)
+
+    result = main(["pipeline", "quota", "--set", "100000", "--period", f"2026-{unit}"])
+
+    assert result == 0
+    writer.assert_called_once_with(target=100000, period=f"2026-{unit}")
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("as_json", [False, True])
+@pytest.mark.parametrize("source", ["pursuits", "sf"])
+@pytest.mark.parametrize("period", ["2026-H3", "0000-Q1", "\uff12\uff10\uff12\uff16-H1", "private-period-sentinel"])
+def test_invalid_stored_quota_period_stops_before_collection(
+    tmp_path: Path,
+    period: str,
+    source: str,
+    as_json: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from fieldkit import config
+    from fieldkit.__main__ import main
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(f"pipeline:\n  quota:\n    target: 100000\n    period: '{period}'\n", encoding="utf-8")
+    monkeypatch.setattr("fieldkit.config._loader.CONFIG_PATH", config_path)
+    monkeypatch.setattr("fieldkit.__main__.load_dotenv_safe", lambda: None)
+    collector = MagicMock(return_value=[])
+    provider = MagicMock(return_value=0.0)
+    workspace = MagicMock(return_value=tmp_path)
+    writer = MagicMock()
+    monkeypatch.setattr("fieldkit.pipeline.quota._collect_pursuits_for_quota", collector)
+    monkeypatch.setattr("fieldkit.sf.quota.fetch_sf_closed_won", provider)
+    monkeypatch.setattr("fieldkit.commands.pipeline.cli.get_fieldkit_home", workspace)
+    monkeypatch.setattr("fieldkit.commands.pipeline.cli.write_pipeline_quota", writer)
+    config.clear_config_caches()
+    argv = ["pipeline", "quota", "--source", source]
+    if as_json:
+        argv.append("--json")
+
+    result = main(argv)
+
+    assert result == 3
+    collector.assert_not_called()
+    provider.assert_not_called()
+    workspace.assert_not_called()
+    writer.assert_not_called()
+    output = capsys.readouterr()
+    assert not output.out
+    assert "Invalid quota period" in output.err
+    assert period not in output.err
+    assert "Traceback" not in output.err
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("as_json", [False, True])
+@pytest.mark.parametrize("period", [None, ""])
+def test_quota_report_preserves_optional_period(
+    tmp_path: Path, period: str | None, as_json: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from fieldkit.__main__ import main
+
+    quota: dict[str, object] = {"target": 100000}
+    if period is not None:
+        quota["period"] = period
+    monkeypatch.setattr("fieldkit.__main__.load_dotenv_safe", lambda: None)
+    monkeypatch.setattr("fieldkit.commands.pipeline.cli.get_pipeline_quota", lambda: quota)
+    monkeypatch.setattr("fieldkit.commands.pipeline.cli.get_fieldkit_home", lambda: tmp_path)
+    monkeypatch.setattr("fieldkit.pipeline.quota._collect_pursuits_for_quota", lambda *args, **kwargs: [])
+    argv = ["pipeline", "quota"]
+    if as_json:
+        argv.append("--json")
+
+    result = main(argv)
+
+    assert result == 0

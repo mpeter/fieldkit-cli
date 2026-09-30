@@ -8,8 +8,60 @@ from unittest.mock import patch
 import pytest
 
 from fieldkit.watch import contract_expiry as ce
+from fieldkit.watch.status import RunStatusWriteResult, WatcherOutcome, WatcherRunResult
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.mark.parametrize("outcome", ["ok", "partial", "fatal"])
+def test_adapter_uses_result_exit_code(outcome: WatcherOutcome) -> None:
+    from click.testing import CliRunner
+
+    from fieldkit.commands.watch import contract_expiry as adapter
+
+    result = WatcherRunResult(outcome, True, "written")
+    with patch.object(adapter, "_run_contract_expiry", return_value=result):
+        invocation = CliRunner().invoke(adapter.cli, [])
+    assert invocation.exit_code == result.exit_code
+
+
+@pytest.mark.parametrize(
+    ("checked", "failures", "status_write", "dry_run", "expected"),
+    [
+        (0, 0, "written", False, WatcherRunResult("ok", True, "written")),
+        (1, 1, "written", False, WatcherRunResult("partial", True, "written")),
+        (0, 1, "written", False, WatcherRunResult("fatal", True, "written")),
+        (1, 0, "failed", False, WatcherRunResult("fatal", True, "failed")),
+        (1, 1, "skipped", True, WatcherRunResult("partial", True, "skipped")),
+    ],
+)
+def test_execution_facts_match_json(
+    tmp_path: Path,
+    checked: int,
+    failures: int,
+    status_write: RunStatusWriteResult,
+    dry_run: bool,
+    expected: WatcherRunResult,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import json
+
+    (tmp_path / "accounts").mkdir()
+    path = tmp_path / "accounts" / "acme" / "pursuits" / "deal.md"
+    with (
+        patch.object(ce, "get_fieldkit_home", return_value=tmp_path),
+        patch.object(ce, "iterate_pursuits", return_value=[path]),
+        patch.object(ce, "_load_state", return_value={}),
+        patch.object(ce, "_process_pursuit_path", return_value=(checked, 0, failures, 0)),
+        patch.object(ce, "_save_state"),
+        patch.object(ce, "write_run_status", return_value=status_write) as writer,
+    ):
+        result = ce._run_contract_expiry_inner(account_filter=None, dry_run=dry_run, as_json=True)
+    assert result == expected
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["outcome"] == result.outcome
+    assert payload["failures"] == failures + int(status_write == "failed")
+    assert writer.call_args.kwargs["dry_run"] is dry_run
 
 
 # ---------------------------------------------------------------------------
@@ -52,14 +104,14 @@ def _make_project(
 _KWARGS_BASE: dict[str, Any] = {"account_filter": None, "dry_run": False}
 
 
-def _run(tmp_path: Path, **kwargs: Any) -> int:
+def _run(tmp_path: Path, **kwargs: Any) -> WatcherRunResult:
     full_kwargs = {**_KWARGS_BASE, **kwargs}
     with (
         patch.object(ce, "get_fieldkit_home", return_value=tmp_path),
         patch.object(ce, "get_watchers_dir", return_value=tmp_path / "watchers"),
         patch.object(ce, "_alerts_file", return_value=tmp_path / "watchers" / "alerts.md"),
         patch.object(ce, "_state_file", return_value=tmp_path / "watchers" / "state.json"),
-        patch.object(ce, "write_run_status"),
+        patch.object(ce, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(ce, "_load_state", return_value={}),
         patch.object(ce, "_save_state"),
     ):
@@ -76,7 +128,7 @@ def _run(tmp_path: Path, **kwargs: Any) -> int:
 
 def testget_watchers_dir_no_accounts_dir_returns_1(tmp_path: Path) -> None:
     rc = _run(tmp_path)
-    assert rc == 1
+    assert rc.exit_code == 1
 
 
 # ---------------------------------------------------------------------------
@@ -90,7 +142,7 @@ def testget_watchers_dir_no_accounts_dir_returns_1(tmp_path: Path) -> None:
 def test_process_project_path_no_projects_returns_0(tmp_path: Path) -> None:
     (tmp_path / "accounts").mkdir()
     rc = _run(tmp_path)
-    assert rc == 0
+    assert rc.exit_code == 0
 
 
 # ---------------------------------------------------------------------------
@@ -114,7 +166,7 @@ def test_dot_directory_exclusion_dot_archive_excluded(tmp_path: Path) -> None:
         patch.object(ce, "get_watchers_dir", return_value=tmp_path / "watchers"),
         patch.object(ce, "_alerts_file", return_value=tmp_path / "watchers" / "alerts.md"),
         patch.object(ce, "_state_file", return_value=tmp_path / "watchers" / "state.json"),
-        patch.object(ce, "write_run_status"),
+        patch.object(ce, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(ce, "_load_state", return_value={}),
         patch.object(ce, "_save_state"),
         patch.object(ce, "append_alert") as mock_alert,
@@ -141,7 +193,7 @@ def test_completed_stage_skipped_completed_stage_no_alert(tmp_path: Path) -> Non
         patch.object(ce, "get_watchers_dir", return_value=tmp_path / "watchers"),
         patch.object(ce, "_alerts_file", return_value=tmp_path / "watchers" / "alerts.md"),
         patch.object(ce, "_state_file", return_value=tmp_path / "watchers" / "state.json"),
-        patch.object(ce, "write_run_status"),
+        patch.object(ce, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(ce, "_load_state", return_value={}),
         patch.object(ce, "_save_state"),
         patch.object(ce, "append_alert") as mock_alert,
@@ -160,7 +212,7 @@ def test_completed_stage_skipped_closed_stage_no_alert(tmp_path: Path) -> None:
         patch.object(ce, "get_watchers_dir", return_value=tmp_path / "watchers"),
         patch.object(ce, "_alerts_file", return_value=tmp_path / "watchers" / "alerts.md"),
         patch.object(ce, "_state_file", return_value=tmp_path / "watchers" / "state.json"),
-        patch.object(ce, "write_run_status"),
+        patch.object(ce, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(ce, "_load_state", return_value={}),
         patch.object(ce, "_save_state"),
         patch.object(ce, "append_alert") as mock_alert,
@@ -185,7 +237,7 @@ def test_parse_contract_end_date_no_contract_end_skipped(tmp_path: Path) -> None
         patch.object(ce, "get_watchers_dir", return_value=tmp_path / "watchers"),
         patch.object(ce, "_alerts_file", return_value=tmp_path / "watchers" / "alerts.md"),
         patch.object(ce, "_state_file", return_value=tmp_path / "watchers" / "state.json"),
-        patch.object(ce, "write_run_status"),
+        patch.object(ce, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(ce, "_load_state", return_value={}),
         patch.object(ce, "_save_state"),
         patch.object(ce, "append_alert") as mock_alert,
@@ -212,7 +264,7 @@ def _tier_urgency_run_with_alert_capture(tmp_path: Path, days_delta: int) -> Any
         patch.object(ce, "get_watchers_dir", return_value=tmp_path / "watchers"),
         patch.object(ce, "_alerts_file", return_value=tmp_path / "watchers" / "alerts.md"),
         patch.object(ce, "_state_file", return_value=tmp_path / "watchers" / "state.json"),
-        patch.object(ce, "write_run_status"),
+        patch.object(ce, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(ce, "_load_state", return_value={}),
         patch.object(ce, "_save_state"),
         patch.object(ce, "append_alert", side_effect=lambda r, dry_run: alerts.append(r)),
@@ -276,7 +328,7 @@ def test_account_filter_filter_limits_to_matching_account(tmp_path: Path) -> Non
         patch.object(ce, "get_watchers_dir", return_value=tmp_path / "watchers"),
         patch.object(ce, "_alerts_file", return_value=tmp_path / "watchers" / "alerts.md"),
         patch.object(ce, "_state_file", return_value=tmp_path / "watchers" / "state.json"),
-        patch.object(ce, "write_run_status"),
+        patch.object(ce, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(ce, "_load_state", return_value={}),
         patch.object(ce, "_save_state"),
         patch.object(ce, "append_alert", side_effect=lambda r, dry_run: alerts.append(r)),
@@ -308,7 +360,7 @@ def test_suppression_same_tier_suppressed(tmp_path: Path) -> None:
         patch.object(ce, "get_watchers_dir", return_value=tmp_path / "watchers"),
         patch.object(ce, "_alerts_file", return_value=tmp_path / "watchers" / "alerts.md"),
         patch.object(ce, "_state_file", return_value=tmp_path / "watchers" / "state.json"),
-        patch.object(ce, "write_run_status"),
+        patch.object(ce, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(ce, "_load_state", return_value=prior_state),
         patch.object(ce, "_save_state"),
         patch.object(ce, "append_alert", side_effect=lambda r, dry_run: alerts.append(r)),
@@ -332,7 +384,7 @@ def test_suppression_escalated_tier_fires(tmp_path: Path) -> None:
         patch.object(ce, "get_watchers_dir", return_value=tmp_path / "watchers"),
         patch.object(ce, "_alerts_file", return_value=tmp_path / "watchers" / "alerts.md"),
         patch.object(ce, "_state_file", return_value=tmp_path / "watchers" / "state.json"),
-        patch.object(ce, "write_run_status"),
+        patch.object(ce, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(ce, "_load_state", return_value=prior_state),
         patch.object(ce, "_save_state"),
         patch.object(ce, "append_alert", side_effect=lambda r, dry_run: alerts.append(r)),
@@ -353,7 +405,7 @@ def test_suppression_expired_bands_key(tmp_path: Path) -> None:
         patch.object(ce, "get_watchers_dir", return_value=tmp_path / "watchers"),
         patch.object(ce, "_alerts_file", return_value=tmp_path / "watchers" / "alerts.md"),
         patch.object(ce, "_state_file", return_value=tmp_path / "watchers" / "state.json"),
-        patch.object(ce, "write_run_status"),
+        patch.object(ce, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(ce, "_load_state", return_value={}),
         patch.object(ce, "_save_state", side_effect=lambda state, **_: saved_states.append(state)),
         patch.object(ce, "append_alert"),
@@ -385,7 +437,7 @@ def test_run_contract_expiry_dry_run_does_not_save_state(tmp_path: Path) -> None
         patch.object(ce, "get_watchers_dir", return_value=tmp_path / "watchers"),
         patch.object(ce, "_alerts_file", return_value=tmp_path / "watchers" / "alerts.md"),
         patch.object(ce, "_state_file", return_value=tmp_path / "watchers" / "state.json"),
-        patch.object(ce, "write_run_status"),
+        patch.object(ce, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(ce, "_load_state", return_value={}),
         patch.object(ce, "_save_state", side_effect=save_calls.append),
         patch.object(ce, "append_alert"),
@@ -406,7 +458,7 @@ def test_run_contract_expiry_dry_run_passes_flag_to_append(tmp_path: Path) -> No
         patch.object(ce, "get_watchers_dir", return_value=tmp_path / "watchers"),
         patch.object(ce, "_alerts_file", return_value=tmp_path / "watchers" / "alerts.md"),
         patch.object(ce, "_state_file", return_value=tmp_path / "watchers" / "state.json"),
-        patch.object(ce, "write_run_status"),
+        patch.object(ce, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(ce, "_load_state", return_value={}),
         patch.object(ce, "_save_state"),
         patch.object(ce, "append_alert", side_effect=lambda r, dry_run: call_args.append(dry_run)),
@@ -436,13 +488,13 @@ def test_parse_contract_end_date_bad_date_skipped(tmp_path: Path) -> None:
         patch.object(ce, "get_watchers_dir", return_value=tmp_path / "watchers"),
         patch.object(ce, "_alerts_file", return_value=tmp_path / "watchers" / "alerts.md"),
         patch.object(ce, "_state_file", return_value=tmp_path / "watchers" / "state.json"),
-        patch.object(ce, "write_run_status"),
+        patch.object(ce, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(ce, "_load_state", return_value={}),
         patch.object(ce, "_save_state"),
         patch.object(ce, "append_alert", side_effect=lambda r, dry_run: alerts.append(r)),
     ):
         rc = ce._run_contract_expiry_inner(**_KWARGS_BASE)
-    assert rc == 1
+    assert rc.exit_code == 1
     assert alerts == []
 
 
@@ -464,11 +516,11 @@ def test_parse_project_frontmatter_no_frontmatter_skipped(tmp_path: Path) -> Non
         patch.object(ce, "get_watchers_dir", return_value=tmp_path / "watchers"),
         patch.object(ce, "_alerts_file", return_value=tmp_path / "watchers" / "alerts.md"),
         patch.object(ce, "_state_file", return_value=tmp_path / "watchers" / "state.json"),
-        patch.object(ce, "write_run_status"),
+        patch.object(ce, "write_run_status", side_effect=lambda **kw: "skipped" if kw["dry_run"] else "written"),
         patch.object(ce, "_load_state", return_value={}),
         patch.object(ce, "_save_state"),
         patch.object(ce, "append_alert") as mock_alert,
     ):
         rc = ce._run_contract_expiry_inner(**_KWARGS_BASE)
-    assert rc == 1
+    assert rc.exit_code == 1
     mock_alert.assert_not_called()

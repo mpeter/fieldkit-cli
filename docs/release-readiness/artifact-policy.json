@@ -34,7 +34,7 @@
   ],
   "allowed_paths": {
     "wheel": ["fieldkit/**", "fieldkit_cli-*.dist-info/**"],
-    "sdist": [".gitignore", "LICENSE", "README.md", "pyproject.toml", "PKG-INFO", "src/fieldkit/**"]
+    "sdist": [".gitignore", "LICENSE", "README.md", "pyproject.toml", "PKG-INFO", "src/fieldkit/**", "typings/google_auth_httplib2/__init__.pyi"]
   },
   "tracked_payload": {"id": "ART220", "source_root": "src/fieldkit"},
   "forbidden_paths": [

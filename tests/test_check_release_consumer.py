@@ -2,13 +2,58 @@
 
 import json
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
-from scripts import check_release_consumer, release_consumer
+from scripts import check_release_consumer, release_bundle, release_consumer
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.mark.parametrize("case", ["control_key", "long_key", "nested"])
+def test_consumer_cli_records_sanitized_json_failure_without_network(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    key = "synthetic-private-key\n\x1b[31m" if case == "control_key" else "synthetic-private-key" + "x" * 8192
+    encoded = json.dumps(key)
+    payload = (
+        ("{" + encoded + ":1," + encoded + ":2}").encode()
+        if case != "nested"
+        else ('{"urls":[],"metadata":' + "[" * 5000 + "0" + "]" * 5000 + "}").encode()
+    )
+    expected = _expected_release()
+    monkeypatch.setattr(release_consumer, "expected_release", lambda _bundle, _report: expected)
+    requests: list[str] = []
+
+    def controlled_transport(endpoint: str, **_kwargs: object) -> bytes:
+        requests.append(endpoint)
+        return payload
+
+    monkeypatch.setattr(release_consumer, "fetch_https_bytes", controlled_transport)
+    output = tmp_path / "evidence.json"
+    result = check_release_consumer.main(
+        [
+            "--bundle",
+            str(tmp_path / "bundle"),
+            "--candidate-report",
+            str(tmp_path / "report.json"),
+            "--index-endpoint",
+            "https://index.example.test/pypi/fieldkit-cli/1.0.0/json",
+            "--download-host",
+            "files.example.test",
+            "--output",
+            str(output),
+            "--allow-live-index",
+        ]
+    )
+    assert result == 1
+    evidence = json.loads(output.read_text(encoding="utf-8"))
+    assert evidence["status"] == "failed"
+    assert evidence["findings"] == ["index response is invalid JSON"]
+    assert requests == ["https://index.example.test/pypi/fieldkit-cli/1.0.0/json"]
+    assert "synthetic-private-key" not in output.read_text(encoding="utf-8")
 
 
 def _expected_release() -> release_consumer.ExpectedRelease:
@@ -22,10 +67,8 @@ def _expected_release() -> release_consumer.ExpectedRelease:
 
 def test_live_index_opt_in_writes_pending_evidence_atomically(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     expected = _expected_release()
-    monkeypatch.setattr(check_release_consumer.release_consumer, "expected_release", lambda _bundle, _report: expected)
-    monkeypatch.setattr(
-        check_release_consumer.release_consumer, "fetch_index_observations", lambda *_args, **_kwargs: ()
-    )
+    monkeypatch.setattr(release_consumer, "expected_release", lambda _bundle, _report: expected)
+    monkeypatch.setattr(release_consumer, "fetch_index_observations", lambda *_args, **_kwargs: ())
     output = tmp_path / "evidence.json"
 
     assert (
@@ -115,10 +158,8 @@ def test_cli_download_verification_uses_exact_successful_observation(
         for artifact in expected.artifacts
     )
     seen: dict[str, object] = {}
-    monkeypatch.setattr(check_release_consumer.release_consumer, "expected_release", lambda _bundle, _report: expected)
-    monkeypatch.setattr(
-        check_release_consumer.release_consumer, "fetch_index_observations", lambda *_args, **_kwargs: observed
-    )
+    monkeypatch.setattr(release_consumer, "expected_release", lambda _bundle, _report: expected)
+    monkeypatch.setattr(release_consumer, "fetch_index_observations", lambda *_args, **_kwargs: observed)
 
     def fake_download(
         actual_expected: release_consumer.ExpectedRelease,
@@ -132,7 +173,7 @@ def test_cli_download_verification_uses_exact_successful_observation(
             for artifact in actual_expected.artifacts
         )
 
-    monkeypatch.setattr(check_release_consumer.release_consumer, "download_expected_artifacts", fake_download)
+    monkeypatch.setattr(release_consumer, "download_expected_artifacts", fake_download)
 
     assert (
         check_release_consumer.main(
@@ -169,9 +210,9 @@ def test_cli_creates_an_absent_download_directory(monkeypatch: pytest.MonkeyPatc
     expected = _expected_release()
     observed = (release_consumer.ObservedArtifact(expected.artifacts[0].name, expected.artifacts[0].sha256),)
     destination = tmp_path / "consumer-downloads"
-    monkeypatch.setattr(check_release_consumer.release_consumer, "expected_release", lambda _bundle, _report: expected)
+    monkeypatch.setattr(release_consumer, "expected_release", lambda _bundle, _report: expected)
     monkeypatch.setattr(
-        check_release_consumer.release_consumer,
+        release_consumer,
         "poll_index_observations",
         lambda *_args, **_kwargs: release_consumer.PollResult(observed, release_consumer.IndexReport("success", ())),
     )
@@ -186,7 +227,7 @@ def test_cli_creates_an_absent_download_directory(monkeypatch: pytest.MonkeyPatc
         assert actual_destination.is_dir()
         return ()
 
-    monkeypatch.setattr(check_release_consumer.release_consumer, "download_expected_artifacts", fake_download)
+    monkeypatch.setattr(release_consumer, "download_expected_artifacts", fake_download)
 
     assert (
         check_release_consumer.main(
@@ -211,29 +252,36 @@ def test_cli_creates_an_absent_download_directory(monkeypatch: pytest.MonkeyPatc
     )
 
 
-def test_cli_writes_failed_evidence_when_offline_scenarios_time_out(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+@pytest.mark.parametrize("binding", ["retained", "missing"])
+def test_cli_retains_bundle_binding_and_writes_failed_offline_evidence(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, binding: str
 ) -> None:
-    expected = _expected_release()
+    expected = replace(
+        _expected_release(),
+        bundle_report=release_bundle.BundleReport("a" * 40, (("runtime-requirements.txt", "d" * 64),))
+        if binding == "retained"
+        else None,
+    )
     observed = (release_consumer.ObservedArtifact(expected.artifacts[0].name, expected.artifacts[0].sha256),)
-    monkeypatch.setattr(check_release_consumer.release_consumer, "expected_release", lambda _bundle, _report: expected)
+    monkeypatch.setattr(release_consumer, "expected_release", lambda _bundle, _report: expected)
     monkeypatch.setattr(
-        check_release_consumer.release_consumer,
+        release_consumer,
         "poll_index_observations",
         lambda *_args, **_kwargs: release_consumer.PollResult(observed, release_consumer.IndexReport("success", ())),
     )
     monkeypatch.setattr(
-        check_release_consumer.release_consumer,
+        release_consumer,
         "download_expected_artifacts",
         lambda *_args, **_kwargs: (
             release_consumer.DownloadedArtifact(tmp_path / expected.artifacts[0].name, expected.artifacts[0].sha256),
         ),
     )
-    monkeypatch.setattr(
-        check_release_consumer.release_consumer,
-        "run_offline_scenarios",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(subprocess.TimeoutExpired(["fieldkit"], 60)),
-    )
+
+    def timeout_after_binding(*_args: object, **kwargs: object) -> tuple[release_consumer.OfflineScenarioResult, ...]:
+        assert kwargs["expected_bundle_report"] is expected.bundle_report
+        raise subprocess.TimeoutExpired(["fieldkit"], 60)
+
+    monkeypatch.setattr(release_consumer, "run_offline_scenarios", timeout_after_binding)
     output = tmp_path / "evidence.json"
 
     assert (
@@ -261,7 +309,11 @@ def test_cli_writes_failed_evidence_when_offline_scenarios_time_out(
 
     evidence = json.loads(output.read_text(encoding="utf-8"))
     assert evidence["status"] == "failed"
-    assert evidence["findings"] == ["offline verification timed out"]
+    assert evidence["findings"] == [
+        "offline verification timed out"
+        if binding == "retained"
+        else "initial bundle verification binding is required for offline scenarios"
+    ]
 
 
 def test_cli_install_verification_requires_download_verification(
@@ -295,14 +347,14 @@ def test_cli_passes_explicit_polling_bounds_to_the_consumer_library(
 ) -> None:
     expected = _expected_release()
     seen: dict[str, object] = {}
-    monkeypatch.setattr(check_release_consumer.release_consumer, "expected_release", lambda _bundle, _report: expected)
+    monkeypatch.setattr(release_consumer, "expected_release", lambda _bundle, _report: expected)
 
     def fake_poll(actual_expected: release_consumer.ExpectedRelease, **kwargs: object) -> release_consumer.PollResult:
         seen["expected"] = actual_expected
         seen.update(kwargs)
         return release_consumer.PollResult((), release_consumer.IndexReport("pending", ("index unavailable",)))
 
-    monkeypatch.setattr(check_release_consumer.release_consumer, "poll_index_observations", fake_poll)
+    monkeypatch.setattr(release_consumer, "poll_index_observations", fake_poll)
 
     assert (
         check_release_consumer.main(
@@ -336,9 +388,9 @@ def test_cli_writes_failed_evidence_after_a_verified_candidate_and_invalid_index
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     expected = _expected_release()
-    monkeypatch.setattr(check_release_consumer.release_consumer, "expected_release", lambda _bundle, _report: expected)
+    monkeypatch.setattr(release_consumer, "expected_release", lambda _bundle, _report: expected)
     monkeypatch.setattr(
-        check_release_consumer.release_consumer,
+        release_consumer,
         "poll_index_observations",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("index response is invalid JSON")),
     )

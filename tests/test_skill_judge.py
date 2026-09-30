@@ -83,8 +83,8 @@ def _load_calibration_fixtures() -> list[dict]:  # type: ignore[type-arg]
 
 
 def test_stub_path_stub_path_returns_stub_judgement(monkeypatch: pytest.MonkeyPatch) -> None:
-    """With NO_LLM=1, judge_skill returns a SkillJudgement with stub=True and all verdicts 'stub'."""
-    monkeypatch.setenv("NO_LLM", "1")
+    """With FIELDKIT_NO_LLM=1, judge_skill returns a SkillJudgement with stub=True and all verdicts 'stub'."""
+    monkeypatch.setenv("FIELDKIT_NO_LLM", "1")
 
     result = judge_skill("test", "skill text", _SINGLE_CASE)
 
@@ -107,7 +107,7 @@ def test_stub_path_stub_path_exit_code_zero(monkeypatch: pytest.MonkeyPatch) -> 
     The runner checks SkillJudgement.stub to skip not_covered_count accumulation.
     This test verifies the signal the runner relies on is correctly set.
     """
-    monkeypatch.setenv("NO_LLM", "1")
+    monkeypatch.setenv("FIELDKIT_NO_LLM", "1")
 
     result = judge_skill("test", "skill text", _SINGLE_CASE)
     d = result.to_dict()

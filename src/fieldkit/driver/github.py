@@ -11,13 +11,13 @@ them without importing from each other.
 
 import json
 import logging
-import subprocess
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Literal
 
-from fieldkit.config._timeouts import TIMEOUT_GH_CLI
-from fieldkit.errors import AuthError
+from fieldkit.config._timeouts import TIMEOUT_GH_CLI, TIMEOUT_PROCESS_KILL_GRACE
+from fieldkit.errors import AuthError, GitHubRequestError
+from fieldkit.util.bounded_process import BoundedProcessError, run_bounded_process
 
 log = logging.getLogger(__name__)
 
@@ -32,6 +32,8 @@ LABEL_BLOCKED: str = "agent-blocked"
 MAX_ATTEMPTS: int = 3
 
 _GH_TIMEOUT: int = 30  # gh CLI API calls
+_MAX_QUEUE_RESPONSE_BYTES = 2 * 1024 * 1024
+_MAX_IDENTITY_RESPONSE_BYTES = 1024 * 1024
 
 
 class GitHubLookupError(RuntimeError):
@@ -50,25 +52,35 @@ class PullRequestIdentity:
     head_sha: str
 
 
-def _raise_lookup_failure(stderr: str) -> None:
-    detail = stderr.strip() or "GitHub lookup failed"
-    lowered = detail.lower()
+def github_read_failure_kind(stderr: str) -> Literal["authentication", "not-found", "provider"]:
+    """Classify a failed GitHub read without retaining provider payloads."""
+    lowered = stderr.casefold()
+    if any(marker in lowered for marker in ("rate limit", "too many requests", "http 429")):
+        return "provider"
     if any(marker in lowered for marker in ("authentication", "authenticate", "not logged", "http 401", "http 403")):
-        raise AuthError(detail)
-    raise GitHubLookupError(detail)
+        return "authentication"
+    if "http 404" in lowered or "not found" in lowered:
+        return "not-found"
+    return "provider"
+
+
+def _raise_lookup_failure(stderr: str) -> None:
+    if github_read_failure_kind(stderr) == "authentication":
+        raise AuthError("GitHub authentication failed during required identity lookup")
+    raise GitHubLookupError("GitHub required identity lookup failed")
 
 
 def _run_identity_lookup(argv: list[str], timeout: float) -> str:
     try:
-        result = subprocess.run(
+        result = run_bounded_process(
             argv,
-            capture_output=True,
-            text=True,
-            check=False,
             timeout=timeout,
+            stdout_limit=_MAX_IDENTITY_RESPONSE_BYTES,
+            stderr_limit=_MAX_IDENTITY_RESPONSE_BYTES,
+            cleanup_timeout=TIMEOUT_PROCESS_KILL_GRACE,
         )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise GitHubLookupError(str(exc)) from exc
+    except BoundedProcessError as exc:
+        raise GitHubLookupError("GitHub required identity lookup did not complete") from exc
     if result.returncode != 0:
         _raise_lookup_failure(result.stderr)
     return result.stdout
@@ -76,9 +88,12 @@ def _run_identity_lookup(argv: list[str], timeout: float) -> str:
 
 def _parse_pr_identity(payload: str, repo: str, branch: str) -> tuple[int, str, str, str]:
     try:
-        rows: list[dict[str, object]] = json.loads(payload)
+        decoded: object = json.loads(payload)
     except (json.JSONDecodeError, TypeError) as exc:
         raise GitHubLookupError("GitHub returned malformed pull-request JSON") from exc
+    if not isinstance(decoded, list) or any(not isinstance(row, dict) for row in decoded):
+        raise GitHubLookupError("GitHub returned malformed pull-request JSON")
+    rows: list[dict[str, object]] = decoded
     if len(rows) != 1:
         raise GitHubLookupError(f"expected exactly one open pull request for {branch!r}, found {len(rows)}")
     row = rows[0]
@@ -92,6 +107,7 @@ def _parse_pr_identity(payload: str, repo: str, branch: str) -> tuple[int, str, 
     if (
         isinstance(number, bool)
         or not isinstance(number, int)
+        or number <= 0
         or not isinstance(base, str)
         or not isinstance(head, str)
         or not isinstance(sha, str)
@@ -109,9 +125,12 @@ def _parse_pr_identity(payload: str, repo: str, branch: str) -> tuple[int, str, 
 def _repository_id(repo: str, timeout: float) -> int:
     payload = _run_identity_lookup(["gh", "api", f"repos/{repo}", "--jq", ".id"], timeout)
     try:
-        return int(payload.strip())
+        repository_id = int(payload.strip())
     except ValueError as exc:
         raise GitHubLookupError("GitHub returned a malformed repository ID") from exc
+    if repository_id <= 0:
+        raise GitHubLookupError("GitHub returned a malformed repository ID")
+    return repository_id
 
 
 def get_pr_identity(repo: str, branch: str, *, timeout: float = TIMEOUT_GH_CLI) -> PullRequestIdentity:
@@ -166,36 +185,10 @@ class AgentIssue:
         return 0
 
 
-def last_failure_comment(repo: str, issue_number: int) -> str:
-    """Return the most recent driver-failure comment, or an empty string."""
-    try:
-        result = subprocess.run(
-            [
-                "gh",
-                "issue",
-                "view",
-                str(issue_number),
-                "--repo",
-                repo,
-                "--json",
-                "comments",
-                "--jq",
-                '.comments | map(select(.body | startswith("⚠️ **Driver failed") or startswith("🚫 **Driver blocked"))) | last | .body // ""',
-            ],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=_GH_TIMEOUT,
-        )
-        return result.stdout.strip()
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-        return ""
-
-
 def _fetch_issues_by_label(repo: str, label: str) -> list[AgentIssue]:
-    """Return open issues carrying *label*, or ``[]`` on any gh/parse failure."""
+    """Return open issues carrying *label*, failing closed when the source is unavailable."""
     try:
-        result = subprocess.run(
+        result = run_bounded_process(
             [
                 "gh",
                 "issue",
@@ -211,31 +204,51 @@ def _fetch_issues_by_label(repo: str, label: str) -> list[AgentIssue]:
                 "--limit",
                 "50",
             ],
-            capture_output=True,
-            text=True,
-            check=True,
             timeout=_GH_TIMEOUT,
+            stdout_limit=_MAX_QUEUE_RESPONSE_BYTES,
+            stderr_limit=_MAX_IDENTITY_RESPONSE_BYTES,
+            cleanup_timeout=TIMEOUT_PROCESS_KILL_GRACE,
         )
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as exc:
-        stderr = getattr(exc, "stderr", "") or ""
-        log.error("gh issue list --label %s failed: %s", label, stderr.strip() or exc)
-        return []
+    except BoundedProcessError as exc:
+        raise GitHubRequestError("GitHub issue queue is unavailable") from exc
+    if result.returncode != 0:
+        stderr = result.stderr
+        if github_read_failure_kind(stderr) == "authentication":
+            raise AuthError("GitHub issue queue authentication failed")
+        raise GitHubRequestError("GitHub issue queue is unavailable")
 
     try:
-        raw: list[dict[str, Any]] = json.loads(result.stdout)
-    except json.JSONDecodeError as exc:
-        log.error("Failed to parse gh output: %s", exc)
-        return []
-
-    return [
-        AgentIssue(
-            number=item["number"],
-            title=item["title"],
-            body=item.get("body") or "",
-            labels=[lbl["name"] for lbl in item.get("labels", [])],
-        )
-        for item in raw
-    ]
+        if not isinstance(result.stdout, str):
+            raise ValueError("response must be text")
+        raw: object = json.loads(result.stdout)
+        if not isinstance(raw, list):
+            raise ValueError("response must be a list")
+        issues: list[AgentIssue] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                raise ValueError("issue must be an object")
+            number = item.get("number")
+            title = item.get("title")
+            body = item.get("body")
+            labels = item.get("labels", [])
+            if (
+                isinstance(number, bool)
+                or not isinstance(number, int)
+                or number < 1
+                or not isinstance(title, str)
+                or (body is not None and not isinstance(body, str))
+                or not isinstance(labels, list)
+            ):
+                raise ValueError("issue fields are invalid")
+            label_names: list[str] = []
+            for raw_label in labels:
+                if not isinstance(raw_label, dict) or not isinstance(raw_label.get("name"), str):
+                    raise ValueError("issue label is invalid")
+                label_names.append(raw_label["name"])
+            issues.append(AgentIssue(number, title, body or "", label_names))
+        return issues
+    except (json.JSONDecodeError, UnicodeError, ValueError) as exc:
+        raise GitHubRequestError("GitHub issue queue response is invalid") from exc
 
 
 def list_ready_issues(repo: str) -> list[AgentIssue]:
@@ -276,53 +289,41 @@ def list_ready_issues(repo: str) -> list[AgentIssue]:
 
 def add_label(repo: str, issue_number: int, label: str) -> bool:
     """Add *label* to an issue. Returns True on success."""
-    try:
-        subprocess.run(
-            ["gh", "issue", "edit", str(issue_number), "--repo", repo, "--add-label", label],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=_GH_TIMEOUT,
-        )
-        return True
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-        stderr = getattr(exc, "stderr", "") or ""
-        log.error("add_label(%d, %r) failed: %s", issue_number, label, stderr.strip() or exc)
-        return False
+    succeeded = _run_gh_mutation(["gh", "issue", "edit", str(issue_number), "--repo", repo, "--add-label", label])
+    if not succeeded:
+        log.error("add_label(%d) failed", issue_number)
+    return succeeded
 
 
 def remove_label(repo: str, issue_number: int, label: str) -> bool:
     """Remove *label* from an issue. Returns True on success."""
-    try:
-        subprocess.run(
-            ["gh", "issue", "edit", str(issue_number), "--repo", repo, "--remove-label", label],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=_GH_TIMEOUT,
-        )
-        return True
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-        stderr = getattr(exc, "stderr", "") or ""
-        log.error("remove_label(%d, %r) failed: %s", issue_number, label, stderr.strip() or exc)
-        return False
+    succeeded = _run_gh_mutation(["gh", "issue", "edit", str(issue_number), "--repo", repo, "--remove-label", label])
+    if not succeeded:
+        log.error("remove_label(%d) failed", issue_number)
+    return succeeded
 
 
 def comment_on_issue(repo: str, issue_number: int, body: str) -> bool:
     """Post a comment on a GitHub issue.  Best-effort; returns False on failure."""
+    succeeded = _run_gh_mutation(["gh", "issue", "comment", str(issue_number), "--repo", repo, "--body", body])
+    if not succeeded:
+        log.error("comment_on_issue(%d) failed", issue_number)
+    return succeeded
+
+
+def _run_gh_mutation(argv: list[str]) -> bool:
+    """Run one bounded gh mutation without promoting provider payloads."""
     try:
-        subprocess.run(
-            ["gh", "issue", "comment", str(issue_number), "--repo", repo, "--body", body],
-            capture_output=True,
-            text=True,
-            check=True,
+        result = run_bounded_process(
+            argv,
             timeout=_GH_TIMEOUT,
+            stdout_limit=_MAX_IDENTITY_RESPONSE_BYTES,
+            stderr_limit=_MAX_IDENTITY_RESPONSE_BYTES,
+            cleanup_timeout=TIMEOUT_PROCESS_KILL_GRACE,
         )
-        return True
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-        stderr = getattr(exc, "stderr", "") or ""
-        log.error("comment_on_issue(%d) failed: %s", issue_number, stderr.strip() or exc)
+    except BoundedProcessError:
         return False
+    return result.returncode == 0
 
 
 def comment_once(repo: str, issue_number: int, marker: str, body: str) -> bool:
@@ -337,7 +338,7 @@ def comment_once(repo: str, issue_number: int, marker: str, body: str) -> bool:
     Returns True only when a new comment was actually posted.
     """
     try:
-        result = subprocess.run(
+        result = run_bounded_process(
             [
                 "gh",
                 "issue",
@@ -350,14 +351,16 @@ def comment_once(repo: str, issue_number: int, marker: str, body: str) -> bool:
                 "--jq",
                 f".comments | map(select(.body | startswith({json.dumps(marker)}))) | length",
             ],
-            capture_output=True,
-            text=True,
-            check=True,
             timeout=_GH_TIMEOUT,
+            stdout_limit=_MAX_IDENTITY_RESPONSE_BYTES,
+            stderr_limit=_MAX_IDENTITY_RESPONSE_BYTES,
+            cleanup_timeout=TIMEOUT_PROCESS_KILL_GRACE,
         )
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as exc:
-        stderr = getattr(exc, "stderr", "") or ""
-        log.error("comment_once lookup failed for #%d: %s", issue_number, stderr.strip() or exc)
+    except BoundedProcessError:
+        log.error("comment_once lookup failed for #%d", issue_number)
+        return False
+    if result.returncode != 0:
+        log.error("comment_once lookup failed for #%d", issue_number)
         return False
     if result.stdout.strip() not in ("", "0"):
         return False  # a marker comment already exists — stay quiet

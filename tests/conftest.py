@@ -3,6 +3,7 @@ import shutil
 import socket
 import sys
 import tempfile
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from unittest.mock import patch
 
@@ -16,43 +17,25 @@ import fieldkit.commands.watch.slack_threads as _w_slack
 import fieldkit.config as _config
 import fieldkit.config._loader as _config_loader
 import fieldkit.watch._pursuit_stall_render as _w_pursuit_stall_render
+import fieldkit.watch.backstory_health as _w_backstory_domain
 import fieldkit.watch.close_date_countdown as _w_close_date
+import fieldkit.watch.contract_expiry as _w_contract
 import fieldkit.watch.draft_queue as _w_draft
 import fieldkit.watch.morning_brief as _w_morning_brief
+import fieldkit.watch.morning_brief_collect as _w_morning_brief_collect_domain
+import fieldkit.watch.pursuit_stalls as _w_pursuit_stalls_domain
 import fieldkit.watch.repair as _w_repair
+import fieldkit.watch.slack_threads as _w_slack_domain
+import fieldkit.watch.status as _w_status
 import fieldkit.watch.waiting_on_tracker as _w_waiting
-
-# Domain modules added incrementally by watch-domain-migration (implementation change).
-# Each import is guarded so conftest works even when only some slices are committed.
-try:
-    import fieldkit.watch.contract_expiry as _w_contract  # slice 2.8
-except ImportError:
-    _w_contract = None  # type: ignore[assignment]
-try:
-    import fieldkit.watch.backstory_health as _w_backstory_domain  # slice 2.7
-except ImportError:
-    _w_backstory_domain = None  # type: ignore[assignment]
-try:
-    import fieldkit.watch.slack_threads as _w_slack_domain  # slice 2.10
-except ImportError:
-    _w_slack_domain = None  # type: ignore[assignment]
-try:
-    import fieldkit.watch.pursuit_stalls as _w_pursuit_stalls_domain  # slice 2.11
-except ImportError:
-    _w_pursuit_stalls_domain = None  # type: ignore[assignment]
-try:
-    import fieldkit.watch.morning_brief as _w_morning_brief_domain  # slice 2.9
-except ImportError:
-    _w_morning_brief_domain = None  # type: ignore[assignment]
-try:
-    import fieldkit.watch.morning_brief_collect as _w_morning_brief_collect_domain  # slice 2.9
-except ImportError:
-    _w_morning_brief_collect_domain = None  # type: ignore[assignment]
 from fieldkit.config import clear_config_caches
 from fieldkit.gmail.discover import clear_gmail_caches
 from fieldkit.pursuit import clear_pursuit_caches
+from fieldkit.watch.status import RunStatusWriteResult
 
 ROOT = Path(__file__).resolve().parents[1]
+
+pytest_plugins = ("tests.documentation_workflow_support",)
 
 # ---------------------------------------------------------------------------
 # CI config bootstrap — runs before xdist workers spawn
@@ -143,25 +126,6 @@ def pytest_unconfigure(config: pytest.Config) -> None:
 sys.path.insert(0, str(ROOT / "scripts"))
 
 
-def _find_data_root() -> Path | None:
-    """Locate fieldkit-data: check sibling dir, then parent umbrella submodule."""
-    # Sibling: ~/work/fieldkit-data/
-    sibling = ROOT.parent / "fieldkit-data"
-    if (sibling / "accounts").is_dir():
-        return sibling
-    # Parent submodule: ~/work/fieldkit/fieldkit-data/
-    parent_sub = ROOT.parent / "fieldkit" / "fieldkit-data"
-    if (parent_sub / "accounts").is_dir():
-        return parent_sub
-    # Legacy monorepo: same dir has accounts/
-    if (ROOT / "accounts").is_dir():
-        return ROOT
-    return None
-
-
-DATA_ROOT = _find_data_root()
-
-
 def _clear_watcher_dir_caches() -> None:
     """Clear per-watcher _alerts_file()/_state_file()/_accounts_dir() caches to prevent stale paths across tests.
 
@@ -178,7 +142,6 @@ def _clear_watcher_dir_caches() -> None:
         _w_contract_cmd,
         _w_draft,
         _w_morning_brief,
-        _w_morning_brief_domain,
         _w_morning_brief_collect_domain,
         _w_pursuit_stalls,
         _w_pursuit_stalls_domain,
@@ -204,7 +167,7 @@ _LOCAL_HOSTS = frozenset({"127.0.0.1", "::1", "localhost", ""})
 
 
 @pytest.fixture(autouse=True)
-def _block_outbound_network(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:  # type: ignore[misc]
+def _block_outbound_network(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
     """Fail loudly when a test opens a connection to anything but loopback.
 
     Third guard of the same family as ``_mock_write_run_status`` and
@@ -244,72 +207,57 @@ def _block_outbound_network(request: pytest.FixtureRequest, monkeypatch: pytest.
 
 
 @pytest.fixture(autouse=True)
-def _clear_config_cache() -> None:  # type: ignore[misc]
+def _clear_config_cache() -> Iterator[None]:
     """Clear lib.config, pursuit, and watcher-dir caches between tests for isolation."""
     clear_config_caches()
     clear_gmail_caches()
     clear_pursuit_caches()
     _clear_watcher_dir_caches()
-    yield  # type: ignore[misc]
+    yield
     clear_config_caches()
     clear_gmail_caches()
     clear_pursuit_caches()
     _clear_watcher_dir_caches()
 
 
+_STATUS_WRITER_MODULES = (
+    _w_status,
+    _w_waiting,
+    _w_close_date,
+    _w_draft,
+    _w_morning_brief,
+    _w_contract,
+    _w_backstory_domain,
+    _w_slack_domain,
+    _w_pursuit_stalls_domain,
+)
+
+
+def _discard_run_status(*args: object, **kwargs: object) -> RunStatusWriteResult:
+    """Simulate a writer response without I/O; persistence tests restore the real writer."""
+    return "skipped" if kwargs.get("dry_run") is True else "written"
+
+
+def _never_run_today(*args: object, **kwargs: object) -> bool:
+    """Keep real run history from short-circuiting test behavior."""
+    return False
+
+
 @pytest.fixture(autouse=True)
-def _mock_write_run_status() -> None:  # type: ignore[misc]
-    """Prevent any test from writing to the live watcher-run-status.json.
+def _mock_write_run_status(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Isolate every watcher status alias without per-test recording mocks.
 
-    Under pytest-xdist, parallel workers share the same filesystem.  Without
-    this guard, any test that exercises a watcher code-path would corrupt the
-    real ``watcher-run-status.json`` in the live fieldkit-data directory.
-
-    ``was_run_today`` is also mocked to return False so that tests are never
-    skipped or short-circuited by today's real run state.
-
-    Domain module patches are added incrementally as watch-domain-migration
-    (implementation change) slices land.  Each domain patch is guarded so conftest works
-    even when only some slices are committed.
+    Tests needing call assertions may override these guards locally. Missing
+    modules or attributes fail collection/setup rather than bypassing isolation.
     """
-    import contextlib
-    import importlib
-
-    def _patch_if_importable(target: str) -> "contextlib.AbstractContextManager[object]":
-        """Return a patch context manager only when the target module is importable.
-
-        When the module does not exist yet (slice not yet committed), returns a
-        no-op context manager so the autouse fixture does not fail.
-        """
-        parts = target.rsplit(".", 1)
-        if len(parts) != 2:
-            return contextlib.nullcontext()
-        mod_path, _attr = parts
-        try:
-            importlib.import_module(mod_path)
-        except ImportError:
-            return contextlib.nullcontext()
-        return patch(target, create=True)
-
-    with (
-        patch("fieldkit.watch.status.write_run_status"),
-        patch("fieldkit.watch.status.was_run_today", return_value=False),
-        patch("fieldkit.watch.status.get_fieldkit_home", return_value=Path("/tmp/fieldkit-test")),
-        patch("fieldkit.watch.waiting_on_tracker.write_run_status"),
-        patch("fieldkit.watch.close_date_countdown.write_run_status"),
-        patch("fieldkit.watch.draft_queue.write_run_status"),
-        patch("fieldkit.watch.morning_brief.write_run_status", create=True),
-        _patch_if_importable("fieldkit.watch.contract_expiry.write_run_status"),
-        _patch_if_importable("fieldkit.watch.backstory_health.write_run_status"),
-        _patch_if_importable("fieldkit.watch.slack_threads.write_run_status"),
-        _patch_if_importable("fieldkit.watch.pursuit_stalls.write_run_status"),
-        _patch_if_importable("fieldkit.watch.morning_brief.write_run_status"),
-    ):
-        yield  # type: ignore[misc]
+    for module in _STATUS_WRITER_MODULES:
+        monkeypatch.setattr(module, "write_run_status", _discard_run_status)
+    monkeypatch.setattr(_w_status, "was_run_today", _never_run_today)
+    monkeypatch.setattr(_w_status, "get_fieldkit_home", lambda: tmp_path)
 
 
 @pytest.fixture(autouse=True)
-def _mock_watcher_logging_dir(tmp_path: Path) -> None:  # type: ignore[misc]
+def _mock_watcher_logging_dir(tmp_path: Path) -> Iterator[None]:
     """Prevent any test from writing log files to the live fieldkit-data/logs/watchers/ dir.
 
     historic regression: setup_watcher_logging() uses fieldkit.watch.logging.get_fieldkit_home which
@@ -320,13 +268,51 @@ def _mock_watcher_logging_dir(tmp_path: Path) -> None:  # type: ignore[misc]
     overrides autouse patches within the test scope, so those tests are unaffected.
     """
     with patch("fieldkit.watch.logging.get_fieldkit_home", return_value=tmp_path):
-        yield  # type: ignore[misc]
+        yield
 
 
-needs_data = pytest.mark.skipif(
-    DATA_ROOT is None,
-    reason="fieldkit-data not available (no accounts/ directory found)",
-)
+@pytest.fixture
+def fictional_account(tmp_path: Path) -> Path:
+    """An operator-authored account record exercising the stakeholder parser."""
+    account = tmp_path / "workspace" / "accounts" / "acme-corp"
+    account.mkdir(parents=True)
+    (account / "account.md").write_text(
+        "---\nname: Acme Corp\ndomains: [example.com]\n---\n\n"
+        "# Acme Corp\n\n## Stakeholder Map\n\n"
+        "| Name | Title | SF Contact Role | Supplemental |\n"
+        "|------|-------|-----------------|--------------|\n"
+        "| Jane Example | CFO | Economic Buyer | jane@example.com |\n"
+        "| Alex Example | Architect | Technical Buyer | alex@example.com |\n\n"
+        "### Coverage Gaps\n\n"
+        "| Role | Status | Action Needed |\n"
+        "|------|--------|---------------|\n"
+        "| Champion | Missing | Identify a sponsor |\n\n"
+        "## Notes\n\nFictional account for contributor tests.\n",
+        encoding="utf-8",
+    )
+    return account
+
+
+@pytest.fixture
+def sf_pursuit(fictional_account: Path) -> Path:
+    """Hand-authored fictional Salesforce fields, including YAML-sensitive text."""
+    path = fictional_account / "pursuits" / "service-expansion.md"
+    path.parent.mkdir()
+    path.write_text(
+        "---\nstage: propose\ngate-status: pending\n"
+        'sf_opportunity_id: "006EXAMPLE000001AAA"\n'
+        'sf_stage: "Proposal"\n'
+        'sf_close_date: "2026-12-15"\n'
+        'sf_arr: "250000"\n'
+        'sf_owner: "Taylor Example"\n'
+        'sf_next_steps: "Review: scope #1 with sponsor"\n'
+        'sf_last_pulled: "2026-09-01T10:00:00+00:00"\n'
+        "---\n\n# Service Expansion\n\n"
+        "Fictional scope: consulting services for Acme Corp.\n",
+        encoding="utf-8",
+    )
+    return path
+
 
 # Root bypasses filesystem permission bits, so any test that chmod()s a path
 # read-only to force a write failure silently succeeds instead — the expected
@@ -370,7 +356,7 @@ meddpicc:
 
 
 @pytest.fixture
-def write_pursuit_sf(tmp_path: Path):
+def write_pursuit_sf(tmp_path: Path) -> Callable[[Path, str, str, str | None], Path]:
     """Return a factory that writes a pursuit under tree/accounts/{account}/pursuits/.
 
     Signature: factory(tree, account, name, opp_id=None) -> Path
@@ -391,7 +377,7 @@ def write_pursuit_sf(tmp_path: Path):
 
 
 @pytest.fixture
-def write_pursuit_generic(tmp_path: Path):
+def write_pursuit_generic(tmp_path: Path) -> Callable[[Path, str, str], Path]:
     """Return a factory that writes a pursuit under directory/pursuits/{name}.md.
 
     Signature: factory(directory, name, frontmatter) -> Path

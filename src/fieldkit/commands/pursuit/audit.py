@@ -15,6 +15,7 @@ Public API:
 
 import contextlib
 import re
+import stat
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -22,17 +23,21 @@ from typing import Any, Literal
 
 import yaml
 
+from fieldkit.ingest.paths import validate_meeting_account
 from fieldkit.pursuit.enums import Stage
 from fieldkit.pursuit.gate_criteria import ALLOWED_GATE_STATUSES
 from fieldkit.pursuit.io import (
     detect_duplicate_yaml_keys,
     parse_frontmatter_fallback,
+    read_pursuit_text_snapshot,
+    render_frontmatter_raw,
     split_frontmatter_raw,
     write_frontmatter_raw,
 )
 from fieldkit.pursuit.models import canonicalize_legacy_meddpicc
 from fieldkit.pursuit.stages import ALL_STAGES as ALLOWED_STAGES
 from fieldkit.pursuit.stages import CLOSED_STAGES
+from fieldkit.util.workspace_paths import resolve_workspace_output
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -86,6 +91,8 @@ LATE_STAGES = frozenset(
 _VALID_GATE_RESULTS: frozenset[str] = frozenset({"pass", "fail", "override"})
 
 _BACKSTORY_RE = re.compile(r"\[backstory", re.IGNORECASE)
+AUDIT_SKIPPED_FILENAMES = frozenset({"gmail-intel.md", "template.md"})
+_AUDIT_REPAIR_LOCK_TIMEOUT_SECONDS = 5.0
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -253,7 +260,7 @@ def _check_transition_history(fm: dict[str, Any]) -> list[Finding]:
         gate_result = entry.get("gate-result")
         if gate_result is None:
             continue
-        if gate_result not in _VALID_GATE_RESULTS:
+        if not isinstance(gate_result, str) or gate_result not in _VALID_GATE_RESULTS:
             stage_info = entry.get("to") or entry.get("from") or f"entry[{i}]"
             findings.append(
                 Finding(
@@ -395,14 +402,19 @@ def audit_file(path: Path, today: date | None = None) -> AuditResult:
 
     try:
         content = path.read_text(encoding="utf-8")
-    except OSError as exc:
-        result.parse_error = f"Cannot read file: {exc}"
+    except (OSError, UnicodeError):
+        result.parse_error = "Cannot read pursuit file"
         return result
 
-    fm, body = parse_frontmatter_fallback(content)
+    try:
+        fm, body = parse_frontmatter_fallback(content)
+    except (TypeError, yaml.YAMLError):
+        fm = None
+        body = content
     if fm is None:
-        result.parse_error = "No YAML frontmatter found"
-        result.findings.append(Finding("ERROR", "Missing frontmatter entirely — no `---` delimited YAML block"))
+        result.parse_error = "Invalid YAML frontmatter" if content.startswith("---") else "No YAML frontmatter found"
+        if not content.startswith("---"):
+            result.findings.append(Finding("ERROR", "Missing frontmatter entirely — no `---` delimited YAML block"))
         return result
 
     result.stage = str(fm.get("stage", "")).lower()
@@ -435,15 +447,11 @@ def audit_directory(
     if today is None:
         today = datetime.now(tz=UTC).date()
 
-    accounts_dir = root / "accounts"
-    if not accounts_dir.is_dir():
-        return []
-
-    pattern = f"{account_filter}/pursuits/*.md" if account_filter else "*/pursuits/*.md"
     results: list[AuditResult] = []
 
-    for path in sorted(accounts_dir.glob(pattern)):
-        if path.name in {"gmail-intel.md", "template.md"}:
+    accounts_dir = root.resolve() / "accounts"
+    for path in pursuit_paths(root, account_filter):
+        if path.name in AUDIT_SKIPPED_FILENAMES:
             continue
         result = audit_file(path, today)
         # Compute relative path from accounts_dir for cleaner display
@@ -452,6 +460,57 @@ def audit_directory(
         results.append(result)
 
     return results
+
+
+def pursuit_paths(root: Path, account_filter: str | None = None) -> list[Path]:
+    """Return safe pursuit Markdown paths without following child redirects.
+
+    The configured workspace root may itself be an alias. Account selectors are
+    literal directory names, and every discovered account, pursuits directory,
+    and Markdown leaf must retain its exact authorized path below that root.
+    """
+    try:
+        workspace = root.resolve(strict=True)
+        accounts_dir = resolve_workspace_output(workspace, "accounts")
+        if not accounts_dir.exists():
+            return []
+        if not stat.S_ISDIR(accounts_dir.stat(follow_symlinks=False).st_mode):
+            raise ValueError("Accounts path is not a directory")
+
+        if account_filter is not None:
+            validate_meeting_account(account_filter)
+            account_dirs = [resolve_workspace_output(workspace, f"accounts/{account_filter}")]
+        else:
+            account_dirs = sorted(path for path in accounts_dir.iterdir() if not path.name.startswith("."))
+
+        paths: list[Path] = []
+        for discovered in account_dirs:
+            if not discovered.exists():
+                continue
+            discovered_info = discovered.stat(follow_symlinks=False)
+            if stat.S_ISREG(discovered_info.st_mode):
+                continue
+            validate_meeting_account(discovered.name)
+            account_dir = resolve_workspace_output(workspace, f"accounts/{discovered.name}")
+            account_info = account_dir.stat(follow_symlinks=False)
+            if not stat.S_ISDIR(account_info.st_mode):
+                continue
+            pursuits_dir = resolve_workspace_output(workspace, f"accounts/{account_dir.name}/pursuits")
+            if not pursuits_dir.exists():
+                continue
+            if not stat.S_ISDIR(pursuits_dir.stat(follow_symlinks=False).st_mode):
+                raise ValueError("Pursuits path is not a directory")
+            for discovered_path in sorted(pursuits_dir.iterdir()):
+                if discovered_path.suffix != ".md":
+                    continue
+                relative = discovered_path.relative_to(workspace).as_posix()
+                path = resolve_workspace_output(workspace, relative)
+                if not stat.S_ISREG(path.stat(follow_symlinks=False).st_mode):
+                    raise ValueError("Pursuit candidate is not a regular file")
+                paths.append(path)
+        return paths
+    except (OSError, RuntimeError):
+        raise ValueError("Cannot safely discover pursuit files") from None
 
 
 def check_yaml_duplicates(path: Path) -> AuditResult:
@@ -467,8 +526,8 @@ def check_yaml_duplicates(path: Path) -> AuditResult:
 
     try:
         content = path.read_text(encoding="utf-8")
-    except OSError as exc:
-        result.parse_error = f"Cannot read file: {exc}"
+    except (OSError, UnicodeError):
+        result.parse_error = "Cannot read pursuit file"
         return result
 
     raw = split_frontmatter_raw(content)
@@ -480,8 +539,8 @@ def check_yaml_duplicates(path: Path) -> AuditResult:
 
     try:
         duplicates = detect_duplicate_yaml_keys(fm_text)
-    except yaml.YAMLError as exc:
-        result.parse_error = f"YAML parse error: {exc}"
+    except (TypeError, yaml.YAMLError):
+        result.parse_error = "Invalid YAML frontmatter"
         return result
 
     for dup_key in duplicates:
@@ -503,15 +562,11 @@ def check_yaml_duplicates_directory(
     Returns:
         List of AuditResult for files that have findings or errors.
     """
-    accounts_dir = root / "accounts"
-    if not accounts_dir.is_dir():
-        return []
-
-    pattern = f"{account_filter}/pursuits/*.md" if account_filter else "*/pursuits/*.md"
     results: list[AuditResult] = []
 
-    for path in sorted(accounts_dir.glob(pattern)):
-        if path.name in {"gmail-intel.md", "template.md"}:
+    accounts_dir = root.resolve() / "accounts"
+    for path in pursuit_paths(root, account_filter):
+        if path.name in AUDIT_SKIPPED_FILENAMES:
             continue
         result = check_yaml_duplicates(path)
         with contextlib.suppress(ValueError):
@@ -522,7 +577,12 @@ def check_yaml_duplicates_directory(
     return results
 
 
-def apply_fixes(path: Path, *, dry_run: bool = False) -> FixResult:
+def apply_fixes(
+    path: Path,
+    *,
+    dry_run: bool = False,
+    lock_timeout_seconds: float = _AUDIT_REPAIR_LOCK_TIMEOUT_SECONDS,
+) -> FixResult:
     """Auto-correct common frontmatter issues in a pursuit file.
 
     Corrections applied:
@@ -535,6 +595,7 @@ def apply_fixes(path: Path, *, dry_run: bool = False) -> FixResult:
     Args:
         path: Path to the pursuit markdown file.
         dry_run: Compute correction counts without replacing the file.
+        lock_timeout_seconds: Maximum wait for the canonical pursuit writer lock.
 
     Returns:
         FixResult with counts of changes made.
@@ -544,12 +605,31 @@ def apply_fixes(path: Path, *, dry_run: bool = False) -> FixResult:
         ValueError: If legacy and canonical aliases contain conflicting values.
     """
     result = FixResult(path=path)
-    expected_mtime = path.stat().st_mtime
-    content = path.read_text(encoding="utf-8")
-    frontmatter, body = parse_frontmatter_fallback(content)
-    if frontmatter is None:
-        raise ValueError(f"No YAML frontmatter in {path}")
+    source = read_pursuit_text_snapshot(path)
+    expected_mtime = source.info.st_mtime
+    content = source.content
+    raw = split_frontmatter_raw(content)
+    if raw is None:
+        raise ValueError("Invalid pursuit frontmatter")
+    frontmatter_text, body = raw
+    try:
+        loaded = yaml.safe_load(frontmatter_text)
+    except (TypeError, yaml.YAMLError):
+        raise ValueError("Invalid pursuit frontmatter") from None
+    if loaded is None:
+        frontmatter: dict[str, Any] = {}
+    elif isinstance(loaded, dict):
+        frontmatter = loaded
+    else:
+        raise ValueError("Invalid pursuit frontmatter")
     corrected, remove_keys = _plan_frontmatter_fixes(frontmatter, path, result)
+    prepared_content = render_frontmatter_raw(
+        path,
+        corrected,
+        body,
+        expected_mtime=expected_mtime,
+        remove_keys=frozenset(remove_keys),
+    )
 
     if result.total_changes and not dry_run:
         write_frontmatter_raw(
@@ -558,6 +638,9 @@ def apply_fixes(path: Path, *, dry_run: bool = False) -> FixResult:
             body,
             expected_mtime=expected_mtime,
             remove_keys=frozenset(remove_keys),
+            timeout_seconds=lock_timeout_seconds,
+            validated_content=prepared_content,
+            validated_source_content=content,
         )
 
     return result

@@ -30,7 +30,7 @@ def state_write_failed(*, dry_run: bool, write: Callable[[], None], logger: logg
         return False
     try:
         write()
-    except OSError:
-        logger.error(message, exc_info=True)
+    except (OSError, TypeError, ValueError):
+        logger.error(message)
         return True
     return False

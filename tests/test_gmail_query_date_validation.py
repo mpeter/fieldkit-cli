@@ -18,7 +18,8 @@ failure scenario and verifies the fix.
 import pytest
 from click.testing import CliRunner
 
-from fieldkit.commands.gmail.query import _DateEpoch, cli, date_to_epoch
+from fieldkit.commands.gmail.query import _DateEpoch, cli
+from fieldkit.gmail.query_domain import date_to_epoch
 
 pytestmark = pytest.mark.unit
 

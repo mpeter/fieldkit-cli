@@ -32,8 +32,10 @@ configuration error code instead of emitting a traceback.
 ```
 
 Use `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, or `Security` as a
-level-four subheading only when a longer fragment needs structure. Do not add a
-leading or trailing horizontal rule; the assembler inserts separators.
+level-four subheading only when a longer fragment needs structure. Hash-prefixed
+level-two headings and standalone `---` lines are reserved for assembly and are rejected
+anywhere in a fragment, including fenced examples. The assembler inserts
+separators. Distinct fragment files must not have identical content.
 
 ## Verify and assemble
 

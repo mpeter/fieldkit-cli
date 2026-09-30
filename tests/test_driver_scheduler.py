@@ -4,11 +4,15 @@ Spec: openspec/specs/driver-scheduling/spec.md
 """
 
 import json
-import subprocess
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
+import yaml
+
+from fieldkit.driver.prompt_contract import EditSite, PromptContract, PromptKind
+from fieldkit.driver.prompt_source import FrozenPrompt, PromptSource
+from fieldkit.util.bounded_process import BoundedProcessResult
 
 pytestmark = pytest.mark.unit
 
@@ -23,7 +27,8 @@ def test_scheduler_contract_is_public_and_canonical() -> None:
     assert "Requirement: The driver MUST NOT start a work order whose covers intersect" in spec
     assert "Requirement: The driver MUST honor `depends_on` frontmatter" in spec
     assert "Requirement: Concurrent work orders MUST have pairwise-disjoint covers" in spec
-    assert "Requirement: The work-order execution agent MUST resolve edit sites" in spec
+    assert "Requirement: The driver MUST validate structured edit sites" in spec
+    assert "Requirement: Driver execution MUST use a packaged portable instruction source" in spec
     assert "Spec: openspec/specs/driver-scheduling/spec.md" in scheduler
     assert "openspec/changes/" not in scheduler
     assert __doc__ is not None
@@ -38,134 +43,33 @@ def test_scheduler_error_inherits_from_fieldkit_error() -> None:
     assert isinstance(error, FieldkitError)
 
 
-def _write_wo(tmp_path: Path, name: str, frontmatter: str, body: str = "# Work Order\n") -> Path:
+def _write_wo(
+    tmp_path: Path,
+    name: str,
+    frontmatter: str,
+    body: str = "# Work Order\n",
+    *,
+    kind: PromptKind = "work-order",
+) -> FrozenPrompt:
     path = tmp_path / name
-    path.write_text(f"---\n{frontmatter}\n---\n\n{body}", encoding="utf-8")
-    return path
+    del body
+    parsed = yaml.safe_load(frontmatter)
+    covers = frozenset(parsed["covers"])
+    depends_on = tuple(int(str(item).removeprefix("#")) for item in parsed.get("depends_on", []))
+    target = sorted(covers)[0]
+    if target.endswith("/"):
+        target = f"{target}example.py"
+    return FrozenPrompt(
+        PromptSource(path, kind),
+        "a" * 40,
+        PromptContract(covers, depends_on, (EditSite(target, "unique anchor"),)),
+    )
 
 
 def _issue(number: int):
     from fieldkit.driver.github import AgentIssue
 
     return AgentIssue(number=number, title=f"Issue {number}", body="", labels=["agent-ready"])
-
-
-# ---------------------------------------------------------------------------
-# parse_covers
-# ---------------------------------------------------------------------------
-
-
-def test_parse_covers_returns_listed_paths(tmp_path: Path) -> None:
-    from fieldkit.driver.scheduler import parse_covers
-
-    wo = _write_wo(
-        tmp_path,
-        "wo.md",
-        "last_reviewed: 2026-07-16\ncovers:\n  - src/fieldkit/sf/client.py\n  - tests/test_sf_client.py\naudience: developer",
-    )
-
-    result = parse_covers(wo)
-
-    assert result == frozenset({"src/fieldkit/sf/client.py", "tests/test_sf_client.py"})
-
-
-def test_parse_covers_dedupes_duplicate_entries(tmp_path: Path) -> None:
-    from fieldkit.driver.scheduler import parse_covers
-
-    wo = _write_wo(tmp_path, "wo.md", "covers:\n  - src/a.py\n  - src/a.py")
-
-    result = parse_covers(wo)
-
-    assert result == frozenset({"src/a.py"})
-
-
-@pytest.mark.parametrize(
-    "frontmatter",
-    [
-        pytest.param("last_reviewed: 2026-07-16\naudience: developer", id="no-covers-key"),
-        pytest.param("covers:\naudience: developer", id="empty-covers-list"),
-    ],
-)
-def test_parse_covers_returns_none_when_absent_or_empty(tmp_path: Path, frontmatter: str) -> None:
-    from fieldkit.driver.scheduler import parse_covers
-
-    wo = _write_wo(tmp_path, "wo.md", frontmatter)
-
-    result = parse_covers(wo)
-
-    assert result is None
-
-
-def test_parse_covers_returns_none_without_frontmatter(tmp_path: Path) -> None:
-    from fieldkit.driver.scheduler import parse_covers
-
-    plain = tmp_path / "tasks.md"
-    plain.write_text("# Tasks\n\n- [ ] 1.1 Do the thing\n", encoding="utf-8")
-
-    result = parse_covers(plain)
-
-    assert result is None
-
-
-def test_parse_covers_returns_none_for_missing_file(tmp_path: Path) -> None:
-    from fieldkit.driver.scheduler import parse_covers
-
-    result = parse_covers(tmp_path / "does-not-exist.md")
-
-    assert result is None
-
-
-# ---------------------------------------------------------------------------
-# parse_depends_on
-# ---------------------------------------------------------------------------
-
-
-def test_parse_depends_on_inline_list(tmp_path: Path) -> None:
-    from fieldkit.driver.scheduler import parse_depends_on
-
-    wo = _write_wo(tmp_path, "wo.md", "covers:\n  - src/a.py\ndepends_on: [1293, 1300]")
-
-    result = parse_depends_on(wo)
-
-    assert result == (1293, 1300)
-
-
-def test_parse_depends_on_block_list_with_hash_prefixes(tmp_path: Path) -> None:
-    from fieldkit.driver.scheduler import parse_depends_on
-
-    wo = _write_wo(tmp_path, "wo.md", 'depends_on:\n  - "#1293"\n  - 42')
-
-    result = parse_depends_on(wo)
-
-    assert result == (1293, 42)
-
-
-def test_parse_depends_on_dedupes_and_preserves_order(tmp_path: Path) -> None:
-    from fieldkit.driver.scheduler import parse_depends_on
-
-    wo = _write_wo(tmp_path, "wo.md", "depends_on: [7, 3, 7]")
-
-    result = parse_depends_on(wo)
-
-    assert result == (7, 3)
-
-
-@pytest.mark.parametrize(
-    "frontmatter",
-    [
-        pytest.param("covers:\n  - src/a.py", id="absent"),
-        pytest.param("depends_on: []", id="empty-inline"),
-        pytest.param("depends_on: [not-a-number]", id="non-numeric-item"),
-    ],
-)
-def test_parse_depends_on_empty_cases(tmp_path: Path, frontmatter: str) -> None:
-    from fieldkit.driver.scheduler import parse_depends_on
-
-    wo = _write_wo(tmp_path, "wo.md", frontmatter)
-
-    result = parse_depends_on(wo)
-
-    assert result == ()
 
 
 # ---------------------------------------------------------------------------
@@ -275,62 +179,17 @@ def test_select_runnable_preserves_oldest_first_priority(tmp_path: Path) -> None
     assert skips[0].issue_number == 1
 
 
-def test_select_runnable_no_covers_runs_only_in_isolation(tmp_path: Path) -> None:
+def test_select_runnable_allows_disjoint_openspec_contracts(tmp_path: Path) -> None:
     from fieldkit.driver.scheduler import select_runnable
 
-    tasks = tmp_path / "tasks.md"
-    tasks.write_text("# Tasks\n", encoding="utf-8")  # OpenSpec-style: no frontmatter
+    prompt_a = _write_wo(tmp_path, "change-a/tasks.md", "covers:\n  - src/a.py", kind="openspec")
+    prompt_b = _write_wo(tmp_path, "change-b/tasks.md", "covers:\n  - src/b.py", kind="openspec")
 
-    result = select_runnable([(_issue(5), tasks)], {}, frozenset(), max_concurrent=2)
+    result = select_runnable([(_issue(1), prompt_a), (_issue(2), prompt_b)], {}, frozenset(), max_concurrent=2)
 
     selected, skips = result
-    assert [issue.number for issue, _ in selected] == [5]
+    assert [issue.number for issue, _ in selected] == [1, 2]
     assert skips == []
-
-
-def test_select_runnable_no_covers_blocked_by_any_busy_file(tmp_path: Path) -> None:
-    from fieldkit.driver.scheduler import select_runnable
-
-    tasks = tmp_path / "tasks.md"
-    tasks.write_text("# Tasks\n", encoding="utf-8")
-    busy = {"docs/unrelated.md": 1300}
-
-    result = select_runnable([(_issue(5), tasks)], busy, frozenset(), max_concurrent=2)
-
-    selected, skips = result
-    assert selected == []
-    assert skips[0].kind == "no-covers"
-    assert "#1300" in skips[0].detail
-
-
-def test_select_runnable_no_covers_never_joins_a_batch(tmp_path: Path) -> None:
-    from fieldkit.driver.scheduler import select_runnable
-
-    wo_a = _write_wo(tmp_path, "wo-a.md", "covers:\n  - src/a.py")
-    tasks = tmp_path / "tasks.md"
-    tasks.write_text("# Tasks\n", encoding="utf-8")
-
-    result = select_runnable([(_issue(1), wo_a), (_issue(2), tasks)], {}, frozenset(), max_concurrent=2)
-
-    selected, skips = result
-    assert [issue.number for issue, _ in selected] == [1]
-    assert skips[0].issue_number == 2
-    assert skips[0].kind == "no-covers"
-
-
-def test_select_runnable_universal_first_blocks_everything_after(tmp_path: Path) -> None:
-    from fieldkit.driver.scheduler import select_runnable
-
-    tasks = tmp_path / "tasks.md"
-    tasks.write_text("# Tasks\n", encoding="utf-8")
-    wo_b = _write_wo(tmp_path, "wo-b.md", "covers:\n  - src/b.py")
-
-    result = select_runnable([(_issue(1), tasks), (_issue(2), wo_b)], {}, frozenset(), max_concurrent=2)
-
-    selected, skips = result
-    assert [issue.number for issue, _ in selected] == [1]
-    assert skips[0].issue_number == 2
-    assert skips[0].kind == "batch-overlap"
 
 
 # ---------------------------------------------------------------------------
@@ -338,8 +197,71 @@ def test_select_runnable_universal_first_blocks_everything_after(tmp_path: Path)
 # ---------------------------------------------------------------------------
 
 
-def _gh_ok(stdout: str) -> MagicMock:
-    return MagicMock(returncode=0, stdout=stdout, stderr="")
+def test_busy_files_rejects_potentially_truncated_pr_listing() -> None:
+    from fieldkit.driver.scheduler import SchedulerError, busy_files
+
+    listing = [{"number": number, "files": []} for number in range(1, 201)]
+    with (
+        patch("fieldkit.driver.scheduler._gh_json", return_value=listing),
+        pytest.raises(SchedulerError, match="PR listing may be truncated"),
+    ):
+        busy_files("owner/repo")
+
+
+@pytest.mark.parametrize("entry", [None, {}, {"path": 1}, {"path": ""}])
+def test_busy_files_rejects_malformed_file_entry(entry: object) -> None:
+    from fieldkit.driver.scheduler import SchedulerError, busy_files
+
+    with (
+        patch("fieldkit.driver.scheduler._gh_json", return_value=[{"number": 1, "files": [entry]}]),
+        pytest.raises(SchedulerError, match="invalid file entry"),
+    ):
+        busy_files("owner/repo")
+
+
+@pytest.mark.parametrize("entry", [None, {}, {"filename": 1}, {"filename": ""}])
+def test_busy_files_rejects_malformed_paginated_file_entry(entry: object) -> None:
+    from fieldkit.driver.scheduler import SchedulerError, busy_files
+
+    listing = [{"number": 1, "files": [{"path": f"src/file-{index}.py"} for index in range(100)]}]
+    with (
+        patch("fieldkit.driver.scheduler._gh_json", side_effect=[listing, [[entry]]]),
+        pytest.raises(SchedulerError, match="invalid file entry"),
+    ):
+        busy_files("owner/repo")
+
+
+@pytest.mark.parametrize("count", [2999, 3000, 3001])
+def test_busy_files_checks_paginated_endpoint_limit(count: int) -> None:
+    from fieldkit.driver.scheduler import SchedulerError, busy_files
+
+    listing = [{"number": 1, "files": [{"path": f"src/file-{index}.py"} for index in range(100)]}]
+    pages = [[{"filename": f"src/file-{index}.py"} for index in range(count)]]
+    with patch("fieldkit.driver.scheduler._gh_json", side_effect=[listing, pages]):
+        if count < 3000:
+            result = busy_files("owner/repo")
+            assert len(result) == count
+            assert result["src/file-2998.py"] == 1
+        else:
+            with pytest.raises(SchedulerError, match="file listing may be truncated"):
+                busy_files("owner/repo")
+
+
+@pytest.mark.parametrize("start,count", [(0, 0), (0, 99), (1, 100)])
+def test_busy_files_rejects_inconsistent_paginated_paths(start: int, count: int) -> None:
+    from fieldkit.driver.scheduler import SchedulerError, busy_files
+
+    listing = [{"number": 1, "files": [{"path": f"src/file-{index}.py"} for index in range(100)]}]
+    pages = [[{"filename": f"src/file-{index}.py"} for index in range(start, start + count)]]
+    with (
+        patch("fieldkit.driver.scheduler._gh_json", side_effect=[listing, pages]),
+        pytest.raises(SchedulerError, match="file listings disagree"),
+    ):
+        busy_files("owner/repo")
+
+
+def _gh_ok(stdout: str) -> BoundedProcessResult:
+    return BoundedProcessResult(returncode=0, stdout=stdout, stderr="")
 
 
 def test_busy_files_maps_paths_to_pr_numbers() -> None:
@@ -351,49 +273,89 @@ def test_busy_files_maps_paths_to_pr_numbers() -> None:
             {"number": 1351, "files": [{"path": "src/c.py"}]},
         ]
     )
-    with patch("fieldkit.driver.scheduler.subprocess.run", return_value=_gh_ok(payload)) as mock_run:
+    with patch("fieldkit.driver.scheduler.run_bounded_process", return_value=_gh_ok(payload)) as mock_run:
         result = busy_files("owner/repo")
 
     assert result == {"src/a.py": 1350, "src/b.py": 1350, "src/c.py": 1351}
     assert mock_run.call_count == 1  # one gh call for the whole busy set
 
 
-def test_busy_files_raises_scheduler_error_on_gh_failure() -> None:
-    from fieldkit.driver.scheduler import SchedulerError, busy_files
+def test_busy_files_raises_provider_error_on_gh_failure() -> None:
+    from fieldkit.driver.scheduler import busy_files
+    from fieldkit.errors import GitHubRequestError
 
-    failed = MagicMock(returncode=1, stdout="", stderr="boom")
+    failed = _gh_ok("")
+    failed = type(failed)(returncode=1, stdout="", stderr="fictional-secret")
     with (
-        patch("fieldkit.driver.scheduler.subprocess.run", return_value=failed),
-        pytest.raises(SchedulerError, match="gh pr failed"),
+        patch("fieldkit.driver.scheduler.run_bounded_process", return_value=failed),
+        pytest.raises(GitHubRequestError, match="scheduling lookup failed") as caught,
+    ):
+        busy_files("owner/repo")
+    assert "fictional-secret" not in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    "message",
+    ["driver support process timed out", "driver support process could not start"],
+)
+def test_busy_files_raises_provider_error_on_timeout_or_oserror(message: str) -> None:
+    # Fail closed: a hung or missing gh binary must surface as SchedulerError
+    # so run_driver records outcome=skipped instead of crashing the tick.
+    from fieldkit.driver.scheduler import busy_files
+    from fieldkit.errors import GitHubRequestError
+    from fieldkit.util.bounded_process import BoundedProcessError
+
+    with (
+        patch(
+            "fieldkit.driver.scheduler.run_bounded_process",
+            side_effect=BoundedProcessError(message, reason="timeout"),
+        ),
+        pytest.raises(GitHubRequestError, match="did not complete"),
     ):
         busy_files("owner/repo")
 
 
 @pytest.mark.parametrize(
-    "raised",
+    ("stderr", "error_type", "message"),
     [
-        subprocess.TimeoutExpired(cmd=["gh"], timeout=30),
-        FileNotFoundError("gh not on PATH"),
+        pytest.param(
+            "authentication required: fictional-secret /private/path",
+            "auth",
+            "authentication failed",
+            id="authentication",
+        ),
+        pytest.param(
+            "HTTP 403: API rate limit exceeded; fictional-secret /private/path",
+            "provider",
+            "lookup failed",
+            id="rate-limit",
+        ),
     ],
 )
-def test_busy_files_raises_scheduler_error_on_timeout_or_oserror(raised: Exception) -> None:
-    # Fail closed: a hung or missing gh binary must surface as SchedulerError
-    # so run_driver records outcome=skipped instead of crashing the tick.
-    from fieldkit.driver.scheduler import SchedulerError, busy_files
+def test_busy_files_preserves_github_failure_taxonomy_without_payload(
+    stderr: str, error_type: str, message: str
+) -> None:
+    from fieldkit.driver.scheduler import busy_files
+    from fieldkit.errors import AuthError, GitHubRequestError
 
+    expected = AuthError if error_type == "auth" else GitHubRequestError
+    failure = BoundedProcessResult(1, "partial output", stderr)
     with (
-        patch("fieldkit.driver.scheduler.subprocess.run", side_effect=raised),
-        pytest.raises(SchedulerError, match="gh pr failed"),
+        patch("fieldkit.driver.scheduler.run_bounded_process", return_value=failure),
+        pytest.raises(expected, match=message) as caught,
     ):
         busy_files("owner/repo")
+
+    assert "fictional-secret" not in str(caught.value)
+    assert "/private/path" not in str(caught.value)
 
 
 def test_busy_files_raises_scheduler_error_on_bad_json() -> None:
     from fieldkit.driver.scheduler import SchedulerError, busy_files
 
     with (
-        patch("fieldkit.driver.scheduler.subprocess.run", return_value=_gh_ok("not json")),
-        pytest.raises(SchedulerError, match="unparseable JSON"),
+        patch("fieldkit.driver.scheduler.run_bounded_process", return_value=_gh_ok("not json")),
+        pytest.raises(SchedulerError, match="invalid JSON"),
     ):
         busy_files("owner/repo")
 
@@ -408,7 +370,7 @@ def test_busy_files_paginates_prs_at_the_files_cap() -> None:
     rest_page = json.dumps([[{"filename": f"src/f{i}.py"} for i in range(150)]])
 
     with patch(
-        "fieldkit.driver.scheduler.subprocess.run",
+        "fieldkit.driver.scheduler.run_bounded_process",
         side_effect=[_gh_ok(listing), _gh_ok(rest_page)],
     ) as mock_run:
         result = busy_files("owner/repo")
@@ -428,12 +390,12 @@ def test_busy_files_paginates_prs_at_the_files_cap() -> None:
 def test_open_issue_numbers_partitions_open_and_closed() -> None:
     from fieldkit.driver.scheduler import open_issue_numbers
 
-    def fake_run(cmd: list[str], **kwargs: object) -> MagicMock:
+    def fake_run(cmd: list[str], **kwargs: object) -> BoundedProcessResult:
         number = int(cmd[-1].rsplit("/", 1)[-1])
         state = "closed" if number == 100 else "open"
         return _gh_ok(json.dumps({"number": number, "state": state}))
 
-    with patch("fieldkit.driver.scheduler.subprocess.run", side_effect=fake_run):
+    with patch("fieldkit.driver.scheduler.run_bounded_process", side_effect=fake_run):
         result = open_issue_numbers("owner/repo", [100, 200])
 
     assert result == frozenset({200})
@@ -442,8 +404,8 @@ def test_open_issue_numbers_partitions_open_and_closed() -> None:
 def test_open_issue_numbers_treats_nonexistent_issue_as_open() -> None:
     from fieldkit.driver.scheduler import open_issue_numbers
 
-    not_found = MagicMock(returncode=1, stdout="", stderr="HTTP 404: Not Found")
-    with patch("fieldkit.driver.scheduler.subprocess.run", return_value=not_found):
+    not_found = type(_gh_ok(""))(returncode=1, stdout="", stderr="HTTP 404: Not Found")
+    with patch("fieldkit.driver.scheduler.run_bounded_process", return_value=not_found):
         result = open_issue_numbers("owner/repo", [9999])
 
     assert result == frozenset({9999})
@@ -452,7 +414,7 @@ def test_open_issue_numbers_treats_nonexistent_issue_as_open() -> None:
 def test_open_issue_numbers_empty_input_makes_no_gh_calls() -> None:
     from fieldkit.driver.scheduler import open_issue_numbers
 
-    with patch("fieldkit.driver.scheduler.subprocess.run") as mock_run:
+    with patch("fieldkit.driver.scheduler.run_bounded_process") as mock_run:
         result = open_issue_numbers("owner/repo", [])
 
     assert result == frozenset()

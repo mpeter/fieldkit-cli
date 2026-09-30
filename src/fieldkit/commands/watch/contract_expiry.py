@@ -125,9 +125,5 @@ def cli(
             warning=threshold_warning,
             notice=threshold_notice,
             as_json=as_json,
-        )
+        ).exit_code
     )
-
-
-if __name__ == "__main__":
-    raise SystemExit(cli())

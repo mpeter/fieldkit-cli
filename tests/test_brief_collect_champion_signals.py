@@ -13,9 +13,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-import fieldkit.commands.brief.collect as collect_mod
-from fieldkit.commands.brief.collect import _champion_signal_block, collect_champion_signals
-from fieldkit.gmail.exceptions import GmailDbNotFoundError
+import fieldkit.brief.collect as collect_mod
+from fieldkit.brief.collect import _champion_signal_block, collect_champion_signals
+from fieldkit.errors import SQLiteSnapshotError
+from fieldkit.gmail.exceptions import GmailDbNotFoundError, GmailSchemaError
 
 pytestmark = pytest.mark.unit
 
@@ -61,12 +62,20 @@ def test_collect_champion_signals_no_gmail_db_returns_sentinel_without_connectin
     mock_connect.assert_not_called()
 
 
-def test_collect_champion_signals_connect_error_returns_sentinel(tmp_path: Path) -> None:
-    """A GmailDbNotFoundError from _gmail_connect surfaces the unavailable sentinel."""
+@pytest.mark.parametrize(
+    "error",
+    [
+        GmailDbNotFoundError("missing"),
+        GmailSchemaError("invalid schema"),
+        SQLiteSnapshotError("active", reason="active"),
+    ],
+)
+def test_collect_champion_signals_connect_error_returns_sentinel(tmp_path: Path, error: Exception) -> None:
+    """Local cache failures surface the unavailable sentinel."""
     with (
         patch.object(collect_mod, "_gmail_db_exists", return_value=True),
         patch.object(collect_mod, "get_gmail_db_path", return_value=tmp_path / "gmail.db"),
-        patch.object(collect_mod, "_gmail_connect", side_effect=GmailDbNotFoundError("missing")),
+        patch.object(collect_mod, "_gmail_connect", side_effect=error),
     ):
         result = collect_champion_signals(tmp_path)
 

@@ -1,10 +1,25 @@
 # [PURSUIT NAME] — [ACCOUNT NAME]
 
+This is a private draft template, not a generated report or verified customer
+record. Replace placeholders only with selected, authorized evidence; include
+source dates and mark missing values `unknown` or `unavailable`. Keep inference
+distinct from customer commitments. Using this template does not create a Google
+document, update Salesforce, advance a stage, or authorize external sharing.
+
+Before saving, confirm the destination and any replacement of an existing draft.
+Keep private material within approved locations, reject path/symlink escapes,
+write atomically as UTF-8, and reread the result before reporting a saved draft.
+
+Abbreviations used below: Statement of Work (SOW), Salesforce (SF), annual
+contract value (ACV), stock keeping unit (SKU), proof of concept (POC), and
+knowledge transfer (KT).
+
 **Account:** [Account Name]
 **SOW Requested By:** [Name, Title]
 **Opportunity Owner:** [Account Engineer Name]
 **Last Updated:** [Date]
-**GDoc Created:** [Date]
+**External Document:** [Approved document URL and creation date, or not created]
+**Evidence Coverage:** [Selected sources and dates; unavailable inputs]
 
 ---
 
@@ -14,9 +29,9 @@
 
 [Paragraph 1: What the opportunity is — technology area, scope, and business context. How it originated (who requested it, what triggered the conversation). The primary buyer and champion.]
 
-[Paragraph 2: Current deal status — SF stage, ACV, proposed SOW period, key commercial structure (HCS drawdown, T&M, fixed price). Key events that shaped the current scope (pivots, requirements changes, stakeholder moves).]
+[Paragraph 2: Current deal status — SF stage, ACV, proposed SOW period, and the applicable commercial structure (for example, time and materials or fixed price). Key events that shaped the current scope (pivots, requirements changes, stakeholder moves).]
 
-[Paragraph 3: Where we stand today — what verbal or written commitments exist, what paperwork is in flight, and what the critical next milestone is before this moves forward.]
+[Paragraph 3: Where we stand today — what verbal or written commitments exist, what paperwork remains outstanding, and what the critical next milestone is before this moves forward.]
 
 ---
 
@@ -27,9 +42,9 @@
 | Stage      | [SF Stage]               |
 | Close Date | [MM/DD/YYYY]             |
 | ACV        | $[amount]                |
-| SKU        | [CU-GPS / T&M / Other]   |
+| SKU        | [Applicable product or service identifier] |
 | SOW Period | [Start – End or TBD]     |
-| Type       | [HCS Drawdown / Net New] |
+| Type       | [Applicable commercial arrangement] |
 | Budget Cap | $[amount if known]       |
 
 ---
@@ -50,7 +65,8 @@ result or stage gate.
 **Biggest Risk:** [The single most important evidence need or operational risk —
 cite an exact ClosePlan question ID only when it came from the current live read.]
 
-**Recommended Next Action:** [Concrete next step the AE should take this week.]
+**Recommended Next Action:** [Evidence-backed proposal, owner, and timing if known;
+not an instruction to execute without approval.]
 
 ---
 
@@ -85,6 +101,11 @@ cite an exact ClosePlan question ID only when it came from the current live read
 
 ## Current Scope
 
+Use approved commercial evidence and its stated currency, units, and revision.
+If hours and rates are available, calculate each line total and reconcile the
+grand total. Otherwise leave totals unknown; this table is not a pricing engine,
+contract approval, or authority to invent rates, budgets, or commitments.
+
 **SOW Period:** [TBD or start–end date]
 **Total:** $[amount] | [hours] hrs
 
@@ -100,7 +121,7 @@ cite an exact ClosePlan question ID only when it came from the current live read
 
 **Phase 1 — [Phase Name]:** [What gets delivered, what dependencies exist, what the gate condition is.]
 
-**Phase 2 — [Phase Name]:** [What gets delivered, bank pre-work required, what clears the gate.]
+**Phase 2 — [Phase Name]:** [What gets delivered, customer prerequisites, what clears the gate.]
 
 **Phase 3 — [Phase Name]:** [Final deliverables, POC handoff, documentation, KT.]
 

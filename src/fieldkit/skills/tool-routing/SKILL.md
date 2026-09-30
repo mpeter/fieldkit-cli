@@ -1,87 +1,86 @@
 ---
 name: tool-routing
 description: >
-  You need to call an external service such as Google Workspace, Backstory,
-  Tavily, Brave, Slack, GitHub, Dataverse, or a browser and need the primary CLI
-  or the narrow MCP-only exception. Routes CLI-first and records when no route
-  exists. Trigger with "tool routing", "which tool for [task]", "tool for Gmail",
-  "MCP routing", "which MCP server", or "right tool for [service]".
+  Choose a supported fieldkit, Google Workspace, file, GitHub, browser, Slack,
+  or web route without assuming private services or uninstalled tools.
 metadata:
   opencode/slash: "true"
   category: ops
 ---
 
-## Objective
-Route every external operation through an installed CLI when one has capability
-parity. Use MCP only for the five narrowly defined exceptions below. Avoid gateway
-setup, schema load, and retry work for CLI-covered tasks.
+# Choose a supported tool route
 
+Use this skill to identify how an operation can be performed in the current
+environment. A route is usable only when its executable or tool is present, its
+documented interface covers the operation, and the required identity and
+authorization are known. Discovery is not proof of authentication or permission.
 
-## Primary routes
-| Task | Primary route | Details |
-|---|---|---|
-| Account-centric cached Gmail queries | `fieldkit gmail query ...` | `fieldkit gmail query --help` |
-| Gmail, Drive, Docs, Sheets, Calendar, Contacts, Slides, Tasks, Forms, Chat, Apps Script | `gws <service> ...` | [ops/workspace-tool-catalog.md](ops/workspace-tool-catalog.md) |
-| Browser automation with the logged-in Chrome session | `chrome-use` | [references/browser-cli.md](references/browser-cli.md) |
-| Tavily search, extract, crawl, map, research | `tvly` | [references/web-search.md](references/web-search.md) |
-| Slack | `slackcli` | [references/non-mcp-tools.md](references/non-mcp-tools.md) |
-| GitHub | `gh` and Git | [references/non-mcp-tools.md](references/non-mcp-tools.md) |
-| Public GitHub code-pattern search | direct global `gh_grep` MCP | [references/non-mcp-tools.md](references/non-mcp-tools.md) |
-| Vault read/write/search/history | native files, `rg`, Git, `qmd` | [references/vault.md](references/vault.md) |
-| Official library docs | project docs or web; `gh` for code examples | [references/developer-search.md](references/developer-search.md) |
+## Start with shipped fieldkit behavior
 
+Start with the installed `fieldkit` command registry for account, Gmail-cache,
+pursuit, watcher, workflow, and supported integration operations. Run
+`fieldkit commands --json` to inspect the current leaf commands, write classes,
+and account scope. Then inspect the selected leaf's `--help` before constructing
+arguments. In a source checkout, use the checkout's documented development
+launcher so a separately installed command cannot answer for another revision.
 
-## MCP exceptions
-Use these only when the requested capability matches the rationale exactly:
+Do not infer that a similarly named command exists.
+Do not invent a command, endpoint, plugin, server, or compatibility route when
+the registry lacks the capability. Report the operation as unavailable or
+identify the documented setup that is missing.
 
-- MCP-NECESSITY fieldkit-sales: Backstory and Product Pages are proprietary services with no installed CLI or public file/API route. See [references/fieldkit-sales.md](references/fieldkit-sales.md).
-- MCP-NECESSITY fieldkit-dataverse: Rover, Snowflake, and authenticated Jira data are exposed through the registered Dataverse MCP service and no installed CLI. See [references/fieldkit-dataverse.md](references/fieldkit-dataverse.md).
-- MCP-NECESSITY direct global `gh_grep`: grep.app provides cross-repository public code-pattern search that is materially different from ordinary GitHub operations and `gh search code`. See [references/non-mcp-tools.md](references/non-mcp-tools.md).
-- MCP-NECESSITY direct global `brave_search`: Brave is retained only as an independent search index when Tavily results need a materially different source. See [references/web-search.md](references/web-search.md).
-- MCP-NECESSITY direct global `context7`: Context7 is retained only for its curated library corpus when project or official web docs are insufficient. See [references/developer-search.md](references/developer-search.md).
+## Select optional capabilities explicitly
 
+Optional tools are capabilities, not fieldkit prerequisites:
 
-## Decision tree
-1. Identify the exact operation and whether it is read-only or writes remote state.
-2. If `fieldkit`, `gws`, `chrome-use`, `tvly`, `slackcli`, `gh`, Git, native files,
-   or `qmd` covers it, use that route.
-3. If it matches one of the five MCP-NECESSITY statements, use the named direct
-   global MCP or, for an application-specific service, check the gateway and use only
-   that group.
-4. If neither applies, state that the capability is unavailable. Do not invent an
-   endpoint or revive a removed group.
-5. For credential failures, follow [workflows/first-time-setup.md](workflows/first-time-setup.md).
+- Google Workspace operations may use a separately installed and authenticated
+  `gws` CLI. Follow the [Google Workspace catalog](ops/workspace-tool-catalog.md).
+- Local workspace content uses native file reads, `rg`, and Git. Follow the
+  [workspace content routes](references/vault.md).
+- GitHub work may use Git and a separately installed `gh` CLI. Other public
+  developer research starts with project and official documentation. Follow the
+  [CLI routes](references/cli-routes.md) and
+  [developer search routes](references/developer-search.md).
+- Browser automation, Slack access, and web research require a tool the operator
+  has separately installed and authorized. fieldkit does not guarantee a client,
+  command name, credential store, or account. Follow the
+  [web research boundary](references/web-search.md) and, for Slack, the
+  [Slack search protocol](references/slack-search-protocol.md).
 
+If more than one installed tool could perform the operation, prefer the one with
+the narrowest documented scope and strongest preview or read-back support. Do not
+silently switch data sources: different services are not equivalent evidence.
 
-## CLI examples
-- Gmail draft: `gws gmail users drafts create`; label change: `gws gmail users messages modify`.
-- Docs edit: inspect with `gws docs documents get`, mutate with `gws docs documents batchUpdate`, then read back.
-- Calendar focus/OOO creation: inspect the schema, then `gws calendar events insert`; event update: `gws calendar events patch`, then read back.
-- Browser: load `chrome-use skills get core --full`, then use `chrome-use` for navigation, actions, and assertions.
-- Vault: use native files/`rg` for exact content and `qmd` for lexical, vector, or hybrid retrieval.
+## Decide before acting
 
+1. Name the exact read or write, target service, target account, and expected
+   result.
+2. Check the fieldkit registry first. If fieldkit owns the behavior, use its
+   documented command and safety flags.
+3. Otherwise, verify that an optional tool is installed and inspect its current
+   help. Confirm authentication with a credential-safe status operation.
+4. Resolve ambiguous accounts, resources, recipients, and destinations before a
+   write. Never choose the first result by list order.
+5. Preview when the supported interface offers a dry-run. Show the exact proposed
+   mutation and obtain the required operator approval.
+6. Run the bounded operation, preserve its exit status, and verify the result
+   through an independent read or artifact inspection.
+7. If any prerequisite or verification step fails, leave the operation pending.
+   Follow the [failure scenarios](references/failure-scenarios.md) instead of
+   claiming partial success.
 
-## Write safety
-CLI-first changes transport, not authority. Obtain the required user authorization
-before remote sends, shares, permission changes, event/contact edits, or other
-side effects. After an authorized write, read the affected resource back through
-the same CLI and report the stored result.
+Read-only access does not authorize a write. Authorization for one resource or
+account does not authorize another. A successful transport response does not
+prove the intended state was stored.
 
+For first-time credential setup, use the
+[authentication workflow](workflows/first-time-setup.md). Salesforce next-step
+changes use the separate
+[Salesforce next-step protocol](references/sf-next-steps-protocol.md).
 
-## MCP gateway check
-Run this only after selecting an application-specific MCP exception:
+## Report the outcome
 
-```bash
-systemctl --user status mcpjungle
-mcpjungle list groups
-```
-
-If the selected group is absent or the gateway is down, stop with the relevant
-setup step. Do not redirect the request to a different data source and call it parity.
-
-
-## Success criteria
-- The primary CLI is selected whenever it covers the requested capability.
-- MCP use names one of the five necessity boundaries and its direct or gateway route.
-- Unavailable operations, including retired vault graph queries, are reported as unavailable.
-- Remote writes retain authorization, verification, and failure reporting.
+Name the route selected, identity and scope checked, operation attempted, and
+verification performed. Mark each requested operation as verified, pending,
+failed, skipped, or unavailable. Never collapse missing credentials, an unknown
+tool, incomplete pagination, ambiguous identity, or failed read-back into success.

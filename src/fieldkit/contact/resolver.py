@@ -11,23 +11,23 @@ No CLI, no try/except around DB ops (errors fail loudly per R058).
 
 import re
 import sqlite3
-from functools import cache
 from pathlib import Path
 from re import compile as _compile
 from typing import Any
 
 from fieldkit.config import get_accounts_root as _get_accounts_root
 from fieldkit.config import get_user_email, get_user_name
+from fieldkit.errors import GmailSyncPartialError, SQLiteSnapshotError
+from fieldkit.gmail.address_query import exact_message_address_filter, register_exact_address_matcher
 from fieldkit.gmail.discover import get_gmail_db_path
-
-
-@cache
-def _default_db() -> Path:
-    return get_gmail_db_path()
-
+from fieldkit.gmail.query_domain import (
+    connect as connect_gmail_cache,
+)
+from fieldkit.gmail.query_support import scan_row_budget, sqlite_query_budget
 
 _STRIP_RE = _compile(r"^(Re:\s*|Fwd?:\s*|AW:\s*|FWD:\s*|Subject:\s*)+", flags=re.IGNORECASE)
 _OOO_RE = _compile(r"^(out of office|automatic reply|autoreply)", flags=re.IGNORECASE)
+_CONTACT_QUERY_WORK_BOUND_MESSAGE = "Gmail contact query exceeded its work bound"
 
 
 # Fields returned in every resolved profile (excludes slack_* by default for external)
@@ -79,39 +79,43 @@ def _compute_decay_signal(decay_pct: float | None) -> str | None:
 
 
 def connect(db_path: Path | None = None) -> sqlite3.Connection:
-    """Return a sqlite3 connection with row_factory and foreign_keys enabled."""
-    path = db_path or _default_db()
-    conn = sqlite3.connect(str(path))
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys=ON")
-    return conn
+    """Open the current ready published people cache with writes disabled."""
+    path = db_path if db_path is not None else get_gmail_db_path()
+    return connect_gmail_cache(path)
 
 
 def get_recent_threads(email: str, conn: sqlite3.Connection, limit: int = 8) -> list[dict[str, Any]]:
     """Return recent email thread subjects and snippets involving this contact.
 
-    Queries messages where the contact appears in from_addr, to_addr, or cc_addr,
+    Queries messages where the contact is an exact from_addr, to_addr, or cc_addr mailbox,
     then deduplicates by subject stem (strips Re:/Fwd: prefixes) to return distinct
-    conversation topics. Returns [] if messages table is absent.
+    conversation topics.
     """
-    try:
-        rows = conn.execute(
-            """
-            SELECT subject, snippet, date_str, date_epoch, from_addr
-            FROM messages
-            WHERE (from_addr LIKE ? OR to_addr LIKE ? OR cc_addr LIKE ?)
-              AND subject != ''
-            ORDER BY date_epoch DESC
-            LIMIT 100
-            """,
-            (f"%{email}%", f"%{email}%", f"%{email}%"),
-        ).fetchall()
-    except sqlite3.OperationalError:
-        return []
+    row_budget = scan_row_budget(limit)
+    register_exact_address_matcher(conn)
+    address_filter, parameters = exact_message_address_filter(email)
+    with sqlite_query_budget(conn, row_budget=row_budget) as budget:
+        try:
+            rows = conn.execute(
+                f"""
+                SELECT subject, snippet, date_str, date_epoch, from_addr
+                FROM messages
+                WHERE {address_filter}
+                  AND subject != ''
+                ORDER BY date_epoch DESC
+                LIMIT ?
+                """,
+                (*parameters, row_budget + 1),
+            ).fetchall()
+        except sqlite3.DatabaseError:
+            if budget.exhausted:
+                raise GmailSyncPartialError(_CONTACT_QUERY_WORK_BOUND_MESSAGE) from None
+            raise SQLiteSnapshotError("Gmail cache contact data is unverified", reason="unverified") from None
 
     seen_stems = set()
     result = []
-    for r in rows:
+    window_exhausted = len(rows) > row_budget
+    for r in rows[:row_budget]:
         subj = (r["subject"] or "").strip()
         # Skip OOO/auto-reply noise
         if _OOO_RE.match(subj):
@@ -129,7 +133,9 @@ def get_recent_threads(email: str, conn: sqlite3.Connection, limit: int = 8) -> 
             }
         )
         if len(result) >= limit:
-            break
+            return result
+    if window_exhausted:
+        raise GmailSyncPartialError(_CONTACT_QUERY_WORK_BOUND_MESSAGE)
     return result
 
 
@@ -137,7 +143,7 @@ def get_recent_meetings(email: str, conn: sqlite3.Connection, limit: int = 10) -
     """Return recent calendar events where email is organizer or attendee.
 
     Queries calendar_events using organizer_email match UNION json_each(attendees)
-    match, ordered by start_time DESC. Returns [] if calendar_events table is absent.
+    match, ordered by start_time DESC.
     """
     try:
         rows = conn.execute(
@@ -155,8 +161,8 @@ def get_recent_meetings(email: str, conn: sqlite3.Connection, limit: int = 10) -
             """,
             (email, email, limit),
         ).fetchall()
-    except sqlite3.OperationalError:
-        return []
+    except sqlite3.DatabaseError:
+        raise SQLiteSnapshotError("Gmail cache contact data is unverified", reason="unverified") from None
     return [
         {
             "event_id": r["event_id"],

@@ -1,20 +1,7 @@
-"""Tests for get_fieldkit_root() install-mode behaviour.
+"""Configured application roots take precedence over the development fallback.
 
-Design background (M007/S02 deferred item):
-  When fieldkit is installed via `uv tool install`, Path(__file__) inside
-  lib/config.py resolves to a site-packages path, not the repo root. The
-  computed fallback (Path(__file__).parent.parent) would then point into
-  site-packages, which is wrong for skills and data-root resolution.
-
-  The fix is already in place: get_fieldkit_root() reads an optional
-  `fieldkit_root` key from ~/.config/fieldkit/config.yaml and honours it
-  over the computed fallback. Users who install via uv tool install should
-  set this key.
-
-  These tests verify:
-    1. The config-override path works correctly (primary protection).
-    2. The computed fallback points to the parent of lib/ (correct in dev).
-    3. Malformed values (YAML errors, wrong types) fall back gracefully.
+Explicit overrides must be valid absolute paths after home expansion. Bundled
+skill discovery does not require an application-checkout override.
 """
 
 from pathlib import Path
@@ -25,17 +12,39 @@ import yaml
 import fieldkit.config as _config_mod
 import fieldkit.config._loader as _config_impl_mod
 import fieldkit.config._paths as _paths_impl_mod
-from fieldkit.config import get_fieldkit_root
+from fieldkit.config import ConfigError, get_fieldkit_root
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.mark.parametrize("value", ["checkout", "./checkout", "../checkout", "", "   ", None, 42])
+def test_fieldkit_root_rejects_invalid_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: object) -> None:
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(yaml.safe_dump({"fieldkit_root": value}), encoding="utf-8")
+    monkeypatch.setattr(_config_impl_mod, "CONFIG_PATH", cfg)
+    _config_mod.clear_config_caches()
+
+    with pytest.raises(ConfigError, match="fieldkit_root"):
+        get_fieldkit_root()
+
+
+def test_fieldkit_root_expands_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("fieldkit_root: ~/checkout\n", encoding="utf-8")
+    monkeypatch.setattr(_config_impl_mod, "CONFIG_PATH", cfg)
+    _config_mod.clear_config_caches()
+
+    result = get_fieldkit_root()
+
+    assert result == (Path.home() / "checkout").resolve()
 
 
 @pytest.fixture(autouse=True)
 def _clear_cache():
     """Clear the @cache between tests to prevent cross-test bleed."""
-    _config_mod.get_fieldkit_root.cache_clear()
+    _config_mod.clear_config_caches()
     yield
-    _config_mod.get_fieldkit_root.cache_clear()
+    _config_mod.clear_config_caches()
 
 
 def test_fieldkit_root_honours_config_key(tmp_path, monkeypatch):

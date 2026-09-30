@@ -5,9 +5,12 @@ from pathlib import Path
 
 import click
 
-from fieldkit.cli_exit import EXIT_AUTH, EXIT_SUCCESS
 from fieldkit.commands.doctor._result import DoctorResult
-from fieldkit.gmail.discover import get_gmail_db_path, table_exists
+from fieldkit.config import ConfigError
+from fieldkit.errors import GmailSyncPartialError, SQLiteSnapshotError
+from fieldkit.gmail import query_domain
+from fieldkit.gmail.discover import get_gmail_db_path
+from fieldkit.gmail.exceptions import GmailDbNotFoundError, GmailSchemaError
 
 
 def _resolve_gmail_db_path(db_path: Path | None) -> Path:
@@ -15,56 +18,71 @@ def _resolve_gmail_db_path(db_path: Path | None) -> Path:
     return get_gmail_db_path() if db_path is None else db_path
 
 
+def _unreadable_cache() -> DoctorResult:
+    """Keep an unreadable cache intact and distinguish data from credentials."""
+    return DoctorResult(
+        "gmail",
+        healthy=False,
+        failure_kind="data",
+        configured=True,
+        message=(
+            "The cache could not be verified without application writes — preserve it, stop cache users, "
+            "and check its path and permissions; "
+            "if damaged, stop cache users and move a recoverable backup aside before running 'fieldkit gmail sync'"
+        ),
+    )
+
+
+def _active_cache() -> DoctorResult:
+    return DoctorResult(
+        "gmail",
+        healthy=False,
+        failure_kind="retryable",
+        configured=True,
+        message="The cache is active or not ready — retry after the current sync finishes",
+    )
+
+
 def check_gmail(db_path: Path | None = None) -> DoctorResult:
-    """Check gmail.db exists, is non-empty, and has a sound `messages` table."""
-    db_path = _resolve_gmail_db_path(db_path)
+    """Check the local cache is readable, non-empty, and has the required tables."""
+    try:
+        db_path = _resolve_gmail_db_path(db_path)
+    except (ConfigError, ValueError, OSError):
+        return _unreadable_cache()
 
-    if not db_path.exists():
-        return DoctorResult("gmail", healthy=False, configured=False, message="run 'fieldkit gmail sync'")
+    try:
+        size_bytes = db_path.stat().st_size
+    except FileNotFoundError:
+        return DoctorResult(
+            "gmail", healthy=False, failure_kind="data", configured=False, message="run 'fieldkit gmail sync'"
+        )
+    except OSError:
+        return _unreadable_cache()
 
-    size_bytes = db_path.stat().st_size
     if size_bytes == 0:
         return DoctorResult(
             "gmail",
             healthy=False,
+            failure_kind="data",
             configured=True,
-            message=f"{db_path} is 0 bytes — remove it and run 'fieldkit gmail sync'",
+            message="The cache is empty — preserve a backup before rebuilding with 'fieldkit gmail sync'",
         )
 
     try:
-        conn = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)
+        conn = query_domain.connect(db_path)
         try:
-            row = conn.execute("SELECT COUNT(*) FROM messages").fetchone()
-            message_count = row[0] if row else 0
-            # historic regression: check for optional index tables built by 'fieldkit sync'
-            has_people = table_exists(conn, "people")
-            has_thread_accounts = table_exists(conn, "thread_accounts")
+            (message_count,) = conn.execute("SELECT COUNT(*) FROM messages").fetchone()
         finally:
             conn.close()
-    except sqlite3.DatabaseError as exc:
-        return DoctorResult(
-            "gmail",
-            healthy=False,
-            configured=True,
-            message=f"integrity check failed ({exc}) — remove {db_path} and run 'fieldkit gmail sync'",
-        )
-
-    missing: list[str] = []
-    if not has_people:
-        missing.append("people")
-    if not has_thread_accounts:
-        missing.append("thread_accounts")
+    except GmailSyncPartialError:
+        return _active_cache()
+    except SQLiteSnapshotError as exc:
+        return _active_cache() if exc.reason in {"active", "resource"} else _unreadable_cache()
+    except (GmailDbNotFoundError, GmailSchemaError, OSError, ValueError, sqlite3.DatabaseError):
+        return _unreadable_cache()
 
     size_mb = round(size_bytes / (1024 * 1024), 1)
     detail = f"{message_count} messages, {size_mb} MB"
-    if missing:
-        tables = ", ".join(missing)
-        return DoctorResult(
-            "gmail",
-            healthy=False,
-            configured=True,
-            message=f"{detail} — '{tables}' table(s) missing, run 'fieldkit sync' to build",
-        )
     return DoctorResult("gmail", healthy=True, configured=True, message=detail)
 
 
@@ -79,9 +97,10 @@ def check_gmail(db_path: Path | None = None) -> DoctorResult:
 )
 @click.option("--json", "as_json", is_flag=True, default=False, help="Emit result as JSON.")
 def doctor_gmail_cmd(db_path: Path | None, as_json: bool) -> None:
-    """Check the local gmail.db cache for integrity.
+    """Check readability and required tables in the local gmail.db cache.
 
-    Exits 0 when the database is reachable and structurally sound, 2 otherwise.
+    Exits 0 when healthy, 1 when an active writer makes the check retryable, and
+    3 for invalid or unverified cache data.
     """
     result = check_gmail(db_path)
     if as_json:
@@ -99,4 +118,4 @@ def doctor_gmail_cmd(db_path: Path | None, as_json: bool) -> None:
         )
     else:
         click.echo(result.render())
-    raise SystemExit(EXIT_SUCCESS if result.healthy else EXIT_AUTH)
+    raise SystemExit(result.exit_code)

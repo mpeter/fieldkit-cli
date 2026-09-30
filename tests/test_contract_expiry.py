@@ -20,6 +20,7 @@ from fieldkit.watch.contract_expiry import (
     _parse_frontmatter,
     _run_contract_expiry_inner,
 )
+from fieldkit.watch.status import WatcherRunResult
 
 pytestmark = pytest.mark.unit
 
@@ -118,7 +119,7 @@ def test_parse_frontmatter_fallback_rejects_unclosed_frontmatter() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _inner_with_no_accounts(tmp_path: Path, **kwargs: int) -> int:
+def _inner_with_no_accounts(tmp_path: Path, **kwargs: int) -> WatcherRunResult:
     """Call _run_contract_expiry_inner with tmp_path as home (no projects dir).
 
     Returns the exit code or raises FieldkitError for invalid thresholds.
@@ -127,7 +128,13 @@ def _inner_with_no_accounts(tmp_path: Path, **kwargs: int) -> int:
         "fieldkit.watch.contract_expiry.get_fieldkit_home",
         return_value=tmp_path,
     ):
-        return _run_contract_expiry_inner(account_filter=None, dry_run=True, **kwargs)
+        return _run_contract_expiry_inner(
+            account_filter=None,
+            dry_run=True,
+            critical=kwargs.get("critical", 14),
+            warning=kwargs.get("warning", 30),
+            notice=kwargs.get("notice", 60),
+        )
 
 
 def test_validation_critical_gte_warning_raises(tmp_path: Path) -> None:
@@ -168,7 +175,7 @@ def test_validation_valid_custom_thresholds_does_not_raise(tmp_path: Path) -> No
             "fieldkit.watch.contract_expiry.get_fieldkit_home",
             return_value=tmp_path,
         ),
-        patch("fieldkit.watch.contract_expiry.write_run_status"),
+        patch("fieldkit.watch.contract_expiry.write_run_status", return_value="skipped"),
     ):
         result = _run_contract_expiry_inner(account_filter=None, dry_run=True, critical=7, warning=25, notice=90)
-    assert result == 1  # accounts dir not found -> exit 1, not FieldkitError
+    assert result == WatcherRunResult("fatal", False, None)  # accounts dir not found -> exit 1, not FieldkitError

@@ -22,6 +22,7 @@ import click
 
 from fieldkit.cli_exit import EXIT_AUTH, EXIT_DATA, EXIT_PARTIAL
 from fieldkit.config import get_sf_rest_base_url, get_sf_session_id
+from fieldkit.sf import errors as sf_errors
 from fieldkit.sf.components import QUOTE_LINES_RELATED_LIST, _field_value
 
 LOG_PREFIX = "[sf-quote]"
@@ -111,44 +112,43 @@ def _fetch_quote(quote_id: str) -> dict[str, Any]:
     with _sf_direct.SFDirectClient(session_id=sid, base_url=base_url) as client:
         try:
             return client.fetch_sobject(_QUOTE_SOBJECT, quote_id, _QUOTE_FIELDS)
-        except _sf_direct.SFAuthError:
-            _log("ERROR: Auth failure. Run: fieldkit auth sf")
-            raise
-        except _sf_direct.SFNotFoundError:
+        except sf_errors.SFAuthError:
+            raise sf_errors.SFAuthError("Salesforce authentication failed. Run: fieldkit auth sf") from None
+        except sf_errors.SFNotFoundError:
             _log(f"ERROR: Quote {quote_id} not found in Salesforce.")
             raise SystemExit(EXIT_DATA) from None
-        except _sf_direct.SFAPIError as exc:
-            _log(f"ERROR: {exc}")
+        except sf_errors.SFAPIError:
+            _log("ERROR: Quote lookup failed. Retry after checking Salesforce availability and access.")
             raise SystemExit(EXIT_PARTIAL) from None
 
 
 def _fetch_quote_lines(quote_id: str) -> list[dict[str, Any]]:
     """Fetch quote lines via the UI API related-list-records route.
 
-    Returns a list of normalized line dicts. Returns ``[]`` on any client
-    error (auth/API), matching the graceful-degradation pattern used by
-    ``_fetch_deal_splits`` — the header is still useful without lines.
+    Returns a list of normalized line dicts, including a valid empty result.
+    Authentication failures propagate; API failures exit 1 without reporting
+    a complete quote.
     """
-    import logging
-
     import fieldkit.sf.client as _sf_direct
 
     sid = get_sf_session_id()
     if not sid:
-        return []
+        _log("ERROR: No Salesforce session. Run: fieldkit auth sf")
+        raise SystemExit(EXIT_AUTH)
 
     base_url = get_sf_rest_base_url()
     if not base_url:
-        return []
+        _log("ERROR: No Salesforce base URL configured.")
+        raise SystemExit(EXIT_AUTH)
 
     with _sf_direct.SFDirectClient(session_id=sid, base_url=base_url) as client:
         try:
             raw = client.fetch_related_list_records(quote_id, QUOTE_LINES_RELATED_LIST)
-        except _sf_direct.SFAuthError:
-            return []
-        except _sf_direct.SFAPIError as exc:
-            logging.getLogger(__name__).warning("%s Quote lines unavailable: %s", LOG_PREFIX, exc)
-            return []
+        except sf_errors.SFAuthError:
+            raise sf_errors.SFAuthError("Salesforce authentication failed. Run: fieldkit auth sf") from None
+        except sf_errors.SFAPIError:
+            _log("ERROR: Quote lines lookup failed. Retry after checking Salesforce availability and access.")
+            raise SystemExit(EXIT_PARTIAL) from None
     return [_parse_line(rec) for rec in raw]
 
 

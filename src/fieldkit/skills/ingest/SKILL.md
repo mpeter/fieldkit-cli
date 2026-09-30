@@ -1,150 +1,162 @@
 ---
 name: ingest
 description: >
-  New meeting recordings, transcripts, or Gemini notes have arrived and need to be processed
-  into the vault; or the Gmail cache is stale and email signals need refreshing before account
-  analysis. Runs the ingestion pipeline to discover, route, and archive unprocessed sources, or
-  the Gmail sync → tag → enrich pipeline for gmail-intel.md files.
-  Trigger with "ingest this recording", "process the transcript", "add this meeting",
-  "PLAUD recording ready", "meeting notes to ingest", "ingest and route",
-  "run the ingest pipeline", "refresh Gmail", "sync email", "Gmail cache is stale",
-  "run Gmail sync", "gmail-refresh".
+  Register and process Google Docs meeting notes discovered in the ready managed
+  Gmail cache, or refresh Gmail-derived reports for one confirmed account. Use for
+  transcript ingest, provenance backfill, Gmail refresh, and interrupted-ingest
+  recovery. Transcript execution is approval-gated because its pending queue is
+  not account-scoped.
 metadata:
   opencode/slash: "true"
   category: ops
 ---
 
-# Ingest Pipeline
+# Ingest meeting notes
 
-Operate `fieldkit ingest` — the source provenance and idempotent ingestion pipeline for
-meeting transcripts, audio recordings, and Gemini meeting notes from Gmail/Drive.
+Use the installed `fieldkit` command with the intended workspace and runtime-data
+roots configured. A source checkout is not required.
 
-All commands run from `<repo-root>/`.
+This skill covers two separate jobs:
 
-## Folded Ops
+- register and process Google Docs meeting notes discovered in the local Gmail
+  cache; and
+- refresh Gmail-derived account reports through
+  [the Gmail refresh workflow](ops/gmail-refresh.md).
 
-- `ops/gmail-refresh.md` — Gmail sync → tag → enrich pipeline for gmail-intel.md files
+Do not treat a recording, the newest message, or a similar meeting title as
+proof of account ownership. Confirm the account and source with the operator.
 
----
+## Inspect one account without writing
 
-## Gotchas
+Start with the global registry counts and an account-scoped discovery preview:
 
-- **Stale vault signals** — run `/brief` first if data hasn't been refreshed today
-- **Trigger overlap with adjacent skills** — confirm you need this skill and not a closely named one
-
-## Constraints
-
-- **Never write to account files without explicit confirmation**
-- **Always surface generated output for review before any external send**
-
-## Pipeline IDs
-
-The primary pipeline is `transcript-ingest`. Use this ID in all `--pipeline` arguments
-unless you have registered a custom pipeline.
-
----
-
-## Commands
-
-### status — what's registered and queued
-
-```bash
-fieldkit ingest status
+```console
+fieldkit ingest status --account <account> --json
+fieldkit ingest discover --pipeline transcript-ingest --dry-run --account <account> --json
 ```
 
-Shows: registered pipelines, source counts, artifact counts, last run info.
-Run this first to understand the current state before doing anything else.
+The status command validates the account slug, but its counts remain global.
+The reported account filter is not evidence that those counts belong only to
+the selected account. The discovery dry-run, unlike status, scopes its candidate
+preview to the account.
 
----
+Discovery reads the ready committed Gmail cache generation; it does not fetch
+live Gmail or adopt a legacy database. The scoped dry-run reports candidates
+without registering them. If the cache is missing, not ready, stale, or
+unmanaged, pause and use the Gmail refresh workflow. That workflow includes the
+explicit bounded sync and legacy-import paths; do not repair cache state from
+this transcript flow.
 
-### discover — find new sources
+Show the returned candidate source identifiers and subjects. The preview does
+not return source dates; do not invent them. Resolve an empty or
+ambiguous result with the operator instead of selecting a likely match.
 
-Scans Gmail for Gemini meeting transcript emails and registers them in `pipeline.db`.
+## Register globally only after approval
 
-```bash
-fieldkit ingest discover --pipeline transcript-ingest
-fieldkit ingest discover --pipeline transcript-ingest --dry-run     # preview only
-fieldkit ingest discover --pipeline transcript-ingest --limit 50    # cap scan volume
+Account-only registration is unavailable. Live discovery registers candidates
+globally, even when `--account` is supplied. Preview the global bounded scan:
+
+```console
+fieldkit ingest discover --pipeline transcript-ingest --dry-run --limit <N> --json
 ```
 
-Run `discover` before `run` to ensure new sources are registered.
+Registration changes the runtime `pipeline.db` and can add other accounts'
+sources. State that global scope, the previewed candidates, and the positive
+matching-message result limit, then obtain explicit approval before running:
 
----
-
-### run — process registered sources
-
-Executes the pipeline on all pending sources (or up to `--limit`).
-
-```bash
-fieldkit ingest run --pipeline transcript-ingest
-fieldkit ingest run --pipeline transcript-ingest --dry-run          # preview
-fieldkit ingest run --pipeline transcript-ingest --limit 10         # batch
-fieldkit ingest run --pipeline transcript-ingest --interactive      # confirm each
+```console
+fieldkit ingest discover --pipeline transcript-ingest --limit <N> --json
 ```
 
-`--interactive` prompts y/n/q for each source — use when reviewing new sources
-before committing to full pipeline execution.
+Use the same approved positive limit for the preview and registration. The
+limit caps matching messages returned; it does not cap all rows examined or
+select an exact source. A changing cache can change the candidates, so review
+the returned sources before processing anything.
 
----
+Discovery also enforces an independent SQLite work bound. If that bound is
+exhausted, it exits non-zero before registering sources; the failed preview is
+not a complete inventory or an empty-result finding. Stop rather than raising
+limits automatically or processing an older queue.
 
-### backfill — find orphaned vault files
+## Process only after accepting the global queue boundary
 
-Scans vault meeting notes for files that lack a `source_id` provenance stamp.
-**Read-only** — never modifies files, only reports.
+`fieldkit ingest run` does not accept `--account`. Before prompting, it scans the
+local Gmail cache without an account filter and may register additional sources.
+Its pending queue can therefore contain other accounts.
 
-```bash
-fieldkit ingest backfill
+Never continue from a generic “ingest this transcript” request into an automatic
+batch. Explain the global registry boundary and obtain explicit approval to
+review the queue interactively. Then check Google authorization and run:
+
+Before execution, explain that transcript cleaning and extraction normally
+send transcript content to the configured LLM provider. Verify that provider's
+configuration, authorization and approved data scope separately; Google doctor
+does not establish LLM readiness. The supported `FIELDKIT_NO_LLM=1` path avoids
+those LLM calls: cleaning passes through the input and extraction returns empty
+lists with stub confidence. It is not equivalent to a completed semantic
+extraction. Obtain approval for the chosen mode and its effects before running.
+
+```console
+fieldkit doctor google --json
+fieldkit ingest run --pipeline transcript-ingest --interactive
 ```
 
-Use after bulk imports or migrations to find notes that aren't tracked in `pipeline.db`.
+The Google check may refresh an expired token. Continue only when it exits 0.
+At each ingest prompt, accept only the confirmed source and reject unrelated or
+ambiguous entries. Do not use the non-interactive run command as a substitute
+for account scoping.
 
----
+The prompt identifies the source, not the eventual account, pursuit or task
+destinations. Accepting it authorizes preparation and subsequent routing; it
+does not mechanically confine effects to the account named in the request.
+Explain that distinction before approval. If the operator requires exact
+destination approval before any effect, stop: this interactive command does
+not provide that destination preview.
 
-### reprocess — re-run an updated pipeline on existing artifacts
+A transcript run can write a meeting note, pursuit activity, and `TASKS.md`
+effects in the routed account. Prepared output and ownership comments support
+recovery across partial writes. Preserve those records, the database, its
+sidecars, and backups.
 
-Re-runs artifacts produced by an older pipeline version through the current version.
+For `transcript-ingest`, `ingest run --dry-run` previews pending and newly
+discovered sources without registering them or initializing the registry.
+It reads the managed Gmail cache and any existing registry through their
+read-only paths; it does not process transcripts or establish permission to
+execute the previewed work. Its preview remains global, not account-scoped.
 
-```bash
-fieldkit ingest reprocess --pipeline transcript-ingest
-fieldkit ingest reprocess --pipeline transcript-ingest --from-version 1.0
-fieldkit ingest reprocess --pipeline transcript-ingest --dry-run
+## Treat every non-zero result as incomplete
+
+Preserve the exact command, exit status, and sanitized JSON output. A busy lock,
+interruption, setup error, or source failure is not success. Do not skip to a
+later source or claim the batch completed.
+
+Retry the same non-dry-run pipeline to replay retained prepared output. Replayed
+effects are checked before writing again, but previously completed effects may
+remain after a later effect fails. Reconcile operator edits or ownership
+conflicts; do not delete recovery records to force progress.
+
+## Audit missing provenance safely
+
+Backfill is read-only and can be scoped to one confirmed account:
+
+```console
+fieldkit ingest backfill --account <account> --json
 ```
 
-Use after pipeline logic changes to update existing meeting notes without re-ingesting
-from source.
+It reports meeting notes without a `source_id`; it does not repair them.
 
----
+## Reprocess only as an explicit maintenance operation
 
-## Standard Flow
+Reprocessing replaces existing notes and can refetch the original Google Doc.
+Require a backup, an account scope, an intentional `--from-version` or `--force`
+selector, a preview, and separate approval for the live run. Retained
+replacement journals must be reconciled rather than discarded. Initial-ingest
+recovery belongs to `ingest run`; replacement recovery belongs to `ingest
+reprocess`.
 
-```bash
-# 1. Check current state
-fieldkit ingest status
+## Report the result
 
-# 2. Discover new sources from Gmail
-fieldkit ingest discover --pipeline transcript-ingest
-
-# 3. Preview what would run
-fieldkit ingest run --pipeline transcript-ingest --dry-run
-
-# 4. Run the pipeline
-fieldkit ingest run --pipeline transcript-ingest
-
-# 5. Verify
-fieldkit ingest status
-```
-
----
-
-## Output Artifacts
-
-Pipeline artifacts are written to the vault:
-- `accounts/<account>/meetings/YYYY-MM-DD-<slug>.md` — processed meeting notes
-- `pipeline.db` — source registry and run history (path from `fieldkit init`)
-
----
-
-## Related
-
-- `fieldkit ingest status` — always run first; shows pipeline.db health at a glance
-- `ops/gmail-refresh.md` — run this first if gmail-intel signals feeding a meeting brief are stale
+Name the confirmed account, every source reviewed, each accepted or rejected
+source, written paths reported by the command, exact exit status, and any
+remaining pending or recovery state. Do not summarize a partial result as a
+successful ingest.

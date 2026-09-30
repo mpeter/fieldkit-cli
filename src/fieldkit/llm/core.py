@@ -7,11 +7,11 @@ Usage:
     # Normal path (uses LiteLLM via Vertex AI):
     result = synthesize("Summarize this account...")
 
-    # Offline / test path (set NO_LLM=1 in env):
+    # Offline / test path (set FIELDKIT_NO_LLM=1 in env):
     result = synthesize("hello")  # returns _NO_LLM_STUB deterministically
 
-Environment variables (implementation note: FIELDKIT_* prefixed names are primary; unprefixed are aliases):
-    FIELDKIT_NO_LLM / NO_LLM         — any non-empty string → return stub, skip litellm entirely
+Environment variables:
+    FIELDKIT_NO_LLM                  — any non-empty string → return stub, skip litellm entirely
     FIELDKIT_LLM_MODEL / LLM_MODEL   — override the default Vertex AI model (must use vertex_ai/)
     GOOGLE_CLOUD_PROJECT or VERTEXAI_PROJECT — GCP project for Vertex AI (required for live calls)
     FIELDKIT_VERTEX_LOCATION / CLOUD_ML_REGION / VERTEX_LOCATION / GOOGLE_CLOUD_REGION —
@@ -41,16 +41,13 @@ from fieldkit.errors import LLMError
 
 logger = logging.getLogger(__name__)
 
-_NO_LLM_STUB = "[LLM STUB] NO_LLM=1 is set — no API call was made."
-# Default timeout for LLM synthesis calls (seconds).  Covers two Vertex AI cold-start
-# budgets (30-60s each).  Callers that need a different budget pass timeout= explicitly.
+_NO_LLM_STUB = "[LLM STUB] FIELDKIT_NO_LLM=1 is set — no API call was made."
+# Explicit per-request budget used by brief generation, skill routing, and judging.
+# This is shorter than synthesize()'s 120-second default for callers that omit timeout.
 LLM_SYNTHESIS_TIMEOUT = 90
 # Hardcoded fallback model — used only when no override is provided via argument,
 # environment variable, or config file. See _resolve_model() for the full priority chain.
 _HARDCODED_DEFAULT_MODEL = "vertex_ai/claude-sonnet-4-6"
-# Backward-compatible alias — callers that reference llm._DEFAULT_MODEL continue to work.
-# The actual model used at runtime is determined by _resolve_model() inside synthesize().
-_DEFAULT_MODEL = _HARDCODED_DEFAULT_MODEL
 # Conservative initial value (~100k tokens). Revisit using audit log data once finding #1
 # (LLM audit log fix) is implemented.
 _MAX_PROMPT_CHARS: int = 400_000
@@ -102,8 +99,8 @@ def _select_model(override: str | None) -> str:
 def _resolve_model(override: str | None) -> str:
     """Resolve and validate the LLM model string at call time.
 
-    G3d: Replaces module-level _DEFAULT_MODEL constant (which was frozen at import
-    time) with a function called inside synthesize(). This allows test monkeypatching
+    Resolve the model inside ``synthesize()`` so environment changes are read at
+    call time. This allows test monkeypatching
     of FIELDKIT_ANTHROPIC_MODEL to work correctly — the env var is read fresh on
     each call rather than once at module import.
 
@@ -187,12 +184,12 @@ def synthesize(
     Args:
         prompt:  The user message to send.
         model:   Optional Vertex AI model override (e.g. "vertex_ai/claude-sonnet-4-6").
-                 Falls back to LLM_MODEL env var, then _DEFAULT_MODEL.
+                 Falls back to model environment/configuration, then the built-in default.
         timeout: Request timeout in seconds forwarded to
                  ``litellm.completion(timeout=...)``.  Default 120s covers two
                  Vertex AI cold-start budgets.  Pass explicitly when you need a
                  shorter window (e.g. ``timeout=60`` for pipeline synthesis —
-                 see commands/pipeline/main.py).
+                 see pipeline/main.py).
         system:  Optional system message. When provided, prepended as a
                  ``{"role": "system"}`` message with ``cache_control: {"type": "ephemeral"}``
                  for Anthropic prompt caching. When ``None`` (default), behaviour is
@@ -211,7 +208,7 @@ def synthesize(
     """
     # ------------------------------------------------------------------
     # 1. Stub path — checked before any litellm import
-    #    implementation note: llm_disabled() reads both FIELDKIT_NO_LLM (primary) and NO_LLM (alias).
+    #    llm_disabled() reads the canonical FIELDKIT_NO_LLM setting.
     # ------------------------------------------------------------------
     if llm_disabled():
         return _NO_LLM_STUB
@@ -275,9 +272,6 @@ def synthesize(
     # ------------------------------------------------------------------
     @transient_retry(lambda exc: isinstance(exc, _RETRYABLE), logger)
     def _call_litellm_inner(p: str, m: str, t: int) -> str:
-        extra_kwargs: dict[str, str] = {}
-        if m.startswith("vertex_ai/"):
-            extra_kwargs["vertex_location"] = _resolve_vertex_location()
         # Build messages list — prepend system message with cache_control when
         # provided (closed over from enclosing synthesize() scope via Python closure).
         messages: list[dict[str, object]] = []
@@ -303,9 +297,12 @@ def synthesize(
             model=m,
             messages=messages,
             timeout=t,
-            **extra_kwargs,
+            vertex_location=_resolve_vertex_location(),
         )
-        return str(response.choices[0].message.content)
+        choices = getattr(response, "choices", None)
+        if choices is None:
+            raise ValueError("Expected a non-streaming completion response")
+        return str(choices[0].message.content)
 
     # ------------------------------------------------------------------
     # 5. Call the provider (with bounded retry for transient errors)

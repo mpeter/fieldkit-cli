@@ -20,12 +20,12 @@ pytestmark = pytest.mark.unit
 
 
 def test_sf_opp_key_map_subset_of_model_sf_opp_key_map_subset_of_model() -> None:
-    from fieldkit.commands.sf.frontmatter import SF_OPP_KEY_MAP
     from fieldkit.pursuit.models import SF_FIELD_NAMES
+    from fieldkit.sf.frontmatter import OPPORTUNITY_FIELD_MAP
 
-    drift = set(SF_OPP_KEY_MAP.keys()) - SF_FIELD_NAMES
+    drift = set(OPPORTUNITY_FIELD_MAP) - SF_FIELD_NAMES
     assert not drift, (
-        f"SF_OPP_KEY_MAP has keys not in PursuitFrontmatter: {sorted(drift)}. "
+        f"OPPORTUNITY_FIELD_MAP has keys not in PursuitFrontmatter: {sorted(drift)}. "
         "Add the field to PursuitFrontmatter or remove it from SF_OPP_KEY_MAP."
     )
 
@@ -69,35 +69,10 @@ def test_iosf_fields_equals_sf_field_names_io_sf_fields_equals_sf_field_names() 
     )
 
 
-# ── TestStripSFKeyersCoversAllModelFields (flattened) ───────────────────────
-
-
-def test_strip_sf_keyers_covers_all_model_fields_strip_sf_keys_covers_all_model_fields() -> None:
-    from fieldkit.commands.sf.frontmatter import _strip_sf_keys
-    from fieldkit.pursuit.models import SF_FIELD_NAMES
-
-    # Build a synthetic frontmatter block: one line per sf_ field
-    fm_lines = [f"{key}: some_value" for key in sorted(SF_FIELD_NAMES)]
-    # Add a non-sf_ line that must survive
-    fm_lines.append("stage: propose")
-
-    result = _strip_sf_keys(fm_lines)
-
-    # No sf_ lines should remain
-    remaining_sf = [ln for ln in result if any(ln.startswith(f"{k}:") for k in SF_FIELD_NAMES)]
-    assert not remaining_sf, (
-        f"_strip_sf_keys() left sf_ lines in output: {remaining_sf}. "
-        "Update _ALL_SF_KEYS in frontmatter.py to include all SF_FIELD_NAMES."
-    )
-
-    # The non-sf_ line must be preserved
-    assert "stage: propose" in result, "_strip_sf_keys() removed a non-sf_ line — over-stripping bug."
-
-
 # ── TestRoundTripPreservesSFFields (flattened) ──────────────────────────────
 
 
-def test_round_trip_preserves_sf_fields_round_trip_preserves_sf_fields(tmp_path: pytest.TempdirFactory) -> None:
+def test_round_trip_preserves_sf_fields_round_trip_preserves_sf_fields(tmp_path: Path) -> None:
     from fieldkit.pursuit.io import load_pursuit, write_frontmatter
     from fieldkit.pursuit.models import SF_FIELD_NAMES
 

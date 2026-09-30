@@ -1,10 +1,4 @@
-"""Gmail query domain logic — connect, champion signals, and supporting helpers.
-
-Extracted from commands/gmail/query.py (historic regression) so that collect.py and other
-callers can import from the domain layer instead of from commands/.
-
-historic regression: connect() raises GmailDbNotFoundError instead of calling sys.exit(1).
-"""
+"""Canonical Gmail query, connection, and contact-analysis behavior."""
 
 import calendar
 import re
@@ -13,17 +7,18 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from fieldkit.gmail.exceptions import GmailDbNotFoundError
+from fieldkit.config import get_internal_domains
+from fieldkit.errors import GmailSyncPartialError, SQLiteSnapshotError
+from fieldkit.gmail.address_query import exact_message_address_filter, register_exact_address_matcher
+from fieldkit.gmail.addresses import parse_address_header
+from fieldkit.gmail.constants import AUTOMATION_NOISE_DOMAINS
+from fieldkit.gmail.exceptions import GmailDbNotFoundError, GmailSchemaError
 from fieldkit.gmail.names import resolve_name
+from fieldkit.gmail.publication import GMAIL_QUERY_READY_KEY, open_gmail_publication, publication_root_for
+from fieldkit.gmail.query_support import NOISE_REGEX, scan_row_budget, sqlite_query_budget
+from fieldkit.sqlite_publication import SQLitePublicationError
 
 _BATCH_SIZE = 50
-
-_ENSURE_INDEX_STMTS = [
-    "CREATE INDEX IF NOT EXISTS idx_messages_from_addr ON messages(from_addr)",
-    "CREATE INDEX IF NOT EXISTS idx_messages_to_addr   ON messages(to_addr)",
-    "CREATE INDEX IF NOT EXISTS idx_messages_cc_addr   ON messages(cc_addr)",
-    "CREATE INDEX IF NOT EXISTS idx_people_display_name ON people(display_name)",
-]
 
 
 def _chunk_list(lst: list[str], size: int) -> list[list[str]]:
@@ -35,37 +30,8 @@ def _chunk_list(lst: list[str], size: int) -> list[list[str]]:
     return [lst[i : i + size] for i in range(0, max(len(lst), 1), size)]
 
 
-def _ensure_indexes(conn: sqlite3.Connection) -> None:
-    """Apply any indexes that may be missing from existing databases."""
-    for stmt in _ENSURE_INDEX_STMTS:
-        conn.execute(stmt)
-    conn.commit()
-
-
-def _ensure_schema(conn: sqlite3.Connection) -> None:
-    """Apply additive schema migrations for columns added after initial release.
-
-    Each migration uses ALTER TABLE … ADD COLUMN and silently ignores the
-    "duplicate column name" error that SQLite raises when the column already
-    exists.  Any other OperationalError is re-raised so genuine problems are
-    not swallowed.
-
-    Migrations applied here:
-    - body_plain TEXT: added to store plain-text email bodies for dig/context
-      subcommands.  Legacy databases created before this column was introduced
-      crash with ``sqlite3.OperationalError: no such column: body_plain``
-      without this guard (historic regression).
-    """
-    try:
-        conn.execute("ALTER TABLE messages ADD COLUMN body_plain TEXT")
-        conn.commit()
-    except sqlite3.OperationalError as exc:
-        if "duplicate column" not in str(exc).lower():
-            raise
-
-
 def prepare_database(db_path: Path) -> None:
-    """Apply additive schema and index updates before opening query connections.
+    """Validate the ready published cache before concurrent query connections.
 
     Args:
         db_path: Path to the gmail.db SQLite file.
@@ -73,41 +39,77 @@ def prepare_database(db_path: Path) -> None:
     Raises:
         GmailDbNotFoundError: When the database file does not exist.
     """
-    if not db_path.exists():
-        raise GmailDbNotFoundError(f"Gmail database not found: {db_path}")
-    rw_conn = sqlite3.connect(str(db_path))
-    # historic regression: 5s busy_timeout prevents "database is locked" errors when a
-    # concurrent gmail sync holds the write lock.
-    rw_conn.execute("PRAGMA busy_timeout = 5000")
-    try:
-        _ensure_indexes(rw_conn)
-        _ensure_schema(rw_conn)
-    finally:
-        rw_conn.close()
+    with connect(db_path):
+        pass
 
 
 def connect_read_only(db_path: Path) -> sqlite3.Connection:
-    """Open the Gmail cache without performing schema or index writes."""
-    if not db_path.exists():
-        raise GmailDbNotFoundError(f"Gmail database not found: {db_path}")
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-    # historic regression: 5s busy_timeout prevents "database is locked" errors when a
-    # concurrent gmail sync holds the write lock.
-    conn.execute("PRAGMA busy_timeout = 5000")
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.row_factory = sqlite3.Row
-    return conn
+    """Open only the ready committed Gmail cache generation."""
+    if not publication_root_for(db_path).is_dir():
+        if db_path.exists() or db_path.is_symlink():
+            raise SQLiteSnapshotError("Gmail cache requires explicit import", reason="unverified")
+        raise GmailDbNotFoundError("Gmail cache has not been published; run 'fieldkit gmail sync' first")
+    try:
+        return open_gmail_publication(db_path)
+    except SQLitePublicationError as exc:
+        if exc.reason in {"active", "resource"}:
+            raise GmailSyncPartialError("Gmail cache publication is not ready; retry may help") from None
+        raise SQLiteSnapshotError("Gmail cache publication is unverified", reason="unverified") from None
+
+
+def _validate_query_schema(conn: sqlite3.Connection) -> None:
+    """Reject caches that require an explicit sync-owned schema migration."""
+    required = {
+        "threads": {"thread_id", "subject", "message_count", "updated_at"},
+        "messages": {
+            "message_id",
+            "thread_id",
+            "from_addr",
+            "to_addr",
+            "cc_addr",
+            "subject",
+            "date_str",
+            "date_epoch",
+            "body_plain",
+        },
+        "people": {
+            "email",
+            "display_name",
+            "message_count",
+            "thread_count",
+            "meeting_count",
+            "slack_message_count",
+            "last_seen",
+            "is_internal",
+            "account",
+        },
+        "thread_accounts": {"thread_id", "account"},
+        "sync_state": {"key", "value"},
+    }
+    missing: list[str] = []
+    for table, columns in required.items():
+        present = {str(row["name"]) for row in conn.execute(f"PRAGMA table_info({table})")}
+        if absent := sorted(columns - present):
+            missing.append(f"{table} ({', '.join(absent)})")
+    if missing:
+        details = "; ".join(missing)
+        raise GmailSchemaError(
+            f"Gmail cache schema is incomplete: {details}. Run 'fieldkit gmail sync' to migrate the cache."
+        )
 
 
 def connect(db_path: Path) -> sqlite3.Connection:
-    """Prepare the Gmail cache and return a read-only query connection.
-
-    This compatibility entry point performs setup on its calling thread. Code
-    that opens connections concurrently must call :func:`prepare_database`
-    once before starting workers, then use :func:`connect_read_only` in them.
-    """
-    prepare_database(db_path)
-    return connect_read_only(db_path)
+    """Open and validate an existing Gmail cache without modifying it."""
+    conn = connect_read_only(db_path)
+    try:
+        _validate_query_schema(conn)
+        ready = conn.execute("SELECT value FROM sync_state WHERE key = ?", (GMAIL_QUERY_READY_KEY,)).fetchone()
+        if ready is None or ready[0] != "true":
+            raise GmailSyncPartialError("Gmail cache publication is not ready; retry may help")
+    except Exception:
+        conn.close()
+        raise
+    return conn
 
 
 _RFC2822_FORMATS = (
@@ -122,8 +124,7 @@ def _normalize_date(raw: str) -> str:
     """Return YYYY-MM-DD from an RFC 2822 header string or ISO prefix.
 
     Returns an empty string when *raw* cannot be parsed — callers display
-    blank rather than garbage (historic regression: raw[:10] on RFC 2822 strings like
-    "Wed, 6 May" produced corrupt output).
+    blank rather than slicing an unparsed RFC 2822 value.
     """
     if not raw:
         return ""
@@ -143,30 +144,32 @@ def _normalize_date(raw: str) -> str:
     return ""
 
 
-def query_by_email(conn: sqlite3.Connection, email: str, limit: int = 1) -> tuple[int, str | None]:
+def query_by_email(conn: sqlite3.Connection, email: str) -> tuple[int, str | None]:
     """Return (thread_count, last_contact_date_iso) for threads involving *email*.
 
-    Searches from_addr, to_addr, and cc_addr using the address indexes.
+    Searches from_addr, to_addr, and cc_addr by exact parsed mailbox address.
     ``last_contact_date_iso`` is None when no matching messages are found.
-    The *limit* parameter is accepted for API symmetry but the aggregate result
-    always spans all matching threads.
     """
-    pattern = f"%{email}%"
-    row = conn.execute(
-        """
-        SELECT COUNT(DISTINCT m.thread_id) AS thread_count,
-               (SELECT m2.date_str FROM messages m2
-                WHERE  m2.from_addr LIKE ?
-                   OR  m2.to_addr   LIKE ?
-                   OR  m2.cc_addr   LIKE ?
-                ORDER BY m2.date_epoch DESC LIMIT 1) AS last_date
-        FROM   messages m
-        WHERE  m.from_addr LIKE ?
-           OR  m.to_addr   LIKE ?
-           OR  m.cc_addr   LIKE ?
-        """,
-        (pattern, pattern, pattern, pattern, pattern, pattern),
-    ).fetchone()
+    register_exact_address_matcher(conn)
+    match_m, params_m = exact_message_address_filter(email, alias="m.")
+    match_m2, params_m2 = exact_message_address_filter(email, alias="m2.")
+    with sqlite_query_budget(conn, row_budget=scan_row_budget(1)) as budget:
+        try:
+            row = conn.execute(
+                f"""
+            SELECT COUNT(DISTINCT m.thread_id) AS thread_count,
+                   (SELECT m2.date_str FROM messages m2
+                    WHERE {match_m2}
+                    ORDER BY m2.date_epoch DESC LIMIT 1) AS last_date
+            FROM   messages m
+            WHERE {match_m}
+            """,
+                (*params_m2, *params_m),
+            ).fetchone()
+        except sqlite3.DatabaseError:
+            if budget.exhausted:
+                raise GmailSyncPartialError("Gmail contact query exceeded its SQLite work bound") from None
+            raise SQLiteSnapshotError("Gmail cache contact data is unverified", reason="unverified") from None
     if row is None or not row["thread_count"]:
         return (0, None)
     last_date: str | None = row["last_date"]
@@ -218,22 +221,170 @@ def build_date_clause(since: int | None, before: int | None) -> tuple[str, list[
     return fragment, params
 
 
+def _internal_blind_domains() -> set[str]:
+    """Return internal blind domains from the current configuration."""
+    return set(get_internal_domains()) | set(AUTOMATION_NOISE_DOMAINS)
+
+
+def _is_noise(email: str) -> bool:
+    domain = email.split("@")[-1] if "@" in email else ""
+    if domain in _internal_blind_domains():
+        return True
+    return bool(NOISE_REGEX.search(email))
+
+
+def _fetch_blindspot_messages(
+    conn: sqlite3.Connection,
+    thread_ids: list[str],
+    since: int | None,
+) -> list[Any]:
+    """Fetch address and activity rows for account threads."""
+    placeholders = ",".join("?" * len(thread_ids))
+    if since is not None:
+        return conn.execute(
+            f"SELECT from_addr, to_addr, date_epoch FROM messages "
+            f"WHERE thread_id IN ({placeholders}) AND date_epoch >= ?",
+            [*thread_ids, since],
+        ).fetchall()
+    return conn.execute(
+        f"SELECT from_addr, to_addr, date_epoch FROM messages WHERE thread_id IN ({placeholders})",
+        thread_ids,
+    ).fetchall()
+
+
+def _build_addr_stats(msg_rows: list[Any]) -> dict[str, dict[str, Any]]:
+    """Aggregate per-address message count and last-seen epoch."""
+    addr_stats: dict[str, dict[str, Any]] = {}
+    for row in msg_rows:
+        for header, field in ((row[0], "sender address"), (row[1], "recipient address")):
+            for _name, email in parse_address_header(header, field=field):
+                if _is_noise(email):
+                    continue
+                if email not in addr_stats:
+                    addr_stats[email] = {"msgs": 0, "last_epoch": 0}
+                addr_stats[email]["msgs"] += 1
+                epoch: int = row[2] or 0
+                if epoch > addr_stats[email]["last_epoch"]:
+                    addr_stats[email]["last_epoch"] = epoch
+    return addr_stats
+
+
+def query_blindspots(
+    conn: sqlite3.Connection,
+    account: str,
+    since: int | None = None,
+    limit: int | None = 50,
+) -> list[tuple[str, str, int, int]]:
+    """Return external contacts active in account threads."""
+    thread_id_rows = conn.execute(
+        "SELECT thread_id FROM thread_accounts WHERE LOWER(account) = ?",
+        [account.lower()],
+    ).fetchall()
+    if not thread_id_rows:
+        return []
+
+    thread_ids = [row[0] for row in thread_id_rows]
+    addr_stats = _build_addr_stats(_fetch_blindspot_messages(conn, thread_ids, since))
+    if not addr_stats:
+        return []
+
+    placeholders = ",".join("?" * len(addr_stats))
+    name_rows = conn.execute(
+        f"SELECT email, display_name FROM people WHERE email IN ({placeholders})",
+        list(addr_stats),
+    ).fetchall()
+    name_map: dict[str, str] = {row[0]: row[1] or "" for row in name_rows}
+    results = [
+        (email, name_map.get(email, ""), stats["msgs"], stats["last_epoch"]) for email, stats in addr_stats.items()
+    ]
+    results.sort(key=lambda item: item[3], reverse=True)
+    return results[:limit] if limit is not None else results
+
+
+def query_dig(
+    conn: sqlite3.Connection,
+    account: str,
+    keyword: str,
+    since: int | None = None,
+    limit: int = 8,
+) -> list[dict[str, Any]]:
+    """Return account threads whose subject or body matches a keyword."""
+    pattern = f"%{keyword}%"
+    if since is not None:
+        sql = """
+            SELECT t.thread_id, t.subject, t.message_count,
+                   first_msg.from_addr, first_msg.date_str AS first_date,
+                   (SELECT mx.date_str FROM messages mx
+                    WHERE mx.thread_id = t.thread_id
+                    ORDER BY mx.date_epoch DESC LIMIT 1) AS last_date
+            FROM   threads t
+            JOIN   thread_accounts ta ON ta.thread_id = t.thread_id
+            JOIN   (
+                       SELECT thread_id, from_addr, date_str
+                       FROM   messages
+                       WHERE  (subject LIKE ? OR body_plain LIKE ?)
+                       GROUP  BY thread_id
+                       HAVING MIN(date_epoch) > 0
+                   ) first_msg ON first_msg.thread_id = t.thread_id
+            WHERE  LOWER(ta.account) = ?
+              AND  t.thread_id IN (
+                       SELECT DISTINCT thread_id FROM messages WHERE date_epoch >= ?
+                   )
+            ORDER  BY last_date DESC
+            LIMIT  ?
+        """
+        params: list[Any] = [pattern, pattern, account.lower(), since, limit]
+    else:
+        sql = """
+            SELECT t.thread_id, t.subject, t.message_count,
+                   first_msg.from_addr, first_msg.date_str AS first_date,
+                   (SELECT mx.date_str FROM messages mx
+                    WHERE mx.thread_id = t.thread_id
+                    ORDER BY mx.date_epoch DESC LIMIT 1) AS last_date
+            FROM   threads t
+            JOIN   thread_accounts ta ON ta.thread_id = t.thread_id
+            JOIN   (
+                       SELECT thread_id, from_addr, date_str
+                       FROM   messages
+                       WHERE  (subject LIKE ? OR body_plain LIKE ?)
+                       GROUP  BY thread_id
+                       HAVING MIN(date_epoch) > 0
+                   ) first_msg ON first_msg.thread_id = t.thread_id
+            WHERE  LOWER(ta.account) = ?
+            ORDER  BY last_date DESC
+            LIMIT  ?
+        """
+        params = [pattern, pattern, account.lower(), limit]
+
+    rows = conn.execute(sql, params).fetchall()
+    return [
+        {
+            "thread_id": row["thread_id"],
+            "subject": row["subject"],
+            "message_count": row["message_count"],
+            "from_addr": row["from_addr"],
+            "first_date": row["first_date"],
+            "last_date": row["last_date"],
+        }
+        for row in rows
+    ]
+
+
 def _champion_thread_stats(
     conn: sqlite3.Connection, emails: list[str], since: int | None = None
 ) -> tuple[int, int, int, Any]:
     """Return (initiated, total, sent, last_row) for champion signal computation.
 
     Chunks the email list into batches of _BATCH_SIZE to avoid SQLite's
-    1000-node expression-tree limit on large accounts (historic regression).
+    1000-node expression-tree limit on large accounts.
 
     Args:
         since: Optional lower-bound epoch integer.  When provided, only messages
-            on or after this epoch are counted (historic regression).
+            on or after this epoch are counted.
     """
     if not emails:
         return 0, 0, 0, None
 
-    # historic regression: build the date filter fragment once; applied to all per-batch queries.
     date_clause, date_params = build_date_clause(since, None)
 
     initiated = 0
@@ -247,7 +398,7 @@ def _champion_thread_stats(
         sent_from_clause = " OR ".join(["from_addr LIKE ?" for _ in batch])
         total_like_params = like_params * 3
 
-        # historic regression: apply date filter inside the subquery where date_epoch is in scope.
+        # Apply the date filter inside the subquery where date_epoch is in scope.
         # The outer query only has m.min_epoch (aliased), so the bare date_epoch column
         # is not visible there.  Filtering inside the subquery is semantically equivalent
         # and avoids "no such column: date_epoch" errors.
@@ -310,18 +461,17 @@ def query_champion_signals(conn: sqlite3.Connection, name: str, since: int | Non
     """Return a formatted champion-signal report for *name* using *conn*.
 
     Accepts an open sqlite3.Connection and a name/email fragment.  Returns
-    the same text that ``cmd_champion_click`` previously printed to stdout so
-    that callers (e.g. morning_brief) can filter lines without spawning a
+    the text consumed by the CLI and other domain callers without spawning a
     subprocess.
 
     Uses ``resolve_name()`` from ``fieldkit.gmail.names`` for name resolution so
-    that display-name matching is consistent with ``query person`` (historic regression).
+    that display-name matching is consistent with ``query person``.
 
     Args:
         conn: Open SQLite connection to the Gmail cache database.
         name: Name or email fragment to look up.
         since: Optional lower-bound epoch integer.  When provided, only messages
-            on or after this epoch are counted (historic regression).
+            on or after this epoch are counted.
 
     Returns:
         Formatted champion signal report as a string.
@@ -329,8 +479,6 @@ def query_champion_signals(conn: sqlite3.Connection, name: str, since: int | Non
     Keywords preserved for downstream filtering: 'Threads initiated',
     'Last outbound', 'Signal:'.
     """
-    # historic regression: use the shared ranked resolver (same as cmd_person_click) so that
-    # display-name matching works correctly instead of a raw LIKE query.
     matched_rows = resolve_name(name, conn)
 
     if not matched_rows:
@@ -339,7 +487,6 @@ def query_champion_signals(conn: sqlite3.Connection, name: str, since: int | Non
     emails = [r["email"] for r in matched_rows]
     display = (matched_rows[0]["display_name"] or name) if matched_rows else name
 
-    # historic regression: pass the parsed since epoch so date filtering is applied.
     initiated, total, sent, last = _champion_thread_stats(conn, emails, since=since)
 
     days_silent: int | None = None
@@ -363,9 +510,7 @@ def query_champion_signals(conn: sqlite3.Connection, name: str, since: int | Non
     lines.append("")
     lines.append(f"  Signal: {_champion_signal_label(pct)}")
 
-    # Recent threads they started (up to 5) — chunked to avoid expression-tree limit (historic regression)
-    # historic regression: use MIN(date_epoch) for actual first-message date instead of updated_at
-    # (updated_at is the sync timestamp, not the email date; epochs are authoritative).
+    # Recent threads they started, using message epochs rather than sync timestamps.
     all_recents: list[Any] = []
     for batch in _chunk_list(emails, _BATCH_SIZE):
         batch_like = [f"%{e}%" for e in batch]

@@ -1,6 +1,5 @@
 """Private configuration accessors for external integrations."""
 
-import json
 import os
 from pathlib import Path
 from typing import Literal, TypeAlias
@@ -8,8 +7,14 @@ from urllib.parse import urlsplit
 
 from fieldkit.config import _accounts, _loader
 from fieldkit.config._paths import get_fieldkit_data
+from fieldkit.config.salesforce_cookie import read_salesforce_cookie
 
 IntegrationConfigurationState: TypeAlias = Literal["disabled", "enabled", "invalid"]
+McpEndpointName: TypeAlias = Literal["backstory", "calendar", "draft_queue"]
+
+_SF_URL_FORMAT_ERROR = (
+    "Unrecognised Salesforce org URL format. Expected .lightning.force.com or .my.salesforce.com HTTPS URL."
+)
 
 #: All Google API scopes required by fieldkit's Python code (non-MCP paths).
 #: Single auth flow → single token file → all fieldkit commands work.
@@ -35,8 +40,11 @@ def get_google_token_path() -> Path:
 
 def _normalize_sf_rest_url(raw: str) -> str:
     """Validate and normalize one explicitly configured Salesforce HTTPS URL."""
-    parsed = urlsplit(raw)
-    hostname = parsed.hostname or ""
+    try:
+        parsed = urlsplit(raw)
+        hostname = parsed.hostname or ""
+    except ValueError:
+        raise _loader.ConfigError(_SF_URL_FORMAT_ERROR) from None
     valid_shape = (
         parsed.scheme == "https"
         and bool(hostname)
@@ -51,9 +59,7 @@ def _normalize_sf_rest_url(raw: str) -> str:
         return f"https://{instance}.my.salesforce.com"
     if valid_shape and (hostname.endswith(".my.salesforce.com") or hostname.endswith(".salesforce.com")):
         return f"https://{hostname}"
-    raise _loader.ConfigError(
-        f"Unrecognised Salesforce org URL format: {raw!r}. Expected .lightning.force.com or .my.salesforce.com URL."
-    )
+    raise _loader.ConfigError(_SF_URL_FORMAT_ERROR) from None
 
 
 def get_sf_rest_base_url() -> str:
@@ -63,6 +69,11 @@ def get_sf_rest_base_url() -> str:
     if not raw:
         raw = _accounts.get_salesforce_org_url().rstrip("/")
     return _normalize_sf_rest_url(raw) if raw else ""
+
+
+def resolve_oauth_credentials() -> tuple[str | None, str | None]:
+    """Resolve the canonical Google OAuth client settings."""
+    return os.environ.get("GOOGLE_OAUTH_CLIENT_ID") or None, os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET") or None
 
 
 def get_integration_configuration_state(
@@ -83,9 +94,8 @@ def get_integration_configuration_state(
         if "gmail_token" in data:
             value = data["gmail_token"]
             return "enabled" if isinstance(value, str) and value.strip() else "invalid"
-        client_id = bool(os.environ.get("GOOGLE_OAUTH_CLIENT_ID"))
-        client_secret = bool(os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET"))
-        if client_id != client_secret:
+        client_id, client_secret = resolve_oauth_credentials()
+        if bool(client_id) != bool(client_secret):
             return "invalid"
         return "enabled" if client_id else "disabled"
 
@@ -113,21 +123,11 @@ def get_sf_session_id() -> str | None:
             return sid_from_config.strip()
 
     cookie_path = get_cookie_file()
-    if not cookie_path.exists():
-        return None
     try:
-        data = json.loads(cookie_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+        cookie = read_salesforce_cookie(cookie_path)
+    except (ValueError, OSError):
         return None
-    cookies = data.get("cookies", []) if isinstance(data, dict) else []
-    for cookie in cookies:
-        if not isinstance(cookie, dict):
-            continue
-        if cookie.get("name") == "sid" and "my.salesforce.com" in str(cookie.get("domain", "")):
-            value = cookie.get("value")
-            if isinstance(value, str):
-                return value
-    return None
+    return cookie.sid if cookie is not None else None
 
 
 _MCP_GATEWAY_DEFAULT_BASE = "http://127.0.0.1:8080"
@@ -144,7 +144,7 @@ def _load_mcp_gateway_config(*, strict: bool) -> dict[str, object] | None:
 
 
 def get_mcp_gateway_url(*, strict: bool = False) -> str:
-    """Return the configured, environment-overridden, or default MCP gateway URL."""
+    """Return the configured MCP gateway URL, then the environment fallback or default."""
     data = _load_mcp_gateway_config(strict=strict)
     if data is not None:
         value = data.get("mcp_gateway_url", "")
@@ -155,6 +155,39 @@ def get_mcp_gateway_url(*, strict: bool = False) -> str:
     return environment_value or _MCP_GATEWAY_DEFAULT_BASE
 
 
-def get_mcp_gateway_base() -> str:
-    """Return the MCP gateway base URL for existing public callers."""
-    return get_mcp_gateway_url()
+def _normalize_mcp_endpoint(name: McpEndpointName, raw: object) -> str:
+    """Validate one explicit MCP endpoint without retaining credentials."""
+    if not isinstance(raw, str) or not raw.strip():
+        raise _loader.ConfigError(f"Config key 'mcp_endpoints.{name}' must be a non-empty URL")
+    value = raw.strip().rstrip("/")
+    try:
+        parsed = urlsplit(value)
+        port_is_valid = parsed.port is None or 0 < parsed.port <= 65535
+    except ValueError:
+        raise _loader.ConfigError(f"Config key 'mcp_endpoints.{name}' must be a valid http(s) URL") from None
+    valid = (
+        parsed.scheme in {"http", "https"}
+        and bool(parsed.hostname)
+        and port_is_valid
+        and parsed.username is None
+        and parsed.password is None
+        and not parsed.query
+        and not parsed.fragment
+    )
+    if not valid:
+        raise _loader.ConfigError(
+            f"Config key 'mcp_endpoints.{name}' must be an http(s) URL without credentials, query, or fragment"
+        )
+    return value
+
+
+def get_mcp_endpoint(name: McpEndpointName) -> str | None:
+    """Return an explicitly configured full endpoint for one optional workflow."""
+    data = _loader._load_raw_config()
+    endpoints = data.get("mcp_endpoints") if data is not None else None
+    if endpoints is None:
+        return None
+    if not isinstance(endpoints, dict):
+        raise _loader.ConfigError("Config key 'mcp_endpoints' must be a mapping")
+    raw = endpoints.get(name)
+    return None if raw is None else _normalize_mcp_endpoint(name, raw)

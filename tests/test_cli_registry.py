@@ -1,7 +1,6 @@
 """Tests for fieldkit.cli_registry — the in-process Click introspection walker.
 
-D1 Wave 5 (D4): `fieldkit commands --json` registry. Per the coverage
-strategy in `openspec/changes/cli-ux-redesign/design.md`, every entry in
+The `fieldkit commands --json` registry contract requires every entry in
 `_COMMANDS` must appear in the built registry with the required fields
 (`full_name`, `summary`, `write_class`).
 """
@@ -9,6 +8,7 @@ strategy in `openspec/changes/cli-ux-redesign/design.md`, every entry in
 import click
 import pytest
 
+import fieldkit.cli_registry as registry_module
 from fieldkit.__main__ import _COMMANDS
 from fieldkit.cli_registry import (
     CommandEntry,
@@ -140,12 +140,14 @@ def test_confirm_exempt_is_carried_into_the_entry() -> None:
 
 def test_declare_write_below_click_decorator_raises() -> None:
     """Applied in the wrong order it would annotate a bare function and vanish."""
-    with pytest.raises(TypeError, match="above the Click command decorator"):
 
-        @click.command("wrong")
-        @declare_write("external")
-        def cmd() -> None:
-            pass
+    def cmd() -> None:
+        pass
+
+    apply_invalid = vars(registry_module)["declare_write"]("external")
+    assert callable(apply_invalid)
+    with pytest.raises(TypeError, match="above the Click command decorator"):
+        apply_invalid(cmd)
 
 
 def test_confirm_exempt_on_non_external_declaration_raises() -> None:
@@ -206,6 +208,17 @@ def test_github_mutating_issue_commands_are_declared_external(full_name: str) ->
     assert entry.write_class == "external"
     assert entry.write_class_source == "declared"
     assert entry.confirm_exempt, "an external write without --confirm must record why"
+
+
+@pytest.mark.parametrize("full_name", ("sf account", "sf listview", "sf opportunity"))
+def test_salesforce_local_sync_commands_declare_workspace_writes(full_name: str) -> None:
+    entries = {entry.full_name: entry for entry in build_registry()}
+    entry = entries[full_name]
+    options = {option for flag in entry.flags for option in flag.opts}
+
+    assert entry.write_class == "workspace"
+    assert entry.write_class_source == "declared"
+    assert "--dry-run" in options
 
 
 # ---------------------------------------------------------------------------
@@ -319,12 +332,13 @@ def test_declaration_overrides_requiredness() -> None:
 
 
 def test_declare_account_scope_below_click_decorator_raises() -> None:
-    with pytest.raises(TypeError, match="above the Click command decorator"):
+    def cmd() -> None:
+        pass
 
-        @click.command("wrong")
-        @declare_account_scope("filter")
-        def cmd() -> None:
-            pass
+    apply_invalid = vars(registry_module)["declare_account_scope"]("filter")
+    assert callable(apply_invalid)
+    with pytest.raises(TypeError, match="above the Click command decorator"):
+        apply_invalid(cmd)
 
 
 @pytest.mark.parametrize(

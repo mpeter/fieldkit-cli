@@ -12,14 +12,66 @@ Added tests for:
 Patch target: fieldkit.gmail.auth.Credentials (import boundary).
 """
 
+import logging
+from pathlib import Path
 from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
 
+from fieldkit.errors import GmailAuthError
 from fieldkit.gmail import auth as sync
 from fieldkit.gmail.retry import _api_call_with_retry
 
 pytestmark = pytest.mark.unit
+
+
+def test_invalid_token_diagnostic_excludes_path_and_exception_payload(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    token_file = tmp_path / "private-token-location.json"
+    token_file.write_text("{}", encoding="utf-8")
+    with (
+        patch.object(sync, "load_dotenv"),
+        patch.object(sync, "_data_dir", return_value=tmp_path),
+        patch.object(sync, "_get_token_path", return_value=token_file),
+        patch.object(sync, "resolve_oauth_credentials", return_value=(None, None)),
+        patch(
+            "fieldkit.gmail.auth.Credentials.from_authorized_user_file",
+            side_effect=ValueError("synthetic-private-payload"),
+        ),
+        patch("googleapiclient.discovery.build") as build,
+        pytest.raises(GmailAuthError, match="OAuth credentials not configured") as error,
+    ):
+        sync.get_gmail_service()
+
+    assert str(error.value).startswith("Gmail OAuth credentials not configured.")
+    diagnostic = caplog.text + str(error.value)
+    assert "invalid" in caplog.text
+    assert "synthetic-private-payload" not in diagnostic
+    assert str(tmp_path) not in diagnostic
+    build.assert_not_called()
+
+
+@pytest.mark.parametrize("expired", [False, True])
+def test_cached_token_needs_no_separate_client_settings(tmp_path: Path, expired: bool) -> None:
+    token_file = tmp_path / "token.json"
+    token_file.write_text("{}", encoding="utf-8")
+    credentials = MagicMock(valid=not expired, expired=expired, refresh_token="synthetic")
+    service = MagicMock()
+    with (
+        patch.object(sync, "load_dotenv"),
+        patch.object(sync, "_data_dir", return_value=tmp_path),
+        patch.object(sync, "_get_token_path", return_value=token_file),
+        patch.object(sync, "resolve_oauth_credentials", return_value=(None, None)),
+        patch("fieldkit.gmail.auth.Credentials.from_authorized_user_file", return_value=credentials),
+        patch.object(sync, "refresh_google_credentials") as refresh,
+        patch.object(sync, "InstalledAppFlow") as consent,
+        patch("googleapiclient.discovery.build", return_value=service),
+    ):
+        result = sync.get_gmail_service()
+    assert result is service
+    assert refresh.call_count == int(expired)
+    consent.from_client_config.assert_not_called()
 
 
 # ── TestGetGmailServiceOAuth (flattened) ────────────────────────────────────
@@ -30,8 +82,8 @@ def test_get_gmail_service_o_auth_valid_cached_token_skips_refresh(tmp_path, mon
     token_file = tmp_path / "token.json"
     token_file.write_text('{"token": "dummy"}', encoding="utf-8")
 
-    monkeypatch.setenv("GOOGLE_CLIENT_ID", "test-client-id")
-    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "test-client-secret")
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_ID", "test-client-id")
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_SECRET", "test-client-secret")
 
     mock_creds = MagicMock()
     type(mock_creds).valid = PropertyMock(return_value=True)
@@ -39,23 +91,28 @@ def test_get_gmail_service_o_auth_valid_cached_token_skips_refresh(tmp_path, mon
     with (
         patch.object(sync, "_data_dir", return_value=tmp_path),
         patch.object(sync, "_get_token_path", return_value=tmp_path / "token.json"),
-        patch.object(sync.Credentials, "from_authorized_user_file", return_value=mock_creds) as mock_load,
-        patch.object(sync, "build", return_value=MagicMock()) as mock_build,
+        patch("fieldkit.gmail.auth.Credentials.from_authorized_user_file", return_value=mock_creds) as mock_load,
+        patch("googleapiclient.discovery.build", return_value=MagicMock()) as mock_build,
     ):
-        sync.get_gmail_service()
+        result = sync.get_gmail_service()
 
+    assert result is mock_build.return_value
     mock_load.assert_called_once()
     mock_creds.refresh.assert_not_called()
     mock_build.assert_called_once()
     assert mock_build.call_args[0][0] == "gmail"
+    transport = mock_build.call_args.kwargs["http"]
+    assert transport.credentials is mock_creds
+    assert transport.timeout == 30
+    assert "credentials" not in mock_build.call_args.kwargs
 
 
 def test_get_gmail_service_o_auth_expired_token_triggers_refresh(tmp_path, monkeypatch):
     token_file = tmp_path / "token.json"
     token_file.write_text('{"token": "dummy"}', encoding="utf-8")
 
-    monkeypatch.setenv("GOOGLE_CLIENT_ID", "test-client-id")
-    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "test-client-secret")
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_ID", "test-client-id")
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_SECRET", "test-client-secret")
 
     mock_creds = MagicMock()
     type(mock_creds).valid = PropertyMock(return_value=False)
@@ -67,8 +124,8 @@ def test_get_gmail_service_o_auth_expired_token_triggers_refresh(tmp_path, monke
     with (
         patch.object(sync, "_data_dir", return_value=tmp_path),
         patch.object(sync, "_get_token_path", return_value=tmp_path / "token.json"),
-        patch.object(sync.Credentials, "from_authorized_user_file", return_value=mock_creds),
-        patch.object(sync, "build", return_value=MagicMock()) as mock_build,
+        patch("fieldkit.gmail.auth.Credentials.from_authorized_user_file", return_value=mock_creds),
+        patch("googleapiclient.discovery.build", return_value=MagicMock()) as mock_build,
     ):
         sync.get_gmail_service()
 
@@ -124,8 +181,8 @@ def test_gmail_sync_token_handling_missing_token_file_gives_clean_error(tmp_path
     # Use a path that definitely does not exist
     nonexistent_token = Path(tempfile.mkdtemp()) / "nonexistent" / "token.json"
 
-    monkeypatch.setenv("GOOGLE_CLIENT_ID", "test-client-id")
-    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "test-client-secret")
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_ID", "test-client-id")
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_SECRET", "test-client-secret")
 
     mock_flow = MagicMock()
     mock_creds = MagicMock()
@@ -138,7 +195,7 @@ def test_gmail_sync_token_handling_missing_token_file_gives_clean_error(tmp_path
         patch.object(sync, "_get_token_path", return_value=nonexistent_token),
         patch("sys.stdin.isatty", return_value=True),
         patch.object(sync, "InstalledAppFlow") as mock_flow_cls,
-        patch.object(sync, "build", return_value=MagicMock()),
+        patch("googleapiclient.discovery.build", return_value=MagicMock()),
     ):
         mock_flow_cls.from_client_config.return_value = mock_flow
         sync.get_gmail_service()
@@ -158,8 +215,8 @@ def test_gmail_sync_token_handling_invalid_token_file_gives_clean_error(tmp_path
     token_file = tmp_path / "token.json"
     token_file.write_text('{"token": "corrupt"}', encoding="utf-8")
 
-    monkeypatch.setenv("GOOGLE_CLIENT_ID", "test-client-id")
-    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "test-client-secret")
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_ID", "test-client-id")
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_SECRET", "test-client-secret")
 
     mock_flow = MagicMock()
     mock_creds = MagicMock()
@@ -170,14 +227,13 @@ def test_gmail_sync_token_handling_invalid_token_file_gives_clean_error(tmp_path
     with (
         patch.object(sync, "_data_dir", return_value=tmp_path),
         patch.object(sync, "_get_token_path", return_value=token_file),
-        patch.object(
-            sync.Credentials,
-            "from_authorized_user_file",
+        patch(
+            "fieldkit.gmail.auth.Credentials.from_authorized_user_file",
             side_effect=ValueError("wrong format"),
         ) as mock_load,
         patch("sys.stdin.isatty", return_value=True),
         patch.object(sync, "InstalledAppFlow") as mock_flow_cls,
-        patch.object(sync, "build", return_value=MagicMock()),
+        patch("googleapiclient.discovery.build", return_value=MagicMock()),
     ):
         mock_flow_cls.from_client_config.return_value = mock_flow
         # Should NOT raise — ValueError is caught and handled cleanly
@@ -198,8 +254,8 @@ def test_gmail_sync_token_handling_expired_token_gives_clean_error_or_refresh(tm
     token_file = tmp_path / "token.json"
     token_file.write_text('{"token": "expired"}', encoding="utf-8")
 
-    monkeypatch.setenv("GOOGLE_CLIENT_ID", "test-client-id")
-    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "test-client-secret")
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_ID", "test-client-id")
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_SECRET", "test-client-secret")
 
     mock_creds = MagicMock()
     type(mock_creds).valid = PropertyMock(return_value=False)
@@ -210,8 +266,8 @@ def test_gmail_sync_token_handling_expired_token_gives_clean_error_or_refresh(tm
     with (
         patch.object(sync, "_data_dir", return_value=tmp_path),
         patch.object(sync, "_get_token_path", return_value=token_file),
-        patch.object(sync.Credentials, "from_authorized_user_file", return_value=mock_creds),
-        patch.object(sync, "build", return_value=MagicMock()),
+        patch("fieldkit.gmail.auth.Credentials.from_authorized_user_file", return_value=mock_creds),
+        patch("googleapiclient.discovery.build", return_value=MagicMock()),
     ):
         sync.get_gmail_service()
 
@@ -232,8 +288,8 @@ def test_gmail_sync_token_handling_permission_denied_on_token_file_gives_clean_e
     token_file = tmp_path / "token.json"
     token_file.write_text('{"token": "dummy"}', encoding="utf-8")
 
-    monkeypatch.setenv("GOOGLE_CLIENT_ID", "test-client-id")
-    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "test-client-secret")
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_ID", "test-client-id")
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_SECRET", "test-client-secret")
 
     mock_flow = MagicMock()
     mock_creds = MagicMock()
@@ -244,14 +300,13 @@ def test_gmail_sync_token_handling_permission_denied_on_token_file_gives_clean_e
     with (
         patch.object(sync, "_data_dir", return_value=tmp_path),
         patch.object(sync, "_get_token_path", return_value=token_file),
-        patch.object(
-            sync.Credentials,
-            "from_authorized_user_file",
+        patch(
+            "fieldkit.gmail.auth.Credentials.from_authorized_user_file",
             side_effect=ValueError("permission denied or invalid format"),
         ),
         patch("sys.stdin.isatty", return_value=True),
         patch.object(sync, "InstalledAppFlow") as mock_flow_cls,
-        patch.object(sync, "build", return_value=MagicMock()),
+        patch("googleapiclient.discovery.build", return_value=MagicMock()),
     ):
         mock_flow_cls.from_client_config.return_value = mock_flow
         # Should NOT raise — ValueError is caught and handled cleanly
@@ -266,8 +321,8 @@ def test_gmail_sync_token_handling_valid_token_proceeds_to_sync(tmp_path, monkey
     token_file = tmp_path / "token.json"
     token_file.write_text('{"token": "valid"}', encoding="utf-8")
 
-    monkeypatch.setenv("GOOGLE_CLIENT_ID", "test-client-id")
-    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "test-client-secret")
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_ID", "test-client-id")
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_SECRET", "test-client-secret")
 
     mock_creds = MagicMock()
     type(mock_creds).valid = PropertyMock(return_value=True)
@@ -276,8 +331,8 @@ def test_gmail_sync_token_handling_valid_token_proceeds_to_sync(tmp_path, monkey
     with (
         patch.object(sync, "_data_dir", return_value=tmp_path),
         patch.object(sync, "_get_token_path", return_value=token_file),
-        patch.object(sync.Credentials, "from_authorized_user_file", return_value=mock_creds),
-        patch.object(sync, "build", return_value=mock_service) as mock_build,
+        patch("fieldkit.gmail.auth.Credentials.from_authorized_user_file", return_value=mock_creds),
+        patch("googleapiclient.discovery.build", return_value=mock_service) as mock_build,
     ):
         result = sync.get_gmail_service()
 
@@ -291,15 +346,15 @@ def test_gmail_sync_token_handling_valid_token_proceeds_to_sync(tmp_path, monkey
 
 
 def test_gmail_sync_token_handling_missing_oauth_credentials_exits_with_code_2(tmp_path, monkeypatch) -> None:
-    """Missing GOOGLE_CLIENT_ID/SECRET → GmailAuthError (clean error, not raw traceback).
+    """Missing GOOGLE_OAUTH_CLIENT_ID/SECRET → GmailAuthError (clean error, not raw traceback).
 
     This is the most common first-run failure: user hasn't run 'fieldkit init'.
     get_gmail_service() raises GmailAuthError with a clear message; cli_main() maps
     it to exit code 2 (EXIT_AUTH) via the typed-exception exit boundary.
     """
     # Ensure no OAuth credentials are set
-    monkeypatch.delenv("GOOGLE_CLIENT_ID", raising=False)
-    monkeypatch.delenv("GOOGLE_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("GOOGLE_OAUTH_CLIENT_ID", raising=False)
+    monkeypatch.delenv("GOOGLE_OAUTH_CLIENT_SECRET", raising=False)
     monkeypatch.delenv("GOOGLE_OAUTH_CLIENT_ID", raising=False)
     monkeypatch.delenv("GOOGLE_OAUTH_CLIENT_SECRET", raising=False)
 
@@ -327,8 +382,8 @@ def test_gmail_sync_non_interactive_stdin_never_launches_oauth_flow(tmp_path, mo
     """
     from fieldkit.errors import GmailAuthError
 
-    monkeypatch.setenv("GOOGLE_CLIENT_ID", "test-client-id")
-    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "test-client-secret")
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_ID", "test-client-id")
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_SECRET", "test-client-secret")
 
     nonexistent_token = tmp_path / "no-token.json"
 
@@ -345,7 +400,9 @@ def test_gmail_sync_non_interactive_stdin_never_launches_oauth_flow(tmp_path, mo
     mock_flow_cls.from_client_config.assert_not_called()
 
 
-def test_gmail_sync_interactive_stdin_passes_open_browser_false(tmp_path, monkeypatch) -> None:
+def test_gmail_sync_interactive_stdin_passes_open_browser_false(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
     """#1211: TTY stdin → OAuth proceeds, run_local_server called with open_browser=False.
 
     Regression guard for the open_browser=False change: even in an interactive
@@ -353,10 +410,12 @@ def test_gmail_sync_interactive_stdin_passes_open_browser_false(tmp_path, monkey
     manually. This test locks that the open_browser=False argument is passed to
     run_local_server, so a future change cannot silently revert to auto-launching.
     """
-    monkeypatch.setenv("GOOGLE_CLIENT_ID", "test-client-id")
-    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "test-client-secret")
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_ID", "test-client-id")
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_SECRET", "test-client-secret")
 
-    nonexistent_token = tmp_path / "no-token.json"
+    caplog.set_level(logging.INFO, logger="gmail-sync")
+    nonexistent_token = tmp_path / "private-token-destination.json"
+    service = MagicMock()
     mock_flow = MagicMock()
     mock_creds = MagicMock()
     type(mock_creds).valid = PropertyMock(return_value=True)
@@ -368,10 +427,15 @@ def test_gmail_sync_interactive_stdin_passes_open_browser_false(tmp_path, monkey
         patch.object(sync, "_get_token_path", return_value=nonexistent_token),
         patch("sys.stdin.isatty", return_value=True),
         patch.object(sync, "InstalledAppFlow") as mock_flow_cls,
-        patch.object(sync, "build", return_value=MagicMock()),
+        patch("googleapiclient.discovery.build", return_value=service),
     ):
         mock_flow_cls.from_client_config.return_value = mock_flow
-        sync.get_gmail_service()
+        result = sync.get_gmail_service()
 
     # open_browser=False must be passed — browser must NOT auto-launch (#1211)
+    assert result is service
     mock_flow.run_local_server.assert_called_once_with(port=0, open_browser=False)
+    assert nonexistent_token.read_text(encoding="utf-8") == '{"token": "new"}'
+    assert "Google token cached." in caplog.text
+    assert str(tmp_path) not in caplog.text
+    assert nonexistent_token.name not in caplog.text

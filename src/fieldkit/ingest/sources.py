@@ -4,7 +4,6 @@ pipeline sources in pipeline.db. MUST NOT import from `fieldkit.gmail`.
 
 import logging
 import sqlite3
-import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -164,24 +163,6 @@ def mark_source_status(conn: sqlite3.Connection, source_id: str, status: SourceS
     conn.commit()
 
 
-def insert_vault_note_artifact(
-    conn: sqlite3.Connection, source_id: str, pipeline_version: str, content_path: str
-) -> None:
-    """Record the vault note produced for a processed transcript source."""
-    artifact_id = str(uuid.uuid4())
-    now_iso = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-    conn.execute(
-        """
-        INSERT INTO artifacts
-            (artifact_id, source_id, pipeline_id, artifact_type, content_path,
-             created_at, pipeline_version)
-        VALUES (?, ?, 'transcript-ingest', 'vault_note', ?, ?, ?)
-        """,
-        (artifact_id, source_id, content_path, now_iso, pipeline_version),
-    )
-    conn.commit()
-
-
 def claim_pending_source(conn: sqlite3.Connection, source_id: str) -> bool:
     """Atomically claim a pending source for processing.
 
@@ -208,7 +189,7 @@ def get_pending_sources(
                meeting_title, meeting_date
         FROM sources
         WHERE pipeline_id = ? AND status = 'pending'
-        ORDER BY discovered_at ASC
+        ORDER BY discovered_at ASC, source_id ASC
     """
     params: list[object] = [pipeline_id]
     if limit is not None:

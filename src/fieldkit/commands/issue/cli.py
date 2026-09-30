@@ -21,10 +21,26 @@ from collections.abc import Sequence
 
 import click
 
-from fieldkit.cli_exit import EXIT_DATA, EXIT_PARTIAL
+from fieldkit.cli_exit import EXIT_DATA
 from fieldkit.cli_registry import declare_write
-from fieldkit.commands.issue.gh_store import GHIssue, GHIssueStore, IssueSeverity, IssueStatus, IssueType
 from fieldkit.config import get_github_repo
+from fieldkit.issue import (
+    ISSUE_MODULES,
+    ISSUE_SEVERITIES,
+    ISSUE_TYPES,
+    SEVERITY_RANK,
+    AdvanceOutcome,
+    GHIssue,
+    GHIssueStore,
+    IssueSeverity,
+    IssueStatus,
+    IssueType,
+    MilestonePlan,
+    MilestoneState,
+    advance_milestone_candidates,
+    milestone_exit_code,
+    plan_milestone_sync,
+)
 from fieldkit.util.jsonio import json_default
 
 # Every mutating `issue` subcommand POSTs/PATCHes the GitHub REST API via
@@ -59,9 +75,6 @@ def _status_color(status: str) -> str:
     }.get(status, "white")
 
 
-_SEVERITY_RANK: dict[str, int] = {"critical": 0, "high": 1, "medium": 2, "low": 3}
-
-
 @click.group(
     name="issue",
     context_settings={"help_option_names": ["-h", "--help"], "max_content_width": 100},
@@ -85,17 +98,17 @@ def cli(ctx: click.Context) -> None:
 
 @declare_write("external", confirm_exempt=_UNATTENDED)
 @cli.command("create")
-@click.option("--type", "issue_type", type=click.Choice(["bug", "enhancement"]), required=True, help="Issue type.")
+@click.option("--type", "issue_type", type=click.Choice(ISSUE_TYPES), required=True, help="Issue type.")
 @click.option("--title", required=True, help="Short title (one sentence).")
 @click.option("--body", default="", help="Detailed description. Markdown supported.")
 @click.option(
     "--severity",
-    type=click.Choice(["low", "medium", "high", "critical"]),
+    type=click.Choice(ISSUE_SEVERITIES),
     default="medium",
     show_default=True,
     help="Severity level (bugs) or impact (enhancements).",
 )
-@click.option("--module", default="other", show_default=True, help="Affected module (sf, gmail, ingest, etc.).")
+@click.option("--module", type=click.Choice(ISSUE_MODULES), default="other", show_default=True)
 @click.option("--source", default="unknown", show_default=True, help="Who raised this (agent name, user, etc.).")
 @click.option(
     "--json",
@@ -115,11 +128,6 @@ def create_cmd(
 ) -> None:
     """Create a new bug or enhancement request."""
     store = _store()
-    known = store.known_modules()
-    if module not in known:
-        valid = ", ".join(sorted(known))
-        click.echo(f"[issue] Unknown module {module!r}. Valid values: {valid}", err=True)
-        raise SystemExit(EXIT_PARTIAL)
     issue = store.create(
         issue_type=issue_type,
         title=title,
@@ -188,7 +196,7 @@ def list_cmd(status: str, show_all: bool, issue_type: str, module: str | None, a
         click.echo(f"No {label}issues found.")
         return
 
-    issues.sort(key=lambda i: (_SEVERITY_RANK.get(i.severity, 99), i.created))
+    issues.sort(key=lambda i: (SEVERITY_RANK[i.severity], i.created))
 
     if as_json:
         payload = {
@@ -298,7 +306,7 @@ def close_cmd(issue_id: str, wont_fix: bool, skip_verify: bool, note: str | None
             "or pass --skip-verify to override.",
             err=True,
         )
-        raise SystemExit(EXIT_PARTIAL)
+        raise SystemExit(EXIT_DATA)
 
     new_status: IssueStatus = "wont-fix" if wont_fix else "closed"
     updated = store.update_status(issue_id.lower(), new_status, note=note)
@@ -376,12 +384,12 @@ def fix_cmd(issue_id: str, commit: str | None, note: str | None, as_json: bool) 
     if issue is None:
         click.echo(f"[issue] Not found: {issue_id}", err=True)
         raise SystemExit(EXIT_DATA)
-    if issue.status not in ("open", "planned"):
+    if issue.status == "wont-fix":
         click.echo(
-            f"[issue] {issue.id} is already {issue.status!r} — can only fix open or planned issues.",
+            f"[issue] {issue.id} is {issue.status!r} — reopen it before marking it fixed.",
             err=True,
         )
-        raise SystemExit(EXIT_PARTIAL)
+        raise SystemExit(EXIT_DATA)
     updated = store.mark_fixed(issue_id.lower(), commit=commit, note=note)
     if updated is None:
         click.echo(f"[issue] Update failed for {issue_id}", err=True)
@@ -421,12 +429,12 @@ def plan_cmd(issue_id: str, note: str | None, as_json: bool) -> None:
     if issue is None:
         click.echo(f"[issue] Not found: {issue_id}", err=True)
         raise SystemExit(EXIT_DATA)
-    if issue.status != "open":
+    if issue.status not in ("open", "planned"):
         click.echo(
-            f"[issue] {issue.id} is already {issue.status!r} — only open issues can be planned.",
+            f"[issue] {issue.id} is {issue.status!r} — only open issues can be planned.",
             err=True,
         )
-        raise SystemExit(EXIT_PARTIAL)
+        raise SystemExit(EXIT_DATA)
     updated = store.update_status(issue_id.lower(), "planned", note=note)
     if updated is None:
         click.echo(f"[issue] Update failed for {issue_id}", err=True)
@@ -447,8 +455,8 @@ def plan_cmd(issue_id: str, note: str | None, as_json: bool) -> None:
 @click.argument("issue_id")
 @click.option("--title", default=None, help="New title.")
 @click.option("--body", default=None, help="Replace body text.")
-@click.option("--severity", type=click.Choice(["low", "medium", "high", "critical"]), default=None)
-@click.option("--module", default=None, help="Affected module.")
+@click.option("--severity", type=click.Choice(ISSUE_SEVERITIES), default=None)
+@click.option("--module", type=click.Choice(ISSUE_MODULES), default=None, help="Affected module.")
 @click.option(
     "--json",
     "as_json",
@@ -466,11 +474,6 @@ def edit_cmd(
 ) -> None:
     """Edit issue metadata (title, body, severity, module)."""
     store = _store()
-    if module is not None:
-        known = store.known_modules()
-        if module not in known:
-            click.echo(f"[issue] Unknown module {module!r}. Valid: {', '.join(sorted(known))}", err=True)
-            raise SystemExit(EXIT_PARTIAL)
     issue = store.edit(issue_id.lower(), title=title, body=body, severity=severity, module=module)
     if issue is None:
         click.echo(f"[issue] Not found: {issue_id}", err=True)
@@ -553,84 +556,14 @@ def link_cmd(issue_id: str, milestone_id: str, note: str | None, as_json: bool) 
 # ---------------------------------------------------------------------------
 
 
-@dataclasses.dataclass(frozen=True)
-class _MilestonePlan:
-    """Which linked issues are eligible to advance, and to what status."""
-
-    target_status: IssueStatus
-    action_label: str
-    candidates: list[GHIssue]
-    linked: int
-    skipped: int
-
-
-@dataclasses.dataclass(frozen=True)
-class _AdvanceOutcome:
-    """Result of advancing one issue. ``updated is None`` means the write failed."""
-
-    issue_id: str
-    updated: GHIssue | None
-
-
-def _plan_milestone_sync(issues: list[GHIssue], state: str) -> _MilestonePlan:
-    """Decide which linked issues advance, and to what status.
-
-    ``queued`` advances open issues to planned; ``completed`` advances planned
-    issues to fixed. Issues already at the target or beyond are skipped.
-    """
-    if state == "queued":
-        candidates = [i for i in issues if i.status == "open"]
-        target_status: IssueStatus = "planned"
-        action_label = "open → planned"
-    else:
-        candidates = [i for i in issues if i.status == "planned"]
-        target_status = "fixed"
-        action_label = "planned → fixed"
-    return _MilestonePlan(
-        target_status=target_status,
-        action_label=action_label,
-        candidates=candidates,
-        linked=len(issues),
-        skipped=len(issues) - len(candidates),
-    )
-
-
-def _echo_one_outcome(outcome: _AdvanceOutcome, target_status: IssueStatus) -> None:
+def _echo_one_outcome(outcome: AdvanceOutcome, target_status: IssueStatus) -> None:
     """Report one issue's result on the human-readable path."""
     updated = outcome.updated
     if updated is not None:
         styled = click.style(target_status, fg=_status_color(target_status))
         click.echo(f"  {updated.id} → {styled}  {updated.title}")
     else:
-        click.echo(f"  {outcome.issue_id} update FAILED", err=True)
-
-
-def _advance_candidates(
-    store: GHIssueStore,
-    plan: _MilestonePlan,
-    *,
-    mid: str,
-    commit: str | None,
-    echo: bool,
-) -> list[_AdvanceOutcome]:
-    """Advance every candidate, returning one outcome per issue.
-
-    Each result is echoed as it lands rather than after the loop, so a long bulk
-    run reports progress and a mid-run exception still leaves the already-advanced
-    issues on stdout. That interleaving is deliberate and matches the behaviour
-    this function was extracted from.
-    """
-    outcomes: list[_AdvanceOutcome] = []
-    for issue in plan.candidates:
-        if plan.target_status == "fixed":
-            updated = store.mark_fixed(issue.id, commit=commit, note=f"Auto-fixed via sync-milestone {mid}")
-        else:
-            updated = store.update_status(issue.id, plan.target_status, note=f"Auto-planned via sync-milestone {mid}")
-        outcome = _AdvanceOutcome(issue.id, updated)
-        outcomes.append(outcome)
-        if echo:
-            _echo_one_outcome(outcome, plan.target_status)
-    return outcomes
+        click.echo(f"  {outcome.issue_id} update FAILED ({outcome.failure})", err=True)
 
 
 def _emit_milestone_json(
@@ -638,8 +571,8 @@ def _emit_milestone_json(
     mid: str,
     state: str,
     dry_run: bool,
-    plan: _MilestonePlan,
-    outcomes: list[_AdvanceOutcome],
+    plan: MilestonePlan,
+    outcomes: list[AdvanceOutcome],
 ) -> None:
     """Emit the run summary. One builder because this command has several exit
     paths — hand-written dicts per path would drift apart on the next edit."""
@@ -650,22 +583,24 @@ def _emit_milestone_json(
         "target_status": plan.target_status,
         "linked": plan.linked,
         "skipped": plan.skipped,
-        "candidates": [dataclasses.asdict(i) for i in plan.candidates],
+        "candidates": [{"id": issue.id, "status": issue.status} for issue in plan.candidates],
         "advanced": sum(1 for o in outcomes if o.updated is not None),
-        "failed": [o.issue_id for o in outcomes if o.updated is None],
+        "failed": [
+            {"id": outcome.issue_id, "category": outcome.failure} for outcome in outcomes if outcome.failure is not None
+        ],
     }
     click.echo(json.dumps(payload, indent=2, default=json_default))
 
 
 def _sync_milestone_prose(
     store: GHIssueStore,
-    plan: _MilestonePlan,
+    plan: MilestonePlan,
     *,
     mid: str,
     state: str,
     dry_run: bool,
     commit: str | None,
-) -> list[_AdvanceOutcome]:
+) -> list[AdvanceOutcome]:
     """Human-readable path: header, per-issue progress, then a summary line."""
     if not plan.linked:
         click.echo(f"[issue] No issues linked to milestone {mid}.")
@@ -685,7 +620,9 @@ def _sync_milestone_prose(
             click.echo(f"  would advance {issue.id}  {issue.status!r} → {plan.target_status!r}  {issue.title}")
         return []
 
-    outcomes = _advance_candidates(store, plan, mid=mid, commit=commit, echo=True)
+    outcomes = advance_milestone_candidates(store, plan, commit=commit)
+    for outcome in outcomes:
+        _echo_one_outcome(outcome, plan.target_status)
     advanced = sum(1 for o in outcomes if o.updated is not None)
     click.echo(f"[issue] Advanced {advanced}/{len(plan.candidates)} issue(s).")
     return outcomes
@@ -709,7 +646,13 @@ def _sync_milestone_prose(
     default=False,
     help="Machine-readable JSON output.",
 )
-def sync_milestone_cmd(milestone_id: str, state: str, commit: str | None, dry_run: bool, as_json: bool) -> None:
+def sync_milestone_cmd(
+    milestone_id: str,
+    state: MilestoneState,
+    commit: str | None,
+    dry_run: bool,
+    as_json: bool,
+) -> None:
     """Bulk-advance issues linked to a GitHub milestone based on milestone state.
 
     \b
@@ -720,26 +663,19 @@ def sync_milestone_cmd(milestone_id: str, state: str, commit: str | None, dry_ru
     """
     store = _store()
     mid = milestone_id.upper()
-    plan = _plan_milestone_sync(store.list_by_milestone(mid), state)
+    plan = plan_milestone_sync(store.list_by_milestone(mid), state)
 
     if as_json:
-        outcomes = (
-            _advance_candidates(store, plan, mid=mid, commit=commit, echo=False)
-            if plan.candidates and not dry_run
-            else []
-        )
+        outcomes = advance_milestone_candidates(store, plan, commit=commit) if plan.candidates and not dry_run else []
         _emit_milestone_json(mid=mid, state=state, dry_run=dry_run, plan=plan, outcomes=outcomes)
     else:
         outcomes = _sync_milestone_prose(store, plan, mid=mid, state=state, dry_run=dry_run, commit=commit)
 
-    # A partial failure must not exit 0. The raise stays *after* the
-    # output on both paths — `sync-milestone` is the documented exception to the
-    # --json error contract, emitting its full advanced/failed document on exit 1
-    # because that breakdown is precisely what a caller needs to recover. Hoisting
-    # this earlier, or turning it into an early return, would silently strip the
-    # document a consumer parses on exit 1. See tests/test_issue_cli_json.py.
-    if any(o.updated is None for o in outcomes):
-        raise SystemExit(EXIT_PARTIAL)
+    # The full bounded outcome document is emitted before the non-zero batch
+    # status so callers can reconcile already-applied transitions safely.
+    exit_code = milestone_exit_code(outcomes)
+    if exit_code:
+        raise SystemExit(exit_code)
 
 
 # ---------------------------------------------------------------------------
@@ -768,10 +704,9 @@ def board_cmd(as_json: bool) -> None:
     enhs = [i for i in all_open if i.type == "enhancement"]
 
     if as_json:
-        # Same severity ordering the rendered board uses — _section sorts by the
-        # ranking _SEVERITY_RANK already holds.
+        # Same canonical severity ordering the rendered board uses.
         def _by_severity(issues: Sequence[GHIssue]) -> list[dict[str, object]]:
-            ordered = sorted(issues, key=lambda i: _SEVERITY_RANK.get(i.severity, 99))
+            ordered = sorted(issues, key=lambda i: SEVERITY_RANK[i.severity])
             return [dataclasses.asdict(i) for i in ordered]
 
         payload = {
@@ -796,11 +731,7 @@ def board_cmd(as_json: bool) -> None:
             return
         for issue in sorted(
             issues,
-            key=lambda i: (
-                ("critical", "high", "medium", "low").index(i.severity)
-                if i.severity in ("critical", "high", "medium", "low")
-                else 99
-            ),
+            key=lambda i: SEVERITY_RANK[i.severity],
         ):
             sev = click.style(f"[{issue.severity[:3].upper()}]", fg=_severity_color(issue.severity))
             title_display = (issue.title[:65] + "…") if len(issue.title) > 65 else issue.title

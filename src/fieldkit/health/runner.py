@@ -28,8 +28,16 @@ from time import monotonic
 from typing import Any, Literal
 
 from fieldkit.config import TIMEOUT_HEALTH_GATE, TIMEOUT_HEALTH_GIT, get_fieldkit_data, get_harness_scratch_root
+from fieldkit.errors import FieldkitError
 from fieldkit.health.checks import HEALTH_CHECKS, CheckResult, run_check
-from fieldkit.health.filing import FilingOutcome, IssueFiler, file_regressions
+from fieldkit.health.filing import (
+    FilingFailureCategory,
+    FilingOutcome,
+    FilingPartialError,
+    IssueFiler,
+    file_regressions,
+    filing_failure_category,
+)
 from fieldkit.util.atomic import locked_json_update
 
 log = logging.getLogger(__name__)
@@ -52,6 +60,7 @@ class HealthRunResult:
     issues_deduped: tuple[str, ...]
     elapsed_seconds: float
     error: str = ""
+    filing_failure: FilingFailureCategory | None = None
 
 
 def _worktrees_root() -> Path:
@@ -171,6 +180,7 @@ def write_health_run_status(result: HealthRunResult, *, dry_run: bool) -> None:
             "issues_deduped": list(result.issues_deduped),
             "elapsed_seconds": round(result.elapsed_seconds, 1),
             "error": result.error,
+            "filing_failure": result.filing_failure,
         }
         with locked_json_update(status_file) as existing:
             entries: list[dict[str, Any]] = list(existing.get("runs", []))
@@ -267,11 +277,19 @@ def _execute_health_run(repo_root: Path, filer: IssueFiler, *, dry_run: bool, st
 
     filing = FilingOutcome(filed=(), deduped=())
     filing_error = ""
+    filing_failure: FilingFailureCategory | None = None
     try:
         filing = file_regressions(results, filer, dry_run=dry_run)
-    except RuntimeError as exc:
+    except FilingPartialError as exc:
+        filing = exc.outcome
+        filing_error = str(exc)
+        filing_failure = filing_failure_category(exc.__cause__ if isinstance(exc.__cause__, Exception) else exc)
+        runner_errors.append(filing_error)
+        log.error("health: %s", filing_error)
+    except (FieldkitError, RuntimeError) as exc:
         # Sensing succeeded but filing did not — partial, loudly recorded.
-        filing_error = f"filing failed: {exc}"
+        filing_error = "filing failed before an issue could be created"
+        filing_failure = filing_failure_category(exc)
         runner_errors.append(filing_error)
         log.error("health: %s", filing_error)
 
@@ -291,6 +309,7 @@ def _execute_health_run(repo_root: Path, filer: IssueFiler, *, dry_run: bool, st
         issues_deduped=filing.deduped,
         elapsed_seconds=monotonic() - started,
         error=filing_error,
+        filing_failure=filing_failure,
     )
 
 

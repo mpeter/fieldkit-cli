@@ -1,54 +1,31 @@
-"""Regression tests for historic regression and historic regression path resolution fixes.
+"""Brief collection reads workspace data and degrades on synthesis failure.
 
-historic regression: collect_stale_prose() used to accept a project_root parameter
-  supplied by the caller (get_fieldkit_root()), which could point to the
-  wrong directory when fieldkit_root is misconfigured.  The fix derives the
-  script path from __file__ inside the function itself.
-
-historic regression: _run() used to fall back to get_fieldkit_root() as data_root when
-  config was absent, causing collect_tasks() to look for TASKS.md in the
-  code repo (which has none) and return empty placeholder strings.  The fix
-  separates output_dir (brief file location) from data_root (user data repo)
-  in the fallback path.
-
-Tests use tmp_path and monkeypatch for full filesystem isolation — no live
-config, no real data repo, no external API calls (P14).
+Tests use isolated filesystems and stubbed providers, never live user data.
 """
 
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
-import fieldkit.commands.brief.main as _brief_mod
-from fieldkit.commands.brief.main import _run, collect_stale_prose, collect_tasks
+import fieldkit.brief.pipeline_only as _brief_mod
+from fieldkit.brief.collect import collect_tasks
+from fieldkit.brief.pipeline_only import collect_stale_prose
+from fieldkit.commands.brief.cli import _run_pipeline_only as _run
+
+
+@pytest.fixture(autouse=True)
+def configured_report_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(_brief_mod, "get_llm_model", lambda: "vertex_ai/test-model")
+    monkeypatch.setattr(_brief_mod, "llm_disabled", lambda: False)
+
 
 # ── collect_stale_prose ───────────────────────────────────────────────────────
 
 
 @pytest.mark.unit
-def test_collect_stale_prose_finds_script_via_package_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """collect_stale_prose finds stale.py via __file__-derived path.
-
-    Monkeypatches the module's __file__ so the internal path derivation
-    resolves to tmp_path/fieldkit/morning_brief/main.py, making the script
-    expected at tmp_path/fieldkit/pursuit/stale.py.
-    """
-    # Create the fake package layout that mirrors the real repo structure:
-    #   tmp_path/
-    #     fieldkit/morning_brief/main.py   ← monkeypatched __file__
-    #     fieldkit/pursuit/stale.py            ← fake script (prints nothing)
-    fake_module_file = tmp_path / "fieldkit" / "morning_brief" / "main.py"
-    fake_module_file.parent.mkdir(parents=True, exist_ok=True)
-    fake_module_file.touch()
-
-    fake_script = tmp_path / "fieldkit" / "pursuit" / "stale.py"
-    fake_script.parent.mkdir(parents=True, exist_ok=True)
-    # Script that exits 0 with no output (simulates "no stale prose found")
-    fake_script.write_text("import sys\nsys.exit(0)\n", encoding="utf-8")
-
-    # Create a minimal data_root with one pursuit directory so iterate_pursuits
-    # returns at least one path (otherwise the function returns "None detected."
-    # before even checking the script).
+def test_collect_stale_prose_uses_installed_checker(tmp_path: Path) -> None:
+    """The installed checker receives the workspace pursuit, without a script lookup."""
     data_root = tmp_path / "data"
     pursuit_dir = data_root / "accounts" / "acme-corp" / "pursuits"
     pursuit_dir.mkdir(parents=True, exist_ok=True)
@@ -58,16 +35,11 @@ def test_collect_stale_prose_finds_script_via_package_path(tmp_path: Path, monke
         encoding="utf-8",
     )
 
-    # Patch __file__ on the module so Path(__file__).resolve().parent.parent.parent
-    # resolves to tmp_path (the fake repo root).
-    monkeypatch.setattr(_brief_mod, "__file__", str(fake_module_file))
+    with patch("fieldkit.pursuit.stale.check_file", return_value=["Stale narrative"]) as check_file:
+        result = collect_stale_prose(data_root)
 
-    result = collect_stale_prose(data_root)
-
-    # The script ran (it exists) and produced no output → "None detected."
-    # This confirms the function found the script via the __file__-derived path,
-    # not via a caller-supplied root.
-    assert result == "None detected.", f"Expected 'None detected.' but got: {result!r}"
+    assert result == "Stale narrative"
+    check_file.assert_called_once_with(str(pursuit_file))
 
 
 # ── collect_tasks ─────────────────────────────────────────────────────────────
@@ -123,11 +95,9 @@ def test_run_falls_back_to_no_llm_brief_on_llm_error(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """When synthesize() raises LLMError during _run(), the brief falls back to
-    _render_no_llm_brief() output, writes it to disk, and does NOT raise.
+    """A synthesis failure writes a deterministic degraded brief, then exits 1.
 
-    Spec ref: llm-timeout/spec.md — Scenario: LLM timeout degrades to no-llm
-    output in morning brief.
+    The LLM partial-failure exception reaches the CLI exit boundary after writing.
 
     Setup mirrors the existing historic regression tests: monkeypatch get_fieldkit_home() to
     return a tmp_path with an accounts/ directory so _run() resolves data_root
@@ -163,7 +133,7 @@ def test_run_falls_back_to_no_llm_brief_on_llm_error(
         ),
         patch.object(_brief_mod, "_collect_degraded_sources", return_value=[]),
         # synthesize raises LLMError to simulate a timeout
-        patch.object(_brief_mod, "synthesize", side_effect=LLMError("timed out after 90s")),
+        patch.object(_brief_mod, "synthesize", side_effect=LLMError("timed out after 90s", "rate-limit")),
     ):
         # historic regression: _run() raises LLMError on failure; cli_main() maps it to exit 1.
         from fieldkit.cli_exit import cli_main
@@ -195,7 +165,6 @@ def test_verbose_flag_prints_collector_timing(
 ) -> None:
     """--verbose prints [brief] collect_... timing lines to stderr.
 
-    Spec ref: brief-verbose/spec.md — Scenario: verbose flag prints timing to stderr.
 
     CliRunner uses mix_stderr=True by default, so stderr lines appear in
     result.output alongside stdout.  All collectors are mocked to return
@@ -247,8 +216,7 @@ def test_no_verbose_flag_no_timing_output(
 ) -> None:
     """Without --verbose, no [brief] collect_ timing lines appear.
 
-    Spec ref: brief-verbose/spec.md — Scenario: no --verbose flag produces no
-    timing output.  The existing '[morning_brief] Collecting data...' line is
+    The '[morning_brief] Collecting data...' line is
     still emitted but the per-collector '[brief] collect_...' lines must not be.
     """
     from unittest.mock import patch
@@ -411,7 +379,7 @@ def test_pipeline_pulse_red_deal_sorts_before_higher_meddpicc(tmp_path: Path, mo
     """
     from datetime import date, timedelta
 
-    from fieldkit.commands.brief.collect import collect_pipeline_pulse
+    from fieldkit.brief.collect import collect_pipeline_pulse
 
     data_root = tmp_path / "data"
     pursuits_dir = data_root / "accounts" / "acme-corp" / "pursuits"
@@ -443,7 +411,7 @@ def test_pipeline_pulse_red_deal_sorts_before_higher_meddpicc(tmp_path: Path, mo
 @pytest.mark.unit
 def test_pipeline_pulse_returns_at_most_five_pursuits(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """implementation change: collect_pipeline_pulse returns at most 5 pursuits even with 8 active."""
-    from fieldkit.commands.brief.collect import collect_pipeline_pulse
+    from fieldkit.brief.collect import collect_pipeline_pulse
 
     data_root = tmp_path / "data"
     pursuits_dir = data_root / "accounts" / "acme-corp" / "pursuits"

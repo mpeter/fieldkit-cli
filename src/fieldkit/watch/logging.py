@@ -137,7 +137,7 @@ def teardown_watcher_logging(
 
 
 @contextmanager
-def watcher_logging(watcher_name: str) -> Generator[None, None, None]:
+def watcher_logging(watcher_name: str, *, enabled: bool = True) -> Generator[None, None, None]:
     """Context manager that sets up and tears down watcher logging.
 
     Guarantees ``teardown_watcher_logging()`` is called even if the watcher
@@ -154,6 +154,10 @@ def watcher_logging(watcher_name: str) -> Generator[None, None, None]:
     Yields:
         Nothing — the caller's body runs inside the try/finally block.
     """
+    if not enabled:
+        yield
+        return
+
     _log_path, log_handler, state = setup_watcher_logging(watcher_name)
     try:
         yield

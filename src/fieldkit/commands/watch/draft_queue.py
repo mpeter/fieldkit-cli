@@ -10,42 +10,15 @@ Usage:
 
 Exit codes:
     0  Success; zero or more stale drafts written to alerts file.
-    1  MCP gateway unavailable or fatal configuration error.
+    1  Retryable provider or persistence failure.
+    2  Provider authentication requires user action.
+    3  Invalid watcher or email configuration.
 """
 
 import click
 
 from fieldkit.cli_registry import declare_write
-from fieldkit.watch.draft_queue import (
-    _MCP_BASE,
-    _MCP_TIMEOUT,
-    _alerts_file,
-    _extract_header,
-    _format_age,
-    _resolve_user_email,
-    _run_draft_queue,
-    get_watchers_dir,
-    log,
-    parse_drafts,
-    write_alerts,
-)
-from fieldkit.watch.morning_brief_mcp import MCPSession
-
-__all__ = [
-    "_MCP_BASE",
-    "_MCP_TIMEOUT",
-    "MCPSession",
-    "_alerts_file",
-    "_extract_header",
-    "_format_age",
-    "_resolve_user_email",
-    "_run_draft_queue",
-    "get_watchers_dir",
-    "log",
-    "parse_drafts",
-    "write_alerts",
-]
-
+from fieldkit.watch.draft_queue import _run_draft_queue
 
 # ---------------------------------------------------------------------------
 # Click CLI
@@ -66,8 +39,5 @@ def cli(dry_run: bool, account: str | None, as_json: bool) -> None:
     from fieldkit.commands._account_guard import validate_account_slug
 
     validate_account_slug(account)
-    raise SystemExit(_run_draft_queue(dry_run=dry_run, account=account, as_json=as_json))
-
-
-if __name__ == "__main__":
-    raise SystemExit(cli())
+    result = _run_draft_queue(dry_run=dry_run, account=account, as_json=as_json)
+    raise SystemExit(result.exit_code)

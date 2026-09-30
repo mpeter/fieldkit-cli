@@ -1,4 +1,4 @@
-"""Tests for tools/pipeline_review/main.py.
+"""Tests for fieldkit/pipeline/main.py.
 
 Covers the 10 specified behaviours:
 1. collect_pursuit_health returns PursuitRow for each non-closed pursuit
@@ -7,37 +7,91 @@ Covers the 10 specified behaviours:
 4. render_pipeline_table sorts by STAGE_ORDER then days_in_stage descending
 5. Gate icons: pending→🔲, pass→✅, fail→❌, override→⚠️
 6. Score labels: 0-8→🔴, 9-16→🟡, 17-24→🟢 (via render output)
-7. --no-llm flag produces table and LLM placeholder, no subprocess to claude
+7. --no-llm flag produces deterministic sections without a narrative placeholder
 8. Output file written to routines/briefs/pipeline-review-YYYY-MM-DD.md
 9. biggest_gap returns 'element: current→required' when gap exists
 10. biggest_gap returns gate-override message when gate_status is override
 """
 
-import sys
 from datetime import UTC, date, datetime
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from click.testing import Result
 
-from fieldkit.commands.pipeline.collect import (
+from fieldkit.errors import EmptyOutputError, LLMError
+from fieldkit.pipeline.collect import (
     GATE_ICONS,
+    ChampionSignal,
     PursuitRow,
     _extract_account,
     collect_blindspot_data,
     collect_pursuit_health,
 )
-from fieldkit.commands.pipeline.main import render_full_brief
-from fieldkit.commands.pipeline.render import (
+from fieldkit.pipeline.main import render_full_brief
+from fieldkit.pipeline.render import (
     _quarter_label,
     _render_blindspot_section,
     _render_champion_section,
     render_pipeline_table,
 )
-from fieldkit.errors import LLMError
 from fieldkit.watch.morning_brief_render import calculate_quota_gap
 
+
+@pytest.mark.unit
+def test_pipeline_domain_generates_without_terminal_output(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    from fieldkit.pipeline import main as pipeline_main
+
+    with (
+        patch.object(pipeline_main, "collect_all_pursuit_data", return_value=([], [], [])),
+        patch.object(pipeline_main, "render_full_brief", return_value="# Deterministic review"),
+    ):
+        result = pipeline_main.generate_review(no_llm=True, data_root=tmp_path)
+
+    assert result.text == "# Deterministic review"
+    assert result.path.read_text(encoding="utf-8") == result.text
+    assert result.provider_failure is None
+    assert capsys.readouterr() == ("", "")
+
+
 # ── Fixtures ──────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("body", ["", " \n\t"])
+@pytest.mark.parametrize("existing", [False, True])
+@pytest.mark.parametrize("fallback", [False, True])
+def test_pipeline_empty_render_preserves_report(tmp_path: Path, body: str, existing: bool, fallback: bool) -> None:
+    from fieldkit.pipeline import main as pipeline_main
+
+    report_dir = tmp_path / "briefs"
+    target = report_dir / f"pipeline-review-{datetime.now(tz=UTC).date().isoformat()}.md"
+    if existing:
+        report_dir.mkdir()
+        target.write_bytes(b"prior report")
+        target.chmod(0o640)
+    with (
+        patch.object(pipeline_main, "collect_all_pursuit_data", return_value=([], [], [])),
+        patch.object(
+            pipeline_main, "render_full_brief", side_effect=[LLMError("provider failed"), body] if fallback else [body]
+        ),
+        patch.object(pipeline_main, "atomic_text_write") as writer,
+        pytest.raises(EmptyOutputError, match="Empty output detected"),
+    ):
+        pipeline_main.generate_review(no_llm=False, data_root=tmp_path)
+    writer.assert_not_called()
+    assert report_dir.exists() is existing
+    if existing:
+        assert list(report_dir.iterdir()) == [target]
+        assert target.read_bytes() == b"prior report"
+        assert target.stat().st_mode & 0o777 == 0o640
+
+
+@pytest.fixture(autouse=True)
+def configured_report_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("fieldkit.pipeline.main.get_llm_model", lambda: "vertex_ai/test-model")
+    monkeypatch.setattr("fieldkit.pipeline.main.llm_disabled", lambda: False)
 
 
 def _make_data_root(tmp_path: Path) -> Path:
@@ -272,8 +326,8 @@ def test_render_full_brief_contains_pursuit_health_table():
 
 
 @pytest.mark.unit
-def test_no_llm_produces_placeholder(tmp_path):
-    """--no-llm brief contains LLM placeholder text, not an LLM subprocess call."""
+def test_no_llm_omits_narrative_and_provider_call(tmp_path):
+    """--no-llm writes deterministic sections without pretending to synthesize a narrative."""
     rows = [PursuitRow("global-pay", "deal", "discover", "pending", 5)]
     with patch("subprocess.run") as mock_run:
         brief = render_full_brief(rows, champion_signals=[], blindspot_data=[], no_llm=True, today=date(2026, 5, 18))
@@ -281,7 +335,8 @@ def test_no_llm_produces_placeholder(tmp_path):
         for call in mock_run.call_args_list:
             args = call[0][0] if call[0] else []
             assert "claude" not in str(args), "claude subprocess was called with --no-llm"
-    assert "LLM narrative skipped" in brief or "LLM_NARRATIVE_PLACEHOLDER" not in brief
+    assert "## Narrative Summary" not in brief
+    assert "LLM narrative skipped" not in brief
 
 
 @pytest.mark.unit
@@ -290,7 +345,7 @@ def test_no_llm_brief_contains_table(tmp_path):
     rows = [PursuitRow("global-pay", "deal", "discover", "pending", 5)]
     brief = render_full_brief(rows, champion_signals=[], blindspot_data=[], no_llm=True, today=date(2026, 5, 18))
     assert "Pursuit Health Table" in brief
-    assert "LLM narrative skipped" in brief
+    assert "## Narrative Summary" not in brief
 
 
 # ── Test 8: Output file written to routines/briefs/ ──────────────────────────
@@ -302,11 +357,10 @@ def test_output_file_path_contains_today(tmp_path, monkeypatch):
     from click.testing import CliRunner
 
     import fieldkit.commands.pipeline.cli as pr_cli
-    import fieldkit.commands.pipeline.main as pr_main
 
     today = datetime.now(tz=UTC).date().isoformat()
 
-    monkeypatch.setattr(pr_main, "get_fieldkit_home", lambda: tmp_path)
+    monkeypatch.setattr(pr_cli, "get_fieldkit_home", lambda: tmp_path)
     (tmp_path / "accounts").mkdir(exist_ok=True)
     (tmp_path / "briefs").mkdir(exist_ok=True)
 
@@ -322,18 +376,18 @@ def test_output_file_path_contains_today(tmp_path, monkeypatch):
 def test_account_scoped_output_uses_distinct_filename_and_collector_scope(tmp_path):
     from unittest.mock import patch
 
-    from fieldkit.commands.pipeline.main import _run
+    from fieldkit.pipeline.main import generate_review
 
     with (
         patch(
-            "fieldkit.commands.pipeline.main.collect_all_pursuit_data",
+            "fieldkit.pipeline.main.collect_all_pursuit_data",
             return_value=([], [], []),
         ) as mock_collect,
-        patch("fieldkit.commands.pipeline.main.render_full_brief", return_value="# Scoped review\n"),
+        patch("fieldkit.pipeline.main.render_full_brief", return_value="# Scoped review\n"),
     ):
-        result = _run(no_llm=True, data_root_override=tmp_path, account="acme-corp")
+        result = generate_review(no_llm=True, data_root=tmp_path, account="acme-corp")
 
-    assert result is None
+    assert result.provider_failure is None
     today = datetime.now(tz=UTC).date().isoformat()
     scoped_review = tmp_path / "briefs" / f"pipeline-review-acme-corp-{today}.md"
     assert scoped_review.read_text(encoding="utf-8") == "# Scoped review\n"
@@ -343,12 +397,11 @@ def test_account_scoped_output_uses_distinct_filename_and_collector_scope(tmp_pa
 
 @pytest.mark.unit
 def test_account_scoped_output_rejects_unsafe_filename_component(tmp_path):
-    from fieldkit.commands.pipeline.main import _run
+    from fieldkit.pipeline.main import generate_review
 
-    with pytest.raises(SystemExit) as exc_info:
-        _run(no_llm=True, data_root_override=tmp_path, account="../../outside")
+    with pytest.raises(ValueError, match="unsafe account slug"):
+        generate_review(no_llm=True, data_root=tmp_path, account="../../outside")
 
-    assert exc_info.value.code == 3
     assert not (tmp_path / "briefs").exists()
 
 
@@ -416,7 +469,7 @@ def test_render_champion_section_empty():
 @pytest.mark.unit
 def test_render_champion_section_with_data():
     """Signals with data render a Markdown table row."""
-    signals = [
+    signals: list[ChampionSignal] = [
         {
             "account": "global-pay",
             "deal": "project-shift",
@@ -437,7 +490,7 @@ def test_render_champion_section_with_data():
 @pytest.mark.unit
 def test_render_champion_section_missing_last_outbound():
     """Missing last_outbound renders as '—'."""
-    signals = [
+    signals: list[ChampionSignal] = [
         {
             "account": "acme-bank",
             "deal": "deal",
@@ -489,6 +542,26 @@ def test_render_blindspot_section_mixed():
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize(
+    ("setting", "expected_threshold"),
+    [({"pursuit_coverage_threshold": 3}, 3), ({"blindspot_threshold": 3}, 1)],
+)
+def test_collect_coverage_uses_only_new_threshold_key(
+    tmp_path: Path,
+    setting: dict[str, int],
+    expected_threshold: int,
+) -> None:
+    with (
+        patch("fieldkit.pipeline.collect.get_accounts_config", return_value={"accounts": {"acme": setting}}),
+        patch("fieldkit.pipeline.collect.iterate_pursuits", return_value=iter([])),
+    ):
+        coverage = collect_blindspot_data(tmp_path)
+
+    assert coverage[0]["threshold"] == expected_threshold
+    assert coverage[0]["status"] == "blindspot"
+
+
+@pytest.mark.unit
 def test_collect_blindspot_data_no_accounts_yaml(tmp_path):
     """When accounts.yaml is absent, returns an empty list (not an error)."""
     (tmp_path / "accounts").mkdir()
@@ -504,7 +577,7 @@ def test_collect_blindspot_data_below_threshold(tmp_path):
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     (config_dir / "accounts.yaml").write_text(
-        "accounts:\n  shield-ins:\n    domains: [shieldins.com]\n    blindspot_threshold: 1\n",
+        "accounts:\n  shield-ins:\n    domains: [shieldins.com]\n    pursuit_coverage_threshold: 1\n",
         encoding="utf-8",
     )
     result = collect_blindspot_data(tmp_path)
@@ -531,7 +604,7 @@ def test_collect_blindspot_data_above_threshold(tmp_path):
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     (config_dir / "accounts.yaml").write_text(
-        "accounts:\n  global-pay:\n    domains: [globalpay.com]\n    blindspot_threshold: 1\n",
+        "accounts:\n  global-pay:\n    domains: [globalpay.com]\n    pursuit_coverage_threshold: 1\n",
         encoding="utf-8",
     )
     result = collect_blindspot_data(tmp_path)
@@ -547,7 +620,7 @@ def test_collect_blindspot_data_above_threshold(tmp_path):
 @pytest.mark.unit
 def test_collect_champion_signals_no_pursuits(tmp_path):
     """With no pursuits, collect_champion_signals returns empty list."""
-    from fieldkit.commands.pipeline.collect import collect_champion_signals as ccs
+    from fieldkit.pipeline.collect import collect_champion_signals as ccs
 
     (tmp_path / "accounts").mkdir()
     result = ccs(tmp_path)
@@ -557,7 +630,7 @@ def test_collect_champion_signals_no_pursuits(tmp_path):
 @pytest.mark.unit
 def test_collect_champion_signals_skips_zero_champion(tmp_path, write_pursuit_generic):
     """Pursuits with champion=0 are excluded from champion signals."""
-    from fieldkit.commands.pipeline.collect import collect_champion_signals as ccs
+    from fieldkit.pipeline.collect import collect_champion_signals as ccs
 
     acct = tmp_path / "accounts" / "global-pay"
     write_pursuit_generic(
@@ -589,7 +662,7 @@ def test_render_pipeline_table_empty_rows():
 @pytest.mark.unit
 def test_main_no_llm_end_to_end(tmp_path, monkeypatch):
     """cli() with --no-llm produces output containing the pursuit health table."""
-    import fieldkit.commands.pipeline.collect as pr_collect
+    import fieldkit.pipeline.collect as pr_collect
 
     (tmp_path / "accounts").mkdir()
 
@@ -598,7 +671,7 @@ def test_main_no_llm_end_to_end(tmp_path, monkeypatch):
     brief = render_full_brief(rows, champion_signals=[], blindspot_data=[], no_llm=True, today=date(2026, 5, 18))
 
     assert "## Pursuit Health Table" in brief
-    assert "LLM narrative skipped" in brief
+    assert "## Narrative Summary" not in brief
     assert "2026-05-18" in brief
 
 
@@ -620,7 +693,7 @@ def test_render_full_brief_calls_synthesize():
     champion_signals: list = []
     blindspot_data: list = []
 
-    with patch("fieldkit.commands.pipeline.main.synthesize", return_value="NARRATIVE CONTENT") as mock_synth:
+    with patch("fieldkit.pipeline.main.synthesize", return_value="NARRATIVE CONTENT") as mock_synth:
         result = render_full_brief(
             rows,
             champion_signals=champion_signals,
@@ -635,22 +708,19 @@ def test_render_full_brief_calls_synthesize():
 
 
 @pytest.mark.unit
-def test_render_full_brief_degrades_on_llm_error():
-    """When synthesize() raises LLMError, render_full_brief() renders an inline
-    failure message '_LLM synthesis failed: ..._' in the Narrative section.
-
-    LLMError's canonical (and only) home is fieldkit.errors, which is never
-    reloaded — so class identity holds across every import path, and the
-    except-clause in render_full_brief matches regardless of test order.
-    """
+def test_render_full_brief_propagates_llm_error():
+    """The renderer propagates provider failure instead of returning success-shaped Markdown."""
 
     rows = [PursuitRow("global-pay", "deal", "discover", "pending", 5)]
 
-    with patch(
-        "fieldkit.commands.pipeline.main.synthesize",
-        side_effect=LLMError("api down"),
+    with (
+        pytest.raises(LLMError, match="api down") as error,
+        patch(
+            "fieldkit.pipeline.main.synthesize",
+            side_effect=LLMError("api down"),
+        ),
     ):
-        result = render_full_brief(
+        render_full_brief(
             rows,
             champion_signals=[],
             blindspot_data=[],
@@ -658,23 +728,15 @@ def test_render_full_brief_degrades_on_llm_error():
             today=date(2026, 5, 18),
         )
 
-    # historic regression/376: error details are NOT embedded in the brief — sanitised message only.
-    assert "_LLM synthesis unavailable" in result
-    assert "api down" not in result  # error string must not leak into brief
+    assert error.value.category == "general"
 
 
 @pytest.mark.unit
-def test_render_full_brief_llm_error_shows_table_and_error_message(
+def test_render_full_brief_preserves_retryable_llm_error(
     tmp_path: Path,
     write_pursuit_generic: object,
 ) -> None:
-    """When synthesize() raises LLMError (e.g. timeout), render_full_brief degrades
-    gracefully: the pursuit health table is present and the narrative block shows
-    an LLM failure message.
-
-    Spec ref: llm-timeout/spec.md — Scenario: LLM timeout degrades to no-llm
-    output in pipeline review.
-    """
+    """Retryable failures retain their category; persistence belongs to the orchestrator."""
 
     rows = [
         PursuitRow(
@@ -686,11 +748,14 @@ def test_render_full_brief_llm_error_shows_table_and_error_message(
         )
     ]
 
-    with patch(
-        "fieldkit.commands.pipeline.main.synthesize",
-        side_effect=LLMError("timed out after 90s"),
+    with (
+        pytest.raises(LLMError, match="timed out") as error,
+        patch(
+            "fieldkit.pipeline.main.synthesize",
+            side_effect=LLMError("timed out after 90s", "rate-limit"),
+        ),
     ):
-        result = render_full_brief(
+        render_full_brief(
             rows,
             champion_signals=[],
             blindspot_data=[],
@@ -698,17 +763,12 @@ def test_render_full_brief_llm_error_shows_table_and_error_message(
             today=date(2026, 6, 10),
         )
 
-    # The pursuit health table must be present even when LLM fails
-    assert "## Pursuit Health Table" in result
-    # The narrative block must contain the sanitised failure message (historic regression/376)
-    assert "LLM synthesis unavailable" in result
-    # Error details must NOT leak into the brief (sanitised message only)
-    assert "timed out after 90s" not in result
+    assert error.value.category == "rate-limit"
 
 
 @pytest.mark.unit
-def test_render_full_brief_llm_error_truncates_long_message() -> None:
-    """historic regression: LLM error fallback must truncate at 120 chars to avoid leaking raw GCP JSON."""
+def test_render_full_brief_does_not_format_provider_failure_into_report() -> None:
+    """A provider error cannot become returned Markdown, regardless of its payload length."""
 
     # Simulate a verbose Vertex AI exception message (400+ chars with GCP project path)
     long_error = (
@@ -720,11 +780,14 @@ def test_render_full_brief_llm_error_truncates_long_message() -> None:
     )
     rows = [PursuitRow("global-pay", "deal", "discover", "pending", 5)]
 
-    with patch(
-        "fieldkit.commands.pipeline.main.synthesize",
-        side_effect=LLMError(long_error),
+    with (
+        pytest.raises(LLMError, match="Unexpected error") as error,
+        patch(
+            "fieldkit.pipeline.main.synthesize",
+            side_effect=LLMError(long_error),
+        ),
     ):
-        result = render_full_brief(
+        render_full_brief(
             rows,
             champion_signals=[],
             blindspot_data=[],
@@ -732,11 +795,7 @@ def test_render_full_brief_llm_error_truncates_long_message() -> None:
             today=date(2026, 6, 11),
         )
 
-    assert "_LLM synthesis unavailable" in result
-    # The raw GCP project path must NOT appear in the brief output
-    assert "internal-gcp-project" not in result, "GCP project path leaked into brief output"
-    # Full JSON body must NOT appear
-    assert "FAILED_PRECONDITION" not in result, "Raw GCP error JSON leaked into brief output"
+    assert error.value.category == "general"
 
 
 # ── Stage Gate Criteria Tests (M003 — Pursuit Advance Validation) ────────────
@@ -748,7 +807,7 @@ def test_render_full_brief_llm_error_truncates_long_message() -> None:
 @pytest.mark.unit
 def test_gate_criteria_thresholds_validate_gate_requires_pain_champion_metrics():
     """Pipeline collection owns no local qualification threshold table."""
-    import fieldkit.commands.pipeline.collect as collect
+    import fieldkit.pipeline.collect as collect
 
     assert not hasattr(collect, "GATE_CRITERIA")
 
@@ -756,7 +815,7 @@ def test_gate_criteria_thresholds_validate_gate_requires_pain_champion_metrics()
 @pytest.mark.unit
 def test_gate_criteria_thresholds_propose_gate_requires_four_elements():
     """Pipeline collection does not copy local element thresholds."""
-    import fieldkit.commands.pipeline.collect as collect
+    import fieldkit.pipeline.collect as collect
 
     assert not hasattr(collect, "ELEMENT_LABELS")
 
@@ -764,7 +823,7 @@ def test_gate_criteria_thresholds_propose_gate_requires_four_elements():
 @pytest.mark.unit
 def test_gate_criteria_thresholds_negotiate_gate_requires_all_elements_at_2():
     """No local numeric threshold can establish native qualification."""
-    import fieldkit.commands.pipeline.collect as collect
+    import fieldkit.pipeline.collect as collect
 
     assert not hasattr(collect, "SCORE_LABELS")
 
@@ -801,6 +860,7 @@ def test_transition_history_round_trip_transition_history_fields():
 
     fixtures = Path(__file__).parent / "fixtures" / "pursuit_full.md"
     model, _, _ = load_pursuit(fixtures)
+    assert model.transition_history is not None
     entry = model.transition_history[0]
     # historic regression: entries are now TransitionEntry models, not plain dicts.
     assert isinstance(entry, TransitionEntry)
@@ -826,6 +886,7 @@ def test_transition_history_round_trip_round_trip_preserves_transition_history(t
 
     model2, _, _ = load_pursuit(dst)
     assert model2.transition_history is not None
+    assert model.transition_history is not None
     assert len(model2.transition_history) == len(model.transition_history)
     # historic regression: entries are now TransitionEntry models, not plain dicts.
     assert model2.transition_history[0].from_ == "validate"
@@ -913,11 +974,11 @@ def test_single_glob_pass(tmp_path, monkeypatch):
     """collect_all_pursuit_data calls iterate_pursuits exactly once."""
     from unittest.mock import patch
 
-    from fieldkit.commands.pipeline.collect import collect_all_pursuit_data
+    from fieldkit.pipeline.collect import collect_all_pursuit_data
 
     with (
-        patch("fieldkit.commands.pipeline.collect.iterate_pursuits", return_value=iter([])) as mock_iter,
-        patch("fieldkit.commands.pipeline.collect.read_accounts_config", return_value={}),
+        patch("fieldkit.pipeline.collect.iterate_pursuits", return_value=iter([])) as mock_iter,
+        patch("fieldkit.pipeline.collect.get_accounts_config", return_value={}),
     ):
         collect_all_pursuit_data(tmp_path)
 
@@ -933,12 +994,12 @@ def test_quota_gap_basic():
 
     historic regression: weights now match pursuit forecast (conservative values).
     """
-    pursuits = [
+    pursuits: list[dict[str, object]] = [
         {"stage": "closed-won", "sf_amount": "500000"},
         {"stage": "negotiate", "sf_amount": "1000000"},  # 0.75 weight
         {"stage": "propose", "sf_amount": "1000000"},  # 0.50 weight
     ]
-    quota_config = {"target": 2000000, "period": "2026-H2"}
+    quota_config: dict[str, object] = {"target": 2000000, "period": "2026-H2"}
     result = calculate_quota_gap(pursuits, quota_config)
     assert result["target"] == pytest.approx(2000000.0)
     assert result["closed_won"] == pytest.approx(500000.0)
@@ -951,12 +1012,12 @@ def test_quota_gap_basic():
 @pytest.mark.unit
 def test_quota_gap_missing_sf_amount_skipped():
     """Pursuits without sf_amount are excluded from the calculation."""
-    pursuits = [
+    pursuits: list[dict[str, object]] = [
         {"stage": "negotiate", "sf_amount": None},
         {"stage": "propose", "sf_amount": ""},
         {"stage": "closed-won", "sf_amount": "200000"},
     ]
-    quota_config = {"target": 1000000}
+    quota_config: dict[str, object] = {"target": 1000000}
     result = calculate_quota_gap(pursuits, quota_config)
     assert result["closed_won"] == pytest.approx(200000.0)
     assert result["weighted"] == pytest.approx(0.0)
@@ -966,10 +1027,10 @@ def test_quota_gap_missing_sf_amount_skipped():
 @pytest.mark.unit
 def test_quota_gap_closed_lost_not_counted():
     """closed-lost pursuits are not in the pursuits list (filtered upstream)."""
-    pursuits = [
+    pursuits: list[dict[str, object]] = [
         {"stage": "closed-won", "sf_amount": "300000"},
     ]
-    quota_config = {"target": 500000}
+    quota_config: dict[str, object] = {"target": 500000}
     result = calculate_quota_gap(pursuits, quota_config)
     assert result["closed_won"] == pytest.approx(300000.0)
     assert result["gap"] == pytest.approx(200000.0)
@@ -978,10 +1039,10 @@ def test_quota_gap_closed_lost_not_counted():
 @pytest.mark.unit
 def test_quota_gap_over_quota():
     """Gap is negative when closed-won + weighted exceed target."""
-    pursuits = [
+    pursuits: list[dict[str, object]] = [
         {"stage": "closed-won", "sf_amount": "3000000"},
     ]
-    quota_config = {"target": 2000000}
+    quota_config: dict[str, object] = {"target": 2000000}
     result = calculate_quota_gap(pursuits, quota_config)
     assert result["gap"] == pytest.approx(-1000000.0)
 
@@ -1004,7 +1065,7 @@ def test_quota_gap_all_stage_weights():
         "pre-pipeline": 0.0,
     }
     for stage, weight in stage_weights.items():
-        pursuits = [{"stage": stage, "sf_amount": "1000000"}]
+        pursuits: list[dict[str, object]] = [{"stage": stage, "sf_amount": "1000000"}]
         result = calculate_quota_gap(pursuits, {"target": 0})
         assert result["weighted"] == _pytest.approx(1000000.0 * weight), f"stage={stage}"
 
@@ -1012,8 +1073,8 @@ def test_quota_gap_all_stage_weights():
 @pytest.mark.unit
 def test_quota_gap_dollar_string_amount():
     """Dollar-formatted strings like '$1,200,000.00' are parsed correctly."""
-    pursuits = [{"stage": "negotiate", "sf_amount": "$1,200,000.00"}]
-    quota_config = {"target": 2000000}
+    pursuits: list[dict[str, object]] = [{"stage": "negotiate", "sf_amount": "$1,200,000.00"}]
+    quota_config: dict[str, object] = {"target": 2000000}
     result = calculate_quota_gap(pursuits, quota_config)
     assert result["weighted"] == pytest.approx(1200000.0 * 0.75)
 
@@ -1021,7 +1082,7 @@ def test_quota_gap_dollar_string_amount():
 @pytest.mark.unit
 def test_quota_gap_uses_sf_probability():
     """sf_probability=75 on a pursuit with amount 1000000 → weighted=750000."""
-    pursuits = [{"stage": "negotiate", "sf_amount": "1000000", "sf_probability": 75}]
+    pursuits: list[dict[str, object]] = [{"stage": "negotiate", "sf_amount": "1000000", "sf_probability": 75}]
     result = calculate_quota_gap(pursuits, {"target": 0})
     assert result["weighted"] == pytest.approx(750000.0)
 
@@ -1029,7 +1090,7 @@ def test_quota_gap_uses_sf_probability():
 @pytest.mark.unit
 def test_quota_gap_falls_back_to_stage_weight():
     """Pursuit without sf_probability falls back to QUOTA_STAGE_WEIGHTS (historic regression: now 0.50)."""
-    pursuits = [{"stage": "propose", "sf_amount": "1000000"}]
+    pursuits: list[dict[str, object]] = [{"stage": "propose", "sf_amount": "1000000"}]
     result = calculate_quota_gap(pursuits, {"target": 0})
     assert result["weighted"] == pytest.approx(500000.0)
 
@@ -1037,7 +1098,7 @@ def test_quota_gap_falls_back_to_stage_weight():
 @pytest.mark.unit
 def test_quota_gap_mixed_probability_and_stage():
     """Mix of pursuits: one with sf_probability, one without."""
-    pursuits = [
+    pursuits: list[dict[str, object]] = [
         {"stage": "negotiate", "sf_amount": "1000000", "sf_probability": 80},
         {"stage": "propose", "sf_amount": "500000"},
     ]
@@ -1060,18 +1121,18 @@ def test_bug217_collect_all_pursuit_data_skips_internal_accounts(tmp_path):
     """
     from unittest.mock import patch
 
-    from fieldkit.commands.pipeline.collect import collect_all_pursuit_data
+    from fieldkit.pipeline.collect import collect_all_pursuit_data
 
     accounts_config = {
         "accounts": {
-            "acme-corp": {"domains": ["acme.com"], "blindspot_threshold": 1},
+            "acme-corp": {"domains": ["acme.com"], "pursuit_coverage_threshold": 1},
             "example-internal": {"domains": ["internal.example.com"], "internal": True},
         }
     }
 
     with (
-        patch("fieldkit.commands.pipeline.collect.iterate_pursuits", return_value=iter([])),
-        patch("fieldkit.commands.pipeline.collect.read_accounts_config", return_value=accounts_config),
+        patch("fieldkit.pipeline.collect.iterate_pursuits", return_value=iter([])),
+        patch("fieldkit.pipeline.collect.get_accounts_config", return_value=accounts_config),
     ):
         _, _, blindspot_data = collect_all_pursuit_data(tmp_path)
 
@@ -1134,11 +1195,11 @@ def test_bug002_champion_query_no_match_returns_empty():
     """
     from unittest.mock import MagicMock
 
-    from fieldkit.commands.pipeline.collect import _query_champion_signals_inprocess
+    from fieldkit.pipeline.collect import _query_champion_signals_inprocess
 
     conn = MagicMock()
     with __import__("unittest.mock", fromlist=["patch"]).patch(
-        "fieldkit.commands.pipeline.collect.query_champion_signals",
+        "fieldkit.pipeline.collect.query_champion_signals",
         return_value="No people matched 'Jane Smith'\n",
     ):
         result = _query_champion_signals_inprocess(conn, "Jane Smith")
@@ -1153,7 +1214,7 @@ def test_bug002_champion_query_with_last_outbound_parses_correctly():
     """
     from unittest.mock import MagicMock
 
-    from fieldkit.commands.pipeline.collect import _query_champion_signals_inprocess
+    from fieldkit.pipeline.collect import _query_champion_signals_inprocess
 
     valid_output = (
         "  Threads initiated   : 3  (50% initiation rate)\n"
@@ -1162,7 +1223,7 @@ def test_bug002_champion_query_with_last_outbound_parses_correctly():
     )
     conn = MagicMock()
     with __import__("unittest.mock", fromlist=["patch"]).patch(
-        "fieldkit.commands.pipeline.collect.query_champion_signals",
+        "fieldkit.pipeline.collect.query_champion_signals",
         return_value=valid_output,
     ):
         _initiation, last_outbound, signal = _query_champion_signals_inprocess(conn, "Jane Smith")
@@ -1353,15 +1414,15 @@ def test_collect_champion_signals_returns_empty_on_exception(caplog):
     import sqlite3
     from unittest.mock import MagicMock
 
-    from fieldkit.commands.pipeline.collect import _query_champion_signals_inprocess
+    from fieldkit.pipeline.collect import _query_champion_signals_inprocess
 
     conn = MagicMock()
     with (
         __import__("unittest.mock", fromlist=["patch"]).patch(
-            "fieldkit.commands.pipeline.collect.query_champion_signals",
+            "fieldkit.pipeline.collect.query_champion_signals",
             side_effect=sqlite3.OperationalError("Expression tree too large"),
         ),
-        caplog.at_level(logging.WARNING, logger="fieldkit.commands.pipeline.main"),
+        caplog.at_level(logging.WARNING, logger="fieldkit.pipeline.main"),
     ):
         result = _query_champion_signals_inprocess(conn, "acme")
 
@@ -1376,11 +1437,11 @@ def test_collect_champion_signals_returns_empty_when_output_blank():
     """Blank output from query_champion_signals → returns ('', '', '')."""
     from unittest.mock import MagicMock
 
-    from fieldkit.commands.pipeline.collect import _query_champion_signals_inprocess
+    from fieldkit.pipeline.collect import _query_champion_signals_inprocess
 
     conn = MagicMock()
     with __import__("unittest.mock", fromlist=["patch"]).patch(
-        "fieldkit.commands.pipeline.collect.query_champion_signals",
+        "fieldkit.pipeline.collect.query_champion_signals",
         return_value="",
     ):
         result = _query_champion_signals_inprocess(conn, "acme")
@@ -1393,7 +1454,7 @@ def test_collect_champion_signals_parses_valid_output():
     """Valid output with 'Last outbound' is parsed correctly."""
     from unittest.mock import MagicMock
 
-    from fieldkit.commands.pipeline.collect import _query_champion_signals_inprocess
+    from fieldkit.pipeline.collect import _query_champion_signals_inprocess
 
     valid_output = (
         "  Threads initiated   : 5  (60% initiation rate)\n"
@@ -1402,7 +1463,7 @@ def test_collect_champion_signals_parses_valid_output():
     )
     conn = MagicMock()
     with __import__("unittest.mock", fromlist=["patch"]).patch(
-        "fieldkit.commands.pipeline.collect.query_champion_signals",
+        "fieldkit.pipeline.collect.query_champion_signals",
         return_value=valid_output,
     ):
         _init, last_out, signal = _query_champion_signals_inprocess(conn, "Jane Smith")
@@ -1421,16 +1482,16 @@ def test_collect_all_pursuit_data_handles_absent_gmail_db(tmp_path: Path) -> Non
     """collect_all_pursuit_data returns empty signals list when gmail.db is absent."""
     from unittest.mock import patch
 
-    from fieldkit.commands.pipeline.collect import collect_all_pursuit_data
+    from fieldkit.pipeline.collect import collect_all_pursuit_data
 
     data_root = _make_data_root(tmp_path)
 
     # Patch get_gmail_db_path to return a path that does not exist
     absent_db = tmp_path / "nonexistent.db"
     with (
-        patch("fieldkit.commands.pipeline.collect.get_gmail_db_path", return_value=absent_db),
+        patch("fieldkit.pipeline.collect.get_gmail_db_path", return_value=absent_db),
         patch("fieldkit.pursuit.iterate_pursuits", return_value=[]),
-        patch("fieldkit.pursuit.read_accounts_config", return_value={}),
+        patch("fieldkit.pipeline.collect.get_accounts_config", return_value={}),
     ):
         rows, signals, _blindspot_data = collect_all_pursuit_data(data_root)
 
@@ -1449,7 +1510,7 @@ def test_collect_all_pursuit_data_skips_closed_pursuits(tmp_path: Path, write_pu
     """collect_all_pursuit_data excludes closed-won/closed-lost pursuits from rows."""
     from unittest.mock import patch
 
-    from fieldkit.commands.pipeline.collect import collect_all_pursuit_data
+    from fieldkit.pipeline.collect import collect_all_pursuit_data
 
     acct = tmp_path / "accounts" / "acme-corp"
     write_pursuit_generic(acct, "closed-deal", "stage: closed-won\n" + _BASE_MEDDPICC)  # type: ignore[operator]
@@ -1457,8 +1518,8 @@ def test_collect_all_pursuit_data_skips_closed_pursuits(tmp_path: Path, write_pu
 
     absent_db = tmp_path / "no.db"
     with (
-        patch("fieldkit.commands.pipeline.collect.get_gmail_db_path", return_value=absent_db),
-        patch("fieldkit.commands.pipeline.collect.read_accounts_config", return_value={}),
+        patch("fieldkit.pipeline.collect.get_gmail_db_path", return_value=absent_db),
+        patch("fieldkit.pipeline.collect.get_accounts_config", return_value={}),
     ):
         rows, _signals, _ = collect_all_pursuit_data(tmp_path)
 
@@ -1468,24 +1529,24 @@ def test_collect_all_pursuit_data_skips_closed_pursuits(tmp_path: Path, write_pu
 
 
 @pytest.mark.unit
-def test_collect_all_pursuit_data_blindspot_threshold_respected(tmp_path: Path) -> None:
+def test_collect_all_pursuit_data_pursuit_coverage_threshold_respected(tmp_path: Path) -> None:
     """collect_all_pursuit_data correctly classifies accounts as ok/blindspot."""
     from unittest.mock import patch
 
-    from fieldkit.commands.pipeline.collect import collect_all_pursuit_data
+    from fieldkit.pipeline.collect import collect_all_pursuit_data
 
     accounts_config = {
         "accounts": {
-            "acme-corp": {"domains": ["acme.com"], "blindspot_threshold": 1},
-            "shield-ins": {"domains": ["shieldins.com"], "blindspot_threshold": 1},
+            "acme-corp": {"domains": ["acme.com"], "pursuit_coverage_threshold": 1},
+            "shield-ins": {"domains": ["shieldins.com"], "pursuit_coverage_threshold": 1},
         }
     }
 
     absent_db = tmp_path / "no.db"
     with (
-        patch("fieldkit.commands.pipeline.collect.get_gmail_db_path", return_value=absent_db),
-        patch("fieldkit.commands.pipeline.collect.iterate_pursuits", return_value=iter([])),
-        patch("fieldkit.commands.pipeline.collect.read_accounts_config", return_value=accounts_config),
+        patch("fieldkit.pipeline.collect.get_gmail_db_path", return_value=absent_db),
+        patch("fieldkit.pipeline.collect.iterate_pursuits", return_value=iter([])),
+        patch("fieldkit.pipeline.collect.get_accounts_config", return_value=accounts_config),
     ):
         _, _, blindspot_data = collect_all_pursuit_data(tmp_path)
 
@@ -1500,16 +1561,16 @@ def test_collect_all_pursuit_data_accounts_config_not_dict(tmp_path: Path) -> No
     """collect_all_pursuit_data handles non-dict accounts_cfg gracefully."""
     from unittest.mock import patch
 
-    from fieldkit.commands.pipeline.collect import collect_all_pursuit_data
+    from fieldkit.pipeline.collect import collect_all_pursuit_data
 
     # accounts config where 'accounts' is a list (malformed)
     accounts_config: dict = {"accounts": ["item1", "item2"]}
 
     absent_db = tmp_path / "no.db"
     with (
-        patch("fieldkit.commands.pipeline.collect.get_gmail_db_path", return_value=absent_db),
-        patch("fieldkit.commands.pipeline.collect.iterate_pursuits", return_value=iter([])),
-        patch("fieldkit.commands.pipeline.collect.read_accounts_config", return_value=accounts_config),
+        patch("fieldkit.pipeline.collect.get_gmail_db_path", return_value=absent_db),
+        patch("fieldkit.pipeline.collect.iterate_pursuits", return_value=iter([])),
+        patch("fieldkit.pipeline.collect.get_accounts_config", return_value=accounts_config),
     ):
         _rows, _signals, blindspot_data = collect_all_pursuit_data(tmp_path)
 
@@ -1518,24 +1579,24 @@ def test_collect_all_pursuit_data_accounts_config_not_dict(tmp_path: Path) -> No
 
 
 @pytest.mark.unit
-def test_collect_all_pursuit_data_accounts_config_yaml_error(tmp_path: Path) -> None:
-    """collect_all_pursuit_data handles read_accounts_config raising FileNotFoundError."""
+def test_collect_all_pursuit_data_absent_accounts_config(tmp_path: Path) -> None:
+    """Absent optional accounts configuration produces no blindspots."""
     from unittest.mock import patch
 
-    from fieldkit.commands.pipeline.collect import collect_all_pursuit_data
+    from fieldkit.pipeline.collect import collect_all_pursuit_data
 
     absent_db = tmp_path / "no.db"
     with (
-        patch("fieldkit.commands.pipeline.collect.get_gmail_db_path", return_value=absent_db),
-        patch("fieldkit.commands.pipeline.collect.iterate_pursuits", return_value=iter([])),
+        patch("fieldkit.pipeline.collect.get_gmail_db_path", return_value=absent_db),
+        patch("fieldkit.pipeline.collect.iterate_pursuits", return_value=iter([])),
         patch(
-            "fieldkit.commands.pipeline.collect.read_accounts_config",
-            side_effect=FileNotFoundError("no accounts.yaml"),
+            "fieldkit.pipeline.collect.get_accounts_config",
+            return_value={},
         ),
     ):
         _rows, _signals, blindspot_data = collect_all_pursuit_data(tmp_path)
 
-    # FileNotFoundError → config={} → empty blindspot_data
+    # Absent optional configuration returns an empty mapping.
     assert blindspot_data == []
 
 
@@ -1544,7 +1605,7 @@ def test_collect_all_pursuit_data_invalid_pursuit_file_skipped(tmp_path: Path) -
     """collect_all_pursuit_data skips pursuit files that fail to parse."""
     from unittest.mock import patch
 
-    from fieldkit.commands.pipeline.collect import collect_all_pursuit_data
+    from fieldkit.pipeline.collect import collect_all_pursuit_data
 
     # Simulate iterate_pursuits returning a path, but load_pursuit raises ValidationError
     fake_path = tmp_path / "accounts" / "acme" / "pursuits" / "bad-deal.md"
@@ -1553,13 +1614,13 @@ def test_collect_all_pursuit_data_invalid_pursuit_file_skipped(tmp_path: Path) -
 
     absent_db = tmp_path / "no.db"
     with (
-        patch("fieldkit.commands.pipeline.collect.get_gmail_db_path", return_value=absent_db),
-        patch("fieldkit.commands.pipeline.collect.iterate_pursuits", return_value=iter([fake_path])),
+        patch("fieldkit.pipeline.collect.get_gmail_db_path", return_value=absent_db),
+        patch("fieldkit.pipeline.collect.iterate_pursuits", return_value=iter([fake_path])),
         patch(
-            "fieldkit.commands.pipeline.collect.load_pursuit",
+            "fieldkit.pipeline.collect.load_pursuit",
             side_effect=ValueError("bad frontmatter"),
         ),
-        patch("fieldkit.commands.pipeline.collect.read_accounts_config", return_value={}),
+        patch("fieldkit.pipeline.collect.get_accounts_config", return_value={}),
     ):
         rows, _signals, _ = collect_all_pursuit_data(tmp_path)
 
@@ -1573,20 +1634,20 @@ def test_collect_all_pursuit_data_gmail_connect_error_returns_empty_signals(tmp_
     import sqlite3
     from unittest.mock import patch
 
-    from fieldkit.commands.pipeline.collect import collect_all_pursuit_data
+    from fieldkit.pipeline.collect import collect_all_pursuit_data
 
     # Simulate gmail.db existing but connection failing
     fake_db = tmp_path / "gmail.db"
     fake_db.write_text("not a sqlite db", encoding="utf-8")
 
     with (
-        patch("fieldkit.commands.pipeline.collect.get_gmail_db_path", return_value=fake_db),
+        patch("fieldkit.pipeline.collect.get_gmail_db_path", return_value=fake_db),
         patch(
-            "fieldkit.commands.pipeline.collect._gmail_connect",
+            "fieldkit.pipeline.collect._gmail_connect",
             side_effect=sqlite3.OperationalError("not a database"),
         ),
-        patch("fieldkit.commands.pipeline.collect.iterate_pursuits", return_value=iter([])),
-        patch("fieldkit.commands.pipeline.collect.read_accounts_config", return_value={}),
+        patch("fieldkit.pipeline.collect.iterate_pursuits", return_value=iter([])),
+        patch("fieldkit.pipeline.collect.get_accounts_config", return_value={}),
     ):
         _rows, signals, _ = collect_all_pursuit_data(tmp_path)
 
@@ -1601,14 +1662,19 @@ def test_collect_all_pursuit_data_gmail_connect_error_returns_empty_signals(tmp_
 # ── TestNoLlmFlagPositionDetection (flattened) ──────────────────────────────
 
 
-def _no_llm_flag_position_detection_invoke(argv: list[str]) -> object:
+def _no_llm_flag_position_detection_invoke(argv: list[str]) -> Result:
+    import click
     from click.testing import CliRunner
 
-    from fieldkit.commands.pipeline.cli import cli
+    from fieldkit.__main__ import main
+
+    @click.command()
+    def invoke_main() -> None:
+        raise click.exceptions.Exit(main(argv[1:]))
 
     runner = CliRunner()
-    with patch.object(sys, "argv", argv):
-        return runner.invoke(cli, argv[2:], catch_exceptions=True)
+    with patch("fieldkit.__main__.load_dotenv_safe"):
+        return runner.invoke(invoke_main, catch_exceptions=True)
 
 
 @pytest.mark.unit

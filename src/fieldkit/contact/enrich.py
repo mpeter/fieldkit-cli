@@ -30,7 +30,6 @@ from fieldkit.enrich._io import (
     CONTACTS_RAW_PREV,
     enrich_dir,
     load_raw_contacts,
-    migrate_legacy_memory_files,
 )
 
 
@@ -160,7 +159,6 @@ class EnrichRecordsResult:
 
     total_enriched: int
     total_failed: int
-    migrated_legacy_files: int
     total_raw_contacts: int
 
 
@@ -183,22 +181,17 @@ def enrich_records(*, account: str | None = None) -> EnrichRecordsResult:
     Returns:
         An :class:`EnrichRecordsResult` summary of the run.
     """
-    migrated = migrate_legacy_memory_files()
-
     raw_contacts = load_raw_contacts()
     if account is not None:
         raw_contacts = [c for c in raw_contacts if c.get("account") == account]
 
     if not raw_contacts:
-        return EnrichRecordsResult(
-            total_enriched=0, total_failed=0, migrated_legacy_files=migrated, total_raw_contacts=0
-        )
+        return EnrichRecordsResult(total_enriched=0, total_failed=0, total_raw_contacts=0)
 
     total_enriched, total_failed = run_enrichment_pipeline(raw_contacts)
 
     return EnrichRecordsResult(
         total_enriched=total_enriched,
         total_failed=total_failed,
-        migrated_legacy_files=migrated,
         total_raw_contacts=len(raw_contacts),
     )

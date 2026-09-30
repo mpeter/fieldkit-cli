@@ -1,139 +1,101 @@
-# One-on-One Update
+# One-on-one update
 
-Manager-ready 1:1 update in under 2 minutes.
-Covers: what closed, wins, at-risk with asks, pipeline numbers, this week's focus, escalations.
+Use this workflow to prepare a manager-ready pipeline and priority update. The
+result is a source-attributed draft, not an automatic status file or Slack post.
 
-## Gotchas
+Optional request modifiers such as `--since YYYY-MM-DD`, `--qbr-mode`, and
+`--slack` describe the requested draft; they are not fieldkit CLI flags. Confirm
+an exact lookback start date. A quarterly request changes the reporting window,
+but does not create data that the sources do not contain.
 
-- **Stale vault signals** — run `/brief` first if data hasn't been refreshed today
-- **Trigger overlap with adjacent skills** — confirm you need this skill and not a closely named one
+## Collect current local evidence
 
-## Constraints
-
-- **Never write to account files without explicit confirmation**
-- **Always surface generated output for review before any external send**
-
-## Flags
-
-- `--since YYYY-MM-DD` — custom lookback window for wins/closed (default: last 7 days)
-- `--qbr-mode` — expand to quarterly summary (30-day window, add YTD numbers)
-- `--slack` — shorter Slack-paste version (bullets only, no section headers)
-
-Groups needed: **fieldkit-sales** (Backstory — positive signals and stage advances).
-Pursuit files, TASKS.md, and watcher alerts are read directly from disk (native file reads).
-
----
-
-## Step 1: Closed / won this week
-
-Scan all pursuit files for `stage: closed-won` AND `last-transition` within lookback window.
-For each: deal name, account, close value (sf_consulting_total or sf_training_total), brief context note.
-
----
-
-## Step 2: Pipeline numbers
+Run the shipped read-only reports:
 
 ```bash
-fieldkit pursuit forecast
+fieldkit pursuit forecast --json
+fieldkit pursuit health --json
+fieldkit pursuit projects --json
 ```
 
-Parse output for:
-- Closed Won (QTD): sum of consulting + training from closed-won pursuits this quarter
-- Commit: sum of negotiate + closed-won values
-- Weighted Forecast: from forecast command output
-- Best Case: from forecast command output
+Use the forecast's returned `closed_won`, `commit`, `weighted`, and `best_case`
+values exactly as defined by the command. They are current local scenario totals,
+not automatically quarter-to-date or year-to-date results. Preserve skipped or
+invalid-data warnings.
 
----
+Use the health report's returned risk level and reasons. Do not claim that it
+detects an arbitrary 21-day stall, qualification gap, champion gap, or executive
+buyer gap unless a separate dated source explicitly establishes that fact.
+Use the projects report's own delivery classifications for project risk.
 
-## Step 3: At-risk deals
+To identify events inside the lookback window, read the relevant pursuit records
+through the workspace's normal pursuit representation. A closed-won item or stage
+advance counts only when `transition-history` provides a parseable transition
+date in the window. A bare current stage does not prove when the change happened.
 
-```bash
-fieldkit pursuit health
-```
+TASKS.md and a watcher report are optional local sources. Use them only when the
+file exists, its ownership is understood, and its dates support the claim. Do not
+turn an undated task or stale alert into current evidence.
 
-A deal is surfaced as at-risk if any of:
-- Stuck in any stage > 21 days
-- Close date is overdue, or within 30 days while still in an early stage
-- Missing `sf_opportunity_id`
-- Native qualification is unavailable in the local health report
+## Optional sources
 
-Also read `<fieldkit_home>/watchers/pursuit-stall-alerts.md` for stall details.
+An operator-authorized account-intelligence or discussion source may add a dated
+positive signal. fieldkit does not require or configure that service. Verify the
+tool's read-only interface, identity, scope, result bounds, and timestamps before
+use. Keep internal commentary distinct from customer statements.
 
-For each at-risk deal, auto-suggest the manager ask:
-- Stuck in negotiate > 30 days → "Need executive alignment call with [account]"
-- Native qualification unavailable → "Run /grill for the exact read-only ClosePlan review"
-- Zombie project → "Help with formal closeout / customer communication"
+For every source, record a **Source status** of `verified`, `unavailable`,
+`pending`, or `failed`. Continue with independent sources after one failure, but
+never convert missing, partial, or malformed data into zero activity.
 
----
+## Draft the update
 
-## Step 4: Wins and positive signals (7-day window)
+Recommend a manager ask only as a proposal tied to observed evidence. Do not
+invent an owner, deadline, customer commitment, or dollar amount.
 
-Check pursuit file `transition-history` for stage advances in the lookback window.
-Via **fieldkit-sales** group: `get_recent_account_activity` for positive signals (new contacts, meetings, engagement uptick).
-
----
-
-## Step 5: This week's focus
-
-Read TASKS.md Today + Active sections. Identify top 3 items by urgency and impact:
-- Close dates within 30 days → highest priority
-- Stuck deals with known next action → second tier
-- Expiring projects needing renewal conversation → third tier
-
----
-
-## Step 6: Escalations
-
-Identify items that need manager action:
-- Pursuit health HIGH risk at negotiate+ with no champion or EB
-- TASKS.md Waiting On items older than 14 days with no response
-
----
-
-## Output Format
+Replace sample statuses with observed outcomes. A template row marked `verified`
+is not evidence: missing, failed, partial, or unknown coverage stays unavailable
+or pending. Keep proposed actions separate from observed facts.
 
 ```markdown
-## 1:1 Update — [DATE]
+## 1:1 Update — [date]
 
-### ✅ Closed / Won This Week
-- [deal] at [account]: [value] — [brief context]
-- (none)
+### Source status
+| Source | As of / scope | Status | Note |
+|---|---|---|---|
+| pursuit forecast | [report date] | verified | current local scenarios |
+| transition history | [lookback] | unavailable | [reason] |
 
-### 🏆 Wins & Positive Signals
-- [deal or account] — [what happened]
+### Closed / won in the lookback
+- [deal and value] — Source: [transition entry, date]
+- No verified transitions in the completed scope.
 
-### 🚨 At Risk / Needs Attention
-- [deal] at [account] ([value]): [reason] — Recommended ask: [specific ask]
+### Wins and positive signals
+- [observed event] — Source: [source, date]
 
-### 📊 Pipeline Numbers
-- Closed Won (QTD): $[N]
-- Commit (negotiate+): $[N] — [deal list]
-- Weighted Forecast: $[N]
-- Best Case: $[N]
+### At risk / needs attention
+- [deal or project]: [returned reason] — Proposed manager ask: [ask]
 
-### 🎯 This Week's Focus
-1. [priority]
-2. [priority]
-3. [priority]
+### Pipeline numbers
+- Closed won (current local scenario): $[N]
+- Commit: $[N]
+- Weighted: $[N]
+- Best case: $[N]
 
-### 🤝 Asks / Escalations
-- [specific ask] — [context and urgency]
-- (none)
+### This week's focus
+1. [priority] — Evidence: [source, date]
+2. [priority] — Evidence: [source, date]
+3. [priority] — Evidence: [source, date]
+
+### Asks / escalations
+- [proposed ask] — [evidence and urgency]
 ```
 
-Saved to: `<fieldkit_home>/archive/one-on-ones/YYYY-MM-DD-1on1-update.md`
+For a `--slack` request, produce a compact pasteable draft without sending it.
+Keep source gaps in the compact version rather than presenting uncertain numbers
+as verified.
 
----
-
-## Slack Format (--slack)
-
-Compact version without headers, all bullets:
-
-```
-*1:1 — [DATE]*
-✅ Closed: [deal] $[N]
-🚨 At risk: [deal] — stuck in [stage] [N]d — need [manager ask]
-📊 Pipeline: Commit $[N] | Weighted $[N] | Best Case $[N]
-🎯 Focus: [top 2 priorities]
-🤝 Ask: [if any]
-```
+Present the draft for review. Do not write to `one-on-ones/`, edit account or
+pursuit files, or send the update. If the operator asks to save it, propose an
+exact workspace-relative path, obtain confirmation, and require separate
+overwrite approval when that path already exists.

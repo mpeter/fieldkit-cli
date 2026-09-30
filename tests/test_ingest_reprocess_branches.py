@@ -12,9 +12,29 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from fieldkit.errors import AuthError, LLMError
 from fieldkit.ingest.db import ArtifactRecord
+from fieldkit.ingest.docs import GeminiDocContent
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.fixture(autouse=True)
+def _isolated_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("fieldkit.config.get_fieldkit_home", lambda: tmp_path)
+    # These adapter tests use mock databases; journal validation has real-DB coverage.
+    monkeypatch.setattr("fieldkit.ingest.reprocess_replay.preflight_reprocess", lambda conn, workspace: ())
+
+
+def _existing_note(tmp_path: Path) -> Path:
+    path = tmp_path / "accounts/acme/meetings/note.md"
+    path.parent.mkdir(parents=True)
+    path.write_text(_note_text("Existing note"), encoding="utf-8")
+    return path
+
+
+def _note_text(body: str) -> str:
+    return "---\nsource_id: src-001\npipeline: transcript-ingest\n---\n\n" + body + "\n"
 
 
 # ---------------------------------------------------------------------------
@@ -270,27 +290,32 @@ def test_run_reprocess_from_version_dry_run_with_limit(tmp_path: Path) -> None:
 # ── TestReprocessServiceAuthError (flattened) ───────────────────────────────
 
 
-def test_run_reprocess_docs_service_not_found_returns_1(tmp_path: Path) -> None:
-    from fieldkit.commands.ingest.reprocess import _reprocess_transcript_ingest
+@pytest.mark.parametrize("as_json", [False, True])
+def test_reprocess_missing_credentials_exits_auth(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], as_json: bool
+) -> None:
+    from fieldkit.__main__ import main
 
     spec = _make_spec()
     art = _make_artifact()
 
     with (
+        patch("fieldkit.commands.ingest.registry.PIPELINE_MAP", _make_pipeline_map(spec)),
         patch("fieldkit.ingest.db.get_db_path", return_value=tmp_path / "pipeline.db"),
         patch("fieldkit.ingest.db.init_db", return_value=MagicMock()),
         patch("fieldkit.ingest.db.get_artifacts_for_reprocess", return_value=[art]),
-        patch("fieldkit.ingest.docs.get_docs_service", side_effect=FileNotFoundError("token missing")),
+        patch("fieldkit.config.get_google_token_path", return_value=tmp_path / "missing-token.json"),
+        patch("fieldkit.commands.ingest.reprocess._reprocess_one_artifact") as process,
     ):
-        rc = _reprocess_transcript_ingest(
-            spec=spec,
-            from_version="0.1.0",
-            dry_run=False,
-            interactive=False,
-            limit=None,
-        )
+        argv = ["ingest", "reprocess", "--pipeline", "transcript-ingest", "--from-version", "0.1.0"]
+        rc = main([*argv, "--json"] if as_json else argv)
 
-    assert rc == 1
+    assert rc == 2
+    process.assert_not_called()
+    captured = capsys.readouterr()
+    assert "fieldkit auth google" in captured.err
+    assert str(tmp_path) not in captured.err
+    assert "Traceback" not in captured.err
 
 
 # ---------------------------------------------------------------------------
@@ -338,10 +363,10 @@ def test_run_reprocess_successful_artifact_returns_0() -> None:
     assert rc == 0
 
 
-def test_run_reprocess_failed_artifact_preserves_human_exit() -> None:
-    """Human mode preserves its historical zero exit after reporting errors."""
+def test_run_reprocess_failed_artifact_returns_partial_failure() -> None:
+    """Human mode must not report success after an artifact fails."""
     rc = _run_reprocess_run_with_mock_process([_make_artifact()], process_ok=False)
-    assert rc == 0
+    assert rc == 1
 
 
 def test_run_reprocess_multiple_artifacts_all_succeed() -> None:
@@ -363,7 +388,7 @@ def test_run_reprocess_json_reports_ordered_partial_outcomes(capsys: pytest.Capt
         patch("fieldkit.ingest.db.init_db", return_value=MagicMock()),
         patch("fieldkit.ingest.db.get_artifacts_for_reprocess", return_value=artifacts),
         patch("fieldkit.ingest.docs.get_docs_service", return_value=MagicMock()),
-        patch("fieldkit.commands.ingest.reprocess._reprocess_one_artifact", side_effect=[True, False, True]),
+        patch("fieldkit.commands.ingest.reprocess._reprocess_one_artifact", side_effect=[True, False, True]) as process,
     ):
         rc = _reprocess_transcript_ingest(
             spec=_make_spec(version="0.2.0"),
@@ -376,11 +401,14 @@ def test_run_reprocess_json_reports_ordered_partial_outcomes(capsys: pytest.Capt
 
     payload = json.loads(capsys.readouterr().out)
     assert rc == 1
-    assert payload["completed"] == ["src-0", "src-2"]
+    assert process.call_count == 2
+    assert payload["completed"] == ["src-0"]
     assert payload["failed"] == ["src-1"]
+    assert payload["pending"] == ["src-2"]
 
 
-def test_run_reprocess_json_interrupt_preserves_retry_boundary(capsys: pytest.CaptureFixture[str]) -> None:
+@pytest.mark.parametrize("as_json", [False, True])
+def test_run_reprocess_interrupt_preserves_retry_boundary(as_json: bool, capsys: pytest.CaptureFixture[str]) -> None:
     import json
 
     from fieldkit.commands.ingest._output import json_output
@@ -388,7 +416,7 @@ def test_run_reprocess_json_interrupt_preserves_retry_boundary(capsys: pytest.Ca
 
     artifacts = [_make_artifact(f"src-{i}", f"art-{i}") for i in range(3)]
     with (
-        json_output(True),
+        json_output(as_json),
         patch("fieldkit.ingest.db.get_db_path", return_value=Path("/tmp/fake.db")),
         patch("fieldkit.ingest.db.init_db", return_value=MagicMock()),
         patch("fieldkit.ingest.db.get_artifacts_for_reprocess", return_value=artifacts),
@@ -401,13 +429,17 @@ def test_run_reprocess_json_interrupt_preserves_retry_boundary(capsys: pytest.Ca
             dry_run=False,
             interactive=False,
             limit=None,
-            as_json=True,
+            as_json=as_json,
         )
 
-    payload = json.loads(capsys.readouterr().out)
-    assert rc == 0
-    assert payload["completed"] == ["src-0"]
-    assert payload["pending"] == ["src-1", "src-2"]
+    assert rc == 1
+    output = capsys.readouterr()
+    if as_json:
+        payload = json.loads(output.out)
+        assert payload["completed"] == ["src-0"]
+        assert payload["pending"] == ["src-1", "src-2"]
+    else:
+        assert "Interrupted" in output.err
 
 
 def test_run_reprocess_interactive_yes_processes() -> None:
@@ -439,7 +471,7 @@ def test_run_reprocess_interactive_quit_stops() -> None:
     assert rc == 0
 
 
-def test_run_reprocess_keyboard_interrupt_returns_0() -> None:
+def test_run_reprocess_keyboard_interrupt_returns_1() -> None:
     from fieldkit.commands.ingest.reprocess import _reprocess_transcript_ingest
 
     spec = _make_spec()
@@ -463,7 +495,7 @@ def test_run_reprocess_keyboard_interrupt_returns_0() -> None:
             limit=None,
         )
 
-    assert rc == 0
+    assert rc == 1
 
 
 # ---------------------------------------------------------------------------
@@ -474,21 +506,23 @@ def test_run_reprocess_keyboard_interrupt_returns_0() -> None:
 # ── TestReprocessOneArtifact (flattened) ────────────────────────────────────
 
 
-def test_reprocess_one_artifact_doc_fetch_returns_none_returns_false() -> None:
+def test_reprocess_one_artifact_doc_fetch_returns_none_returns_false(tmp_path: Path) -> None:
     from fieldkit.commands.ingest.reprocess import _reprocess_one_artifact
 
-    art = _make_artifact()
+    art = _make_artifact(content_path=str(_existing_note(tmp_path)))
 
-    with patch("fieldkit.commands.ingest.reprocess._fetch_doc_for_reprocess", return_value=None):
+    with patch("fieldkit.commands.ingest.reprocess._fetch_doc_for_reprocess", return_value=None) as fetch:
         result = _reprocess_one_artifact(art=art, service=MagicMock(), conn=MagicMock(), pipeline_version="0.2.0")
 
     assert result is False
+    fetch.assert_called_once()
 
 
 def test_reprocess_one_artifact_write_oserror_returns_false(tmp_path: Path) -> None:
     from fieldkit.commands.ingest.reprocess import _reprocess_one_artifact
+    from fieldkit.ingest.pipeline import Stage1Result
 
-    art = _make_artifact(content_path=str(tmp_path / "vault" / "note.md"))
+    art = _make_artifact(content_path=str(_existing_note(tmp_path)))
 
     doc = SimpleNamespace(
         doc_title="Note",
@@ -503,7 +537,7 @@ def test_reprocess_one_artifact_write_oserror_returns_false(tmp_path: Path) -> N
             "fieldkit.ingest.router.route_by_domains",
             return_value=SimpleNamespace(accounts=["unknown"], pursuits=[]),
         ),
-        patch("fieldkit.ingest.pipeline.stage1_clean", return_value="cleaned"),
+        patch("fieldkit.ingest.pipeline.stage1_clean", return_value=Stage1Result("cleaned")),
         patch(
             "fieldkit.ingest.pipeline.stage2_extract",
             return_value=SimpleNamespace(
@@ -512,18 +546,24 @@ def test_reprocess_one_artifact_write_oserror_returns_false(tmp_path: Path) -> N
                 pursuits=[],
             ),
         ),
-        patch("fieldkit.ingest.pipeline.render_vault_note", return_value="# Note"),
-        patch.object(Path, "write_text", side_effect=OSError("disk full")),
+        patch("fieldkit.ingest.pipeline.render_vault_note", return_value=_note_text("# Note")),
+        patch("fieldkit.ingest.reprocess_replay.prepare_reprocess") as prepare,
+        patch("fieldkit.ingest.reprocess_replay.replay_reprocess", side_effect=OSError("disk full")) as replay,
     ):
         result = _reprocess_one_artifact(art=art, service=MagicMock(), conn=MagicMock(), pipeline_version="0.2.0")
 
     assert result is False
+    prepare.assert_called_once()
+    replay.assert_called_once()
 
 
-def test_reprocess_one_artifact_stage1_failure_graceful_degradation(tmp_path: Path) -> None:
+def test_reprocess_one_artifact_stage1_failure_graceful_degradation(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     from fieldkit.commands.ingest.reprocess import _reprocess_one_artifact
+    from fieldkit.ingest.pipeline import Stage1Result
 
-    vault = tmp_path / "vault.md"
+    vault = _existing_note(tmp_path)
     art = _make_artifact(content_path=str(vault))
 
     doc = SimpleNamespace(
@@ -545,22 +585,31 @@ def test_reprocess_one_artifact_stage1_failure_graceful_degradation(tmp_path: Pa
             "fieldkit.ingest.router.route_by_domains",
             return_value=SimpleNamespace(accounts=["unknown"], pursuits=[]),
         ),
-        patch("fieldkit.ingest.pipeline.stage1_clean", side_effect=RuntimeError("llm fail")),
-        patch("fieldkit.ingest.pipeline.stage2_extract", return_value=meta),
-        patch("fieldkit.ingest.pipeline.render_vault_note", return_value="# Content"),
-        patch("fieldkit.ingest.db.update_artifact_version"),
+        patch("fieldkit.ingest.pipeline.stage1_clean", side_effect=RuntimeError("provider-payload-sentinel")),
+        patch("fieldkit.ingest.pipeline.stage2_extract", return_value=meta) as extract,
+        patch("fieldkit.ingest.pipeline.render_vault_note", return_value=_note_text("# Content")),
+        patch("fieldkit.ingest.reprocess_replay.prepare_reprocess") as prepare,
+        patch("fieldkit.ingest.reprocess_replay.replay_reprocess") as replay,
     ):
         result = _reprocess_one_artifact(art=art, service=MagicMock(), conn=MagicMock(), pipeline_version="0.2.0")
 
-    # stage1 failure degrades gracefully — vault should still be written
     assert result is True
-    assert vault.exists()
+    extract.assert_called_once_with(Stage1Result("Raw text", bypassed=True))
+    prepare.assert_called_once()
+    replay.assert_called_once()
+    captured = capsys.readouterr()
+    assert "provider-payload-sentinel" not in captured.out + captured.err
+    assert "Transcript cleaning failed; using uncleaned text" in captured.err
+    assert "Review the degraded meeting output" in captured.err
 
 
-def test_reprocess_one_artifact_stage2_failure_graceful_degradation(tmp_path: Path) -> None:
+def test_reprocess_one_artifact_stage2_failure_graceful_degradation(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     from fieldkit.commands.ingest.reprocess import _reprocess_one_artifact
+    from fieldkit.ingest.pipeline import Stage1Result
 
-    vault = tmp_path / "vault.md"
+    vault = _existing_note(tmp_path)
     art = _make_artifact(content_path=str(vault))
 
     doc = SimpleNamespace(
@@ -576,18 +625,26 @@ def test_reprocess_one_artifact_stage2_failure_graceful_degradation(tmp_path: Pa
             "fieldkit.ingest.router.route_by_domains",
             return_value=SimpleNamespace(accounts=["unknown"], pursuits=[]),
         ),
-        patch("fieldkit.ingest.pipeline.stage1_clean", return_value="cleaned"),
-        patch("fieldkit.ingest.pipeline.stage2_extract", side_effect=RuntimeError("extract fail")),
+        patch("fieldkit.ingest.pipeline.stage1_clean", return_value=Stage1Result("cleaned")),
+        patch("fieldkit.ingest.pipeline.stage2_extract", side_effect=RuntimeError("provider-payload-sentinel")),
         patch(
             "fieldkit.ingest.pipeline.TranscriptMeta",
             return_value=SimpleNamespace(confidence="low", accounts=["unknown"], pursuits=[]),
         ),
-        patch("fieldkit.ingest.pipeline.render_vault_note", return_value="# Content"),
-        patch("fieldkit.ingest.db.update_artifact_version"),
+        patch("fieldkit.ingest.pipeline.render_vault_note", return_value=_note_text("# Content")),
+        patch("fieldkit.ingest.reprocess_replay.prepare_reprocess") as prepare,
+        patch("fieldkit.ingest.reprocess_replay.replay_reprocess") as replay,
     ):
         result = _reprocess_one_artifact(art=art, service=MagicMock(), conn=MagicMock(), pipeline_version="0.2.0")
 
     assert result is True
+
+    prepare.assert_called_once()
+    replay.assert_called_once()
+    captured = capsys.readouterr()
+    assert "provider-payload-sentinel" not in captured.out + captured.err
+    assert "Transcript extraction failed; using low-confidence metadata" in captured.err
+    assert "Review the degraded meeting output" in captured.err
 
 
 # ---------------------------------------------------------------------------
@@ -596,6 +653,48 @@ def test_reprocess_one_artifact_stage2_failure_graceful_degradation(tmp_path: Pa
 
 
 # ── TestFetchDocForReprocess (flattened) ────────────────────────────────────
+
+
+@pytest.mark.parametrize("operation", ["fetch", "stage1_clean", "stage2_extract"])
+@pytest.mark.parametrize(
+    "failure",
+    [
+        AuthError("synthetic credential failure"),
+        LLMError("provider failure", "auth"),
+        LLMError("provider failure", "rate-limit"),
+        LLMError("provider failure", "general"),
+    ],
+)
+def test_reprocess_authentication_failure_has_no_write(
+    operation: str, tmp_path: Path, capsys: pytest.CaptureFixture[str], failure: Exception
+) -> None:
+    from fieldkit.commands.ingest.reprocess import _reprocess_one_artifact
+    from fieldkit.ingest.pipeline import Stage1Result, TranscriptMeta
+    from fieldkit.ingest.router import Confidence, RouteResult
+
+    target = _existing_note(tmp_path)
+    doc = GeminiDocContent("src-auth", "Synthetic", "notes", "transcript")
+    with (
+        patch("fieldkit.ingest.docs.fetch_gemini_doc", return_value=doc) as fetch,
+        patch("fieldkit.ingest.router.route_by_domains", return_value=RouteResult(["unknown"], Confidence.NONE, False)),
+        patch("fieldkit.ingest.pipeline.stage1_clean", return_value=Stage1Result("cleaned")) as clean,
+        patch("fieldkit.ingest.pipeline.stage2_extract", return_value=TranscriptMeta()) as extract,
+        patch("fieldkit.ingest.pipeline.render_vault_note", return_value="Replacement note") as render,
+        patch("fieldkit.ingest.reprocess_replay.save_reprocess") as update,
+    ):
+        {"fetch": fetch, "stage1_clean": clean, "stage2_extract": extract}[operation].side_effect = failure
+        with pytest.raises(type(failure), match=r"credential failure|provider failure") as caught:
+            _reprocess_one_artifact(
+                art=_make_artifact(content_path=str(target)),
+                service=object(),
+                conn=MagicMock(),
+                pipeline_version="0.2.0",
+            )
+    assert caught.value is failure
+    render.assert_not_called()
+    update.assert_not_called()
+    assert target.read_text(encoding="utf-8") == _note_text("Existing note")
+    assert capsys.readouterr().err == ""
 
 
 def test_fetch_doc_for_reprocess_not_found_returns_none() -> None:
@@ -618,10 +717,13 @@ def test_fetch_doc_for_reprocess_access_denied_returns_none() -> None:
     assert result is None
 
 
-def test_fetch_doc_for_reprocess_generic_error_returns_none() -> None:
+def test_fetch_doc_for_reprocess_generic_error_returns_none(capsys: pytest.CaptureFixture[str]) -> None:
     from fieldkit.commands.ingest.reprocess import _fetch_doc_for_reprocess
 
-    with patch("fieldkit.ingest.docs.fetch_gemini_doc", side_effect=RuntimeError("network error")):
+    with patch("fieldkit.ingest.docs.fetch_gemini_doc", side_effect=RuntimeError("provider-payload-sentinel")):
         result = _fetch_doc_for_reprocess(MagicMock(), "src-xyz")
 
     assert result is None
+    captured = capsys.readouterr()
+    assert "provider-payload-sentinel" not in captured.out + captured.err
+    assert "Document fetch failed; check connectivity and retry" in captured.err

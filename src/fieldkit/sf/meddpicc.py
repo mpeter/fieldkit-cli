@@ -7,7 +7,7 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Final, Literal
 
-from fieldkit.sf.client import SFAPIError, SFDataAccessError, SFDirectClient, SFNotFoundError
+from fieldkit.sf.client import SFDirectClient
 from fieldkit.sf.closeplan_evidence import (
     cross_deal_question_issues,
     deal_identity_evidence,
@@ -15,6 +15,7 @@ from fieldkit.sf.closeplan_evidence import (
     ui_api_field_issues,
 )
 from fieldkit.sf.closeplan_template import TemplateQuestionRead, TemplateRead, read_template_questions, read_templates
+from fieldkit.sf.errors import SFAPIError, SFDataAccessError, SFNotFoundError
 from fieldkit.sf.types import (
     ClosePlanTemplate,
     ClosePlanTemplateQuestion,

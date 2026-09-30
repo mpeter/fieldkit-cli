@@ -25,8 +25,10 @@ The exit-code guarantee is enforced at two layers:
    code for any exception that escapes a leaf command not wrapped in ``cli_main()``.
 
 Both layers delegate to ``handle_cli_exception()`` — the single source of truth
-for the exception→code mapping. ``KeyboardInterrupt`` (``BaseException``) is
-intentionally not caught by either layer; the shell maps it to exit 130.
+for the domain exception→code mapping. ``KeyboardInterrupt`` passes through the
+per-command layer. The dispatcher returns 130 for interruptions, including
+Click's interruption-caused ``Abort`` wrapper, without printing a traceback.
+Non-signal Click cancellation returns 1.
 
 Usage
 -----
@@ -50,18 +52,28 @@ import sys
 import traceback
 from collections.abc import Generator
 from contextlib import contextmanager
+from types import TracebackType
 
+import click
+
+import fieldkit.sf.errors as sf_errors
 from fieldkit.config import ConfigError
 from fieldkit.errors import (
     AuthError,
+    EmptyOutputError,
     FieldkitError,
     FrontmatterStalenessError,
+    GitHubDataError,
+    GitHubRequestError,
     GmailSyncPartialError,
     GmailSyncRestartRequiredError,
     GoogleCredentialRefreshRetryableError,
     LLMError,
     MissingOptionalDependencyError,
     PursuitStaleError,
+    RoutingReadRetryableError,
+    SalesforceSyncPartialError,
+    SQLiteSnapshotError,
 )
 
 # ---------------------------------------------------------------------------
@@ -88,6 +100,40 @@ Investigation is required; retrying without a fix will not help."""
 # ---------------------------------------------------------------------------
 
 
+def normalize_exit_status(code: object) -> int:
+    """Accept canonical statuses without exposing invalid exit payloads."""
+    if type(code) is int and EXIT_SUCCESS <= code <= EXIT_DATA:
+        return code
+    click.echo("[cli_exit] Invalid exit status — investigation required.", err=True)
+    return EXIT_DATA
+
+
+def normalize_explicit_exit(exc: click.exceptions.Exit | SystemExit) -> int:
+    """Extract an explicit exit status, retaining Python's no-code success."""
+    code = exc.exit_code if isinstance(exc, click.exceptions.Exit) else exc.code
+    if isinstance(exc, SystemExit) and code is None:
+        return EXIT_SUCCESS
+    return normalize_exit_status(code)
+
+
+class CanonicalExitContext(click.Context):
+    """Normalize unsuppressed Click exits before Click converts them to results."""
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        tb: TracebackType | None,
+    ) -> bool | None:
+        try:
+            suppressed = super().__exit__(exc_type, exc_value, tb)
+        except click.exceptions.Exit as exc:
+            raise click.exceptions.Exit(normalize_explicit_exit(exc)) from None
+        if not suppressed and isinstance(exc_value, click.exceptions.Exit):
+            raise click.exceptions.Exit(normalize_explicit_exit(exc_value)) from None
+        return suppressed
+
+
 def _config_error_prefix(exc: BaseException) -> str:
     """Keep optional-profile guidance clean while retaining config diagnostics."""
     if isinstance(exc, MissingOptionalDependencyError):
@@ -96,7 +142,11 @@ def _config_error_prefix(exc: BaseException) -> str:
 
 
 def _partial_result_message(
-    exc: FrontmatterStalenessError | GmailSyncPartialError | GoogleCredentialRefreshRetryableError,
+    exc: FrontmatterStalenessError
+    | GmailSyncPartialError
+    | GoogleCredentialRefreshRetryableError
+    | RoutingReadRetryableError
+    | SalesforceSyncPartialError,
 ) -> str:
     """Render a partial-result diagnostic without making domain code CLI-aware."""
     if isinstance(exc, GmailSyncRestartRequiredError):
@@ -114,6 +164,9 @@ def handle_cli_exception(exc: BaseException) -> int:
     The clause order is significant and must not be changed:
     - Partial-result ``FieldkitError`` subclasses are tested before ``AuthError``
       so that they map to EXIT_PARTIAL rather than falling through to EXIT_DATA.
+    - Canonical Salesforce errors have dedicated fixed diagnostics. ``SFAuthError``
+      precedes ``AuthError`` and maps to EXIT_AUTH; the other five known
+      Salesforce categories map to EXIT_DATA without rendering exception text.
     - ``AuthError`` must precede ``PursuitStaleError`` and ``LLMError`` so that
       auth failures from any domain are caught at the right code.
     - The base ``FieldkitError`` clause must be last among the isinstance checks
@@ -121,7 +174,7 @@ def handle_cli_exception(exc: BaseException) -> int:
       FieldkitError``), not ``isinstance()``, so only literal ``FieldkitError(...)``
       instances raised directly at a call site get the clean one-liner; every other
       ``FieldkitError`` subclass (including ones with no dedicated clause above,
-      like ``SFAPIError`` or ``DocNotFoundError``) falls through to the broad
+      like ``TranscribeError`` or ``DocNotFoundError``) falls through to the broad
       ``else`` and keeps its traceback.
 
     Args:
@@ -136,19 +189,64 @@ def handle_cli_exception(exc: BaseException) -> int:
 
     Note:
         Always writes an appropriate diagnostic line or traceback to stderr
-        as a side effect. Uses ``print()`` rather than ``click.echo()``
-        intentionally — ``cli_exit.py`` does not import ``click`` to keep
-        this module's dependency footprint minimal (only ``fieldkit.config``
-        and ``fieldkit.errors``).
+        as a side effect. Fixed user-facing diagnostics use ``click.echo()``;
+        traceback and legacy domain branches retain ``print()``.
     """
     if isinstance(exc, (MissingOptionalDependencyError, ConfigError)):
         print(f"[cli_exit] {_config_error_prefix(exc)}{exc}", file=sys.stderr)
         return EXIT_DATA
-    elif isinstance(exc, (FrontmatterStalenessError, GmailSyncPartialError, GoogleCredentialRefreshRetryableError)):
+    elif isinstance(exc, EmptyOutputError):
+        if exc.cleanup_failed:
+            click.echo(
+                "[cli_exit] Empty output detected; cleanup failed — inspect the output before retrying.", err=True
+            )
+        else:
+            click.echo("[cli_exit] Empty output detected — investigate before retrying.", err=True)
+        return EXIT_DATA
+    elif isinstance(exc, SQLiteSnapshotError):
+        if exc.reason == "active":
+            click.echo("[cli_exit] SQLite database is active — retry after current writers finish.", err=True)
+            return EXIT_PARTIAL
+        click.echo("[cli_exit] SQLite snapshot could not be verified — inspect the database before retrying.", err=True)
+        return EXIT_DATA
+    elif isinstance(exc, GitHubDataError):
+        click.echo(f"[cli_exit] {exc}", err=True)
+        return EXIT_DATA
+    elif isinstance(exc, GitHubRequestError):
+        click.echo(f"[cli_exit] {exc}", err=True)
+        return EXIT_PARTIAL
+    elif isinstance(
+        exc,
+        (
+            FrontmatterStalenessError,
+            GmailSyncPartialError,
+            GoogleCredentialRefreshRetryableError,
+            RoutingReadRetryableError,
+            SalesforceSyncPartialError,
+        ),
+    ):
         print(_partial_result_message(exc), file=sys.stderr)
         return EXIT_PARTIAL
+    elif isinstance(exc, sf_errors.SFAuthError):
+        click.echo(f"[cli_exit] Salesforce authentication failed — {sf_errors.reauth_hint_message()}", err=True)
+        return EXIT_AUTH
+    elif isinstance(exc, sf_errors.SFConditionalWriteConflict):
+        click.echo("[cli_exit] Salesforce guarded write is stale — reread the record before another write.", err=True)
+        return EXIT_DATA
+    elif isinstance(exc, sf_errors.SFConditionalWriteOutcomeUnknown):
+        click.echo("[cli_exit] Salesforce may have written the record — reread it before another write.", err=True)
+        return EXIT_DATA
+    elif isinstance(exc, sf_errors.SFNotFoundError):
+        click.echo("[cli_exit] Salesforce record not found — check the record reference.", err=True)
+        return EXIT_DATA
+    elif isinstance(exc, sf_errors.SFDataAccessError):
+        click.echo("[cli_exit] Salesforce access denied — check record permissions.", err=True)
+        return EXIT_DATA
+    elif isinstance(exc, sf_errors.SFAPIError):
+        click.echo("[cli_exit] Salesforce request failed — check availability and configuration.", err=True)
+        return EXIT_DATA
     elif isinstance(exc, AuthError):
-        # AuthError and all subclasses (SFAuthError, GmailAuthError, ShadowbotAuthError, etc.) → EXIT_AUTH (2).
+        # Remaining auth errors (GmailAuthError, ShadowbotAuthError, etc.) → EXIT_AUTH (2).
         # Placed before PursuitStaleError and LLMError so auth failures from any domain are caught here.
         print(f"[cli_exit] Auth error — user action required: {exc}", file=sys.stderr)
         return EXIT_AUTH
@@ -158,14 +256,15 @@ def handle_cli_exception(exc: BaseException) -> int:
         return EXIT_PARTIAL
     elif isinstance(exc, LLMError):
         if exc.category == "auth":
-            print(f"[cli_exit] Auth failure — user action required: {exc}", file=sys.stderr)
+            click.echo("[cli_exit] Model authentication failed — refresh provider credentials and retry.", err=True)
             return EXIT_AUTH
         elif exc.category == "rate-limit":
-            print(f"[cli_exit] Rate limit — partial failure: {exc}", file=sys.stderr)
+            click.echo("[cli_exit] Model rate limit — retry later.", err=True)
             return EXIT_PARTIAL
         else:
-            print("[cli_exit] LLM error — investigation required:", file=sys.stderr)
-            traceback.print_exception(exc, file=sys.stderr)
+            click.echo(
+                "[cli_exit] Model request failed — check model configuration and provider availability.", err=True
+            )
             return EXIT_DATA
     elif type(exc) is FieldkitError:
         # Exact base FieldkitError (not a subclass): a deliberate, descriptive,
@@ -173,8 +272,8 @@ def handle_cli_exception(exc: BaseException) -> int:
         # (e.g. the implementation note empty-payload wipe guard, implementation note duplicate-key guard).
         # Print the message cleanly — no traceback — so these call sites get a clean
         # one-liner without hand-rolling click.echo() + SystemExit. Deliberately an
-        # exact-type check, not isinstance(): subclasses like SFAPIError,
-        # TranscribeError, and DocNotFoundError represent real failures (e.g. an
+        # exact-type check, not isinstance(): subclasses like TranscribeError
+        # and DocNotFoundError represent real failures (e.g. an
         # HTTP 500) that still need their traceback for debugging, so they must fall
         # through to the broad `else` below. Must stay after every more specific
         # FieldkitError subclass clause above (ConfigError is not a FieldkitError
@@ -203,16 +302,19 @@ def cli_main() -> Generator[None, None, None]:
         ConfigError                      → EXIT_DATA (3) — missing/invalid config
         FrontmatterStalenessError        → EXIT_PARTIAL (1) — file modified since last read
         GmailSyncPartialError            → EXIT_PARTIAL (1) — messages omitted during sync
-        AuthError (and subclasses)       → EXIT_AUTH (2) — covers SFAuthError, ShadowbotAuthError, etc.
+        RoutingReadRetryableError        → EXIT_PARTIAL (1) — routing inputs temporarily inaccessible
+        SFAuthError                     → EXIT_AUTH (2) with fixed reauthentication guidance
+        Other known Salesforce errors   → EXIT_DATA (3) with fixed category guidance
+        Remaining AuthError subclasses  → EXIT_AUTH (2) — covers ShadowbotAuthError, GmailAuthError, etc.
         PursuitStaleError                → EXIT_PARTIAL (1) — pursuit stale check failed
         LLMError(category='auth')        → EXIT_AUTH (2)
         LLMError(category='rate-limit')  → EXIT_PARTIAL (1)
-        LLMError(any other category)     → EXIT_DATA (3) with traceback to stderr
+        LLMError(any other category)     → EXIT_DATA (3) with payload-free guidance
         FieldkitError (exact type only)  → EXIT_DATA (3) with a clean one-liner, no traceback
         Any other Exception              → EXIT_DATA (3) with traceback to stderr
 
     On clean exit (no exception), the context manager returns normally and the
-    caller's own sys.exit() (or implicit exit 0) takes effect.
+    caller returns normally. Explicit exits are normalized to canonical statuses.
 
     Example::
 
@@ -225,5 +327,7 @@ def cli_main() -> Generator[None, None, None]:
     """
     try:
         yield
+    except (click.exceptions.Exit, SystemExit) as exc:
+        sys.exit(normalize_explicit_exit(exc))
     except Exception as exc:  # noqa: BLE001  # broad catch is intentional: this is the per-command boundary
         sys.exit(handle_cli_exception(exc))

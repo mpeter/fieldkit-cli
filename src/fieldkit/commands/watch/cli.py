@@ -28,9 +28,9 @@ import click
 
 import fieldkit.watch.status as _watch_status
 from fieldkit.cli_exit import EXIT_PARTIAL
-from fieldkit.config import TIMEOUT_CRON
-from fieldkit.errors import AuthError
-from fieldkit.watch.status import WatcherOutcome, get_last_run_outcome
+from fieldkit.config import TIMEOUT_CRON, ConfigError
+from fieldkit.errors import AuthError, EmptyOutputError, LLMError
+from fieldkit.watch.status import WatcherOutcome, WatcherRunResult, validate_watcher_result
 
 
 @click.group(
@@ -63,7 +63,7 @@ def cli(ctx: click.Context) -> None:
     "all_flag",
     is_flag=True,
     default=False,
-    help="Run all watchers in sequence and write the morning brief.",
+    help="Run local and configured optional watchers, then write the morning brief.",
 )
 @click.option(
     "--dry-run",
@@ -95,6 +95,12 @@ def cli(ctx: click.Context) -> None:
     default=False,
     help="(--all only) Exit 0 after a completed partial pass; fatal failures still fail.",
 )
+@click.option(
+    "--slack",
+    is_flag=True,
+    default=False,
+    help="(--all only) Include the optional Slack thread watcher.",
+)
 @click.pass_context
 def run_group(
     ctx: click.Context,
@@ -104,8 +110,9 @@ def run_group(
     cron_time: str,
     force: bool,
     allow_partial: bool,
+    slack: bool,
 ) -> None:
-    """Run a single watcher by NAME, or all watchers with --all."""
+    """Run one watcher by NAME, or the configured aggregate set with --all."""
     if ctx.invoked_subcommand is not None:
         if all_flag:
             raise click.UsageError("--all cannot be combined with a watcher NAME.")
@@ -119,6 +126,7 @@ def run_group(
         cron_time=cron_time,
         force=force,
         allow_partial=allow_partial,
+        slack=slack,
     )
 
 
@@ -307,12 +315,10 @@ def _run_preflight_guard(services: list[str], *, dry_run: bool) -> None:
 def _raise_for_preflight_failures(failures: list[str]) -> None:
     """Report failed pre-flight checks and stop the orchestration pass."""
     if failures:
-        for msg in failures:
-            click.echo(f"Pre-flight check failed: {msg}", err=True)
-        raise SystemExit(EXIT_PARTIAL)
+        raise AuthError("Selected watcher integration requires authentication or user setup")
 
 
-def _run_brief_step(*, dry_run: bool) -> tuple[int, float]:
+def _run_brief_step(*, dry_run: bool, no_llm: bool, calendar_enabled: bool = False) -> tuple[WatcherRunResult, float]:
     """Run llm pre-flight then generate the morning brief in-process.
 
     Extracted from run_all to reduce cyclomatic complexity (CRAP gate). Brief
@@ -324,50 +330,96 @@ def _run_brief_step(*, dry_run: bool) -> tuple[int, float]:
         dry_run: When True, no files are written by the brief generator.
 
     Returns:
-        A tuple of (exit_code, elapsed_seconds).
+        A tuple of (execution result, elapsed_seconds).
     """
     import time as _time
 
-    from fieldkit.watch.preflight import preflight_check as _preflight_check
-
     _brief_start = _time.time()
-    _brief_llm_failures = _preflight_check(["llm"], dry_run=dry_run)
-    if _brief_llm_failures:
-        for msg in _brief_llm_failures:
-            logging.error("watcher=morning-brief pre-flight check failed: %s", msg)
-        _brief_rc = 1
-    else:
-        from fieldkit.commands.brief.generate import _run_generate_inner
+    from fieldkit.commands.brief.generate import _run_generate_inner
 
-        try:
-            _brief_rc = _run_generate_inner(date_str=None, dry_run=dry_run, verbose=False, account=None)
-        except Exception as exc:  # noqa: BLE001
-            logging.error("watcher=morning-brief raised unexpected exception: %s: %s", type(exc).__name__, exc)
-            _brief_rc = 1
+    try:
+        _brief_rc = _run_generate_inner(
+            date_str=None,
+            dry_run=dry_run,
+            verbose=False,
+            account=None,
+            no_llm=no_llm,
+            calendar_enabled=calendar_enabled,
+        )
+    except (AuthError, ConfigError, LLMError):
+        raise
+    except EmptyOutputError as error:
+        logging.error(
+            "watcher=morning-brief %s",
+            "empty output cleanup failed" if error.cleanup_failed else "produced empty output",
+        )
+        _brief_rc = WatcherRunResult("fatal", False, None, 3)
+    except Exception:  # noqa: BLE001 -- aggregate records a bounded fatal failure
+        logging.error("watcher=morning-brief raised an unexpected exception")
+        _brief_rc = WatcherRunResult("fatal", False, None)
+    _brief_rc = _admit_execution_result("morning-brief", _brief_rc, dry_run=dry_run)
     _brief_elapsed = _time.time() - _brief_start
-    logging.info("watcher=morning-brief exit_code=%d", _brief_rc)
+    logging.info("watcher=morning-brief exit_code=%d", _brief_rc.exit_code)
     return _brief_rc, _brief_elapsed
 
 
-def _run_all_exit_code(max_code: int, *, allow_partial: bool) -> int:
-    """Return the service outcome for a completed watcher pass."""
-    return 0 if allow_partial and max_code == 1 else max_code
+def _aggregate_outcome(results: list[WatcherRunResult]) -> WatcherOutcome:
+    """Classify invocation facts before applying continuation policy."""
+    if any(
+        result.outcome == "fatal" or (result.exit_code != 0 and not result.completed) or result.exit_code >= 2
+        for result in results
+    ):
+        return "fatal"
+    return "partial" if any(result.outcome == "partial" for result in results) else "ok"
 
 
-def _invoke_watcher(name: str, run: Callable[[], object]) -> int:
+def _run_all_exit_code(results: list[WatcherRunResult], *, allow_partial: bool, dry_run: bool) -> int:
+    """Allow only completed partial work with same-invocation persistence."""
+    max_code = max(result.exit_code for result in results)
+    if (
+        allow_partial
+        and not dry_run
+        and _aggregate_outcome(results) == "partial"
+        and all(result.completed_partial for result in results if result.exit_code != 0)
+    ):
+        return 0
+    return max_code
+
+
+def _admit_execution_result(name: str, result: object, *, dry_run: bool) -> WatcherRunResult:
+    admitted = validate_watcher_result(result, dry_run=dry_run)
+    if admitted is not result:
+        logging.error("watcher=%s returned invalid execution evidence", name)
+    return admitted
+
+
+def _invoke_watcher(name: str, run: Callable[[], object], *, dry_run: bool = False) -> WatcherRunResult:
     """Run one watcher behind the aggregate command's output and error boundary."""
     try:
         with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
             result = run()
-    except AuthError:
+    except (AuthError, ConfigError):
         raise
-    except Exception as exc:  # noqa: BLE001 -- one watcher must not stop the daily chain
-        logging.error("watcher=%s raised unexpected exception: %s: %s", name, type(exc).__name__, exc)
-        return 1
-    return result if type(result) is int else 1
+    except EmptyOutputError as error:
+        logging.error(
+            "watcher=%s %s", name, "empty output cleanup failed" if error.cleanup_failed else "produced empty output"
+        )
+        return WatcherRunResult("fatal", False, None, 3)
+    except Exception:  # noqa: BLE001 -- one watcher must not stop the daily chain
+        logging.error("watcher=%s raised an unexpected exception", name)
+        return WatcherRunResult("fatal", False, None)
+    return _admit_execution_result(name, result, dry_run=dry_run)
 
 
-def run_all(*, dry_run: bool, install_cron: bool, cron_time: str, force: bool, allow_partial: bool = False) -> None:
+def run_all(
+    *,
+    dry_run: bool,
+    install_cron: bool,
+    cron_time: str,
+    force: bool,
+    allow_partial: bool = False,
+    slack: bool = False,
+) -> None:
     """Run watcher domains sequentially, then write and persist the morning brief.
 
     Invoked by `watch run --all`; continues after watcher exceptions, aggregates
@@ -377,19 +429,34 @@ def run_all(*, dry_run: bool, install_cron: bool, cron_time: str, force: bool, a
         _handle_install_cron(cron_time=cron_time, dry_run=dry_run)
         raise SystemExit(0)
 
-    # implementation note: fast-fail before invoking all watchers.
-    # Dry-run skips the MCP check (not required for a dry run).
-    _run_preflight_guard(["sf", "gmail", "mcp"], dry_run=dry_run)
+    from fieldkit.config import ConfigError
+    from fieldkit.watch.integration_plan import build_integration_plan
+
+    try:
+        plan = build_integration_plan(
+            google_when_configured=False,
+            sf_requested=False,
+            backstory_when_configured=True,
+            draft_queue_when_configured=True,
+            calendar_when_configured=True,
+            slack_requested=slack,
+            llm_when_configured=True,
+        )
+    except ConfigError:
+        click.echo("Config error: optional integration selection is invalid", err=True)
+        raise SystemExit(3) from None
+    if not dry_run:
+        _run_preflight_guard(list(plan.preflight_services), dry_run=False)
 
     import time as _time
 
     _run_start = _time.time()
 
-    if not force and _watch_status.was_run_today("run-all"):
-        _prior_outcome = get_last_run_outcome("run-all")
-        if _prior_outcome == "fatal":
+    daily = _watch_status.get_daily_run_snapshot("run-all") if not dry_run and not force else None
+    if daily is not None and daily.ran_today:
+        if daily.outcome != "ok":
             logging.warning(
-                "run --all last run today had outcome=fatal — "
+                "run --all last run today was nonpassing — "
                 "re-run with --force to investigate or check watcher-run-status.json"
             )
             raise SystemExit(EXIT_PARTIAL)
@@ -433,13 +500,14 @@ def run_all(*, dry_run: bool, install_cron: bool, cron_time: str, force: bool, a
             dry_run=dry_run,
             as_json=False,
         ),
-        "slack-threads": lambda: _slack_mod._run_slack_threads(
-            threshold_hours=_slack_mod._DEFAULT_THRESHOLD_HOURS,
-            account=None,
-            limit=_slack_mod._DEFAULT_SEARCH_LIMIT,
-            limit_per_account=None,
-            dry_run=dry_run,
-            as_json=False,
+        "slack-threads": lambda: (
+            _slack_mod._run_slack_threads(
+                threshold_hours=_slack_mod._DEFAULT_THRESHOLD_HOURS,
+                account=None,
+                limit=_slack_mod._DEFAULT_SEARCH_LIMIT,
+                limit_per_account=None,
+                dry_run=dry_run,
+            ).run
         ),
         "draft-queue": lambda: _draft_queue_mod._run_draft_queue(dry_run=dry_run, account=None, as_json=False),
     }
@@ -447,50 +515,79 @@ def run_all(*, dry_run: bool, install_cron: bool, cron_time: str, force: bool, a
     max_code = 0
 
     # implementation change: collect per-watcher results for summary table
-    _watcher_results: list[tuple[str, int, float]] = []  # (name, exit_code, duration_s)
+    _watcher_results: list[tuple[str, WatcherRunResult, float]] = []
 
-    for name in _WATCHER_ORDER:
+    selected_optional = set(plan.optional_watchers)
+    active_watchers = [
+        name
+        for name in _WATCHER_ORDER
+        if (name not in {"backstory-health", "slack-threads", "draft-queue"} or name in selected_optional)
+        and not (dry_run and name == "slack-threads")
+    ]
+
+    for name in active_watchers:
         _watcher_start = _time.time()
-        rc = _invoke_watcher(name, watcher_runs[name])
+        rc = _invoke_watcher(name, watcher_runs[name], dry_run=dry_run)
         _watcher_elapsed = _time.time() - _watcher_start
 
-        logging.info("watcher=%s exit_code=%d", name, rc)
+        logging.info("watcher=%s exit_code=%d", name, rc.exit_code)
         _watcher_results.append((name, rc, _watcher_elapsed))
-        if rc > max_code:
-            max_code = rc
+        max_code = max(max_code, rc.exit_code)
 
-    _brief_rc, _brief_elapsed = _run_brief_step(dry_run=dry_run)
+    try:
+        _brief_rc, _brief_elapsed = _run_brief_step(
+            dry_run=dry_run,
+            no_llm=not plan.llm,
+            calendar_enabled=plan.calendar,
+        )
+    except LLMError:
+        if not dry_run:
+            status_write = _watch_status.write_run_status(
+                watcher="run-all",
+                outcome="fatal",
+                records_checked=len(active_watchers),
+                alerts_generated=0,
+                failures=sum(result.exit_code != 0 for _, result, _ in _watcher_results) + 1,
+                elapsed_seconds=_time.time() - _run_start,
+                dry_run=False,
+            )
+            if status_write != "written":
+                click.echo("Error: watcher run status was not persisted.", err=True)
+        raise
     _watcher_results.append(("morning-brief", _brief_rc, _brief_elapsed))
-    if _brief_rc > max_code:
-        max_code = _brief_rc
+    max_code = max(max_code, _brief_rc.exit_code)
 
     # implementation change: print summary table
     click.echo("\nWatcher Summary:")
     click.echo(f"  {'Watcher':<28} {'Exit':>4}  {'Duration':>8}")
     click.echo(f"  {'-' * 28} {'----':>4}  {'--------':>8}")
     for _name, _rc, _dur in _watcher_results:
-        _status = "ok" if _rc == 0 else ("WARN" if _rc == 1 else "FAIL")
+        _status = "ok" if _rc.exit_code == 0 else ("WARN" if _rc.exit_code == 1 else "FAIL")
         click.echo(f"  {_name:<28} {_status:>4}  {_dur:>6.1f}s")
+    for reason in plan.skipped:
+        click.echo(f"  not run: {reason}")
+    if dry_run and "slack-threads" in selected_optional:
+        click.echo("  not run: Slack selected; provider scan not run in aggregate preview")
 
     if not dry_run:
         elapsed = _time.time() - _run_start
-        _outcome: WatcherOutcome = "ok" if max_code == 0 else ("partial" if max_code == 1 else "fatal")
-        _watch_status.write_run_status(
+        _outcome = _aggregate_outcome([result for _, result, _ in _watcher_results])
+        status_write = _watch_status.write_run_status(
             watcher="run-all",
             outcome=_outcome,
-            records_checked=len(_WATCHER_ORDER),
+            records_checked=len(active_watchers),
             alerts_generated=0,
-            failures=0,
+            failures=sum(1 for _name, result, _duration in _watcher_results if result.exit_code != 0),
             elapsed_seconds=elapsed,
             dry_run=False,
         )
+        if type(status_write) is not str or status_write != "written":
+            click.echo("Error: watcher run status was not persisted.", err=True)
+            raise SystemExit(max(max_code, EXIT_PARTIAL))
 
-    # A completed partial pass writes an explicit run-all=partial record and
-    # fresh alerts/brief. The mother-hen chain may then propose safe follow-up
-    # work. Preflight failures return above without a status record, and fatal
-    # watcher/brief codes remain nonzero, so this flag never masks a broken
-    # chain as a completed partial pass.
-    raise SystemExit(_run_all_exit_code(max_code, allow_partial=allow_partial))
+    raise SystemExit(
+        _run_all_exit_code([result for _, result, _ in _watcher_results], allow_partial=allow_partial, dry_run=dry_run)
+    )
 
 
 _CRON_FIELD_RE = re.compile(r"^[0-9*/,-]+$")

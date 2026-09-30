@@ -10,6 +10,8 @@ from unittest.mock import patch
 import pytest
 from click.testing import CliRunner
 
+from fieldkit.sf.quota import SFQuotaResult
+
 pytestmark = pytest.mark.unit
 
 _MODULE = "fieldkit.commands.pipeline.cli"
@@ -58,7 +60,7 @@ def test_pipeline_cli_unknown_flag_exits_nonzero() -> None:
 
 # ── TestCmdQuota (flattened) ────────────────────────────────────────────────
 
-_CMD_QUOTA__QUOTA_MODULE = "fieldkit.commands.pipeline.quota"
+_CMD_QUOTA__QUOTA_MODULE = "fieldkit.pipeline.quota"
 _CMD_QUOTA__CALC_MODULE = "fieldkit.watch.morning_brief_render"
 
 
@@ -118,7 +120,7 @@ def test_cmd_quota_source_sf_text_output_positive_gap() -> None:
     from datetime import UTC, date, datetime
 
     # gap = target(1_000_000) - sf_closed_won(200_000) - weighted(500_000) = 300_000
-    with patch(f"{_CMD_QUOTA__QUOTA_MODULE}.fetch_sf_closed_won", return_value=200_000.0):
+    with patch("fieldkit.sf.quota.fetch_sf_closed_won", return_value=SFQuotaResult(200_000.0, ())):
         result = _cmd_quota_invoke(["--source", "sf"])
     assert result.exit_code == 0
     end_date = date(2026, 12, 31)
@@ -141,7 +143,7 @@ def test_cmd_quota_source_sf_text_output_negative_gap() -> None:
         "excluded_names": [],
     }
     # gap = target(1_000_000) - sf_closed_won(900_000) - weighted(200_000) = -100_000
-    with patch(f"{_CMD_QUOTA__QUOTA_MODULE}.fetch_sf_closed_won", return_value=900_000.0):
+    with patch("fieldkit.sf.quota.fetch_sf_closed_won", return_value=SFQuotaResult(900_000.0, ())):
         result = _cmd_quota_invoke(["--source", "sf"], gap=gap)
     assert result.exit_code == 0
     assert "-$100,000" in result.output
@@ -175,7 +177,22 @@ def test_cmd_quota_quota_json_output() -> None:
     assert result.exit_code == 0
     data = json.loads(result.output)
     assert "target" in data
-    assert "gap" in data
+    assert data["gap"] is None
+    assert data["source"] == "pursuits"
+
+
+@pytest.mark.parametrize("sf_closed_won", [0.0, 500_000.0, 900_000.0])
+def test_cmd_quota_source_sf_json_gap(sf_closed_won: float) -> None:
+    """SF JSON retains a numeric gap, including zero and over-attainment."""
+    import json
+
+    with patch("fieldkit.sf.quota.fetch_sf_closed_won", return_value=SFQuotaResult(sf_closed_won, ())):
+        result = _cmd_quota_invoke(["--source", "sf", "--json"])
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["source"] == "sf"
+    assert data["sf_closed_won"] == sf_closed_won
+    assert data["gap"] == 1_000_000.0 - sf_closed_won - 500_000.0
 
 
 def test_cmd_quota_quota_excluded_pursuits_warns() -> None:
@@ -226,7 +243,7 @@ def test_pipeline_open_json_reports_selected_file_and_opens_it(tmp_path: Path) -
 def test_pipeline_generation_passes_validated_account_to_runner() -> None:
     with (
         patch("fieldkit.config.get_account_names", return_value=["acme-corp"]),
-        patch("fieldkit.commands.pipeline.main._run") as mock_run,
+        patch("fieldkit.commands.pipeline.cli._run") as mock_run,
     ):
         result = CliRunner().invoke(_get_cli(), ["--account", "acme-corp", "--no-llm"])
 
@@ -237,7 +254,7 @@ def test_pipeline_generation_passes_validated_account_to_runner() -> None:
 def test_pipeline_generation_unknown_account_exits_before_runner() -> None:
     with (
         patch("fieldkit.config.get_account_names", return_value=["acme-corp"]),
-        patch("fieldkit.commands.pipeline.main._run") as mock_run,
+        patch("fieldkit.commands.pipeline.cli._run") as mock_run,
     ):
         result = CliRunner().invoke(_get_cli(), ["--account", "unknown"])
 
@@ -249,7 +266,7 @@ def test_pipeline_generation_unknown_account_exits_before_runner() -> None:
 def test_pipeline_generation_rejects_configured_unsafe_account_before_runner() -> None:
     with (
         patch("fieldkit.config.get_account_names", return_value=["../../outside"]),
-        patch("fieldkit.commands.pipeline.main._run") as mock_run,
+        patch("fieldkit.commands.pipeline.cli._run") as mock_run,
     ):
         result = CliRunner().invoke(_get_cli(), ["--account", "../../outside"])
 

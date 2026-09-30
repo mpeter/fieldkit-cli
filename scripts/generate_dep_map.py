@@ -1,398 +1,257 @@
 #!/usr/bin/env python3
-"""
-generate_dep_map.py — Auto-generate docs/dependency-map.md from live repo analysis.
+"""Generate the dependency reference from Python imports, CLI registration, and Tach policy.
 
-Run after any structural change that adds/removes modules or MCP group references:
-    uv run python scripts/generate_dep_map.py
-
-The output file is committed to the repo. Drift is caught by `make quality` (--check mode).
+The reference describes static imports, not runtime reachability or a passing
+architecture gate. Invalid or unreadable inputs stop generation.
 """
 
 from __future__ import annotations
 
-import re
-import subprocess
+import argparse
+import ast
+import difflib
+import os
+import stat
 import sys
-from datetime import date
+import tomllib
+from collections.abc import Iterator
+from importlib.util import resolve_name
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).parent.parent
+REPO_ROOT = Path(__file__).resolve().parent.parent
 OUTPUT = REPO_ROOT / "docs" / "dependency-map.md"
-SRC_ROOT = REPO_ROOT / "src"
+MAX_SOURCE_BYTES = 1024 * 1024
 
-sys.path.insert(0, str(SRC_ROOT))
+sys.path.insert(0, str(REPO_ROOT / "src"))
+from fieldkit.__main__ import _COMMANDS  # noqa: E402
 from fieldkit.provenance import derived_doc_banner, derived_doc_marker  # noqa: E402
 
-# Provenance marker — this doc is derived exhaust, not a system of record.
 _MARKER = derived_doc_marker(
     caste="derived",
-    derived_from=["src/fieldkit/ import graph", "src/fieldkit/skills/", "tach.toml"],
+    derived_from=["src/fieldkit/", "hooks/", "src/fieldkit/__main__.py", "tach.toml"],
     generated_by="scripts/generate_dep_map.py",
 )
 
-# Domain modules in dependency order (foundation → utilities → domain)
-DOMAIN_MODULES = [
-    "config",
-    "pursuit",
-    "gmail",
-    "watch",
-    "cli_exit",
-    "sf",
-    "llm",
-    "skill",
-    "enrich",
-    "contact",
-    "ingest",
-    "tasks",
-    "config.dotenv",
-]
 
-# fieldkit.commands.* subpackages to audit for domain imports
-COMMANDS_PACKAGES = [
-    "gmail",
-    "sf",
-    "brief",
-    "pipeline",
-    "watch",
-    "ingest",
-    "contact",
-    "pursuit",
-    "meeting",
-    "shadowbot",
-    "init",
-    "skill",
-    "datasync",
-    "issue",
-    "version",
-]
-
-# Domain subpackages where submodule granularity matters for blast radius
-SUBMODULE_DETAIL = {
-    "pursuit": ["io", "models", "stale", "utils"],
-    "gmail": ["discover", "names"],
-}
+def _scan_error(error: OSError) -> None:
+    raise error
 
 
-def _rg(pattern: str, path: str, extra: list[str] | None = None) -> list[str]:
-    """Search Python files under path for pattern; return relative file paths.
-
-    Pure-Python replacement for ripgrep — no external binary required.
-    The ``extra`` argument is accepted for API compatibility but unused
-    (all callers pass only --type py / -l flags which are built-in here).
-    """
-    compiled = re.compile(pattern)
-    root = REPO_ROOT / path if not Path(path).is_absolute() else Path(path)
-    matches: list[str] = []
-    for py_file in root.rglob("*.py"):
-        try:
-            if compiled.search(py_file.read_text(encoding="utf-8", errors="ignore")):
-                matches.append(str(py_file.relative_to(REPO_ROOT)))
-        except OSError:
-            continue
-    return matches
+def _read_source(path: Path) -> str:
+    """Read one bounded UTF-8 regular file without following its final symlink."""
+    descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    with os.fdopen(descriptor, "rb") as stream:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            raise ValueError("source input must be a regular file")
+        content = stream.read(MAX_SOURCE_BYTES + 1)
+    if len(content) > MAX_SOURCE_BYTES:
+        raise ValueError("source input exceeds the size limit")
+    return content.decode("utf-8")
 
 
-def _rg_count(pattern: str, path: str) -> int:
-    return len(_rg(pattern, path))
+def _python_files(root: Path) -> Iterator[Path]:
+    """Enumerate source files without silently skipping inaccessible directories."""
+    if not root.is_dir() or root.is_symlink():
+        raise ValueError(f"source root must be a regular directory: {root.name}")
+    for directory, children, files in os.walk(root, onerror=_scan_error):
+        children.sort()
+        for name in [*children, *files]:
+            if (Path(directory) / name).is_symlink():
+                raise ValueError("source inventory cannot follow symlinks")
+        for name in sorted(files):
+            if name.endswith(".py"):
+                path = Path(directory) / name
+                if not path.is_file():
+                    raise ValueError("source input must be a regular file")
+                yield path
 
 
-def _build_import_matrix() -> dict[str, dict[str, bool]]:
-    """Map commands_pkg -> domain_module -> True if imported."""
-    matrix: dict[str, dict[str, bool]] = {}
-    for pkg in COMMANDS_PACKAGES:
-        pkg_path = f"src/fieldkit/commands/{pkg}"
-        matrix[pkg] = {}
-        for mod in DOMAIN_MODULES:
-            files = _rg(f"from fieldkit\\.{mod}( import|$)", pkg_path)
-            matrix[pkg][mod] = bool(files)
-    return matrix
+def _source_modules() -> dict[str, Path]:
+    modules: dict[str, Path] = {}
+    for root in (REPO_ROOT / "src" / "fieldkit", REPO_ROOT / "hooks"):
+        for path in _python_files(root):
+            relative = path.relative_to(root.parent).with_suffix("")
+            parts = relative.parts[:-1] if relative.name == "__init__" else relative.parts
+            name = ".".join(parts)
+            if name in modules:
+                raise ValueError(f"ambiguous Python module: {name}")
+            modules[name] = path
+    return modules
 
 
-def _tach_status() -> str:
-    # Try uvx first (tach installed as a standalone tool), fall back to uv run.
-    for cmd in [["uvx", "tach", "check"], ["uv", "run", "tach", "check"]]:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            cwd=REPO_ROOT,
-            check=False,
-        )
-        if result.returncode == 0:
-            return "✅ All module boundaries clean (`uvx tach check` passes)"
-        # If the command was not found, try the next alternative.
-        if result.returncode != 127 and "No such file" not in (result.stderr or ""):
-            break
-    return f"⚠️ Boundary violations detected:\n```\n{result.stdout.strip()}\n```"
+def _known_modules(modules: dict[str, Path] | dict[str, set[str]]) -> set[str]:
+    """Include namespace packages as well as concrete Python modules."""
+    return {
+        ".".join(parts[:length])
+        for name in modules
+        for parts in [name.split(".")]
+        for length in range(1, len(parts) + 1)
+    }
 
 
-def _domain_consumer_counts() -> dict[str, int]:
-    """Return number of Python files importing each domain module."""
-    counts: dict[str, int] = {}
-    search_roots = [REPO_ROOT / "src" / "fieldkit" / "commands", REPO_ROOT / "hooks"]
-    for mod in DOMAIN_MODULES:
-        compiled = re.compile(rf"from fieldkit\.{mod}( import|$)", re.MULTILINE)
-        matched: set[Path] = set()
-        for root in search_roots:
-            if not root.exists():
-                continue
-            for py_file in root.rglob("*.py"):
-                try:
-                    if compiled.search(py_file.read_text(encoding="utf-8", errors="ignore")):
-                        matched.add(py_file)
-                except OSError:
-                    continue
-        counts[mod] = len(matched)
-    return counts
+def _fieldkit_imports(tree: ast.Module, package: str, known: set[str]) -> set[str]:
+    imports: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imports.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            base = node.module or ""
+            if node.level:
+                base = resolve_name("." * node.level + base, package)
+            if base == "fieldkit":
+                imports.update(
+                    f"fieldkit.{alias.name}" if f"fieldkit.{alias.name}" in known else base for alias in node.names
+                )
+            else:
+                imports.add(base)
+    result = {name for name in imports if name == "fieldkit" or name.startswith("fieldkit.")}
+    missing = result - known
+    if missing:
+        raise ValueError(f"unresolved fieldkit imports: {', '.join(sorted(missing))}")
+    return result
 
 
-def _build_submodule_detail() -> dict[str, dict[str, list[str]]]:
-    """Map domain_pkg -> submod -> list of commands packages that import it."""
-    detail: dict[str, dict[str, list[str]]] = {}
-    for pkg, submods in SUBMODULE_DETAIL.items():
-        detail[pkg] = {}
-        for sub in submods:
-            pattern = f"from fieldkit\\.{pkg}\\.{sub}"
-            files = _rg(pattern, "src/fieldkit/commands/")
-            consumers = sorted({Path(f).parent.name for f in files})
-            detail[pkg][sub] = consumers
-    return detail
+def read_imports() -> dict[str, set[str]]:
+    """Read every application and hook Python file with strict syntax and encoding."""
+    modules = _source_modules()
+    known = _known_modules(modules)
+    imports: dict[str, set[str]] = {}
+    for name, path in sorted(modules.items()):
+        tree = ast.parse(_read_source(path), filename=str(path.relative_to(REPO_ROOT)))
+        package = name if path.name == "__init__.py" else name.rpartition(".")[0]
+        imports[name] = _fieldkit_imports(tree, package, known)
+    return imports
+
+
+def _area(module: str) -> str:
+    return ".".join(module.split(".")[:2]) if module.startswith("fieldkit.") else module.split(".")[0]
+
+
+def _declared_boundaries(known: set[str]) -> dict[str, list[str]]:
+    policy = tomllib.loads(_read_source(REPO_ROOT / "tach.toml"))
+    entries = policy.get("modules")
+    if not isinstance(entries, list):
+        raise ValueError("Tach policy must declare a modules list")
+    boundaries: dict[str, list[str]] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise ValueError("Tach module entry must be an object")
+        name, dependencies = entry.get("path"), entry.get("depends_on")
+        if not isinstance(name, str) or name not in known or name in boundaries:
+            raise ValueError("Tach module path is unknown or duplicated")
+        if not isinstance(dependencies, list) or not all(
+            isinstance(dependency, str) and dependency in known for dependency in dependencies
+        ):
+            raise ValueError(f"Tach dependencies are invalid for {name}")
+        boundaries[name] = sorted(set(dependencies))
+    return boundaries
+
+
+def _labels(names: set[str] | list[str], *, empty: str) -> str:
+    return ", ".join(f"`{name}`" for name in sorted(names)) or empty
 
 
 def generate() -> str:
-    """Generate dependency-map.md content."""
-    today = date.today().isoformat()
-    matrix = _build_import_matrix()
-    consumer_counts = _domain_consumer_counts()
-    tach_status = _tach_status()
-
-    # Package-existence guard
-    for pkg in COMMANDS_PACKAGES:
-        pkg_path = REPO_ROOT / "src" / "fieldkit" / "commands" / pkg
-        if not any(pkg_path.glob("*.py")):
-            print(
-                f"WARNING: src/fieldkit/commands/{pkg}/ has no .py files — remove from COMMANDS_PACKAGES",
-                file=sys.stderr,
-            )
-
-    lines: list[str] = [
+    """Render the same structural reference for the same source content."""
+    imports = read_imports()
+    boundaries = _declared_boundaries(_known_modules(imports))
+    lines = [
         _MARKER.rstrip("\n"),
         "",
-        "# Dependency Map",
+        "# fieldkit dependency map",
         "",
         derived_doc_banner(),
         "",
-        f"> Auto-generated {today} from live repo analysis. Do not edit manually.",
-        "> Re-generate: `uv run python scripts/generate_dep_map.py`",
+        "This reference is derived from Python source, the public command registry, and",
+        "Tach configuration. Source files are parsed for graph discovery, not imported.",
+        "This reference does not claim that a quality gate passed.",
+        "The contributor gate verifies the declared architecture boundaries.",
         "",
-        "---",
+        "## Public command adapters",
         "",
-        "## Architecture Layers",
+        "The registry determines public command names. Import areas below include direct",
+        "imports from the adapter package and its descendants; they are not runtime traces.",
         "",
-        "```",
-        "src/fieldkit/              ← single package root (src/ layout)",
-        "  config/                  ← configuration loader and path helpers",
-        "  llm/                     ← LLM inference via Vertex AI",
-        "  sf/                      ← Salesforce REST client",
-        "  gmail/                   ← Gmail discovery and name resolution",
-        "  pursuit/                 ← pursuit models, I/O, MEDDPICC helpers",
-        "  ingest/                  ← transcript/audio ingest pipeline",
-        "  watch/                   ← watcher infrastructure (status, logging, dedup)",
-        "  enrich/                  ← contact enrichment schema (shared dependency)",
-        "  contact/                 ← contact discovery, enrichment, and reporting domain",
-        "  skill/                   ← skill template rendering",
-        "  tasks/                   ← action item classification",
-        "  shadowbot/               ← ShadowBot client (domain)",
-        "  commands/                ← CLI adapters (thin wrappers over domain)",
-        "    sf/                    ← sf subcommands",
-        "    gmail/                 ← gmail subcommands",
-        "    brief/                 ← brief command",
-        "    pipeline/              ← pipeline command",
-        "    watch/                 ← watcher daemons",
-        "    ingest/                ← ingest pipeline CLI",
-        "    contact/               ← contact discovery/enrichment/report CLI",
-        "    pursuit/               ← pursuit management CLI",
-        "    docs/                  ← docs integration CLI",
-        "    shadowbot/             ← ShadowBot CLI",
-        "    init/                  ← first-run configuration wizard CLI",
-        "    skill/                 ← skill runner CLI",
-        "    datasync/              ← ordered full data pipeline runner",
-        "    issue/                 ← local issue tracker",
-        "    version/               ← version info",
-        "  skills/                  ← agent skills (markdown + SKILL.md, not Python)",
-        "hooks/                     ← Claude Code hooks + git pre-commit",
-        "```",
-        "",
-        f"**Boundary enforcement:** {tach_status}",
-        "",
-        "---",
-        "",
-        "## Domain Module Consumer Map",
-        "",
-        "Which `fieldkit.commands.*` packages import which domain modules.",
-        "✓ = imported, · = not used.",
-        "",
-    ]
-
-    active_mods = [m for m in DOMAIN_MODULES if consumer_counts.get(m, 0) > 0]
-    active_pkgs = [p for p in COMMANDS_PACKAGES if any(matrix[p][m] for m in active_mods)]
-
-    mod_labels = [m.replace("_", " ") for m in active_mods]
-    header = "| Package | " + " | ".join(mod_labels) + " |"
-    sep = "| --- | " + " | ".join(["---"] * len(active_mods)) + " |"
-    lines.append(header)
-    lines.append(sep)
-
-    for pkg in active_pkgs:
-        cells = ["✓" if matrix[pkg][mod] else "·" for mod in active_mods]
-        lines.append(f"| `{pkg}` | " + " | ".join(cells) + " |")
-
-    lines += [
-        "",
-        "---",
-        "",
-        "## Key Domain Modules — Blast Radius",
-        "",
-        "| Module | Consumers | Notes |",
+        "| Command | Registered module | Imported fieldkit areas |",
         "| --- | --- | --- |",
     ]
-
-    blast_notes: dict[str, str] = {
-        "config": "Most-imported module; every CLI subpackage and hooks depend on it",
-        "pursuit": "Frontmatter models, io, MEDDPICC helpers — used by many subpackages",
-        "gmail": "Thread discovery, DB path, name resolution — used by all Gmail commands",
-        "watch": "Watcher status, logging, dedup — used by all watch daemons",
-        "cli_exit": "Exit code enforcement — used at every CLI entry point",
-        "sf": "Salesforce REST client — primary consumer: commands/sf",
-        "llm": "Vertex AI synthesis — used by AI-driven watchers and morning brief",
-        "skill": "Skill template rendering — used by commands/skill",
-        "enrich": "Contact enrichment schema (ContactRecord) — shared by commands/contact",
-        "contact": "Contact discovery, enrichment, and reporting domain — used by commands/contact",
-        "ingest": "Ingest pipeline domain — used by commands/ingest",
-        "tasks": "Action item classification — used by ingest pipeline",
-        "config.dotenv": "Environment loading shim",
-    }
-
-    for mod in sorted(active_mods, key=lambda m: -consumer_counts.get(m, 0)):
-        count = consumer_counts.get(mod, 0)
-        note = blast_notes.get(mod, "")
-        mod_label = f"fieldkit.{mod}/"
-        lines.append(f"| `{mod_label}` | {count} | {note} |")
-
-    submodule_detail = _build_submodule_detail()
-    lines += ["", "---", "", "## Domain Submodule Detail", ""]
-    lines += ["For packages where submodule granularity affects blast radius:", ""]
-    for pkg, submods in submodule_detail.items():
-        lines += [f"### fieldkit.{pkg}", ""]
-        lines += ["| Submodule | External Consumers |", "| --- | --- |"]
-        for sub, consumers in submods.items():
-            consumer_str = ", ".join(f"`{c}`" for c in consumers) if consumers else "— (domain-internal)"
-            lines.append(f"| `fieldkit.{pkg}.{sub}` | {consumer_str} |")
-        lines.append("")
-
-    lines += [
-        "",
-        "---",
-        "",
-        "## Change Impact Checklist",
-        "",
-        "### Changing a domain module",
-        "```bash",
-        "# 1. Find all consumers",
-        "rg 'from fieldkit.<module> import' src/fieldkit/commands/ hooks/ --type py",
-        "# 2. Type-check",
-        "uv run mypy src/fieldkit/ hooks/*.py --no-error-summary",
-        "# 3. Run tests",
-        "uv run pytest tests/ -q",
-        "```",
-        "",
-        "### Renaming a CLI command",
-        "```bash",
-        "# 1. Update _COMMANDS in src/fieldkit/__main__.py",
-        "# 2. Search skills",
-        "rg 'fieldkit <old-name>' src/fieldkit/skills/ --type md",
-        "# 3. Search docs",
-        "rg 'fieldkit <old-name>' docs/",
-        "```",
-        "",
-        "### Adding a new domain module",
-        "```bash",
-        "# 1. Add to DOMAIN_MODULES list in scripts/generate_dep_map.py",
-        "# 2. Add to tach.toml if the module must be isolated",
-        "# 3. Regenerate: make docs",
-        "```",
-        "",
-        "## Quick Queries",
-        "",
-        "```bash",
-        "# What commands packages use fieldkit.pursuit?",
-        "rg 'from fieldkit.pursuit import' src/fieldkit/commands/ hooks/ --type py",
-        "",
-        "# What skills reference the fieldkit-sales MCP group?",
-        "rg 'fieldkit-sales' src/fieldkit/skills/ --type md -l",
-        "",
-        "# Verify no boundary violations",
-        "uv run tach check",
-        "```",
-        "",
-    ]
-
-    return "\n".join(lines) + "\n"
+    for command, (_, module) in sorted(_COMMANDS.items()):
+        if module not in imports:
+            raise ValueError(f"registered command module is absent: {module}")
+        package = module.rpartition(".")[0]
+        areas = {
+            _area(target)
+            for source, targets in imports.items()
+            if source == package or source.startswith(package + ".")
+            for target in targets
+        }
+        lines.append(f"| `fieldkit {command}` | `{module}` | {_labels(areas, empty='None observed')} |")
+    lines.extend(
+        [
+            "",
+            "## Observed cross-area imports",
+            "",
+            "Each area is an immediate fieldkit package/module or the hooks directory.",
+            "All Python import statements are inspected, including conditional and type-checking",
+            "imports. Same-area imports are omitted; dynamic imports are not inferred.",
+            "An empty row means no cross-area fieldkit import was observed, not that runtime",
+            "coupling is impossible.",
+            "",
+            "| Source area | Imported fieldkit areas |",
+            "| --- | --- |",
+        ]
+    )
+    areas_by_source: dict[str, set[str]] = {}
+    for source, targets in imports.items():
+        area = _area(source)
+        areas_by_source.setdefault(area, set()).update(_area(target) for target in targets if _area(target) != area)
+    for area, targets in sorted(areas_by_source.items()):
+        labels = _labels(targets, empty="None observed")
+        lines.append(f"| `{area}` | {labels} |")
+    lines.extend(
+        [
+            "",
+            "## Declared architecture boundaries",
+            "",
+            "These are the module paths and allowed dependencies declared in `tach.toml`.",
+            "They describe policy, not observed imports or the result of executing Tach.",
+            "See the [contribution guide](../CONTRIBUTING.md) for the enforced verification path.",
+            "",
+            "| Declared module | Allowed dependencies |",
+            "| --- | --- |",
+        ]
+    )
+    for name, dependencies in sorted(boundaries.items()):
+        lines.append(f"| `{name}` | {_labels(dependencies, empty='None declared')} |")
+    return "\n".join(lines).rstrip() + "\n"
 
 
-def _source_mtime() -> float:
-    """Return the newest mtime across all Python source files and this script."""
-    candidates = list(SRC_ROOT.rglob("*.py"))
-    candidates.append(Path(__file__))
-    return max((p.stat().st_mtime for p in candidates if p.exists()), default=0.0)
-
-
-def _normalize_generated_date(text: str) -> str:
-    """Replace the generation date in the header with a fixed placeholder.
-
-    The header embeds the date the doc was written, which made --check
-    time-dependent: any PR built the day after the last regeneration failed
-    the freshness gate on a pure date mismatch (no content change).
-    """
-    return re.sub(r"^> Auto-generated \d{4}-\d{2}-\d{2} ", "> Auto-generated DATE ", text, count=1, flags=re.M)
-
-
-if __name__ == "__main__":
-    check_mode = "--check" in sys.argv
-
-    if check_mode:
-        if not OUTPUT.exists():
-            print("ERROR: docs/dependency-map.md does not exist — run 'make docs'", file=sys.stderr)
-            sys.exit(1)
-        # Fast path: skip generation if output is newer than all sources.
-        if OUTPUT.stat().st_mtime > _source_mtime():
-            print("docs/dependency-map.md is up to date ✓", file=sys.stderr)
-            sys.exit(0)
-
-    print("Generating dependency map...", file=sys.stderr)
+def main(argv: list[str] | None = None) -> int:
+    """Generate the reference or verify its content without modifying it."""
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
+    parser.add_argument("--check", action="store_true")
+    check_mode = parser.parse_args(argv).check
+    if check_mode and not OUTPUT.exists():
+        print("ERROR: docs/dependency-map.md does not exist — run 'make docs'", file=sys.stderr)
+        return 1
     content = generate()
-
     if check_mode:
-        existing = _normalize_generated_date(OUTPUT.read_text(encoding="utf-8"))
-        content = _normalize_generated_date(content)
+        existing = OUTPUT.read_text(encoding="utf-8")
         if existing != content:
-            import difflib
-
             diff = list(
                 difflib.unified_diff(
-                    existing.splitlines(),
-                    content.splitlines(),
-                    fromfile="committed",
-                    tofile="generated",
-                    lineterm="",
+                    existing.splitlines(), content.splitlines(), fromfile="committed", tofile="generated", lineterm=""
                 )
             )
             print("\n".join(diff[:40]), file=sys.stderr)
-            if len(diff) > 40:
-                print(f"... and {len(diff) - 40} more lines", file=sys.stderr)
-            print("ERROR: docs/dependency-map.md is stale — run 'make docs' to regenerate", file=sys.stderr)
-            sys.exit(1)
+            print("ERROR: docs/dependency-map.md is stale — run 'make docs'", file=sys.stderr)
+            return 1
         print("docs/dependency-map.md is up to date ✓", file=sys.stderr)
     else:
         OUTPUT.parent.mkdir(parents=True, exist_ok=True)
         OUTPUT.write_text(content, encoding="utf-8")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

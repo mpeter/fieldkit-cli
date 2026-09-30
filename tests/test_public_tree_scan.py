@@ -6,14 +6,224 @@ import json
 import subprocess
 import tarfile
 import zipfile
-from datetime import date
+from dataclasses import replace
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
 
-from scripts import check_artifacts, check_public_identity, export_public_tree, public_tree_artifacts, public_tree_scan
+from scripts import (
+    check_artifacts,
+    check_public_identity,
+    export_public_tree,
+    public_history_source,
+    public_tree_artifacts,
+    public_tree_scan,
+)
+from tests.test_public_history_source import history as history
 
 pytestmark = pytest.mark.unit
+History = tuple[Path, public_history_source.ApprovedCutoverAnchor, bytes]
+
+
+def _successor_snapshot(
+    history: History, tmp_path: Path, *, version: str = "1.1.0"
+) -> tuple[Path, Path, Path, public_history_source.PublicHistorySource]:
+    repo, anchor, record = history
+    _write_policies(repo, public_paths=["README.md", "pyproject.toml", "src/**"])
+    project = repo / "pyproject.toml"
+    project.write_text(
+        project.read_text(encoding="utf-8").replace('version = "1.1.0"', f'version = "{version}"'), encoding="utf-8"
+    )
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "successor policies")
+    source = public_history_source.capture_source(
+        repo,
+        "HEAD",
+        expected_anchor=anchor,
+        cutover_record=record,
+        repository_id=anchor.repository_id,
+        version=version,
+        planned_tag=f"v{version}",
+    )
+    snapshot = tmp_path / "successor-snapshot"
+    assert (
+        public_history_source.materialize_source(repo, source, snapshot, expected_anchor=anchor, cutover_record=record)
+        == source
+    )
+    retained = tmp_path / "source.json"
+    retained.write_bytes(public_history_source.source_bytes(source, expected_anchor=anchor, cutover_record=record))
+    return snapshot, retained, repo / export_public_tree._POLICY_PATH, source
+
+
+@pytest.mark.parametrize("version", ["1.1.0", "1.0.1"])
+def test_successor_scan_has_distinct_versioned_current_tree_and_anchor(
+    history: History, tmp_path: Path, version: str
+) -> None:
+    repo, anchor, record = history
+    snapshot, retained, policy, source = _successor_snapshot(history, tmp_path, version=version)
+    report = public_tree_scan.scan_public_tree(
+        repo, snapshot, retained, policy, source_kind="public-history", expected_anchor=anchor, cutover_record=record
+    )
+    assert report.content_ok is True
+    assert isinstance(report, public_tree_scan.PublicHistoryScanReport)
+    assert report.schema_version == 2
+    assert report.source_commit == source.source_commit
+    assert report.source_tree == report.exported_tree == source.source_tree != anchor.initial_tree
+    assert report.planned_tag == f"v{version}"
+    assert report.anchor == anchor
+    assert report.source_sha256 == hashlib.sha256(retained.read_bytes()).hexdigest()
+    assert report.to_dict()["source_kind"] == "public-history"
+    assert report.to_dict()["status"] == "pending"
+
+
+@pytest.mark.parametrize(
+    "attack", ["snapshot", "mode", "dirty", "manifest", "anchor", "record", "missing-trust", "legacy-dispatch"]
+)
+def test_successor_scanner_rejects_tampered_or_untrusted_sources(history: History, tmp_path: Path, attack: str) -> None:
+    repo, anchor, record = history
+    snapshot, retained, policy, source = _successor_snapshot(history, tmp_path)
+    if attack == "snapshot":
+        (snapshot / "README.md").write_text("tampered", encoding="utf-8")
+    elif attack == "mode":
+        (snapshot / "README.md").chmod(0o755)
+    elif attack == "dirty":
+        (repo / "README.md").write_text("dirty", encoding="utf-8")
+    elif attack == "manifest":
+        changed = replace(
+            source, entries=(replace(source.entries[0], category="another_category"), *source.entries[1:])
+        )
+        retained.write_bytes(public_history_source.source_bytes(changed, expected_anchor=anchor, cutover_record=record))
+    elif attack == "anchor":
+        anchor = replace(anchor, initial_tree="f" * 40)
+    elif attack == "record":
+        record += b"\n"
+    with pytest.raises(ValueError):
+        public_tree_scan.scan_public_tree(
+            repo,
+            snapshot,
+            retained,
+            policy,
+            source_kind="initial-export" if attack == "legacy-dispatch" else "public-history",
+            expected_anchor=None if attack == "missing-trust" else anchor,
+            cutover_record=record,
+        )
+
+
+def test_successor_scan_reverifies_source_after_content_observation(
+    history: History, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo, anchor, record = history
+    snapshot, retained, policy, _source = _successor_snapshot(history, tmp_path)
+
+    def mutate(_destination: Path, _artifacts: tuple[Path, ...]) -> tuple[public_tree_scan.Finding, ...]:
+        (repo / "README.md").write_text("changed during scan", encoding="utf-8")
+        return ()
+
+    monkeypatch.setattr(public_tree_scan, "_scan_with_gitleaks", mutate)
+    with pytest.raises(ValueError, match="clean worktree"):
+        public_tree_scan.scan_public_tree(
+            repo,
+            snapshot,
+            retained,
+            policy,
+            source_kind="public-history",
+            expected_anchor=anchor,
+            cutover_record=record,
+        )
+
+
+@pytest.mark.parametrize("attack", ["oversize", "symlink"])
+def test_successor_scan_reread_is_bounded_and_nofollow(
+    history: History, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, attack: str
+) -> None:
+    repo, anchor, record = history
+    snapshot, retained, policy, _source = _successor_snapshot(history, tmp_path)
+    genuine = public_tree_scan._scan_source
+
+    def verify_then_change(*args: object, **kwargs: object) -> public_history_source.PublicHistorySource:
+        result = genuine(
+            repo,
+            snapshot,
+            retained,
+            policy,
+            source_kind="public-history",
+            expected_anchor=anchor,
+            cutover_record=record,
+        )
+        assert isinstance(result, public_history_source.PublicHistorySource)
+        target = snapshot / "README.md"
+        if attack == "oversize":
+            with target.open("wb") as stream:
+                stream.truncate(public_history_source.MAX_SOURCE_BYTES + 1)
+        else:
+            outside = tmp_path / "outside.txt"
+            outside.write_text("successor\n", encoding="utf-8")
+            target.unlink()
+            target.symlink_to(outside)
+        return result
+
+    def forbidden_read(_path: Path) -> bytes:
+        pytest.fail("scan used unbounded/following Path.read_bytes after source verification")
+
+    monkeypatch.setattr(public_tree_scan, "_scan_source", verify_then_change)
+    monkeypatch.setattr(Path, "read_bytes", forbidden_read)
+    with pytest.raises(ValueError, match=r"byte bound|stable source entry"):
+        public_tree_scan.scan_public_tree(
+            repo,
+            snapshot,
+            retained,
+            policy,
+            source_kind="public-history",
+            expected_anchor=anchor,
+            cutover_record=record,
+        )
+
+
+@pytest.mark.parametrize("attack", ["none", "revision", "digest"])
+def test_successor_artifacts_are_bound_to_current_source(history: History, tmp_path: Path, attack: str) -> None:
+    repo, anchor, record = history
+    snapshot, retained, policy, source = _successor_snapshot(history, tmp_path)
+    wheel = tmp_path / "example_cli-1.1.0-py3-none-any.whl"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr("example/safe.py", "safe = True\n")
+    evidence, _documents = public_tree_artifacts.read_artifact(
+        wheel, public_tree_artifacts.ArchiveLimits(20, 1024, 4096, 4096)
+    )
+    validation = _artifact_validation(source.source_commit, evidence)
+    if attack == "revision":
+        validation = replace(validation, source_revision=anchor.initial_commit)
+    elif attack == "digest":
+        validation = replace(validation, artifacts=(replace(validation.artifacts[0], sha256="f" * 64),))
+    if attack != "none":
+        with pytest.raises(ValueError, match=r"source revision|identities"):
+            public_tree_scan.scan_public_tree(
+                repo,
+                snapshot,
+                retained,
+                policy,
+                artifacts=(wheel,),
+                artifact_validation=validation,
+                source_kind="public-history",
+                expected_anchor=anchor,
+                cutover_record=record,
+            )
+        return
+    report = public_tree_scan.scan_public_tree(
+        repo,
+        snapshot,
+        retained,
+        policy,
+        artifacts=(wheel,),
+        artifact_validation=validation,
+        source_kind="public-history",
+        expected_anchor=anchor,
+        cutover_record=record,
+    )
+    assert report.content_ok is True
+    assert report.source_commit == source.source_commit
+    assert report.artifacts[0] == evidence
+    assert report.scanned_artifact_entries == evidence.member_count
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -210,19 +420,14 @@ def test_public_policy_exempts_reserved_example_subdomains() -> None:
     assert rule.pattern.search("user@" + "customer.invalid") is not None
 
 
-def test_public_policy_classifies_git_service_account_only_in_rehearsal_verifier() -> None:
-    """The exact Git SSH service account is a transport identifier, not user PII."""
+def test_public_policy_has_no_retired_rehearsal_observer_allowance() -> None:
+    """Removed observers must not retain privacy or identity policy exceptions."""
     policy = public_tree_scan._load_policy(
-        Path("docs/release-readiness/public-tree-scan-policy.json").read_bytes(), date.today()
+        Path("docs/release-readiness/public-tree-scan-policy.json").read_bytes(), datetime.now(tz=UTC).date()
     )
-    allowance = next(
-        item
-        for item in policy.text_allowances
-        if item.rule_id == "PII001" and item.path == "scripts/check_documentation_examples.py"
-    )
-
-    assert allowance.pattern.fullmatch("git" + "@github.com")
-    assert allowance.pattern.search("person" + "@github.com") is None
+    assert not any(item.path == "scripts/check_documentation_examples.py" for item in policy.text_allowances)
+    identity = json.loads(Path("docs/release-readiness/public-identity-policy.json").read_text(encoding="utf-8"))
+    assert not any(item.get("path") == "scripts/check_documentation_examples.py" for item in identity["allowances"])
 
 
 def test_public_policy_classifies_git_service_account_in_cutover_verifier() -> None:

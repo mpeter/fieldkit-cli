@@ -198,9 +198,9 @@ def check_A08_prompt_injection_guards(repo_root: Path = REPO_ROOT) -> list[str]:
     # Each entry: (file_rel, required_symbol) — the file must import the symbol
     # as evidence that it has been audited and hardened.
     required_guards: list[tuple[str, str]] = [
-        ("commands/brief/main.py", "wrap_user_data"),
+        ("brief/pipeline_only.py", "wrap_user_data"),
         ("ingest/pipeline.py", "wrap_user_data"),
-        ("commands/pipeline/render.py", "wrap_user_data"),
+        ("pipeline/render.py", "wrap_user_data"),
     ]
     hits = []
     for rel, symbol in required_guards:

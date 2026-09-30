@@ -1,21 +1,23 @@
 """Tests for implementation change (--verbose flag) and implementation change (--account scopes slack-threads).
 
 implementation change covers:
-- Full stderr is printed to stderr when verbose=True and subprocess fails.
-- Full stdout is printed to stderr when verbose=True and subprocess succeeds.
-- Full output is suppressed when verbose=False (default unchanged).
+- Bounded stderr is printed to stderr when verbose=True and subprocess fails.
+- Bounded stdout is printed to stderr when verbose=True and subprocess succeeds.
+- Child output is suppressed when verbose=False (default unchanged).
 
 implementation change covers:
 - When RunConfig(account="acme-corp"), slack-threads step includes --account acme-corp.
 - When RunConfig(account=None), no --account flag appears in any step command.
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from click.testing import CliRunner
 
 from fieldkit.commands.datasync.cli import (
+    DATASYNC_CAPTURE_BYTES,
+    MAX_VERBOSE_CHARS,
     MAX_VERBOSE_LINES,
     RunConfig,
     _build_steps,
@@ -23,7 +25,8 @@ from fieldkit.commands.datasync.cli import (
     _truncate_output,
     cli,
 )
-from fieldkit.config import TIMEOUT_DATASYNC
+from fieldkit.config import TIMEOUT_DATASYNC, TIMEOUT_PROCESS_KILL_GRACE
+from fieldkit.util.bounded_process import BoundedProcessResult
 
 pytestmark = pytest.mark.unit
 
@@ -33,6 +36,9 @@ def test_verbose_help_discloses_output_limit() -> None:
 
     assert result.exit_code == 0
     assert "last 100 lines" in result.output
+    assert "16,384 characters" in result.output
+    assert "each subprocess stdout/stderr stream" in " ".join(result.output.split())
+    assert "16 KiB" not in result.output
     assert "full subprocess output" not in result.output
 
 
@@ -46,7 +52,7 @@ def test_verbose_help_discloses_output_limit() -> None:
 
 def test_build_steps_account_scoped_slack_threads_includes_account_flag() -> None:
     """slack-threads step must include --account when cfg.account is set."""
-    cfg = RunConfig(account="acme-corp")
+    cfg = RunConfig(account="acme-corp", slack=True)
     steps = _build_steps(cfg)
 
     slack_cmd = next((cmd for label, cmd in steps if label == "slack-threads"), None)
@@ -61,7 +67,7 @@ def test_build_steps_account_scoped_slack_threads_includes_account_flag() -> Non
 
 def test_build_steps_account_scoped_backstory_and_stalls_also_scoped() -> None:
     """Existing scoping for backstory-health and pursuit-stalls is preserved."""
-    cfg = RunConfig(account="acme-corp")
+    cfg = RunConfig(account="acme-corp", backstory=True)
     steps = _build_steps(cfg)
 
     for label in ("backstory-health", "pursuit-stalls"):
@@ -99,16 +105,12 @@ def _run_step_make_completed_process(
     returncode: int = 0,
     stdout: str = "",
     stderr: str = "",
-) -> MagicMock:
-    m = MagicMock()
-    m.returncode = returncode
-    m.stdout = stdout
-    m.stderr = stderr
-    return m
+) -> BoundedProcessResult:
+    return BoundedProcessResult(returncode, stdout, stderr)
 
 
 def test_run_step_verbose_true_prints_stderr_on_failure() -> None:
-    """Full stderr is printed to stderr when verbose=True and step fails."""
+    """Bounded stderr is printed to stderr when verbose=True and step fails."""
     multi_line_stderr = "line 1: error\nline 2: detail\nline 3: traceback"
     proc = _run_step_make_completed_process(returncode=1, stderr=multi_line_stderr)
 
@@ -119,7 +121,7 @@ def test_run_step_verbose_true_prints_stderr_on_failure() -> None:
 
     with (
         patch("fieldkit.commands.datasync.cli.click.echo", side_effect=fake_echo),
-        patch("subprocess.run", return_value=proc),
+        patch("fieldkit.commands.datasync.cli.run_bounded_process", return_value=proc),
     ):
         _run_step(1, 1, "test-step", ["fieldkit", "watch", "test"], dry_run=False, verbose=True)
 
@@ -130,7 +132,7 @@ def test_run_step_verbose_true_prints_stderr_on_failure() -> None:
 
 
 def test_run_step_verbose_true_prints_stdout_on_success() -> None:
-    """Full stdout is printed when verbose=True even on success."""
+    """Bounded stdout is printed when verbose=True even on success."""
     multi_line_stdout = "step started\nstep completed\nrecords: 42"
     proc = _run_step_make_completed_process(returncode=0, stdout=multi_line_stdout)
 
@@ -141,7 +143,7 @@ def test_run_step_verbose_true_prints_stdout_on_success() -> None:
 
     with (
         patch("fieldkit.commands.datasync.cli.click.echo", side_effect=fake_echo),
-        patch("subprocess.run", return_value=proc),
+        patch("fieldkit.commands.datasync.cli.run_bounded_process", return_value=proc),
     ):
         _run_step(1, 1, "test-step", ["fieldkit", "watch", "test"], dry_run=False, verbose=True)
 
@@ -152,7 +154,7 @@ def test_run_step_verbose_true_prints_stdout_on_success() -> None:
 
 
 def test_run_step_verbose_false_suppresses_full_output() -> None:
-    """Full subprocess output is NOT printed when verbose=False (default)."""
+    """Subprocess output is not printed when verbose=False (default)."""
     multi_line_stderr = "line 1: error\nline 2: detail\nline 3: traceback"
     proc = _run_step_make_completed_process(returncode=1, stderr=multi_line_stderr)
 
@@ -163,7 +165,7 @@ def test_run_step_verbose_false_suppresses_full_output() -> None:
 
     with (
         patch("fieldkit.commands.datasync.cli.click.echo", side_effect=fake_echo),
-        patch("subprocess.run", return_value=proc),
+        patch("fieldkit.commands.datasync.cli.run_bounded_process", return_value=proc),
     ):
         _run_step(1, 1, "test-step", ["fieldkit", "watch", "test"], dry_run=False, verbose=False)
 
@@ -185,7 +187,7 @@ def test_run_step_verbose_default_is_false() -> None:
 
     with (
         patch("fieldkit.commands.datasync.cli.click.echo", side_effect=fake_echo),
-        patch("subprocess.run", return_value=proc),
+        patch("fieldkit.commands.datasync.cli.run_bounded_process", return_value=proc),
     ):
         # Call without verbose keyword — must not raise
         _run_step(1, 1, "test-step", ["fieldkit", "watch", "test"], dry_run=False)
@@ -197,11 +199,14 @@ def test_run_step_verbose_default_is_false() -> None:
 
 def test_run_step_retains_datasync_timeout() -> None:
     proc = _run_step_make_completed_process(returncode=0)
-    with patch("subprocess.run", return_value=proc) as run:
+    with patch("fieldkit.commands.datasync.cli.run_bounded_process", return_value=proc) as run:
         result = _run_step(1, 1, "test-step", ["fieldkit", "watch", "test"], dry_run=False)
 
     assert result.success is True
     assert run.call_args.kwargs["timeout"] == TIMEOUT_DATASYNC
+    assert run.call_args.kwargs["stdout_limit"] == DATASYNC_CAPTURE_BYTES
+    assert run.call_args.kwargs["stderr_limit"] == DATASYNC_CAPTURE_BYTES
+    assert run.call_args.kwargs["cleanup_timeout"] == TIMEOUT_PROCESS_KILL_GRACE
 
 
 def test_run_step_verbose_empty_output_no_header() -> None:
@@ -215,7 +220,7 @@ def test_run_step_verbose_empty_output_no_header() -> None:
 
     with (
         patch("fieldkit.commands.datasync.cli.click.echo", side_effect=fake_echo),
-        patch("subprocess.run", return_value=proc),
+        patch("fieldkit.commands.datasync.cli.run_bounded_process", return_value=proc),
     ):
         _run_step(1, 1, "test-step", ["fieldkit", "watch", "test"], dry_run=False, verbose=True)
 
@@ -342,14 +347,21 @@ def test_truncate_output_custom_max_lines_respected() -> None:
     assert len(result_lines) == 6, f"Expected 6 lines (5 content + notice), got {len(result_lines)}"
 
 
+def test_truncate_output_single_line_respects_character_cap() -> None:
+    text = "x" * (MAX_VERBOSE_CHARS * 3)
+
+    result = _truncate_output(text)
+
+    assert len(result) <= MAX_VERBOSE_CHARS
+    assert "truncated" in result.lower()
+    assert result.endswith("x" * 100)
+
+
 def test_truncate_output_verbose_step_output_is_capped() -> None:
     """_run_step verbose output is capped at MAX_VERBOSE_LINES per stream."""
     # Generate output with 3x the cap to ensure truncation fires
     big_stderr = "\n".join(f"error line {i}" for i in range(MAX_VERBOSE_LINES * 3))
-    proc = MagicMock()
-    proc.returncode = 1
-    proc.stdout = ""
-    proc.stderr = big_stderr
+    proc = BoundedProcessResult(1, "", big_stderr)
 
     captured_lines: list[str] = []
 
@@ -358,7 +370,7 @@ def test_truncate_output_verbose_step_output_is_capped() -> None:
 
     with (
         patch("fieldkit.commands.datasync.cli.click.echo", side_effect=fake_echo),
-        patch("subprocess.run", return_value=proc),
+        patch("fieldkit.commands.datasync.cli.run_bounded_process", return_value=proc),
     ):
         _run_step(1, 1, "test-step", ["fieldkit", "watch", "test"], dry_run=False, verbose=True)
 

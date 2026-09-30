@@ -75,6 +75,4 @@ def cli(run_discover: bool, run_apply_web: bool, account: str | None, output_jso
         if er_result.total_raw_contacts == 0:
             click.echo("No contacts to enrich. Run 'fieldkit contact enrich --discover' first.")
             return
-        if er_result.migrated_legacy_files:
-            click.echo(f"Migrated {er_result.migrated_legacy_files} contact file(s) from legacy memory location.")
         click.echo(f"Enriched {er_result.total_enriched} contact(s); {er_result.total_failed} failed.")

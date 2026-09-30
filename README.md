@@ -15,9 +15,9 @@ an immutable release record with a signed tag, GitHub release, and package
 artifacts; see [Release history](docs/releases.md) to verify published versions.
 Future product work is tracked in the [roadmap](ROADMAP.md).
 
-## Quickstart: try the portable core
+## Quickstart: install and prove the portable core
 
-You need Python 3.11 or newer and
+You need a [supported Python version](docs/compatibility.md) and
 [`uv`](https://docs.astral.sh/uv/getting-started/installation/).
 
 ```console
@@ -32,11 +32,16 @@ fieldkit doctor
 fieldkit skill list
 ```
 
-The workspace commands create a generic local workspace, make it active in your
-fieldkit user configuration, and exercise the installed package without
-credentials or configured external services. See
-[Installation and first success](docs/getting-started.md) for source installs,
-optional profiles, expected results, and cleanup.
+`init --minimal` creates a generic local workspace and makes it active in your
+fieldkit user configuration. With a fresh configuration and no integrations
+enabled, `doctor` exits successfully while reporting each unconfigured
+integration as disabled. With no `FIELDKIT_SKILLS_DIR` or configured
+`fieldkit_root` override, `skill list` prints the workflows bundled with the
+installed package. This first success needs no service credentials.
+
+The command updates your fieldkit user configuration. If you already use
+fieldkit, follow the isolated trial in [Installation and first
+success](docs/getting-started.md) instead.
 
 ## What it can do
 
@@ -53,9 +58,10 @@ Start with [What fieldkit does](docs/user-guide.md), then choose integrations fr
 [Local data and privacy](docs/privacy.md) before using real account or customer
 information.
 
-## Install a capability profile
+## Choose a capability profile
 
-The base package is intentionally small. Add only what you use:
+The base package is intentionally small. You can select a profile at install
+time instead:
 
 ```console
 uv tool install 'fieldkit-cli[google]'
@@ -65,13 +71,18 @@ uv tool install 'fieldkit-cli[chrome-auth]'
 uv tool install 'fieldkit-cli[all]'
 ```
 
-Installing a profile provides its Python dependencies; it does not configure a
-provider, grant access, or send data anywhere.
+Installing a profile downloads its Python dependencies; it does not configure a
+provider, grant access, or transmit your fieldkit workspace data. If the base
+tool is already installed, add `--force` to replace its tool environment with
+the selected profile. See [Integrations and profiles](docs/integrations.md)
+before enabling a service.
 
 ## Contribute
 
 fieldkit welcomes bug reports, documentation, tests, code, design discussion,
-and issue triage. A contributor checkout has one supported setup path:
+and issue triage. A contributor checkout has one supported setup path. Before
+running `pr-check`, prepare a clean committed candidate and set `QUALITY_BASE`
+to the reviewed full commit SHA as described in [CONTRIBUTING.md](CONTRIBUTING.md):
 
 ```console
 git clone https://github.com/<your-user>/fieldkit-cli.git

@@ -53,7 +53,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 from click.testing import CliRunner, Result
 
-from fieldkit.commands.issue.gh_store import GHIssue
+from fieldkit.gmail.publication import (
+    GMAIL_QUERY_READY_KEY,
+    apply_gmail_page,
+    initialize_gmail_publication,
+)
+from fieldkit.issue import GHIssue
+from fieldkit.sqlite_publication import SQLiteMutationConnection
 
 pytestmark = pytest.mark.unit
 
@@ -151,7 +157,7 @@ def _query_db() -> sqlite3.Connection:
     )
     conn.execute(
         "INSERT INTO people (person_id, email, display_name) VALUES (?, ?, ?)",
-        ("alice@acme-corp.com", "alice@acme-corp.com", "Alice Smith"),
+        ("alice@acme-corp.example.com", "alice@acme-corp.example.com", "Alice Smith"),
     )
     conn.execute(
         "INSERT INTO messages (msg_id, thread_id, subject, from_addr, to_addr, cc_addr, date_str, date_epoch,"
@@ -160,7 +166,7 @@ def _query_db() -> sqlite3.Connection:
             str(uuid.uuid4()),
             "t-001",
             "Renewal pricing",
-            "alice@acme-corp.com",
+            "alice@acme-corp.example.com",
             "rep@example.com",
             "",
             "2023-11-14",
@@ -321,48 +327,80 @@ def _pursuit_archive(tmp_path: Path) -> dict[str, Any]:
 
 def _gmail_account_tags(tmp_path: Path) -> dict[str, Any]:
     db_path = tmp_path / "gmail.db"
-    conn = sqlite3.connect(str(db_path))
-    conn.executescript(
-        """
-        CREATE TABLE messages (msg_id TEXT PRIMARY KEY, thread_id TEXT, labels TEXT);
-        CREATE TABLE labels (label_id TEXT PRIMARY KEY, label_name TEXT);
-        CREATE TABLE thread_accounts (thread_id TEXT, account TEXT, PRIMARY KEY (thread_id, account));
-        """
-    )
-    conn.execute("INSERT INTO labels (label_id, label_name) VALUES ('L1', 'ref/acme-corp')")
-    conn.execute("INSERT INTO messages (msg_id, thread_id, labels) VALUES ('m1', 't-001', '[\"L1\"]')")
-    conn.commit()
-    conn.close()
+    initialize_gmail_publication(db_path)
+
+    def seed(connection: SQLiteMutationConnection) -> None:
+        connection.execute(
+            "INSERT INTO threads(thread_id, subject, message_count) VALUES (?, ?, ?)",
+            ("t-001", "Fictional planning", 1),
+        )
+        connection.execute(
+            "INSERT INTO labels(label_id, label_name) VALUES (?, ?)",
+            ("L1", "ref/acme-corp"),
+        )
+        connection.execute(
+            "INSERT INTO messages(message_id, thread_id, labels) VALUES (?, ?, ?)",
+            ("m1", "t-001", '["L1"]'),
+        )
+        connection.execute(
+            "INSERT OR REPLACE INTO sync_state(key, value) VALUES (?, 'true')",
+            (GMAIL_QUERY_READY_KEY,),
+        )
+
+    apply_gmail_page(db_path, seed)
     account_tags = importlib.import_module("fieldkit.commands.gmail.account_tags")
     result = CliRunner().invoke(account_tags.cli, ["--db", str(db_path), "--json"])
     return _payload(result, "gmail account-tags")
 
 
 def _gmail_backstory_gap(tmp_path: Path) -> dict[str, Any]:
-    home = tmp_path / "home"
-    (home / "config").mkdir(parents=True)
-    (home / "config" / "accounts.yaml").write_text(
-        "accounts:\n  acme-corp:\n    domains: [acme-corp.com]\n    blindspots_min_messages: 2\n",
-        encoding="utf-8",
+    from fieldkit.gmail.publication import (
+        GMAIL_QUERY_READY_KEY,
+        apply_gmail_page,
+        initialize_gmail_publication,
     )
+    from fieldkit.sqlite_publication import SQLiteMutationConnection
+
+    config: dict[str, object] = {
+        "accounts": {
+            "acme-corp": {
+                "domains": ["acme-corp.example.com"],
+                "blindspots_min_messages": 2,
+            }
+        }
+    }
     db_path = tmp_path / "gmail.db"
-    conn = sqlite3.connect(str(db_path))
-    conn.executescript(
-        """
-        CREATE TABLE people (
-            email TEXT PRIMARY KEY, display_name TEXT, message_count INTEGER,
-            thread_count INTEGER, meeting_count INTEGER, slack_message_count INTEGER,
-            last_seen TEXT, is_internal INTEGER, account TEXT
-        );
-        """
-    )
-    conn.execute(
-        "INSERT INTO people VALUES ('alice@acme-corp.com', 'Alice Smith', 9, 4, 1, 0, '2023-11-14', 0, 'acme-corp')"
-    )
-    conn.commit()
-    conn.close()
+    initialize_gmail_publication(db_path)
+
+    def seed(connection: SQLiteMutationConnection) -> None:
+        connection.execute(
+            """
+            INSERT INTO people (
+                email, display_name, message_count, thread_count, meeting_count,
+                slack_message_count, last_seen, is_internal, account, domain
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "alice@acme-corp.example.com",
+                "Alice Smith",
+                9,
+                4,
+                1,
+                0,
+                "2023-11-14",
+                0,
+                "acme-corp",
+                "acme-corp.example.com",
+            ),
+        )
+        connection.execute(
+            "INSERT OR REPLACE INTO sync_state(key, value) VALUES (?, 'true')",
+            (GMAIL_QUERY_READY_KEY,),
+        )
+
+    apply_gmail_page(db_path, seed)
     backstory_gap = importlib.import_module("fieldkit.commands.gmail.backstory_gap")
-    with patch.object(backstory_gap, "_config_path", lambda: home / "config" / "accounts.yaml"):
+    with patch.object(backstory_gap, "get_accounts_config", lambda *, strict: config):
         result = CliRunner().invoke(backstory_gap.cli, ["--db", str(db_path), "--json"])
     return _payload(result, "gmail backstory-gap")
 
@@ -370,7 +408,7 @@ def _gmail_backstory_gap(tmp_path: Path) -> dict[str, Any]:
 def _gmail_query(args: list[str], label: str) -> Callable[[Path], dict[str, Any]]:
     def _build(tmp_path: Path) -> dict[str, Any]:
         query = importlib.import_module("fieldkit.commands.gmail.query")
-        with patch.object(query, "connect", return_value=_query_db()):
+        with patch.object(query.query_domain, "connect", return_value=_query_db()):
             result = CliRunner().invoke(query.cli, [*args, "--db", str(tmp_path / "fake.db"), "--json"])
         return _payload(result, label)
 

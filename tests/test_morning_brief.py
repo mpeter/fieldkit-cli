@@ -1,6 +1,8 @@
 """Tests for fieldkit/watch/morning_brief.py — alert extraction and deduplication."""
 
 import datetime
+import logging
+from collections.abc import Callable
 from pathlib import Path
 from unittest.mock import patch
 
@@ -9,6 +11,13 @@ import pytest
 from fieldkit.watch.morning_brief_collect import extract_today_alerts
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.fixture(autouse=True)
+def configured_report_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("fieldkit.brief.pipeline_only.get_llm_model", lambda: "vertex_ai/test-model")
+    monkeypatch.setattr("fieldkit.brief.pipeline_only.llm_disabled", lambda: False)
+
 
 _TODAY = datetime.date(2026, 6, 7)
 _TODAY_STR = "2026-06-07"
@@ -21,12 +30,37 @@ def _alerts_file(tmp_path: Path, content: str) -> Path:
     return f
 
 
+def test_write_brief_logs_filename_without_private_parent_path(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    from fieldkit.watch.morning_brief import _write_brief_to_disk
+
+    output_dir = tmp_path / "private-account-root" / "briefs"
+    with (
+        patch("fieldkit.watch.morning_brief.write_run_status", return_value="written"),
+        caplog.at_level(logging.INFO, logger="fieldkit.watch.morning_brief"),
+    ):
+        result = _write_brief_to_disk(
+            "# Morning brief\n",
+            _TODAY,
+            0.1,
+            [[], [], [], [], []],
+            dry_run=False,
+            output_dir=output_dir,
+        )
+
+    assert result.written is True
+    assert result.run.exit_code == 0
+    assert f"morning-brief-{_TODAY_STR}.md" in caplog.text
+    assert str(output_dir) not in caplog.text
+
+
 # ---------------------------------------------------------------------------
 # extract_today_alerts — basic extraction
 # ---------------------------------------------------------------------------
 
 
-def test_extracts_today_blocks(tmp_path: Path):
+def test_extracts_today_blocks(tmp_path: Path) -> None:
     # Use lookback_days=0 to assert today-only filtering (yesterday excluded).
     # _OTHER_STR is 1 day before _TODAY; with lookback_days=0 it must be excluded.
     f = _alerts_file(
@@ -44,7 +78,7 @@ def test_extracts_today_blocks(tmp_path: Path):
     assert _OTHER_STR not in alerts[0]
 
 
-def test_returns_empty_when_no_today_alerts(tmp_path: Path):
+def test_returns_empty_when_no_today_alerts(tmp_path: Path) -> None:
     # Use lookback_days=0 so that only today's alerts are considered.
     # _OTHER_STR is yesterday; with lookback_days=0 it must be excluded.
     f = _alerts_file(
@@ -56,7 +90,7 @@ def test_returns_empty_when_no_today_alerts(tmp_path: Path):
     assert alerts == []
 
 
-def test_raises_when_file_missing(tmp_path: Path):
+def test_raises_when_file_missing(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError, match=r"."):
         extract_today_alerts(tmp_path / "nonexistent.md", _TODAY)
 
@@ -66,7 +100,7 @@ def test_raises_when_file_missing(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_deduplicates_identical_headings(tmp_path: Path):
+def test_deduplicates_identical_headings(tmp_path: Path) -> None:
     """historic regression regression: same heading written N times produces 1 block."""
     block = f"## {_TODAY_STR} — acct / ads-repave — stalled in propose\n\n- Days: 37\n"
     f = _alerts_file(tmp_path, (block * 5))
@@ -74,7 +108,7 @@ def test_deduplicates_identical_headings(tmp_path: Path):
     assert len(alerts) == 1
 
 
-def test_does_not_deduplicate_distinct_pursuits(tmp_path: Path):
+def test_does_not_deduplicate_distinct_pursuits(tmp_path: Path) -> None:
     """Different pursuit names on the same day are distinct blocks."""
     content = (
         f"## {_TODAY_STR} — acct / pursuit-a — stalled in propose\n\n- Days: 20\n\n"
@@ -85,7 +119,7 @@ def test_does_not_deduplicate_distinct_pursuits(tmp_path: Path):
     assert len(alerts) == 2
 
 
-def test_deduplicates_mixed_pursuits_with_repeats(tmp_path: Path):
+def test_deduplicates_mixed_pursuits_with_repeats(tmp_path: Path) -> None:
     """3 unique pursuits each written 4 times -> 3 blocks."""
     pursuits = ["pursuit-a", "pursuit-b", "pursuit-c"]
     blocks = ""
@@ -97,7 +131,7 @@ def test_deduplicates_mixed_pursuits_with_repeats(tmp_path: Path):
     assert len(alerts) == 3
 
 
-def test_deduplication_with_different_body_same_heading(tmp_path: Path):
+def test_deduplication_with_different_body_same_heading(tmp_path: Path) -> None:
     """Same heading but different body (e.g. different 'Detected at' timestamp) -> 1 block."""
     content = (
         f"## {_TODAY_STR} — acct / pursuit-a — stalled in propose\n\n"
@@ -117,7 +151,7 @@ def test_deduplication_with_different_body_same_heading(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_quota_section_no_config(monkeypatch: pytest.MonkeyPatch):
+def test_quota_section_no_config(monkeypatch: pytest.MonkeyPatch) -> None:
     """When quota not configured, show setup instructions."""
     from fieldkit.watch.morning_brief_render import _render_quota_section
 
@@ -142,7 +176,7 @@ def test_quota_section_without_config_does_not_collect(monkeypatch: pytest.Monke
     collector.assert_not_called()
 
 
-def test_quota_section_with_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+def test_quota_section_with_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """When quota configured, renders table with Target/Closed-won/Weighted/Gap."""
     from fieldkit.watch.morning_brief_render import _render_quota_section
 
@@ -200,7 +234,7 @@ def test_quota_section_propagates_collector_error(monkeypatch: pytest.MonkeyPatc
 # ---------------------------------------------------------------------------
 
 
-def test_get_latest_pursuit_files_returns_5(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+def test_get_latest_pursuit_files_returns_5(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """get_latest_pursuit_files defaults to n=5."""
     from fieldkit.watch.morning_brief_collect import get_latest_pursuit_files
 
@@ -224,7 +258,7 @@ def test_get_latest_pursuit_files_returns_5(monkeypatch: pytest.MonkeyPatch, tmp
     assert all(p.suffix == ".md" for p in result)
 
 
-def test_red_close_date_sorted_first(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+def test_red_close_date_sorted_first(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """A pursuit with close_date within 30 days sorts before one closing in 90 days."""
     from datetime import date, timedelta
 
@@ -266,14 +300,14 @@ def test_red_close_date_sorted_first(monkeypatch: pytest.MonkeyPatch, tmp_path: 
 # ---------------------------------------------------------------------------
 
 
-def test_collect_tasks_reads_from_data_root(tmp_path: Path):
+def test_collect_tasks_reads_from_data_root(tmp_path: Path) -> None:
     """Regression: collect_tasks() reads TASKS.md from data_root, not fieldkit_root.
 
     Before the M060 fix, collect_tasks used get_fieldkit_root() to locate
     TASKS.md, causing FileNotFoundError when installed outside the source tree.
     Now it takes data_root as an explicit parameter and must read from there.
     """
-    from fieldkit.commands.brief.main import collect_tasks
+    from fieldkit.brief.collect import collect_tasks
 
     # Set up TASKS.md in a standalone data_root (not the code repo)
     data_root = tmp_path / "fieldkit-data"
@@ -291,9 +325,9 @@ def test_collect_tasks_reads_from_data_root(tmp_path: Path):
     assert "Legal review" in waiting_section, "collect_tasks did not read Waiting On section from data_root"
 
 
-def test_collect_tasks_returns_empty_strings_when_tasks_md_missing(tmp_path: Path):
+def test_collect_tasks_returns_empty_strings_when_tasks_md_missing(tmp_path: Path) -> None:
     """collect_tasks() gracefully returns empty strings when TASKS.md is absent in data_root."""
-    from fieldkit.commands.brief.main import collect_tasks
+    from fieldkit.brief.collect import collect_tasks
 
     data_root = tmp_path / "empty-data"
     data_root.mkdir()
@@ -305,13 +339,13 @@ def test_collect_tasks_returns_empty_strings_when_tasks_md_missing(tmp_path: Pat
     assert isinstance(waiting_section, str)
 
 
-def test_collect_tasks_does_not_read_from_fieldkit_root(tmp_path: Path, monkeypatch):
+def test_collect_tasks_does_not_read_from_fieldkit_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Regression guard: collect_tasks must NOT call get_fieldkit_root() internally.
 
     Place TASKS.md only in a separate data_root dir. If collect_tasks reads
     from fieldkit_root instead, it will return empty/missing — and this test fails.
     """
-    from fieldkit.commands.brief.main import collect_tasks
+    from fieldkit.brief.collect import collect_tasks
 
     # data_root has the file
     data_root = tmp_path / "data"
@@ -343,7 +377,7 @@ def test_collect_tasks_does_not_read_from_fieldkit_root(tmp_path: Path, monkeypa
 
 
 def _extract_section_heading_levels_collect_tasks(tmp_path: Path, content: str) -> tuple[str, str]:
-    from fieldkit.commands.brief.main import collect_tasks
+    from fieldkit.brief.collect import collect_tasks
 
     data_root = tmp_path / "data"
     data_root.mkdir(exist_ok=True)
@@ -393,11 +427,13 @@ def test_extract_section_heading_levels_next_section_content_does_not_bleed(tmp_
 # ── TestDegradedSources (flattened) ─────────────────────────────────────────
 
 
-def test_degraded_sources_collect_degraded_when_gmail_db_missing(tmp_path, monkeypatch):
+def test_degraded_sources_collect_degraded_when_gmail_db_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """When gmail.db is missing, 'Gmail cache' appears in the degraded list."""
     # Patch _gmail_db_exists to return False
-    import fieldkit.commands.brief.main as main_mod
-    from fieldkit.commands.brief.main import _collect_degraded_sources
+    import fieldkit.brief.pipeline_only as main_mod
+    from fieldkit.brief.pipeline_only import _collect_degraded_sources
 
     monkeypatch.setattr(main_mod, "_gmail_db_exists", lambda: False)
 
@@ -407,23 +443,23 @@ def test_degraded_sources_collect_degraded_when_gmail_db_missing(tmp_path, monke
     (data_root / "accounts").mkdir()
     accounts_yaml = data_root / "accounts.yaml"
     accounts_yaml.write_text("accounts: {}", encoding="utf-8")
-    monkeypatch.setattr("fieldkit.commands.brief.main.get_config_path", lambda name: accounts_yaml)
+    monkeypatch.setattr("fieldkit.brief.pipeline_only.get_config_path", lambda name: accounts_yaml)
 
     result = _collect_degraded_sources(data_root)
     labels = [label for label, _ in result]
     assert "Gmail cache" in labels
 
 
-def test_degraded_sources_render_degraded_section_empty():
+def test_degraded_sources_render_degraded_section_empty() -> None:
     """_render_degraded_section returns empty string for empty list."""
-    from fieldkit.commands.brief.main import _render_degraded_section
+    from fieldkit.brief.render import _render_degraded_section
 
     assert _render_degraded_section([]) == ""
 
 
-def test_degraded_sources_render_degraded_section_formats_correctly():
+def test_degraded_sources_render_degraded_section_formats_correctly() -> None:
     """_render_degraded_section renders label and reason in output."""
-    from fieldkit.commands.brief.main import _render_degraded_section
+    from fieldkit.brief.render import _render_degraded_section
 
     result = _render_degraded_section([("Gmail cache", "gmail.db not found"), ("Pursuits", "accounts dir missing")])
     assert "Degraded Sources" in result
@@ -440,7 +476,7 @@ def test_degraded_sources_render_degraded_section_formats_correctly():
 # ── TestCalendarErrorSurfaced (flattened) ───────────────────────────────────
 
 
-def test_calendar_error_surfaced_calendar_error_string_rendered_verbatim():
+def test_calendar_error_surfaced_calendar_error_string_rendered_verbatim() -> None:
     """historic regression: when calendar returns an error string, it is rendered verbatim in the brief."""
     from fieldkit.watch.morning_brief_render import _render_meetings_section
 
@@ -454,16 +490,19 @@ def test_calendar_error_surfaced_calendar_error_string_rendered_verbatim():
     assert "RuntimeError" in combined
 
 
-def test_calendar_error_surfaced_calendar_error_shows_exception_type():
+def test_calendar_error_surfaced_calendar_error_shows_exception_type() -> None:
     """historic regression: error string contains the exception type, not raw message text."""
+    from fieldkit.watch.mcp import MCPSession
     from fieldkit.watch.morning_brief import _collect_calendar_meetings
-    from fieldkit.watch.morning_brief_mcp import MCPSession
 
-    def _bad_init(self):
+    def _bad_init(self: MCPSession) -> None:
         raise ConnectionRefusedError("localhost:8080 refused")
 
     # Use a monkeypatched session to trigger the except branch
-    with patch.object(MCPSession, "initialize", _bad_init):
+    with (
+        patch("fieldkit.watch.morning_brief.get_mcp_endpoint", return_value="https://gateway.example.com/calendar"),
+        patch.object(MCPSession, "initialize", _bad_init),
+    ):
         result = _collect_calendar_meetings(
             datetime.date(2026, 6, 7),
             internal_domains={"your-org.com"},
@@ -471,38 +510,85 @@ def test_calendar_error_surfaced_calendar_error_shows_exception_type():
         )
 
     assert isinstance(result, str)
-    # historic regression + Constitution VIII: exception TYPE is surfaced, not raw message
-    assert "ConnectionRefusedError" in result
+    assert "provider failure" in result
     assert "Calendar unavailable" in result
     # Raw internal details must NOT appear
     assert "localhost:8080" not in result
 
 
-def test_calendar_error_surfaced_collect_calendar_meetings_includes_exception_type_on_failure(monkeypatch):
+def test_calendar_error_surfaced_collect_calendar_meetings_includes_exception_type_on_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """historic regression: _collect_calendar_meetings returns string with exception type name."""
+    from fieldkit.watch.mcp import MCPSession
     from fieldkit.watch.morning_brief import _collect_calendar_meetings
-    from fieldkit.watch.morning_brief_mcp import MCPSession
 
-    def _bad_init(self):
+    def _bad_init(self: MCPSession) -> None:
         raise RuntimeError("Connection refused to internal host")
 
     monkeypatch.setattr(MCPSession, "initialize", _bad_init)
 
-    result = _collect_calendar_meetings(
-        datetime.date(2026, 6, 7),
-        internal_domains={"your-org.com"},
-        user_email="user@example.com",  # pii-guard: ignore
-    )
+    with patch("fieldkit.watch.morning_brief.get_mcp_endpoint", return_value="https://gateway.example.com/calendar"):
+        result = _collect_calendar_meetings(
+            datetime.date(2026, 6, 7),
+            internal_domains={"your-org.com"},
+            user_email="user@example.com",  # pii-guard: ignore
+        )
 
     assert isinstance(result, str), "Expected error string, got list"
-    # historic regression: exception type name in the return value (not raw message)
-    assert "RuntimeError" in result
+    assert "provider failure" in result
     assert "Calendar unavailable" in result
     # Raw exception message must NOT appear (Constitution VIII)
     assert "Connection refused to internal host" not in result
 
 
-def test_calendar_error_surfaced_render_brief_includes_calendar_error_type(monkeypatch):
+def test_calendar_not_configured_is_explicitly_not_run() -> None:
+    """A fresh local setup reports the optional input as unselected without network access."""
+    from fieldkit.watch._morning_brief_types import SourceNotReady
+    from fieldkit.watch.morning_brief import _collect_calendar_meetings
+
+    with (
+        patch("fieldkit.watch.morning_brief.get_mcp_endpoint", return_value=None),
+        patch("fieldkit.watch.morning_brief.MCPSession") as session,
+    ):
+        result = _collect_calendar_meetings(
+            datetime.date(2026, 6, 7),
+            internal_domains=set(),
+            user_email="",
+        )
+
+    assert isinstance(result, SourceNotReady)
+    assert "not configured" in result.message
+    session.assert_not_called()
+
+
+@pytest.mark.parametrize("phase", ["initialize", "fetch"])
+@pytest.mark.parametrize("mcp_auth", [False, True])
+def test_calendar_auth_failure_propagates_for_exit_two(phase: str, mcp_auth: bool) -> None:
+    """Calendar credential rejection must not become a partial brief source."""
+    from fieldkit.errors import AuthError
+    from fieldkit.watch.mcp import MCPAuthError
+    from fieldkit.watch.morning_brief import _collect_calendar_meetings
+
+    error_type = MCPAuthError if mcp_auth else AuthError
+
+    with (
+        patch("fieldkit.watch.morning_brief.get_mcp_endpoint", return_value="https://gateway.example.com/calendar"),
+        patch("fieldkit.watch.morning_brief.MCPSession") as session,
+        patch("fieldkit.watch.morning_brief.fetch_external_meetings") as fetch,
+        pytest.raises(error_type, match="authentication failed"),
+    ):
+        operation = session.return_value.initialize if phase == "initialize" else fetch
+        operation.side_effect = error_type("authentication failed")
+        _collect_calendar_meetings(
+            datetime.date(2026, 6, 7),
+            internal_domains=set(),
+            user_email="",
+        )
+    session.return_value.close.assert_called_once_with()
+
+
+def test_calendar_error_surfaced_render_brief_includes_calendar_error_type(monkeypatch: pytest.MonkeyPatch) -> None:
     """historic regression: full render_brief call surfaces exception type in output."""
     from fieldkit.watch.morning_brief_render import render_brief
 
@@ -533,40 +619,36 @@ def test_calendar_error_surfaced_render_brief_includes_calendar_error_type(monke
 
 
 def test_bug162_empty_synthesize_guard_empty_synthesize_raises_llm_error_and_falls_back(tmp_path: Path) -> None:
-    """When synthesize() returns '', _run() writes the fallback brief then exits 1.
+    """An empty provider response writes a fallback brief, then exits 3.
 
-    historic regression: _run() raises LLMError(category="rate-limit"); cli_main() maps it
-    to EXIT_PARTIAL (1).  The brief must be written and non-empty before the raise.
+    Empty content is a general provider failure, not evidence of a rate limit.
+    The brief must be written and non-empty before the raise.
     """
     import contextlib
 
     import pytest
 
     from fieldkit.cli_exit import cli_main
-    from fieldkit.commands.brief.main import _run
-    from fieldkit.config import ConfigError
+    from fieldkit.commands.brief.cli import _run_pipeline_only as _run
 
-    # Patch synthesize to return empty string; use ConfigError so _run degrades gracefully.
+    # An empty synthesis must fall back within the configured workspace.
     # Use ExitStack so cli_main() can be a separate inner context manager.
     with contextlib.ExitStack() as stack:
-        stack.enter_context(patch("fieldkit.commands.brief.main.synthesize", return_value=""))
+        stack.enter_context(patch("fieldkit.brief.pipeline_only.synthesize", return_value=""))
+        stack.enter_context(patch("fieldkit.brief.pipeline_only.get_fieldkit_home", return_value=tmp_path))
+        stack.enter_context(patch("fieldkit.brief.pipeline_only.collect_pursuit_alerts", return_value="no alerts"))
+        stack.enter_context(patch("fieldkit.brief.pipeline_only.collect_champion_signals", return_value="no signals"))
+        stack.enter_context(patch("fieldkit.brief.pipeline_only.collect_decay_signals", return_value="no decay"))
+        stack.enter_context(patch("fieldkit.brief.pipeline_only.collect_stale_prose", return_value="no stale"))
         stack.enter_context(
-            patch("fieldkit.commands.brief.main.get_fieldkit_home", side_effect=ConfigError("no config"))
+            patch("fieldkit.brief.pipeline_only.collect_tasks", return_value=("no tasks", "no waiting"))
         )
-        stack.enter_context(patch("fieldkit.commands.brief.main.get_fieldkit_root", return_value=tmp_path))
-        stack.enter_context(patch("fieldkit.commands.brief.main.collect_pursuit_alerts", return_value="no alerts"))
-        stack.enter_context(patch("fieldkit.commands.brief.main.collect_champion_signals", return_value="no signals"))
-        stack.enter_context(patch("fieldkit.commands.brief.main.collect_decay_signals", return_value="no decay"))
-        stack.enter_context(patch("fieldkit.commands.brief.main.collect_stale_prose", return_value="no stale"))
-        stack.enter_context(
-            patch("fieldkit.commands.brief.main.collect_tasks", return_value=("no tasks", "no waiting"))
-        )
-        stack.enter_context(patch("fieldkit.commands.brief.main._render_degraded_section", return_value=""))
-        stack.enter_context(patch("fieldkit.commands.brief.main._collect_degraded_sources", return_value=[]))
-        # Wrap in cli_main() so LLMError(category="rate-limit") → SystemExit(1)
+        stack.enter_context(patch("fieldkit.brief.pipeline_only._render_degraded_section", return_value=""))
+        stack.enter_context(patch("fieldkit.brief.pipeline_only._collect_degraded_sources", return_value=[]))
+        # A general provider failure retains its canonical data-error status.
         with pytest.raises(SystemExit) as exc_info, cli_main():
             _run(no_llm=False, account=None)
-    assert exc_info.value.code == 1, f"Expected exit code 1, got {exc_info.value.code}"
+    assert exc_info.value.code == 3, f"Expected exit code 3, got {exc_info.value.code}"
 
     # The brief file must exist and be non-empty (written before the raise)
     brief_files = list(tmp_path.glob("briefs/morning-brief-*.md"))
@@ -576,37 +658,32 @@ def test_bug162_empty_synthesize_guard_empty_synthesize_raises_llm_error_and_fal
 
 
 def test_bug162_empty_synthesize_guard_whitespace_only_synthesize_raises_llm_error(tmp_path: Path) -> None:
-    """When synthesize() returns only whitespace, _run() writes fallback brief then exits 1.
+    """A whitespace-only response writes a fallback brief, then exits 3.
 
-    historic regression: _run() raises LLMError(category="rate-limit"); cli_main() maps it
-    to EXIT_PARTIAL (1).
+    The canonical boundary preserves the general provider-failure category.
     """
     import contextlib
 
     import pytest
 
     from fieldkit.cli_exit import cli_main
-    from fieldkit.commands.brief.main import _run
-    from fieldkit.config import ConfigError
+    from fieldkit.commands.brief.cli import _run_pipeline_only as _run
 
     with contextlib.ExitStack() as stack:
-        stack.enter_context(patch("fieldkit.commands.brief.main.synthesize", return_value="   \n  "))
+        stack.enter_context(patch("fieldkit.brief.pipeline_only.synthesize", return_value="   \n  "))
+        stack.enter_context(patch("fieldkit.brief.pipeline_only.get_fieldkit_home", return_value=tmp_path))
+        stack.enter_context(patch("fieldkit.brief.pipeline_only.collect_pursuit_alerts", return_value="no alerts"))
+        stack.enter_context(patch("fieldkit.brief.pipeline_only.collect_champion_signals", return_value="no signals"))
+        stack.enter_context(patch("fieldkit.brief.pipeline_only.collect_decay_signals", return_value="no decay"))
+        stack.enter_context(patch("fieldkit.brief.pipeline_only.collect_stale_prose", return_value="no stale"))
         stack.enter_context(
-            patch("fieldkit.commands.brief.main.get_fieldkit_home", side_effect=ConfigError("no config"))
+            patch("fieldkit.brief.pipeline_only.collect_tasks", return_value=("no tasks", "no waiting"))
         )
-        stack.enter_context(patch("fieldkit.commands.brief.main.get_fieldkit_root", return_value=tmp_path))
-        stack.enter_context(patch("fieldkit.commands.brief.main.collect_pursuit_alerts", return_value="no alerts"))
-        stack.enter_context(patch("fieldkit.commands.brief.main.collect_champion_signals", return_value="no signals"))
-        stack.enter_context(patch("fieldkit.commands.brief.main.collect_decay_signals", return_value="no decay"))
-        stack.enter_context(patch("fieldkit.commands.brief.main.collect_stale_prose", return_value="no stale"))
-        stack.enter_context(
-            patch("fieldkit.commands.brief.main.collect_tasks", return_value=("no tasks", "no waiting"))
-        )
-        stack.enter_context(patch("fieldkit.commands.brief.main._render_degraded_section", return_value=""))
-        stack.enter_context(patch("fieldkit.commands.brief.main._collect_degraded_sources", return_value=[]))
+        stack.enter_context(patch("fieldkit.brief.pipeline_only._render_degraded_section", return_value=""))
+        stack.enter_context(patch("fieldkit.brief.pipeline_only._collect_degraded_sources", return_value=[]))
         with pytest.raises(SystemExit) as exc_info, cli_main():
             _run(no_llm=False, account=None)
-    assert exc_info.value.code == 1, f"Expected exit code 1, got {exc_info.value.code}"
+    assert exc_info.value.code == 3, f"Expected exit code 3, got {exc_info.value.code}"
 
     brief_files = list(tmp_path.glob("briefs/morning-brief-*.md"))
     assert brief_files, "Expected a brief file to be written before exception propagated"
@@ -623,10 +700,10 @@ def test_bug162_empty_synthesize_guard_whitespace_only_synthesize_raises_llm_err
 
 
 def test_bug042_missing_last_transition_no_last_transition_produces_alert(
-    tmp_path: Path, write_pursuit_generic
+    tmp_path: Path, write_pursuit_generic: Callable[[Path, str, str], Path]
 ) -> None:
     """A pursuit with no last_transition date produces the 'stall duration unknown' alert."""
-    from fieldkit.commands.brief.main import collect_pursuit_alerts
+    from fieldkit.brief.collect import collect_pursuit_alerts
 
     acct = tmp_path / "accounts" / "acme-corp"
     write_pursuit_generic(
@@ -655,10 +732,10 @@ def test_bug042_missing_last_transition_no_last_transition_produces_alert(
 
 
 def test_bug042_missing_last_transition_no_last_transition_alert_includes_stage_name(
-    tmp_path: Path, write_pursuit_generic
+    tmp_path: Path, write_pursuit_generic: Callable[[Path, str, str], Path]
 ) -> None:
     """The missing-transition alert includes the current stage name."""
-    from fieldkit.commands.brief.main import collect_pursuit_alerts
+    from fieldkit.brief.collect import collect_pursuit_alerts
 
     acct = tmp_path / "accounts" / "acme-corp"
     write_pursuit_generic(
@@ -682,10 +759,10 @@ def test_bug042_missing_last_transition_no_last_transition_alert_includes_stage_
 
 
 def test_bug042_missing_last_transition_with_last_transition_no_spurious_alert(
-    tmp_path: Path, write_pursuit_generic
+    tmp_path: Path, write_pursuit_generic: Callable[[Path, str, str], Path]
 ) -> None:
     """A pursuit with a recent last_transition does NOT produce the missing-date alert."""
-    from fieldkit.commands.brief.main import collect_pursuit_alerts
+    from fieldkit.brief.collect import collect_pursuit_alerts
 
     acct = tmp_path / "accounts" / "acme-corp"
     write_pursuit_generic(

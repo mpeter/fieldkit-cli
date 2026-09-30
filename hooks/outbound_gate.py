@@ -13,16 +13,22 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from fieldkit.publication_policy import evaluate_publication_command  # noqa: E402
-from hooks._common import block, read_payload, tool_input, tool_name  # noqa: E402
+from hooks._common import block, read_payload  # noqa: E402
+
+_INVALID_EVENT = "Invalid outbound hook event; tool execution cannot be evaluated."
 
 
 def main() -> int:
     payload = read_payload()
     if not isinstance(payload, dict):
-        return 0
+        return block(_INVALID_EVENT)
 
-    name = tool_name(payload)
-    inputs = tool_input(payload)
+    name = payload.get("tool_name")
+    inputs = payload.get("tool_input")
+    if not isinstance(name, str) or not name.strip() or not isinstance(inputs, dict):
+        return block(_INVALID_EVENT)
+    if name == "Bash" and not isinstance(inputs.get("command"), str):
+        return block(_INVALID_EVENT)
 
     # Block Gmail send attempts (Google Workspace MCP should only draft, never send)
     if name in (

@@ -1,164 +1,118 @@
 ---
 name: sf-sync
 description: >
-  Salesforce data is stale and pursuit or account files need refreshing from SF before
-  a call, review, or native ClosePlan qualification read. Pulls SF opportunity and account data into local
-  frontmatter without requiring a browser.
-  Trigger with "sync from Salesforce", "refresh SF data", "pull from SF",
-  "SF is out of date", "update from Salesforce", "SF sync", "listview refresh",
-  "opportunity data is stale", "sync SF for [account]", "pull SF opportunity [id]".
+  Preview live Salesforce account or opportunity data, then refresh explicitly
+  approved local fieldkit frontmatter with shipped Salesforce commands.
 metadata:
   opencode/slash: "true"
-  argument-hint: "[listview [account] | opportunity <opp_id> [file] | account <name>]"
+  argument-hint: "[account slug | opportunity id | approved bulk account]"
   category: product
 ---
 
-# sf-sync Skill
+# Preview and refresh Salesforce-backed fields
 
-Sync Salesforce data into local pursuit and account files using high-level CLI commands.
+Use this skill when the Salesforce integration is installed and the operator
+needs live Salesforce data compared with, or copied into, the configured
+fieldkit workspace. A request to “check” or “show” Salesforce data authorizes a
+read, not a local write.
 
-Trigger with: `/sf-sync`, "sync salesforce", "refresh SF data", "pull SF data for [account]",
-"update pursuit frontmatter from SF", "run sf-sync", "sync opportunity [id]".
+Never accept a session ID in chat, command arguments, environment variables,
+logs, or saved evidence. Authentication is an operator-owned prerequisite.
 
----
+## Verify the session
 
-## Gotchas
+Run fieldkit sf session-check --json. Exit 0 with active: true proves the stored
+credential passed the command's current Account metadata probe. Exit 2 means the
+credential is missing, expired, rejected, or otherwise unusable for that probe;
+do not continue with a Salesforce read or write.
 
-- **Stale vault signals** — run `/brief` first if data hasn't been refreshed today
-- **Trigger overlap with adjacent skills** — confirm you need this skill and not a closely named one
+For interactive reauthorization, the operator runs fieldkit auth sf and pastes
+the sid only into the hidden terminal prompt. Non-interactive automation may use
+fieldkit auth sf --sid-file PATH only with an owner-only regular file. After
+authentication, rerun the session check. Do not record the cookie value.
 
-## Constraints
+## Preview without writing
 
-- **Never write to account or pursuit files without explicit confirmation**
-- **Do not advance deal stages without running the gate check first**
-- **Always surface generated output for review before any external send**
+Choose a single, confirmed scope and preview it before proposing a refresh:
 
-## Modes
+- fieldkit sf opportunity OPPORTUNITY_ID --json fetches one opportunity and
+  emits the mapped payload without updating frontmatter. A numeric Salesforce
+  Opportunity Number is also accepted and resolved before the read.
+- fieldkit sf opportunity OPPORTUNITY_ID PURSUIT_FILE --no-write prints a
+  human-readable preview for an explicit local destination without writing it.
+- fieldkit sf opportunity OPPORTUNITY_ID PURSUIT_FILE --dry-run is the
+  equivalent preview spelling used by the CLI write contract.
+- fieldkit sf account ACCOUNT --json fetches an account dashboard payload
+  without updating account.md.
+- fieldkit sf account ACCOUNT --no-write prints that account dashboard without
+  writing it.
+- fieldkit sf account ACCOUNT --dry-run is the equivalent preview spelling.
+- fieldkit sf listview ACCOUNT --dry-run --json performs the account-scoped
+  Salesforce reads and local ID matching without creating directories or
+  writing cache, frontmatter, databases, or state. Its summary reports
+  updated: 0, would_update, and dry_run: true.
 
-**listview** — bulk refresh all pursuits for one or all accounts via Salesforce list views
-**opportunity** — sync a single pursuit's core Salesforce fields by Opportunity ID
-**account** — sync all pursuits + account dashboard record for one account
+Confirm that the returned Salesforce account and opportunity match the intended
+local account and pursuit. Treat missing, conflicting, or ambiguous identity as
+a blocker.
 
-If the user doesn't specify, ask: listview, opportunity, or account?
-If they name an account, default to `listview <account>` or `account <name>` depending on context.
-If they give a 15- or 18-char alphanumeric ID, default to `opportunity` mode.
+For listview, --json alone changes only the summary format and still writes.
+The --dry-run flag is what suppresses those workspace writes.
 
----
+## Show the proposed local change
 
-## Step 0 — Pre-flight: verify SF session
+Before a write, name the exact command, Salesforce record, local destination,
+and mapped fields. For an opportunity refresh, the writer can update the tracked
+Salesforce ID, name, stage, close date, owner, next steps, pull timestamp,
+opportunity number, ARR, ACV, consulting ACV, training ACV, contract type, and
+deal splits when present.
 
-Run `fieldkit sf session-check`.
-- Exit 0: session active, proceed.
-- Exit 2: session expired. Emit this message and STOP:
-  "SF session expired. Get your `sid` cookie from your Salesforce org domain (DevTools → Application → Cookies), then run `fieldkit auth sf`. Re-run this skill once complete."
-Do not proceed past this step if exit code is 2.
+Those fields are Salesforce-derived local cache data. They are not native
+ClosePlan questions, answers, scores, or rollups. Do not convert adjacent pain,
+criteria, competitor, model, or historical local-score material into current
+qualification evidence.
 
----
+Obtain explicit approval for the displayed destination and fields when using a
+single-opportunity or account preview. A listview dry run's JSON summary reports counts only;
+normal stderr progress may name matched IDs and destination paths, but does not
+show per-record mapped fields. Quiet mode may omit that progress. Treat its
+approval as approval of the named account-wide scope, or use single-opportunity
+previews when per-record review is required. Approval for one pursuit is not
+approval for an account-wide or all-account refresh.
 
-## Step 1 — Session Setup
+## Apply only the approved scope
 
-Run once before any sync. The preferred method is fast and requires no browser:
+- For one pursuit, use fieldkit sf opportunity OPPORTUNITY_ID PURSUIT_FILE.
+  Supplying the destination avoids writing a similarly identified file by
+  accident. An untracked write without a destination fails rather than creating
+  a pursuit.
+- For one account's bulk pursuit refresh, use fieldkit sf listview ACCOUNT only
+  after explicit approval. It searches Salesforce, matches returned opportunity
+  IDs to existing local pursuit files, writes cache and mapped frontmatter for
+  matches, and reports open opportunities it could not match.
+- Use fieldkit sf listview --all only after separate approval for every
+  configured non-internal account. An omitted target also selects all accounts,
+  so do not omit it.
+- To update only one account dashboard record, use fieldkit sf account ACCOUNT.
+  This writes the Salesforce cache and mapped account frontmatter in
+  accounts/ACCOUNT/account.md; it does not refresh that account's pursuit files.
 
-```bash
-fieldkit auth sf
-```
+## Verify the result
 
-Get `<sid>` from browser cookies at your Salesforce org domain (DevTools → Application →
-Cookies → `sid` value). This injects the session cookie for both API and browser use.
+Read every approved destination back and preserve unrelated frontmatter and body
+content. For a single-opportunity or account refresh, compare mapped fields with
+the corresponding preview payload. A listview preview has no per-record payload:
+compare each changed pursuit with its corresponding fetched Salesforce record or
+newly written local cache, and report any field whose source cannot be verified.
+Report the pull timestamp, changed files, untracked opportunities, skips, and
+errors.
 
-If the browser flow is needed instead:
+For listview, exit 0 means the completed scope reported zero processing errors;
+it does not mean every Salesforce opportunity had a local match. Exit 1 means
+one or more search, scan, or write errors were summarized. Authentication
+failures take precedence and exit 2. Check the structured summary and review
+every untracked record separately.
 
-```bash
-fieldkit auth sf
-```
-
-Verify the session is active:
-
-```bash
-fieldkit doctor sf
-```
-
-If verify fails, re-run `fieldkit auth sf` and retry. Do not proceed until
-session is confirmed.
-
----
-
-## Step 2 — Sync by Mode
-
-### listview mode
-
-Bulk refresh via Salesforce list views. Fully headless — no browser tools required.
-
-```bash
-fieldkit sf listview <account_name>   # one account
-fieldkit sf listview                   # all accounts
-```
-
-Output: status, updated count, untracked count, errors.
-
-**Untracked opportunities** — appear in list view but have no local pursuit file.
-HCS Drawdown child opps are expected to be untracked. New pursuits need files created.
-
-### opportunity mode
-
-Sync a single pursuit by Salesforce opportunity ID. Fetches core fields only.
-
-```bash
-fieldkit sf opportunity <opp_id>              # auto-locate pursuit file
-fieldkit sf opportunity <opp_id> <file>       # explicit pursuit file path
-```
-
-Fields updated: `sf_stage`, `sf_close_date`, `sf_arr`, `sf_owner`, `sf_next_steps`,
-`sf_last_pulled`, `sf_acv`, `sf_consulting_acv`, `sf_training_acv`.
-
-Native ClosePlan questions, answers, scores, and rollups are not written to pursuit
-frontmatter. For current qualification, `grill` runs the separate read-only
-`fieldkit sf meddpicc <opp_id> --json` contract.
-
-### account mode
-
-Sync all pursuits for one account plus the account dashboard record.
-
-```bash
-fieldkit sf account <name>
-```
-
-Where `<name>` is the account keyword from accounts.yaml (e.g. `acme-corp`, `<account-slug>`,
-`midwest-ins`). Processes all pursuits with `sf_opportunity_id` in frontmatter, then updates
-the account record with pipeline summary and services data.
-
-Report: pursuits synced, skipped (no `sf_opportunity_id`), failed; account record updated.
-
----
-
-## Error Handling
-
-- **Auth failure:** Run `fieldkit auth sf`, then retry.
-- **Untracked opportunity:** Opp exists in SF but no local pursuit file. Review after each listview sync. Create a pursuit file if the opp is actively being pursued.
-- **Partial failure:** Individual pursuit errors are logged; remaining pursuits in the account continue. Never abort an entire account sync due to a single pursuit failure.
-- **No sf_opportunity_id in pursuit:** Logged as SKIP — expected for pre-pipeline opps.
-
----
-
-## Output Format
-
-**Salesforce Sync Complete — [mode] — [timestamp]**
-
-Per pursuit:
-
-- File path
-- Fields updated: `sf_stage`, `sf_close_date`, `sf_arr`, `sf_owner`, `sf_next_steps`, `sf_last_pulled`
-- Status: ✅ synced | ⚠️ skipped (no sf_opportunity_id) | ❌ error
-
-Per account record (account mode):
-
-- File: `accounts/<name>/account.md`
-- Status: ✅ | ❌
-
----
-
-## Related Skills
-
-- `grill` — uses the Opportunity link to read exact native ClosePlan questions; pursuit review also relies on `sf_stage` and `sf_close_date` being current
-- the `pipeline` skill's `src/fieldkit/skills/pipeline/ops/engagement-health.md` — uses sf_contract_end from project files
-- the `pipeline` skill's `src/fieldkit/skills/pipeline/ops/forecast.md` — depends on sf_arr and sf_close_date
+Never create a pursuit file, choose a destination, edit an opportunity ID, or
+retry a partial write silently. Present the unresolved item and ask for a new,
+specific decision.

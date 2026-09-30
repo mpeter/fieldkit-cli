@@ -4,9 +4,9 @@ Provides:
   get_db_path()                  — canonical path for pipeline.db
   init_db()                      — create schema + seed pipeline registry rows; returns connection
   get_db()                       — open an existing pipeline.db; raises FileNotFoundError if absent
+  get_db_read_only()             — open existing pipeline.db without creating files or changing pragmas
   ArtifactRecord                 — typed dataclass for artifact rows
   get_artifacts_for_reprocess()  — query artifacts by pipeline, optionally filtered by version
-  update_artifact_version()      — update pipeline_version and content_path for one artifact
 """
 
 import sqlite3
@@ -17,6 +17,8 @@ from typing import Any, Protocol
 
 from fieldkit.config import CONFIG_PATH, ConfigError, get_fieldkit_data, get_fieldkit_home
 from fieldkit.config._loader import _read_config_dict
+from fieldkit.errors import SQLiteSnapshotError, SQLiteSnapshotReason
+from fieldkit.sqlite_read import open_sqlite_read_only
 
 
 class ArtifactRow(Protocol):
@@ -69,7 +71,7 @@ def get_artifacts_for_reprocess(
             but every artifact is written into its account's directory once
             routing has decided, so the account is recoverable from
             ``content_path`` after the fact.  Artifacts with no
-            ``content_path`` are excluded by the LIKE, which is correct: an
+            ``content_path`` are excluded by the account selector: an
             artifact that was never written to a vault path has no account.
 
     Returns:
@@ -89,10 +91,9 @@ def get_artifacts_for_reprocess(
         params.append(from_version)
 
     if account is not None:
-        # Bounded on both sides so "acme" cannot match "acme-corp": the slug is
-        # matched as a whole path segment, not a prefix.
-        query += " AND content_path LIKE ?"
-        params.append(f"%/accounts/{account}/%")
+        # Match a literal, case-sensitive segment; SQL LIKE treats '_' as a wildcard.
+        query += " AND instr(content_path, ?) > 0"
+        params.append(f"/accounts/{account}/")
 
     query += " ORDER BY created_at ASC"
 
@@ -112,27 +113,6 @@ def get_artifacts_for_reprocess(
         )
         for row in rows
     ]
-
-
-def update_artifact_version(
-    conn: sqlite3.Connection,
-    artifact_id: str,
-    new_version: str,
-    new_content_path: str,
-) -> None:
-    """Update the pipeline_version and content_path for a single artifact.
-
-    Args:
-        conn: Open database connection (write access required).
-        artifact_id: Primary key of the artifact row to update.
-        new_version: New value for ``pipeline_version``.
-        new_content_path: New value for ``content_path``.
-    """
-    conn.execute(
-        "UPDATE artifacts SET pipeline_version = ?, content_path = ? WHERE artifact_id = ?",
-        (new_version, new_content_path, artifact_id),
-    )
-    conn.commit()
 
 
 def get_db_path() -> Path:
@@ -179,22 +159,43 @@ def _schema_path() -> Path:
     return Path(__file__).resolve().parent / "schema.sql"
 
 
+def _configure_write_connection(conn: sqlite3.Connection) -> None:
+    """Require the rollback-journal mode supported by zero-mutation readers."""
+    try:
+        row = conn.execute("PRAGMA journal_mode=DELETE").fetchone()
+    except sqlite3.OperationalError as exc:
+        conn.close()
+        reason: SQLiteSnapshotReason = (
+            "active" if "locked" in str(exc).casefold() or "busy" in str(exc).casefold() else "unverified"
+        )
+        raise SQLiteSnapshotError("pipeline database journal mode could not be migrated safely", reason=reason) from exc
+    except sqlite3.DatabaseError as exc:
+        conn.close()
+        raise SQLiteSnapshotError(
+            "pipeline database journal mode could not be migrated safely", reason="unverified"
+        ) from exc
+    if row is None or str(row[0]).casefold() != "delete":
+        conn.close()
+        raise SQLiteSnapshotError("pipeline database journal mode is active", reason="active")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA busy_timeout = 10000")
+
+
 def init_db(
     db_path: Path | None = None,
-    pipelines: Sequence[Any] | None = None,
+    pipelines: Sequence[Any] = (),
 ) -> sqlite3.Connection:
     """Create (or reset) pipeline.db and seed the pipeline registry.
 
     Args:
         db_path:   Override path for the database file. Defaults to get_db_path().
-        pipelines: Sequence of PipelineSpec objects to seed. Pass
-                   ``fieldkit.ingest.registry.PIPELINES`` from the caller so
-                   that ``lib`` does not import from ``fieldkit``. When
-                   ``None``, no pipeline rows are seeded (useful in tests that
-                   do not exercise the pipeline registry).
+        pipelines: Sequence of pipeline specifications to seed. The caller
+                   supplies the registry so this database adapter does not
+                   depend on command modules. An empty sequence seeds no rows.
 
     Returns:
-        An open sqlite3 connection with WAL mode and foreign keys enabled.
+        An open sqlite3 connection with rollback journaling and foreign keys enabled.
     """
     resolved = db_path if db_path is not None else get_db_path()
     resolved.parent.mkdir(parents=True, exist_ok=True)
@@ -202,13 +203,7 @@ def init_db(
     conn = sqlite3.connect(str(resolved))
     conn.row_factory = sqlite3.Row
 
-    # Enable WAL mode and performance pragmas before running schema
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    # historic regression: 10s busy_timeout prevents "database is locked" errors when parallel
-    # ingest workers or a prior Ctrl-C left the WAL locked.
-    conn.execute("PRAGMA busy_timeout = 10000")
+    _configure_write_connection(conn)
 
     schema_sql = _schema_path().read_text(encoding="utf-8")
     conn.executescript(schema_sql)
@@ -218,21 +213,21 @@ def init_db(
     try:
         conn.execute("ALTER TABLE artifacts ADD COLUMN pipeline_version TEXT NOT NULL DEFAULT '0.1.0'")
         conn.commit()
-    except sqlite3.OperationalError:
-        # Column already exists — duplicate column name is the expected error shape
-        pass
+    except sqlite3.OperationalError as exc:
+        if str(exc) != "duplicate column name: pipeline_version":
+            conn.close()
+            raise
 
-    if pipelines is not None:
-        for spec in pipelines:
-            conn.execute(
-                """
-                INSERT OR IGNORE INTO pipelines
-                    (pipeline_id, description, version, source_format, status)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (spec.pipeline_id, spec.description, spec.version, spec.source_format, spec.status),
-            )
-        conn.commit()
+    for spec in pipelines:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO pipelines
+                (pipeline_id, description, version, source_format, status)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (spec.pipeline_id, spec.description, spec.version, spec.source_format, spec.status),
+        )
+    conn.commit()
 
     return conn
 
@@ -256,10 +251,12 @@ def get_db(db_path: Path | None = None) -> sqlite3.Connection:
     conn = sqlite3.connect(str(resolved))
     conn.row_factory = sqlite3.Row
 
-    # Enable WAL mode and performance pragmas (matches init_db settings)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute("PRAGMA busy_timeout = 10000")  # historic regression: 10s wait before "database is locked"
+    _configure_write_connection(conn)
 
     return conn
+
+
+def get_db_read_only(db_path: Path | None = None) -> sqlite3.Connection:
+    """Open an existing pipeline database without creating files or changing pragmas."""
+    resolved = db_path if db_path is not None else get_db_path()
+    return open_sqlite_read_only(resolved, timeout_seconds=10.0)

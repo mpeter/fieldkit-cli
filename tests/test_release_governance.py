@@ -3,15 +3,49 @@
 import json
 from pathlib import Path
 
-import check_release_governance as cli
 import pytest
 from jsonschema import Draft202012Validator
 
 from scripts import _release_governance as governance
+from scripts import check_release_governance as cli
+from scripts.runtime_license_inventory import MARKER_KEYS
 
 pytestmark = pytest.mark.unit
 
 _REPO_ROOT = Path(__file__).parents[1]
+
+
+@pytest.mark.parametrize("key", ["synthetic-secret\x1b[31m\n", "x" * 8192], ids=["control", "large"])
+def test_duplicate_governance_keys_are_not_reflected_in_errors(tmp_path: Path, key: str) -> None:
+    path = tmp_path / "policy.json"
+    encoded = json.dumps(key)
+    path.write_text(f"{{{encoded}:1,{encoded}:2}}", encoding="utf-8")
+    with pytest.raises(ValueError, match="invalid JSON input") as caught:
+        governance.load_policy(path)
+    assert str(caught.value) == "invalid JSON input"
+
+
+@pytest.mark.parametrize(
+    "section", ["report", "export_manifest", "artifact_validation", "license_evidence", "scan", "policy"]
+)
+def test_governance_schema_versions_reject_float_substitution(tmp_path: Path, section: str) -> None:
+    candidate = _candidate_report()
+    policy = _policy()
+    target = policy if section == "policy" else candidate if section == "report" else candidate[section]
+    assert isinstance(target, dict)
+    version = target["schema_version"]
+    assert isinstance(version, int)
+    target["schema_version"] = float(version)
+    message = {
+        "report": "candidate report has an unsupported schema or status",
+        "export_manifest": "candidate export manifest has an unsupported schema_version",
+        "artifact_validation": "candidate artifact validation has an unsupported schema or source commit",
+        "license_evidence": "candidate license evidence has an unsupported schema or source commit",
+        "scan": "candidate scan evidence has an unsupported schema or status",
+        "policy": "schema_version must be 1",
+    }[section]
+    with pytest.raises(ValueError, match=message):
+        governance.validate(_write(tmp_path / "policy.json", policy), _write(tmp_path / "report.json", candidate))
 
 
 def _candidate_report(*, revision: str = "a" * 40) -> dict[str, object]:
@@ -28,7 +62,7 @@ def _candidate_report(*, revision: str = "a" * 40) -> dict[str, object]:
         },
     ]
     return {
-        "schema_version": 6,
+        "schema_version": 7,
         "status": "pass",
         "expected_repository": "example/fieldkit-cli",
         "package": "fieldkit-cli",
@@ -60,7 +94,7 @@ def _candidate_report(*, revision: str = "a" * 40) -> dict[str, object]:
             ],
         },
         "license_evidence": {
-            "schema_version": 1,
+            "schema_version": 2,
             "status": "pass",
             "scope": "runtime-all-extras",
             "revision": revision,
@@ -69,6 +103,9 @@ def _candidate_report(*, revision: str = "a" * 40) -> dict[str, object]:
             "observed_packages": 0,
             "packages": [],
             "findings": [],
+            "observations": {"name": "runtime-license-observations.json", "sha256": "a" * 64},
+            "platform_requirements": {"name": "platform-all-extras-requirements.txt", "sha256": "b" * 64},
+            "marker_environment": dict.fromkeys(MARKER_KEYS, "example"),
         },
         "runtime_requirements": {
             "name": "runtime-requirements.txt",
@@ -118,6 +155,7 @@ def _policy() -> dict[str, object]:
         "roles": {
             "preparer": "release-maintainer",
             "approver": "release-owner",
+            "approver_login": "release-owner",
             "incident": "release-maintainer",
         },
         "support": {
@@ -154,7 +192,7 @@ def test_candidate_report_rejects_an_unbound_runtime_requirements_receipt(tmp_pa
     candidate["runtime_requirements"] = {"name": "other.txt", "sha256": "f" * 64}
     candidate_path = _write(tmp_path / "candidate.json", candidate)
 
-    with pytest.raises(ValueError, match="runtime requirements filename"):
+    with pytest.raises(ValueError, match="candidate runtime requirements has an unsupported schema"):
         governance.validate(policy_path, candidate_path)
 
 
@@ -192,7 +230,7 @@ def test_schema_rejects_evidenced_control_without_evidence() -> None:
         (_REPO_ROOT / "docs/release-readiness/release-governance-policy.schema.json").read_text(encoding="utf-8")
     )
 
-    errors = list(Draft202012Validator(schema).iter_errors(policy))
+    errors = list(Draft202012Validator(schema).iter_errors(json.loads(json.dumps(policy))))
 
     assert errors
 
@@ -257,6 +295,18 @@ def test_ambiguous_role_assignment_fails_closed(tmp_path: Path) -> None:
         )
 
 
+def test_invalid_approver_login_fails_closed(tmp_path: Path) -> None:
+    policy = _policy()
+    roles = policy["roles"]
+    assert isinstance(roles, dict)
+    roles["approver_login"] = "@not-a-login"
+
+    with pytest.raises(ValueError, match="GitHub login"):
+        governance.validate(
+            _write(tmp_path / "governance.json", policy), _write(tmp_path / "candidate.json", _candidate_report())
+        )
+
+
 def test_evidenced_control_with_stale_candidate_identity_fails(tmp_path: Path) -> None:
     """Evidence cannot be reused after the candidate revision changes."""
     policy = _policy()
@@ -299,7 +349,7 @@ def test_candidate_report_requires_complete_passing_producer_evidence(tmp_path: 
     candidate = _candidate_report()
     candidate.pop("scan")
 
-    with pytest.raises(ValueError, match="candidate report keys must be exactly"):
+    with pytest.raises(ValueError, match="candidate report has an unsupported schema or status"):
         governance.validate(
             _write(tmp_path / "governance.json", _policy()), _write(tmp_path / "candidate.json", candidate)
         )
@@ -323,7 +373,7 @@ def test_candidate_report_rejects_unvalidated_artifact_evidence(tmp_path: Path) 
     assert isinstance(artifact_validation, dict)
     artifact_validation["artifacts"] = [{"anything": True}]
 
-    with pytest.raises(ValueError, match="keys must be exactly"):
+    with pytest.raises(ValueError, match="candidate artifact has an unsupported schema"):
         governance.validate(
             _write(tmp_path / "governance.json", _policy()), _write(tmp_path / "candidate.json", candidate)
         )
@@ -357,7 +407,7 @@ def test_candidate_report_rejects_nonstring_artifact_kind(tmp_path: Path) -> Non
     assert isinstance(artifact, dict)
     artifact["kind"] = []
 
-    with pytest.raises(ValueError, match="kind must be wheel or sdist"):
+    with pytest.raises(ValueError, match="candidate artifact kind must be a non-empty string"):
         governance.validate(
             _write(tmp_path / "governance.json", _policy()), _write(tmp_path / "candidate.json", candidate)
         )
@@ -366,10 +416,15 @@ def test_candidate_report_rejects_nonstring_artifact_kind(tmp_path: Path) -> Non
 @pytest.mark.parametrize(
     ("section", "field", "value", "match"),
     [
-        ("export_manifest", "schema_version", 2, "schema_version must be 1"),
-        ("license_evidence", "scope", "development", "scope is unsupported"),
-        ("license_evidence", "packages", [None], "internally passing"),
-        ("scan", "source_tree", "f" * 40, "does not bind the export manifest"),
+        ("export_manifest", "schema_version", 2, "candidate export manifest has an unsupported schema_version"),
+        (
+            "license_evidence",
+            "scope",
+            "development",
+            "candidate license evidence has an unsupported schema or source commit",
+        ),
+        ("license_evidence", "packages", [None], "candidate license evidence does not pass its complete contract"),
+        ("scan", "source_tree", "f" * 40, "candidate scan evidence does not bind the verified export"),
     ],
 )
 def test_candidate_report_rejects_internally_inconsistent_evidence(
@@ -428,7 +483,7 @@ def test_candidate_report_rejects_extra_artifacts(tmp_path: Path) -> None:
         }
     )
 
-    with pytest.raises(ValueError, match="one wheel and one sdist"):
+    with pytest.raises(ValueError, match="candidate must contain exactly one wheel and one source distribution"):
         governance.validate(
             _write(tmp_path / "governance.json", _policy()), _write(tmp_path / "candidate.json", candidate)
         )
@@ -444,7 +499,7 @@ def test_cli_maps_deep_json_to_data_error(tmp_path: Path, capsys: pytest.Capture
     )
 
     assert result == 3
-    assert "cannot load" in capsys.readouterr().err
+    assert capsys.readouterr().err == "release governance validation error: JSON input exceeds nesting limit\n"
 
 
 def test_candidate_report_must_be_a_bounded_regular_file(tmp_path: Path) -> None:

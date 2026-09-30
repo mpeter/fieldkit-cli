@@ -14,6 +14,10 @@ make quality-full                 # maintainer/post-merge enforcement
 make docs                         # regenerate CLI and dependency references
 ```
 
+`make pr-check` requires a reviewed base resolved to a full immutable commit SHA
+in `QUALITY_BASE` and a clean committed candidate. Follow
+[Verify the pull request](CONTRIBUTING.md#verify-the-pull-request) for the supported invocation.
+
 Use Python 3.11 or newer. The project uses `uv`, Hatchling, Click, strict mypy, Ruff, Tach, pytest, and xdist.
 Run commands from the repository root. When testing worktree changes, use `uv run fieldkit`; a separately installed `fieldkit` command may execute another checkout.
 
@@ -42,14 +46,18 @@ Run commands from the repository root. When testing worktree changes, use `uv ru
 - Quality thresholds, action pins, severity definitions, and architecture
   boundaries are release controls. Do not weaken a gate to make a change pass.
 - Exit statuses are `0` success, `1` partial/retryable, `2` authentication or
-  user action required, and `3` invalid data or usage. Only
-  `cli_exit.cli_main()` calls `sys.exit()`. Click usage errors are normalized by
-  the top-level handler; domain code must not raise them.
+  user action required, and `3` invalid data or usage; dispatcher interruption
+  exits `130`. Domain code must not terminate the process or raise Click usage
+  errors. Shared CLI boundaries normalize errors and statuses through
+  `cli_exit.cli_main()` and the dispatcher; the process launcher calls
+  `sys.exit(main())`. See the [exit-code contract](docs/reference/exit-codes.md).
 - Do not add shell scripts, `shell=True`, or shell-composed directory changes.
   Every subprocess, network request, and LLM call needs a named timeout.
 - Runtime writes are limited to the configured workspace, runtime-data root,
-  and documented fieldkit configuration/data locations. Validate user-derived
-  paths before writing.
+  documented fieldkit configuration/data locations, and documented disposable
+  scratch locations. See [persistent roots and harness scratch](docs/concepts.md#persistent-roots-and-harness-scratch)
+  and [local data and privacy](docs/privacy.md) for harness and temporary-file
+  boundaries. Validate user-derived paths before writing.
 - Multi-writer JSON state uses `locked_json_update()`. Single-writer state uses
   a temporary file plus `Path.replace()`. Configuration uses
   `atomic_yaml_write()`.
@@ -59,7 +67,7 @@ Run commands from the repository root. When testing worktree changes, use `uv ru
 - Credentials, cookies, customer data, email content, private hosts, personal
   email addresses, usernames, and absolute home paths do not belong in commits,
   fixtures, logs, or diagnostics. Use fictional examples such as
-  `example.com` and `acme-corp.com`.
+  `example.com` and `acme-corp.example.com`.
 - External text added to an LLM prompt needs a length bound or content guard.
   New credential files require mode `0600`.
 - Authentication exceptions propagate to the top-level CLI handler. Do not

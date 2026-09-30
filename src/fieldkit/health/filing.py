@@ -2,7 +2,7 @@
 
 Filing goes through an injected :class:`IssueFiler` — the CLI adapter backs it
 with the same ``GHIssueStore`` that ``fieldkit issue create`` uses, so PII-guard,
-ID allocation, and label behavior stay identical (design Decision 2). The
+GitHub-number identity, and label behavior stay identical (design Decision 2). The
 sensor files **unlabeled** issues: only the operator applies ``agent-ready``
 (design Decision 1 — the consent bit stays human).
 
@@ -15,8 +15,9 @@ import logging
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Literal, Protocol
 
+from fieldkit.errors import AuthError, FieldkitError, GitHubRequestError
 from fieldkit.health.checks import CheckResult
 
 log = logging.getLogger(__name__)
@@ -75,6 +76,27 @@ class FilingOutcome:
     deduped: tuple[str, ...]  # check_ids with a matching still-open issue
 
 
+FilingFailureCategory = Literal["retryable", "authentication", "data"]
+
+
+def filing_failure_category(exc: Exception) -> FilingFailureCategory:
+    """Preserve canonical CLI semantics for one issue-filing failure."""
+    if isinstance(exc, AuthError):
+        return "authentication"
+    if isinstance(exc, (GitHubRequestError, RuntimeError)):
+        return "retryable"
+    return "data"
+
+
+class FilingPartialError(RuntimeError):
+    """A filing failed after zero or more earlier issues were created."""
+
+    def __init__(self, check_id: str, outcome: FilingOutcome) -> None:
+        super().__init__(f"filing failed for {check_id}")
+        self.check_id = check_id
+        self.outcome = outcome
+
+
 def file_regressions(results: Sequence[CheckResult], filer: IssueFiler, *, dry_run: bool = False) -> FilingOutcome:
     """File one issue per *new* failing check; dedup against still-open issues.
 
@@ -86,9 +108,8 @@ def file_regressions(results: Sequence[CheckResult], filer: IssueFiler, *, dry_r
     Returns:
         A :class:`FilingOutcome` — which check_ids were filed vs. deduped.
 
-    Raises:
-        RuntimeError: propagated from the filer (``gh`` failures) — the caller
-            classifies this as a runner problem (``partial``), never silence.
+    Provider and configuration exceptions propagate from the filer so the
+    top-level CLI can retain authentication, retryable, and data-error status.
     """
     failing = [r for r in results if r.status == "fail"]
     if not failing:
@@ -111,9 +132,13 @@ def file_regressions(results: Sequence[CheckResult], filer: IssueFiler, *, dry_r
             log.info("health: [dry-run] would file %r", title)
             filed.append(result.check_id)
             continue
-        # Sequential, awaited filing — see design Decision 4 (the #1436 next-id
-        # race needs concurrent raisers; one-at-a-time filing sidesteps it).
-        ref = filer.file_regression(title=title, body=issue_body_for(result))
+        # Sequential, awaited filing keeps per-check outcomes deterministic;
+        # GitHub itself assigns each issue's unique public number.
+        try:
+            ref = filer.file_regression(title=title, body=issue_body_for(result))
+        except (FieldkitError, RuntimeError) as exc:
+            outcome = FilingOutcome(filed=tuple(filed), deduped=tuple(deduped))
+            raise FilingPartialError(result.check_id, outcome) from exc
         log.info("health: filed %s for %s", ref, result.check_id)
         filed.append(result.check_id)
     return FilingOutcome(filed=tuple(filed), deduped=tuple(deduped))

@@ -6,22 +6,34 @@ import fnmatch
 import hashlib
 import json
 import os
-import shutil
+import secrets
 import stat
-import subprocess
 import sys
-import tempfile
+from contextlib import ExitStack
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
+from typing import TYPE_CHECKING
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError, ValidationError
+
+from fieldkit.util.bounded_process import BoundedProcessError
+from fieldkit.util.text_snapshot import read_text_snapshot
+
+if TYPE_CHECKING or __package__:
+    from scripts import quality_source, release_approval_archive
+    from scripts.json_policy import load_json_bytes
+else:
+    import quality_source
+    import release_approval_archive
+    from json_policy import load_json_bytes
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _POLICY_PATH = Path("docs/release-readiness/public-tree-policy.json")
 _POLICY_SCHEMA_PATH = _REPO_ROOT / "docs/release-readiness/public-tree-policy.schema.json"
 _MANIFEST_SCHEMA_PATH = _REPO_ROOT / "docs/release-readiness/public-tree-manifest.schema.json"
-_GIT_TIMEOUT_SECONDS = 30
+_MAX_JSON_BYTES = 16 * 1024 * 1024
+_MAX_POLICY_BYTES = 2 * 1024 * 1024
 _REGULAR_MODES = frozenset({"100644", "100755"})
 _TRACKED_MODES = frozenset({*_REGULAR_MODES, "120000"})
 _ACTIONS = frozenset({"include", "exclude"})
@@ -79,23 +91,22 @@ class Policy:
     rules: tuple[Rule, ...]
 
 
-def _reject_duplicate_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
-    result: dict[str, object] = {}
-    for key, value in pairs:
-        if key in result:
-            raise ExportError(f"duplicate JSON key: {key}")
-        result[key] = value
-    return result
-
-
-def _load_json(path: Path) -> dict[str, object]:
+def _json_object(content: str, subject: str) -> dict[str, object]:
     try:
-        value = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_reject_duplicate_pairs)
-    except (OSError, json.JSONDecodeError) as error:
-        raise ExportError(f"cannot load {path}: {error}") from error
+        value = load_json_bytes(content.encode("utf-8"))
+    except (UnicodeError, ValueError):
+        raise ExportError(f"cannot load {subject}: invalid JSON input") from None
     if not isinstance(value, dict):
-        raise ExportError(f"{path}: expected a JSON object")
+        raise ExportError(f"{subject}: expected a JSON object")
     return value
+
+
+def _load_json(path: Path, *, maximum_bytes: int = _MAX_JSON_BYTES) -> dict[str, object]:
+    try:
+        content = read_text_snapshot(path, max_bytes=maximum_bytes).content
+    except (OSError, ValueError) as error:
+        raise ExportError(f"cannot load {path}: {error}") from error
+    return _json_object(content, str(path))
 
 
 def _validate_schema(value: dict[str, object], schema_path: Path, subject: str) -> None:
@@ -104,8 +115,12 @@ def _validate_schema(value: dict[str, object], schema_path: Path, subject: str) 
         Draft202012Validator.check_schema(schema)
         Draft202012Validator(schema).validate(value)
     except (SchemaError, ValidationError) as error:
-        location = ".".join(str(part) for part in error.absolute_path) or "<root>"
-        raise ExportError(f"{subject} schema violation at {location}: {error.message}") from error
+        keyword = (
+            error.validator
+            if isinstance(error.validator, str) and len(error.validator) <= 32 and error.validator.isidentifier()
+            else "schema"
+        )
+        raise ExportError(f"{subject} schema violation ({keyword})") from None
 
 
 def _strings(value: object, field: str) -> tuple[str, ...]:
@@ -115,7 +130,10 @@ def _strings(value: object, field: str) -> tuple[str, ...]:
 
 
 def _load_policy(path: Path) -> Policy:
-    raw = _load_json(path)
+    return _parse_policy(_load_json(path, maximum_bytes=_MAX_POLICY_BYTES))
+
+
+def _parse_policy(raw: dict[str, object]) -> Policy:
     _validate_schema(raw, _POLICY_SCHEMA_PATH, "public-tree policy")
     if set(raw) != {"schema_version", "expected_repository", "planned_tag", "rules"}:
         raise ExportError("public-tree policy has unsupported top-level fields")
@@ -173,28 +191,10 @@ def _git(repo: Path, *args: str) -> bytes:
         resolved_repo = repo.resolve(strict=True)
     except OSError as error:
         raise ExportError(f"source repository does not exist: {repo}") from error
-    git_environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
-    git_environment.update(
-        {
-            "GIT_CONFIG_GLOBAL": os.devnull,
-            "GIT_CONFIG_NOSYSTEM": "1",
-            "GIT_NO_REPLACE_OBJECTS": "1",
-        }
-    )
     try:
-        result = subprocess.run(
-            ["git", "--no-replace-objects", "-C", str(resolved_repo), *args],
-            check=False,
-            capture_output=True,
-            timeout=_GIT_TIMEOUT_SECONDS,
-            env=git_environment,
-        )
-    except (OSError, subprocess.TimeoutExpired) as error:
+        return quality_source._git(resolved_repo, "--no-replace-objects", *args)
+    except (OSError, ValueError, BoundedProcessError) as error:
         raise ExportError(f"git {' '.join(args)} failed: {error}") from error
-    if result.returncode != 0:
-        detail = result.stderr.decode("utf-8", errors="replace").strip()
-        raise ExportError(f"git {' '.join(args)} failed: {detail}")
-    return result.stdout
 
 
 def _resolve_commit(repo: Path, revision: str) -> tuple[str, str]:
@@ -207,6 +207,10 @@ def _resolve_commit(repo: Path, revision: str) -> tuple[str, str]:
 
 def _source_entries(repo: Path, commit: str) -> tuple[tuple[str, str, str], ...]:
     output = _git(repo, "ls-tree", "-r", "-z", "--full-tree", commit)
+    if output and not output.endswith(b"\0"):
+        raise ExportError("git ls-tree inventory is not NUL terminated")
+    if output.count(b"\0") > quality_source.MAX_ENTRY_COUNT:
+        raise ExportError("git ls-tree inventory exceeds its entry bound")
     entries: list[tuple[str, str, str]] = []
     for record in output.split(b"\0"):
         if not record:
@@ -214,6 +218,8 @@ def _source_entries(repo: Path, commit: str) -> tuple[tuple[str, str, str], ...]
         metadata, separator, raw_path = record.partition(b"\t")
         if not separator:
             raise ExportError("git ls-tree returned a malformed record")
+        if len(raw_path) > quality_source.MAX_PATH_BYTES:
+            raise ExportError("git ls-tree path exceeds its byte bound")
         try:
             mode, object_type, oid = metadata.decode("ascii").split()
             path = raw_path.decode("utf-8")
@@ -304,30 +310,147 @@ def _load_committed_policy(repo: Path, commit: str, path: Path) -> tuple[Policy,
     object_type = _git(repo, "cat-file", "-t", oid).decode().strip()
     if object_type != "blob":
         raise ExportError(f"committed public-tree policy is not a blob: {relative_path}")
+    if int(_git(repo, "cat-file", "-s", oid)) > _MAX_POLICY_BYTES:
+        raise ExportError("committed public-tree policy exceeds its size bound")
     committed_bytes = _git(repo, "cat-file", "blob", oid)
     try:
-        working_bytes = path.read_bytes()
-    except OSError as error:
+        working_content = read_text_snapshot(path, max_bytes=_MAX_POLICY_BYTES).content
+    except (OSError, ValueError) as error:
         raise ExportError(f"cannot read public-tree policy {path}: {error}") from error
-    if working_bytes != committed_bytes:
+    if working_content.encode("utf-8") != committed_bytes:
         raise ExportError(f"public-tree policy differs from committed candidate: {relative_path}")
-    policy = _load_policy(path)
+    policy = _parse_policy(_json_object(working_content, "committed public-tree policy"))
     return policy, relative_path, oid, hashlib.sha256(committed_bytes).hexdigest()
 
 
-def _write_manifest(path: Path, manifest: ExportManifest) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    temporary = Path(temporary_name)
+def _require_absent(parent_fd: int, name: str, subject: str) -> None:
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            json.dump(asdict(manifest), stream, indent=2, sort_keys=True)
-            stream.write("\n")
+        os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    raise ExportError(f"{subject} must not exist: {name}")
+
+
+def _require_directory_binding(parent_fd: int, name: str, descriptor: int) -> None:
+    expected = os.fstat(descriptor)
+    current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    if not stat.S_ISDIR(current.st_mode) or (current.st_dev, current.st_ino) != (
+        expected.st_dev,
+        expected.st_ino,
+    ):
+        raise ExportError("export directory identity changed or was substituted")
+
+
+def _require_parent_binding(path: Path, descriptor: int) -> None:
+    current_fd = release_approval_archive._open_real_directory(path, create=False)
+    try:
+        expected = os.fstat(descriptor)
+        current = os.fstat(current_fd)
+        if (current.st_dev, current.st_ino) != (expected.st_dev, expected.st_ino):
+            raise ExportError("export parent directory identity changed")
+    finally:
+        os.close(current_fd)
+
+
+def _write_file_at(parent_fd: int, name: str, content: bytes, mode: int) -> os.stat_result:
+    descriptor = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent_fd)
+    with os.fdopen(descriptor, "wb") as stream:
+        stream.write(content)
+        os.fchmod(stream.fileno(), mode)
+        stream.flush()
+        os.fsync(stream.fileno())
+        return os.fstat(stream.fileno())
+
+
+def _read_file_at(parent_fd: int, name: str) -> tuple[bytes, os.stat_result]:
+    descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent_fd)
+    with os.fdopen(descriptor, "rb") as stream:
+        metadata = os.fstat(stream.fileno())
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            raise ExportError("export member is not an exclusive regular file")
+        if metadata.st_size > quality_source.GIT_OUTPUT_LIMIT_BYTES:
+            raise ExportError("export member exceeds its byte bound")
+        content = stream.read(quality_source.GIT_OUTPUT_LIMIT_BYTES + 1)
+        if len(content) > quality_source.GIT_OUTPUT_LIMIT_BYTES:
+            raise ExportError("export member exceeds its byte bound")
+        current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        if (current.st_dev, current.st_ino) != (metadata.st_dev, metadata.st_ino):
+            raise ExportError("export member identity changed")
+        return content, metadata
+
+
+def _verify_tree_at(root_fd: int, entries: tuple[TreeEntry, ...]) -> None:
+    expected = {entry.path: entry for entry in entries}
+    expected_directories = {
+        PurePosixPath(*PurePosixPath(path).parts[:index]).as_posix()
+        for path in expected
+        for index in range(1, len(PurePosixPath(path).parts))
+    }
+    files: set[str] = set()
+    directories: set[str] = set()
+
+    def visit(directory_fd: int, prefix: str) -> None:
+        for name in os.listdir(directory_fd):
+            path = f"{prefix}/{name}" if prefix else name
+            metadata = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            if stat.S_ISDIR(metadata.st_mode):
+                directories.add(path)
+                child_fd = release_approval_archive._open_directory_at(directory_fd, name)
+                try:
+                    visit(child_fd, path)
+                    _require_directory_binding(directory_fd, name, child_fd)
+                finally:
+                    os.close(child_fd)
+            elif stat.S_ISREG(metadata.st_mode) and path in expected:
+                content, metadata = _read_file_at(directory_fd, name)
+                entry = expected[path]
+                mode = 0o755 if entry.mode == "100755" else 0o644
+                if stat.S_IMODE(metadata.st_mode) != mode or _git_object_id("blob", content) != entry.oid:
+                    raise ExportError(f"export member bytes or mode changed: {path}")
+                files.add(path)
+            else:
+                raise ExportError(f"unsupported export member: {path}")
+
+    visit(root_fd, "")
+    if files != set(expected) or directories != expected_directories:
+        raise ExportError("export member inventory changed")
+
+
+def _require_manifest_binding(path: Path, parent_fd: int, descriptor: int, content: bytes) -> None:
+    _require_parent_binding(path.parent, parent_fd)
+    metadata = os.fstat(descriptor)
+    current = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+    if (
+        not stat.S_ISREG(current.st_mode)
+        or metadata.st_nlink != 1
+        or (current.st_dev, current.st_ino) != (metadata.st_dev, metadata.st_ino)
+        or os.pread(descriptor, len(content) + 1, 0) != content
+    ):
+        raise ExportError("export manifest identity or bytes changed")
+    _require_parent_binding(path.parent, parent_fd)
+
+
+def _write_manifest(path: Path, manifest: ExportManifest, *, parent_fd: int) -> tuple[int, bytes]:
+    content = (json.dumps(asdict(manifest), indent=2, sort_keys=True) + "\n").encode("utf-8")
+    temporary_name = f".{path.name}-{secrets.token_hex(16)}"
+    descriptor = os.open(
+        temporary_name,
+        os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+        0o600,
+        dir_fd=parent_fd,
+    )
+    try:
+        with os.fdopen(os.dup(descriptor), "wb") as stream:
+            stream.write(content)
+            os.fchmod(stream.fileno(), 0o600)
             stream.flush()
             os.fsync(stream.fileno())
-        temporary.replace(path)
+        _require_parent_binding(path.parent, parent_fd)
+        release_approval_archive._rename_no_replace_at(parent_fd, temporary_name, path.name)
+        _require_manifest_binding(path, parent_fd, descriptor, content)
+        return descriptor, content
     except BaseException:
-        temporary.unlink(missing_ok=True)
+        os.close(descriptor)
         raise
 
 
@@ -399,9 +522,9 @@ def _load_manifest(path: Path) -> ExportManifest:
 
 
 def _validate_destinations(destination: Path, manifest_path: Path) -> None:
-    if destination.exists():
+    if destination.exists() or destination.is_symlink():
         raise ExportError(f"destination must not exist: {destination}")
-    if manifest_path.exists():
+    if manifest_path.exists() or manifest_path.is_symlink():
         raise ExportError(f"manifest must not exist: {manifest_path}")
     if manifest_path.resolve().is_relative_to(destination.resolve()):
         raise ExportError("manifest must live outside the exported tree")
@@ -429,24 +552,44 @@ def export_tree(repo: Path, revision: str, policy_path: Path, destination: Path,
     )
     manifest_data: dict[str, object] = json.loads(json.dumps(asdict(manifest)))
     _validate_schema(manifest_data, _MANIFEST_SCHEMA_PATH, "generated export manifest")
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    staging = Path(tempfile.mkdtemp(prefix=f".{destination.name}-", dir=destination.parent))
     try:
-        for entry in included:
-            target = staging / entry.path
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(_git(repo, "cat-file", "blob", entry.oid))
-            target.chmod(0o755 if entry.mode == "100755" else 0o644)
-        staging.replace(destination)
-        try:
-            _write_manifest(manifest_path, manifest)
-        except OSError:
-            shutil.rmtree(destination)
-            raise
-    except Exception:
-        if staging.exists():
-            shutil.rmtree(staging)
-        raise
+        with ExitStack() as descriptors:
+            parent_fd = release_approval_archive._open_real_directory(destination.parent, create=True)
+            descriptors.callback(os.close, parent_fd)
+            manifest_parent_fd = release_approval_archive._open_real_directory(manifest_path.parent, create=True)
+            descriptors.callback(os.close, manifest_parent_fd)
+            _require_absent(parent_fd, destination.name, "destination")
+            _require_absent(manifest_parent_fd, manifest_path.name, "manifest")
+            staging_name, staging_fd = release_approval_archive._create_staging_directory(parent_fd, destination.name)
+            descriptors.callback(os.close, staging_fd)
+            for entry in included:
+                relative = release_approval_archive._member_path(entry.path)
+                directory_fd = release_approval_archive._open_or_create_member_directory(
+                    staging_fd, relative.parts[:-1]
+                )
+                try:
+                    _write_file_at(
+                        directory_fd,
+                        relative.parts[-1],
+                        _git(repo, "cat-file", "blob", entry.oid),
+                        0o755 if entry.mode == "100755" else 0o644,
+                    )
+                finally:
+                    os.close(directory_fd)
+            _verify_tree_at(staging_fd, included)
+            _require_directory_binding(parent_fd, staging_name, staging_fd)
+            _require_parent_binding(destination.parent, parent_fd)
+            release_approval_archive._rename_no_replace_at(parent_fd, staging_name, destination.name)
+            _require_directory_binding(parent_fd, destination.name, staging_fd)
+            _verify_tree_at(staging_fd, included)
+            manifest_fd, manifest_bytes = _write_manifest(manifest_path, manifest, parent_fd=manifest_parent_fd)
+            descriptors.callback(os.close, manifest_fd)
+            _require_directory_binding(parent_fd, destination.name, staging_fd)
+            _verify_tree_at(staging_fd, included)
+            _require_parent_binding(destination.parent, parent_fd)
+            _require_manifest_binding(manifest_path, manifest_parent_fd, manifest_fd, manifest_bytes)
+    except (OSError, ValueError) as error:
+        raise ExportError(f"export publication failed; retained output requires inspection: {error}") from error
     return manifest
 
 
@@ -463,10 +606,10 @@ def _materialized_entries(destination: Path, manifest: ExportManifest) -> tuple[
     actual_directories: set[str] = set()
     for candidate in destination.rglob("*"):
         path = candidate.relative_to(destination).as_posix()
-        mode = candidate.lstat().st_mode
-        if stat.S_ISREG(mode) or stat.S_ISLNK(mode):
+        filesystem_mode = candidate.lstat().st_mode
+        if stat.S_ISREG(filesystem_mode) or stat.S_ISLNK(filesystem_mode):
             actual_paths.add(path)
-        elif stat.S_ISDIR(mode):
+        elif stat.S_ISDIR(filesystem_mode):
             actual_directories.add(path)
         else:
             raise ExportError(f"unsupported filesystem entry: {path}")
@@ -485,11 +628,17 @@ def _materialized_entries(destination: Path, manifest: ExportManifest) -> tuple[
         target = destination / path
         if target.is_symlink():
             raise ExportError(f"unsupported materialized symlink: {path}")
-        mode = "100755" if target.stat().st_mode & stat.S_IXUSR else "100644"
+        parent_fd = release_approval_archive._open_real_directory(target.parent, create=False)
+        try:
+            content, metadata = _read_file_at(parent_fd, target.name)
+            _require_parent_binding(target.parent, parent_fd)
+        finally:
+            os.close(parent_fd)
+        mode = "100755" if metadata.st_mode & stat.S_IXUSR else "100644"
         expected_entry = expected[path]
         if mode != expected_entry.mode:
             raise ExportError(f"mode mismatch for {path}: expected {expected_entry.mode}, got {mode}")
-        oid = _git_object_id("blob", target.read_bytes())
+        oid = _git_object_id("blob", content)
         if oid != expected_entry.oid:
             raise ExportError(f"object mismatch for {path}: expected {expected_entry.oid}, got {oid}")
         verified.append(

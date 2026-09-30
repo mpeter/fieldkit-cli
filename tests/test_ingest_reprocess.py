@@ -472,10 +472,12 @@ def test_reprocess_interactive_interactive_y_overwrites_file_and_updates_db(
     data_root.mkdir()
 
     # Write a placeholder vault note that should be overwritten
-    content_dir = tmp_path / "vault"
-    content_dir.mkdir()
+    content_dir = data_root / "accounts/acme/meetings"
+    content_dir.mkdir(parents=True)
     vault_file = content_dir / "meeting-a.md"
-    vault_file.write_text("old content", encoding="utf-8")
+    vault_file.write_text(
+        "---\nsource_id: DOC_REPROCESS_001\npipeline: transcript-ingest\n---\nold content", encoding="utf-8"
+    )
 
     conn = init_db(pipeline_db, pipelines=PIPELINES)
     _seed_artifact(
@@ -493,7 +495,7 @@ def test_reprocess_interactive_interactive_y_overwrites_file_and_updates_db(
         patch("fieldkit.ingest.db.get_db_path", return_value=pipeline_db),
         patch("fieldkit.ingest.docs.get_docs_service", return_value=fake_service),
         patch("fieldkit.config.get_fieldkit_home", return_value=data_root),
-        patch.dict(os.environ, {"NO_LLM": "1"}),
+        patch.dict(os.environ, {"FIELDKIT_NO_LLM": "1"}),
         patch("builtins.input", return_value="y"),
     ):
         from fieldkit.commands.ingest.reprocess import main
@@ -554,7 +556,7 @@ def test_reprocess_interactive_interactive_n_skips_artifact(tmp_path: Path, caps
         patch("fieldkit.ingest.db.get_db_path", return_value=pipeline_db),
         patch("fieldkit.ingest.docs.get_docs_service", return_value=fake_service),
         patch("fieldkit.config.get_fieldkit_home", return_value=data_root),
-        patch.dict(os.environ, {"NO_LLM": "1"}),
+        patch.dict(os.environ, {"FIELDKIT_NO_LLM": "1"}),
         patch("builtins.input", return_value="n"),
     ):
         from fieldkit.commands.ingest.reprocess import main
@@ -602,7 +604,7 @@ def test_reprocess_interactive_interactive_q_stops_loop(tmp_path: Path, capsys: 
         patch("fieldkit.ingest.db.get_db_path", return_value=pipeline_db),
         patch("fieldkit.ingest.docs.get_docs_service", return_value=fake_service),
         patch("fieldkit.config.get_fieldkit_home", return_value=data_root),
-        patch.dict(os.environ, {"NO_LLM": "1"}),
+        patch.dict(os.environ, {"FIELDKIT_NO_LLM": "1"}),
         patch("builtins.input", return_value="q"),
     ):
         from fieldkit.commands.ingest.reprocess import main
@@ -662,30 +664,31 @@ def test_reprocess_sigint_sigint_prints_checkpoint_message(tmp_path: Path, capsy
         patch("fieldkit.ingest.db.get_db_path", return_value=pipeline_db),
         patch("fieldkit.ingest.docs.get_docs_service", return_value=fake_service),
         patch("fieldkit.config.get_fieldkit_home", return_value=data_root),
-        patch.dict(os.environ, {"NO_LLM": "1"}),
+        patch.dict(os.environ, {"FIELDKIT_NO_LLM": "1"}),
         patch("builtins.input", side_effect=_raise_on_second_call),
     ):
         from fieldkit.commands.ingest.reprocess import main
 
         rc = main(["--pipeline", "transcript-ingest", "--from-version", "0.1.0", "--interactive"])
 
-    # Must exit 0 (partial completion is OK)
-    assert rc == 0
+    # Interrupted work must not report success
+    assert rc == 1
     captured = capsys.readouterr()
     # Checkpoint message must appear on stderr
     assert "checkpoint" in captured.err.lower() or "interrupt" in captured.err.lower()
 
 
-def test_reprocess_sigint_sigint_non_interactive_exits_0(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """KeyboardInterrupt in non-interactive loop → exit 0 with checkpoint."""
+def test_reprocess_sigint_sigint_non_interactive_exits_1(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """KeyboardInterrupt in non-interactive loop → exit 1 with checkpoint."""
     import os
 
     pipeline_db = tmp_path / "pipeline.db"
     data_root = tmp_path / "data_root"
     data_root.mkdir()
 
-    vault_file = tmp_path / "ni-meeting.md"
-    vault_file.write_text("old", encoding="utf-8")
+    vault_file = data_root / "accounts/acme/meetings/ni-meeting.md"
+    vault_file.parent.mkdir(parents=True)
+    vault_file.write_text("---\nsource_id: DOC_SIGINT_002\npipeline: transcript-ingest\n---\nold", encoding="utf-8")
 
     conn = init_db(pipeline_db, pipelines=PIPELINES)
     _seed_artifact(
@@ -707,14 +710,14 @@ def test_reprocess_sigint_sigint_non_interactive_exits_0(tmp_path: Path, capsys:
         patch("fieldkit.ingest.db.get_db_path", return_value=pipeline_db),
         patch("fieldkit.ingest.docs.get_docs_service", return_value=fake_service),
         patch("fieldkit.config.get_fieldkit_home", return_value=data_root),
-        patch.dict(os.environ, {"NO_LLM": "1"}),
+        patch.dict(os.environ, {"FIELDKIT_NO_LLM": "1"}),
         patch("fieldkit.ingest.docs.fetch_gemini_doc", side_effect=KeyboardInterrupt()),
     ):
         from fieldkit.commands.ingest.reprocess import main
 
         rc = main(["--pipeline", "transcript-ingest", "--from-version", "0.1.0"])
 
-    assert rc == 0
+    assert rc == 1
     captured = capsys.readouterr()
     assert "checkpoint" in captured.err.lower() or "interrupt" in captured.err.lower()
 

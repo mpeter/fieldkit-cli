@@ -19,6 +19,7 @@ import click
 import fieldkit.sf.client as _sf
 from fieldkit.cli_exit import EXIT_DATA, cli_main
 from fieldkit.config import get_sf_rest_base_url, get_sf_session_id
+from fieldkit.sf import errors as sf_errors
 from fieldkit.sf.meddpicc import CANONICAL_ELEMENTS, read_meddpicc
 from fieldkit.sf.types import MeddpiccDeal, MeddpiccElement, MeddpiccQuestion, MeddpiccReadResult
 
@@ -78,7 +79,7 @@ def fetch_meddpicc_scorecard(opp_id: str, *, deal_id: str | None = None) -> Medd
     """
     sid = get_sf_session_id()
     if not sid:
-        raise _sf.SFAuthError("No Salesforce session. Run: fieldkit auth sf")
+        raise sf_errors.SFAuthError("No Salesforce session. Run: fieldkit auth sf")
     base_url = get_sf_rest_base_url()
 
     with _sf.SFDirectClient(session_id=sid, base_url=base_url) as client:

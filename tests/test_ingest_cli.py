@@ -130,10 +130,11 @@ def test_ingest_no_subcommand_exits_nonzero() -> None:
 # ── fieldkit ingest run ────────────────────────────────────────────────────
 
 
-def test_ingest_run_dryrun_exits_0() -> None:
-    """`fieldkit ingest run --pipeline transcript-ingest --dry-run --limit 3` must exit 0."""
+def test_ingest_run_dryrun_requires_a_ready_gmail_publication() -> None:
+    """A checkout-free dry run fails truthfully until Gmail data is published."""
     result = _run("ingest", "run", "--pipeline", "transcript-ingest", "--dry-run", "--limit", "3")
-    assert result.returncode == 0, result.stderr
+    assert result.returncode == 1
+    assert "Gmail cache has not been published" in result.stderr
 
 
 @pytest.mark.integration
@@ -153,7 +154,7 @@ def test_ingest_run_dryrun_output_informative() -> None:
 def test_ingest_run_invalid_pipeline_exits_nonzero() -> None:
     """`fieldkit ingest run --pipeline nonexistent` must exit nonzero."""
     result = _run("ingest", "run", "--pipeline", "nonexistent")
-    assert result.returncode != 0
+    assert result.returncode == 3
     assert "nonexistent" in result.stderr or "unknown" in result.stderr.lower()
 
 
@@ -187,7 +188,7 @@ def test_ingest_discover_exits_0() -> None:
 def test_ingest_discover_invalid_pipeline() -> None:
     """`fieldkit ingest discover --pipeline nonexistent` must exit nonzero."""
     result = _run("ingest", "discover", "--pipeline", "nonexistent")
-    assert result.returncode != 0
+    assert result.returncode == 3
     assert "nonexistent" in result.stderr or "unknown" in result.stderr.lower()
 
 
@@ -247,65 +248,46 @@ def test_ingest_help_mentions_backfill() -> None:
 # Integration fixtures and helpers
 # ===========================================================================
 
-_GMAIL_SCHEMA = """
-CREATE TABLE IF NOT EXISTS threads (
-    thread_id     TEXT PRIMARY KEY,
-    subject       TEXT,
-    snippet       TEXT,
-    message_count INTEGER DEFAULT 0,
-    updated_at    TEXT
-);
-CREATE TABLE IF NOT EXISTS messages (
-    message_id  TEXT PRIMARY KEY,
-    thread_id   TEXT NOT NULL,
-    from_addr   TEXT,
-    to_addr     TEXT,
-    cc_addr     TEXT,
-    subject     TEXT,
-    date_str    TEXT,
-    date_epoch  INTEGER,
-    labels      TEXT,
-    body_plain  TEXT DEFAULT '',
-    body_html   TEXT DEFAULT '',
-    size_bytes  INTEGER DEFAULT 0,
-    snippet     TEXT,
-    synced_at   TEXT NOT NULL DEFAULT (datetime('now'))
-);
-"""
-
 
 def _make_gmail_db(path: Path, *, num_emails: int = 3) -> None:
-    """Create a minimal gmail.db with *num_emails* fake Gemini meeting emails."""
-    conn = sqlite3.connect(str(path))
-    conn.executescript(_GMAIL_SCHEMA)
-    for i in range(num_emails):
-        doc_id = f"INTEG_DOC_{i:04d}"
-        doc_url = f"https://docs.google.com/document/d/{doc_id}/edit"
-        subject = f'Notes: "Integration Meeting {i}" May {i + 1}, 2026'
-        message_id = f"integ_msg_{i:04d}"
+    """Publish *num_emails* fictional Gemini messages through the managed writer."""
+    from fieldkit.gmail.publication import GMAIL_QUERY_READY_KEY, apply_gmail_page, initialize_gmail_publication
+    from fieldkit.sqlite_publication import SQLiteMutationConnection
+
+    initialize_gmail_publication(path)
+
+    def mutation(conn: SQLiteMutationConnection) -> None:
         conn.execute(
-            "INSERT OR IGNORE INTO threads (thread_id, subject) VALUES (?, ?)",
-            (message_id, subject),
+            "INSERT OR REPLACE INTO sync_state(key, value) VALUES (?, 'true')",
+            (GMAIL_QUERY_READY_KEY,),
         )
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO messages
-                (message_id, thread_id, from_addr, subject, body_html, body_plain, date_epoch)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                message_id,
-                message_id,
-                "Gemini <gemini-notes@google.com>",
-                subject,
-                f'<p>View your notes: <a href="{doc_url}">Open doc</a></p>',
-                f"View your notes: {doc_url}",
-                # historic regression: must be within last 90 days — use a recent epoch
-                int(__import__("time").time()) - (86400 * i),  # today minus i days
-            ),
-        )
-    conn.commit()
-    conn.close()
+        for i in range(num_emails):
+            doc_id = f"INTEG_DOC_{i:04d}"
+            doc_url = f"https://docs.google.com/document/d/{doc_id}/edit"
+            subject = f'Notes: "Integration Meeting {i}" May {i + 1}, 2026'
+            message_id = f"integ_msg_{i:04d}"
+            conn.execute(
+                "INSERT OR IGNORE INTO threads (thread_id, subject) VALUES (?, ?)",
+                (message_id, subject),
+            )
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO messages
+                    (message_id, thread_id, from_addr, subject, body_html, body_plain, date_epoch)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    message_id,
+                    message_id,
+                    "Gemini <gemini-notes@google.com>",
+                    subject,
+                    f'<p>View your notes: <a href="{doc_url}">Open doc</a></p>',
+                    f"View your notes: {doc_url}",
+                    int(__import__("time").time()) - (86400 * i),
+                ),
+            )
+
+    apply_gmail_page(path, mutation)
 
 
 def _make_fake_drive_service(doc_id: str = "INTEG_DOC_0000") -> Any:
@@ -441,7 +423,10 @@ def test_integration_run_dryrun_lists_pending_sources(tmp_path: Path) -> None:
     discover_gemini_sources(conn, candidates)
     conn.close()
 
-    with patch("fieldkit.ingest.db.get_db_path", return_value=pipeline_db):
+    with (
+        patch("fieldkit.ingest.db.get_db_path", return_value=pipeline_db),
+        patch("fieldkit.gmail.discover.get_gmail_db_path", return_value=gmail_db),
+    ):
         from fieldkit.commands.ingest.run import cli as run_cli
 
         result = CliRunner().invoke(run_cli, ["--pipeline", "transcript-ingest", "--dry-run", "--limit", "3"])
@@ -450,12 +435,12 @@ def test_integration_run_dryrun_lists_pending_sources(tmp_path: Path) -> None:
 
 
 # ===========================================================================
-# Integration tests — run CLI (live, with NO_LLM and fake Drive)
+# Integration tests — run CLI (live, with FIELDKIT_NO_LLM and fake Drive)
 # ===========================================================================
 
 
 def test_integration_run_writes_vault_note(tmp_path: Path) -> None:
-    """run --limit 1 with NO_LLM=1 and fake Drive → writes vault note, marks processed."""
+    """run --limit 1 with FIELDKIT_NO_LLM=1 and fake Drive → writes vault note, marks processed."""
     gmail_db = tmp_path / "gmail.db"
     pipeline_db = tmp_path / "pipeline.db"
     data_root = tmp_path / "data_root"
@@ -477,12 +462,13 @@ def test_integration_run_writes_vault_note(tmp_path: Path) -> None:
 
     fake_service = _make_fake_drive_service()
 
-    env_patch = patch.dict(os.environ, {"NO_LLM": "1"})
+    env_patch = patch.dict(os.environ, {"FIELDKIT_NO_LLM": "1"})
     db_path_patch = patch("fieldkit.ingest.db.get_db_path", return_value=pipeline_db)
+    gmail_path_patch = patch("fieldkit.gmail.discover.get_gmail_db_path", return_value=gmail_db)
     drive_patch = patch("fieldkit.ingest.docs.get_docs_service", return_value=fake_service)
     data_root_patch = patch("fieldkit.config.get_fieldkit_home", return_value=data_root)
 
-    with env_patch, db_path_patch, drive_patch, data_root_patch:
+    with env_patch, db_path_patch, gmail_path_patch, drive_patch, data_root_patch:
         from fieldkit.commands.ingest.run import cli as run_cli
 
         result = CliRunner().invoke(run_cli, ["--pipeline", "transcript-ingest", "--limit", "1"])
@@ -525,8 +511,9 @@ def test_integration_run_writes_provenance_frontmatter(tmp_path: Path) -> None:
     fake_service = _make_fake_drive_service()
 
     with (
-        patch.dict(os.environ, {"NO_LLM": "1"}),
+        patch.dict(os.environ, {"FIELDKIT_NO_LLM": "1"}),
         patch("fieldkit.ingest.db.get_db_path", return_value=pipeline_db),
+        patch("fieldkit.gmail.discover.get_gmail_db_path", return_value=gmail_db),
         patch("fieldkit.ingest.docs.get_docs_service", return_value=fake_service),
         patch("fieldkit.config.get_fieldkit_home", return_value=data_root),
     ):
@@ -567,8 +554,9 @@ def test_integration_run_interactive_processes_source(tmp_path: Path) -> None:
 
     # Patch builtins.input to return 'y' for interactive prompt
     with (
-        patch.dict(os.environ, {"NO_LLM": "1"}),
+        patch.dict(os.environ, {"FIELDKIT_NO_LLM": "1"}),
         patch("fieldkit.ingest.db.get_db_path", return_value=pipeline_db),
+        patch("fieldkit.gmail.discover.get_gmail_db_path", return_value=gmail_db),
         patch("fieldkit.ingest.docs.get_docs_service", return_value=fake_service),
         patch("fieldkit.config.get_fieldkit_home", return_value=data_root),
         patch("builtins.input", return_value="y"),

@@ -35,6 +35,17 @@ def _git(repo: Path, *args: str) -> str:
 def _document(checks: str) -> str:
     return f"""---
 issues: ["#1242"]
+covers:
+  - README.md
+  - candidate.txt
+  - GNUmakefile
+  - .venv/
+  - tests/
+edit_sites:
+  version: 1
+  sites:
+    - path: README.md
+      anchor: hello
 done_checks:
   version: 1
   checks:
@@ -80,6 +91,8 @@ def _snapshot(repo: Path, work_order: Path, tmp_path: Path):
     return create_trusted_snapshot(
         repo,
         work_order,
+        contract_path=work_order,
+        base_revision=_git(repo, "rev-parse", "main"),
         repository="example/repo",
         issue_number=1242,
         attempt=1,
@@ -100,15 +113,17 @@ def test_prepare_tool_environment_is_private_and_preserves_symlink_targets(tmp_p
     target.write_bytes(b"python")
     target.chmod(0o755)
 
-    def run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+    def run(*args: object, **kwargs: object):
+        from fieldkit.util.bounded_process import BoundedProcessResult
+
         environment = snapshot_dir / "tool-environment"
         (environment / "bin").mkdir(parents=True)
         (environment / "bin" / "python").symlink_to(target)
-        return subprocess.CompletedProcess([], 0, "", "")
+        return BoundedProcessResult(0, "", "")
 
     with (
         patch("fieldkit.driver.done_check_executor._git_bytes", return_value=b"trusted"),
-        patch("fieldkit.driver.done_check_executor.subprocess.run", side_effect=run) as sync,
+        patch("fieldkit.driver.done_check_executor.run_bounded_process", side_effect=run) as sync,
     ):
         environment = _REAL_PREPARE_TOOL_ENVIRONMENT(repo, "a" * 40, snapshot_dir)
 
@@ -128,6 +143,46 @@ def test_snapshot_uses_trusted_base_even_when_candidate_deletes_work_order(tmp_p
     assert snapshot.base_sha == _git(repo, "rev-parse", "main")
     assert snapshot.contract.checks[0].id == "exists"
     assert (snapshot.snapshot_dir / "work-order.md").is_file()
+
+
+def test_snapshot_uses_openspec_sidecar_done_checks_from_same_base(tmp_path: Path) -> None:
+    sidecar = """covers: [README.md]
+edit_sites:
+  version: 1
+  sites:
+    - path: README.md
+      anchor: hello
+done_checks:
+  version: 1
+  checks:
+    - id: exists
+      argv: [test, -f, README.md]
+"""
+    repo, _, _ = _repository(
+        tmp_path,
+        "    - id: unused\n      argv: [test, -f, README.md]\n",
+        {
+            "openspec/changes/example/tasks.md": "# Tasks\n",
+            "openspec/changes/example/driver.yaml": sidecar,
+        },
+    )
+    prompt = repo / "openspec" / "changes" / "example" / "tasks.md"
+    contract = prompt.parent / "driver.yaml"
+
+    snapshot = create_trusted_snapshot(
+        repo,
+        prompt,
+        contract_path=contract,
+        base_revision=_git(repo, "rev-parse", "main"),
+        repository="example/repo",
+        issue_number=1242,
+        attempt=1,
+        branch="driver/issue-1242-test",
+        snapshot_root=tmp_path / "snapshots",
+    )
+
+    assert snapshot.work_order_path == "openspec/changes/example/tasks.md"
+    assert snapshot.contract.checks[0].id == "exists"
 
 
 def test_verify_submitted_head_runs_checks_and_writes_terminal_evidence(tmp_path: Path) -> None:
@@ -176,6 +231,58 @@ def test_authority_change_prevents_check_execution(tmp_path: Path) -> None:
     assert result.passed is False
     assert result.reason == "authority_changed"
     assert result.checks == ()
+
+
+def test_submitted_head_rejects_change_outside_declared_covers(tmp_path: Path) -> None:
+    repo, work_order, _ = _repository(
+        tmp_path,
+        "    - id: exists\n      argv: [test, -f, README.md]\n",
+    )
+    snapshot = _snapshot(repo, work_order, tmp_path)
+    (repo / "outside.txt").write_text("undeclared\n", encoding="utf-8")
+    _git(repo, "add", "outside.txt")
+    _git(repo, "commit", "-m", "test: undeclared path")
+    head = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "push", "origin", "HEAD", "--force")
+
+    with patch("fieldkit.driver.done_check_executor.get_pr_identity", return_value=_identity(head)):
+        result = verify_submitted_head(
+            snapshot,
+            repo,
+            evidence_root=tmp_path / "evidence",
+            verifier_root=tmp_path / "verifier",
+            run_started_monotonic=time.monotonic(),
+        )
+
+    assert result.passed is False
+    assert result.reason == "submitted changes exceed declared covers"
+    assert result.checks == ()
+
+
+def test_submitted_head_checks_both_rename_paths_against_covers(tmp_path: Path) -> None:
+    repo, work_order, _ = _repository(
+        tmp_path,
+        "    - id: exists\n      argv: [test, -f, README.md]\n",
+        {"tests/allowed.txt": "allowed\n"},
+    )
+    snapshot = _snapshot(repo, work_order, tmp_path)
+    (repo / "tests" / "allowed.txt").rename(repo / "outside.txt")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "test: rename outside authority")
+    head = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "push", "origin", "HEAD", "--force")
+
+    with patch("fieldkit.driver.done_check_executor.get_pr_identity", return_value=_identity(head)):
+        result = verify_submitted_head(
+            snapshot,
+            repo,
+            evidence_root=tmp_path / "evidence",
+            verifier_root=tmp_path / "verifier",
+            run_started_monotonic=time.monotonic(),
+        )
+
+    assert result.passed is False
+    assert result.reason == "submitted changes exceed declared covers"
 
 
 def test_check_that_mutates_candidate_tree_fails(tmp_path: Path) -> None:
@@ -231,6 +338,8 @@ def test_snapshot_setup_failure_removes_read_only_checker_tree(tmp_path: Path) -
         create_trusted_snapshot(
             repo,
             work_order,
+            contract_path=work_order,
+            base_revision=_git(repo, "rev-parse", "main"),
             repository="example/repo",
             issue_number=1242,
             attempt=1,

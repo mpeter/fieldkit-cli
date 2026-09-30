@@ -127,8 +127,8 @@ def test_dispatcher_profile_roots_must_match_manifest(profile_repo: Path) -> Non
     dispatcher = profile_repo / checker.DISPATCHER_PATH
     dispatcher.write_text(
         dispatcher.read_text(encoding="utf-8").replace(
-            '"meeting": (\n        "google",',
-            '"meeting": (\n        "web",',
+            '"web": ("web", ("fastapi", "uvicorn"))',
+            '"web": ("google", ("fastapi", "uvicorn"))',
         ),
         encoding="utf-8",
     )
@@ -136,7 +136,7 @@ def test_dispatcher_profile_roots_must_match_manifest(profile_repo: Path) -> Non
     report = checker.validate(profile_repo)
 
     assert report.findings
-    assert any(finding.rule_id == "DEP013" and finding.subject == "meeting" for finding in report.findings)
+    assert any(finding.rule_id == "DEP013" and finding.subject == "web" for finding in report.findings)
 
 
 def test_json_cli_failure_is_machine_readable(profile_repo: Path, capsys: pytest.CaptureFixture[str]) -> None:

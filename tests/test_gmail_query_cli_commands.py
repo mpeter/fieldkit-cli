@@ -63,6 +63,30 @@ def _make_db() -> sqlite3.Connection:
     return conn
 
 
+def test_cli_rejects_legacy_schema_without_modifying_cache(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    from fieldkit.__main__ import main
+
+    db_path = tmp_path / "gmail.db"
+    writer = sqlite3.connect(db_path)
+    writer.executescript(
+        """
+        CREATE TABLE messages (message_id TEXT PRIMARY KEY);
+        CREATE TABLE threads (thread_id TEXT PRIMARY KEY);
+        CREATE TABLE people (email TEXT PRIMARY KEY);
+        """
+    )
+    writer.commit()
+    writer.close()
+    before = (db_path.read_bytes(), db_path.stat().st_mtime_ns, {path.name for path in tmp_path.iterdir()})
+
+    exit_code = main(["gmail", "query", "person", "Alice", "--db", str(db_path)])
+
+    assert exit_code == 3
+    assert "SQLite snapshot could not be verified" in capsys.readouterr().err
+    after = (db_path.read_bytes(), db_path.stat().st_mtime_ns, {path.name for path in tmp_path.iterdir()})
+    assert after == before
+
+
 def _insert_message(
     conn: sqlite3.Connection,
     thread_id: str,
@@ -112,7 +136,7 @@ def test_cmd_person_click_person_no_match_prints_not_found(tmp_path: Path) -> No
     db = _make_db()
     runner = CliRunner()
 
-    with patch("fieldkit.commands.gmail.query.connect", return_value=db):
+    with patch("fieldkit.commands.gmail.query.query_domain.connect", return_value=db):
         result = runner.invoke(cli, ["person", "Unknown Person", "--db", str(tmp_path / "fake.db")])
 
     assert result.exit_code == 0
@@ -122,11 +146,11 @@ def test_cmd_person_click_person_no_match_prints_not_found(tmp_path: Path) -> No
 def test_cmd_person_click_person_with_match_shows_threads(tmp_path: Path) -> None:
     """person command shows threads when person is found."""
     db = _make_db()
-    _insert_person(db, "alice@acme-corp.com", "Alice Smith")
-    _insert_message(db, "t-001", "alice@acme-corp.com", subject="Alice's thread")
+    _insert_person(db, "alice@acme-corp.example.com", "Alice Smith")
+    _insert_message(db, "t-001", "alice@acme-corp.example.com", subject="Alice's thread")
     runner = CliRunner()
 
-    with patch("fieldkit.commands.gmail.query.connect", return_value=db):
+    with patch("fieldkit.commands.gmail.query.query_domain.connect", return_value=db):
         result = runner.invoke(cli, ["person", "Alice Smith", "--db", str(tmp_path / "fake.db")])
 
     assert result.exit_code == 0
@@ -135,10 +159,10 @@ def test_cmd_person_click_person_with_match_shows_threads(tmp_path: Path) -> Non
 def test_cmd_person_click_person_with_since_filter(tmp_path: Path) -> None:
     """person command accepts --since date filter."""
     db = _make_db()
-    _insert_person(db, "bob@acme-corp.com", "Bob Jones")
+    _insert_person(db, "bob@acme-corp.example.com", "Bob Jones")
     runner = CliRunner()
 
-    with patch("fieldkit.commands.gmail.query.connect", return_value=db):
+    with patch("fieldkit.commands.gmail.query.query_domain.connect", return_value=db):
         result = runner.invoke(cli, ["person", "Bob Jones", "--db", str(tmp_path / "fake.db"), "--since", "2023-01-01"])
 
     assert result.exit_code == 0
@@ -157,7 +181,7 @@ def test_cmd_account_click_account_no_threads_shows_zero(tmp_path: Path) -> None
     db = _make_db()
     runner = CliRunner()
 
-    with patch("fieldkit.commands.gmail.query.connect", return_value=db):
+    with patch("fieldkit.commands.gmail.query.query_domain.connect", return_value=db):
         result = runner.invoke(cli, ["account", "nonexistent-account", "--db", str(tmp_path / "fake.db")])
 
     assert result.exit_code == 0
@@ -167,11 +191,11 @@ def test_cmd_account_click_account_no_threads_shows_zero(tmp_path: Path) -> None
 def test_cmd_account_click_account_with_date_filter(tmp_path: Path) -> None:
     """account command with --since applies date filter (date_clause branch)."""
     db = _make_db()
-    _insert_message(db, "t-001", "sales@acme-corp.com", date_epoch=1700000000)
+    _insert_message(db, "t-001", "sales@acme-corp.example.com", date_epoch=1700000000)
     _insert_thread_account(db, "t-001", "acme-corp")
     runner = CliRunner()
 
-    with patch("fieldkit.commands.gmail.query.connect", return_value=db):
+    with patch("fieldkit.commands.gmail.query.query_domain.connect", return_value=db):
         result = runner.invoke(
             cli,
             ["account", "acme-corp", "--db", str(tmp_path / "fake.db"), "--since", "2023-01-01"],
@@ -183,11 +207,11 @@ def test_cmd_account_click_account_with_date_filter(tmp_path: Path) -> None:
 def test_cmd_account_click_account_without_date_filter(tmp_path: Path) -> None:
     """account command without date filter uses the else branch."""
     db = _make_db()
-    _insert_message(db, "t-001", "sales@acme-corp.com", date_epoch=1700000000)
+    _insert_message(db, "t-001", "sales@acme-corp.example.com", date_epoch=1700000000)
     _insert_thread_account(db, "t-001", "acme-corp")
     runner = CliRunner()
 
-    with patch("fieldkit.commands.gmail.query.connect", return_value=db):
+    with patch("fieldkit.commands.gmail.query.query_domain.connect", return_value=db):
         result = runner.invoke(cli, ["account", "acme-corp", "--db", str(tmp_path / "fake.db")])
 
     assert result.exit_code == 0
@@ -197,15 +221,15 @@ def test_query_account_option_matches_account_subcommand_defaults(tmp_path: Path
     runner = CliRunner()
 
     subcommand_db = _make_db()
-    _insert_message(subcommand_db, "t-001", "sales@acme-corp.com", date_epoch=1700000000)
+    _insert_message(subcommand_db, "t-001", "sales@acme-corp.example.com", date_epoch=1700000000)
     _insert_thread_account(subcommand_db, "t-001", "acme-corp")
-    with patch("fieldkit.commands.gmail.query.connect", return_value=subcommand_db):
+    with patch("fieldkit.commands.gmail.query.query_domain.connect", return_value=subcommand_db):
         subcommand = runner.invoke(cli, ["account", "acme-corp", "--db", str(tmp_path / "subcommand.db")])
 
     option_db = _make_db()
-    _insert_message(option_db, "t-001", "sales@acme-corp.com", date_epoch=1700000000)
+    _insert_message(option_db, "t-001", "sales@acme-corp.example.com", date_epoch=1700000000)
     _insert_thread_account(option_db, "t-001", "acme-corp")
-    with patch("fieldkit.commands.gmail.query.connect", return_value=option_db):
+    with patch("fieldkit.commands.gmail.query.query_domain.connect", return_value=option_db):
         option = runner.invoke(cli, ["--account", "acme-corp"])
 
     assert option.exit_code == 0
@@ -213,7 +237,7 @@ def test_query_account_option_matches_account_subcommand_defaults(tmp_path: Path
 
 
 def test_query_without_selection_shows_help_before_database_access() -> None:
-    with patch("fieldkit.commands.gmail.query.connect") as connect_mock:
+    with patch("fieldkit.commands.gmail.query.query_domain.connect") as connect_mock:
         result = CliRunner().invoke(cli)
 
     assert result.exit_code == 2
@@ -224,7 +248,7 @@ def test_query_without_selection_shows_help_before_database_access() -> None:
 def test_query_account_option_rejects_subcommand_before_database_access(capsys: pytest.CaptureFixture[str]) -> None:
     from fieldkit.__main__ import main
 
-    with patch("fieldkit.commands.gmail.query.connect") as connect_mock:
+    with patch("fieldkit.commands.gmail.query.query_domain.connect") as connect_mock:
         result = main(["gmail", "query", "--account", "acme-corp", "threads", "renewal"])
 
     assert result == 3
@@ -245,7 +269,7 @@ def test_cmd_threads_click_threads_no_match_shows_zero(tmp_path: Path) -> None:
     db = _make_db()
     runner = CliRunner()
 
-    with patch("fieldkit.commands.gmail.query.connect", return_value=db):
+    with patch("fieldkit.commands.gmail.query.query_domain.connect", return_value=db):
         result = runner.invoke(cli, ["threads", "nonexistent-keyword", "--db", str(tmp_path / "fake.db")])
 
     assert result.exit_code == 0
@@ -255,10 +279,10 @@ def test_cmd_threads_click_threads_no_match_shows_zero(tmp_path: Path) -> None:
 def test_cmd_threads_click_threads_with_date_filter(tmp_path: Path) -> None:
     """threads command with --since applies date filter."""
     db = _make_db()
-    _insert_message(db, "t-001", "sender@acme-corp.com", subject="OpenShift deal")
+    _insert_message(db, "t-001", "sender@acme-corp.example.com", subject="OpenShift deal")
     runner = CliRunner()
 
-    with patch("fieldkit.commands.gmail.query.connect", return_value=db):
+    with patch("fieldkit.commands.gmail.query.query_domain.connect", return_value=db):
         result = runner.invoke(
             cli,
             ["threads", "OpenShift", "--db", str(tmp_path / "fake.db"), "--since", "2023-01-01"],
@@ -270,10 +294,10 @@ def test_cmd_threads_click_threads_with_date_filter(tmp_path: Path) -> None:
 def test_cmd_threads_click_threads_without_date_filter(tmp_path: Path) -> None:
     """threads command without date filter uses the else branch."""
     db = _make_db()
-    _insert_message(db, "t-001", "sender@acme-corp.com", subject="OpenShift deal")
+    _insert_message(db, "t-001", "sender@acme-corp.example.com", subject="OpenShift deal")
     runner = CliRunner()
 
-    with patch("fieldkit.commands.gmail.query.connect", return_value=db):
+    with patch("fieldkit.commands.gmail.query.query_domain.connect", return_value=db):
         result = runner.invoke(cli, ["threads", "OpenShift", "--db", str(tmp_path / "fake.db")])
 
     assert result.exit_code == 0
@@ -292,7 +316,7 @@ def test_cmd_dig_click_dig_no_match_shows_zero(tmp_path: Path) -> None:
     db = _make_db()
     runner = CliRunner()
 
-    with patch("fieldkit.commands.gmail.query.connect", return_value=db):
+    with patch("fieldkit.commands.gmail.query.query_domain.connect", return_value=db):
         result = runner.invoke(cli, ["dig", "nonexistent-account", "keyword", "--db", str(tmp_path / "fake.db")])
 
     assert result.exit_code == 0
@@ -302,11 +326,11 @@ def test_cmd_dig_click_dig_no_match_shows_zero(tmp_path: Path) -> None:
 def test_cmd_dig_click_dig_with_date_filter(tmp_path: Path) -> None:
     """dig command with --since applies date filter (date_clause branch)."""
     db = _make_db()
-    _insert_message(db, "t-001", "sales@acme-corp.com", subject="Deal discussion", body_plain="Deal details.")
+    _insert_message(db, "t-001", "sales@acme-corp.example.com", subject="Deal discussion", body_plain="Deal details.")
     _insert_thread_account(db, "t-001", "acme-corp")
     runner = CliRunner()
 
-    with patch("fieldkit.commands.gmail.query.connect", return_value=db):
+    with patch("fieldkit.commands.gmail.query.query_domain.connect", return_value=db):
         result = runner.invoke(
             cli,
             ["dig", "acme-corp", "Deal", "--db", str(tmp_path / "fake.db"), "--since", "2023-01-01"],
@@ -318,11 +342,11 @@ def test_cmd_dig_click_dig_with_date_filter(tmp_path: Path) -> None:
 def test_cmd_dig_click_dig_without_date_filter(tmp_path: Path) -> None:
     """dig command without date filter uses the else branch."""
     db = _make_db()
-    _insert_message(db, "t-001", "sales@acme-corp.com", subject="Deal discussion", body_plain="Deal details.")
+    _insert_message(db, "t-001", "sales@acme-corp.example.com", subject="Deal discussion", body_plain="Deal details.")
     _insert_thread_account(db, "t-001", "acme-corp")
     runner = CliRunner()
 
-    with patch("fieldkit.commands.gmail.query.connect", return_value=db):
+    with patch("fieldkit.commands.gmail.query.query_domain.connect", return_value=db):
         result = runner.invoke(cli, ["dig", "acme-corp", "Deal", "--db", str(tmp_path / "fake.db")])
 
     assert result.exit_code == 0
@@ -334,7 +358,7 @@ def test_cmd_dig_click_dig_with_results_shows_table(tmp_path: Path) -> None:
     _insert_message(
         db,
         "t-deal",
-        "sales@acme-corp.com",
+        "sales@acme-corp.example.com",
         subject="OpenShift deal",
         body_plain="OpenShift pricing discussion.",
         date_epoch=1700000000,
@@ -343,7 +367,7 @@ def test_cmd_dig_click_dig_with_results_shows_table(tmp_path: Path) -> None:
     _insert_thread_account(db, "t-deal", "acme-corp")
     runner = CliRunner()
 
-    with patch("fieldkit.commands.gmail.query.connect", return_value=db):
+    with patch("fieldkit.commands.gmail.query.query_domain.connect", return_value=db):
         result = runner.invoke(cli, ["dig", "acme-corp", "OpenShift", "--db", str(tmp_path / "fake.db")])
 
     assert result.exit_code == 0
@@ -362,7 +386,7 @@ def test_cmd_champion_click_champion_no_match_shows_not_found(tmp_path: Path) ->
     db = _make_db()
     runner = CliRunner()
 
-    with patch("fieldkit.commands.gmail.query.connect", return_value=db):
+    with patch("fieldkit.commands.gmail.query.query_domain.connect", return_value=db):
         result = runner.invoke(cli, ["champion", "Unknown Person", "--db", str(tmp_path / "fake.db")])
 
     assert result.exit_code == 0
@@ -372,11 +396,11 @@ def test_cmd_champion_click_champion_no_match_shows_not_found(tmp_path: Path) ->
 def test_cmd_champion_click_champion_with_match_shows_signal(tmp_path: Path) -> None:
     """champion command shows signal report when person is found."""
     db = _make_db()
-    _insert_person(db, "carol@acme-corp.com", "Carol White")
-    _insert_message(db, "t-001", "carol@acme-corp.com", subject="Carol's thread")
+    _insert_person(db, "carol@acme-corp.example.com", "Carol White")
+    _insert_message(db, "t-001", "carol@acme-corp.example.com", subject="Carol's thread")
     runner = CliRunner()
 
-    with patch("fieldkit.commands.gmail.query.connect", return_value=db):
+    with patch("fieldkit.commands.gmail.query.query_domain.connect", return_value=db):
         result = runner.invoke(cli, ["champion", "Carol White", "--db", str(tmp_path / "fake.db")])
 
     assert result.exit_code == 0
@@ -396,7 +420,7 @@ def test_cmd_blindspots_click_blindspots_no_threads_for_account(tmp_path: Path) 
     db = _make_db()
     runner = CliRunner()
 
-    with patch("fieldkit.commands.gmail.query.connect", return_value=db):
+    with patch("fieldkit.commands.gmail.query.query_domain.connect", return_value=db):
         result = runner.invoke(cli, ["blindspots", "nonexistent-account", "--db", str(tmp_path / "fake.db")])
 
     assert result.exit_code == 0
@@ -411,14 +435,14 @@ def test_cmd_blindspots_click_blindspots_with_external_contacts(tmp_path: Path) 
         _insert_message(
             db,
             thread_id=f"t-{i}",
-            from_addr="external@acme-corp.com",
-            to_addr="me@acme-corp.com",
+            from_addr="external@acme-corp.example.com",
+            to_addr="me@acme-corp.example.com",
             date_epoch=1700000000 + i * 1000,
         )
         _insert_thread_account(db, f"t-{i}", "acme-corp")
     runner = CliRunner()
 
-    with patch("fieldkit.commands.gmail.query.connect", return_value=db):
+    with patch("fieldkit.commands.gmail.query.query_domain.connect", return_value=db):
         result = runner.invoke(
             cli, ["blindspots", "acme-corp", "--db", str(tmp_path / "fake.db"), "--min-messages", "1"]
         )
@@ -433,13 +457,13 @@ def test_cmd_blindspots_click_blindspots_with_known_filter(tmp_path: Path) -> No
         _insert_message(
             db,
             thread_id=f"t-{i}",
-            from_addr="known@acme-corp.com",
+            from_addr="known@acme-corp.example.com",
             date_epoch=1700000000 + i * 1000,
         )
         _insert_thread_account(db, f"t-{i}", "acme-corp")
     runner = CliRunner()
 
-    with patch("fieldkit.commands.gmail.query.connect", return_value=db):
+    with patch("fieldkit.commands.gmail.query.query_domain.connect", return_value=db):
         result = runner.invoke(
             cli,
             [
@@ -450,7 +474,7 @@ def test_cmd_blindspots_click_blindspots_with_known_filter(tmp_path: Path) -> No
                 "--min-messages",
                 "1",
                 "--known",
-                "known@acme-corp.com",
+                "known@acme-corp.example.com",
             ],
         )
 
@@ -460,12 +484,12 @@ def test_cmd_blindspots_click_blindspots_with_known_filter(tmp_path: Path) -> No
 def test_cmd_blindspots_click_blindspots_no_results_after_filter(tmp_path: Path) -> None:
     """blindspots command shows no-results message when all contacts filtered."""
     db = _make_db()
-    # Insert only internal contacts (acme-corp.com is filtered)
-    _insert_message(db, "t-1", "me@acme-corp.com", date_epoch=1700000000)
+    # Insert only internal contacts (acme-corp.example.com is filtered)
+    _insert_message(db, "t-1", "me@acme-corp.example.com", date_epoch=1700000000)
     _insert_thread_account(db, "t-1", "acme-corp")
     runner = CliRunner()
 
-    with patch("fieldkit.commands.gmail.query.connect", return_value=db):
+    with patch("fieldkit.commands.gmail.query.query_domain.connect", return_value=db):
         result = runner.invoke(
             cli, ["blindspots", "acme-corp", "--db", str(tmp_path / "fake.db"), "--min-messages", "1"]
         )
@@ -481,36 +505,38 @@ def _add_blindspot_contact(db: sqlite3.Connection, email: str, *, thread_id: str
 
 def test_cmd_blindspots_sets_aside_suspected_masked_address_by_default(tmp_path: Path) -> None:
     db = _make_db()
-    _add_blindspot_contact(db, "alex.taylor@acme-corp.com", thread_id="ordinary", date_epoch=1_700_000_000)
-    _add_blindspot_contact(db, "casey.morgan.q7zm@acme-corp.com", thread_id="suspected", date_epoch=1_700_001_000)
-    config = {"accounts": {"acme-corp": {"domains": ["acme-corp.com"]}}}
+    _add_blindspot_contact(db, "alex.taylor@acme-corp.example.com", thread_id="ordinary", date_epoch=1_700_000_000)
+    _add_blindspot_contact(
+        db, "casey.morgan.q7zm@acme-corp.example.com", thread_id="suspected", date_epoch=1_700_001_000
+    )
+    config = {"accounts": {"acme-corp": {"domains": ["acme-corp.example.com"]}}}
 
     with (
-        patch("fieldkit.commands.gmail.query.connect", return_value=db),
+        patch("fieldkit.commands.gmail.query.query_domain.connect", return_value=db),
         patch("fieldkit.commands.gmail.query.get_accounts_config", return_value=config),
-        patch("fieldkit.commands.gmail.query.get_internal_domains", return_value=[]),
+        patch("fieldkit.gmail.query_domain.get_internal_domains", return_value=[]),
     ):
         result = CliRunner().invoke(
             cli, ["blindspots", "acme-corp", "--db", str(tmp_path / "fake.db"), "--min-messages", "1"]
         )
 
     assert result.exit_code == 0
-    assert "alex.taylor@acme-corp.com" in result.output
-    assert "casey.morgan.q7zm@acme-corp.com" not in result.output
+    assert "alex.taylor@acme-corp.example.com" in result.output
+    assert "casey.morgan.q7zm@acme-corp.example.com" not in result.output
     assert "Set aside 1 suspected masked address(es)" in result.output
     assert "--include-suspected" in result.output
 
 
 def test_cmd_blindspots_include_suspected_marks_address(tmp_path: Path) -> None:
     db = _make_db()
-    email = "casey.morgan.q7zm@acme-corp.com"
+    email = "casey.morgan.q7zm@acme-corp.example.com"
     _add_blindspot_contact(db, email, thread_id="suspected", date_epoch=1_700_001_000)
-    config = {"accounts": {"acme-corp": {"domains": ["acme-corp.com"]}}}
+    config = {"accounts": {"acme-corp": {"domains": ["acme-corp.example.com"]}}}
 
     with (
-        patch("fieldkit.commands.gmail.query.connect", return_value=db),
+        patch("fieldkit.commands.gmail.query.query_domain.connect", return_value=db),
         patch("fieldkit.commands.gmail.query.get_accounts_config", return_value=config),
-        patch("fieldkit.commands.gmail.query.get_internal_domains", return_value=[]),
+        patch("fieldkit.gmail.query_domain.get_internal_domains", return_value=[]),
     ):
         result = CliRunner().invoke(
             cli,
@@ -533,18 +559,18 @@ def test_cmd_blindspots_include_suspected_marks_address(tmp_path: Path) -> None:
 
 def test_cmd_blindspots_json_preserves_suspect_without_consuming_limit(tmp_path: Path) -> None:
     db = _make_db()
-    ordinary = "alex.taylor@acme-corp.com"
-    suspected = "casey.morgan.q7zm@acme-corp.com"
-    second_suspected = "jamie.river.abcd@acme-corp.com"
+    ordinary = "alex.taylor@acme-corp.example.com"
+    suspected = "casey.morgan.q7zm@acme-corp.example.com"
+    second_suspected = "jamie.river.abcd@acme-corp.example.com"
     _add_blindspot_contact(db, ordinary, thread_id="ordinary", date_epoch=1_700_000_000)
     _add_blindspot_contact(db, suspected, thread_id="suspected", date_epoch=1_700_001_000)
     _add_blindspot_contact(db, second_suspected, thread_id="second-suspected", date_epoch=1_700_002_000)
-    config = {"accounts": {"acme-corp": {"domains": ["acme-corp.com"]}}}
+    config = {"accounts": {"acme-corp": {"domains": ["acme-corp.example.com"]}}}
 
     with (
-        patch("fieldkit.commands.gmail.query.connect", return_value=db),
+        patch("fieldkit.commands.gmail.query.query_domain.connect", return_value=db),
         patch("fieldkit.commands.gmail.query.get_accounts_config", return_value=config),
-        patch("fieldkit.commands.gmail.query.get_internal_domains", return_value=[]),
+        patch("fieldkit.gmail.query_domain.get_internal_domains", return_value=[]),
     ):
         result = CliRunner().invoke(
             cli,
@@ -573,13 +599,13 @@ def test_cmd_blindspots_json_preserves_suspect_without_consuming_limit(tmp_path:
 
 def test_cmd_blindspots_missing_domains_preserves_matching_shape(tmp_path: Path) -> None:
     db = _make_db()
-    email = "casey.morgan.q7zm@acme-corp.com"
+    email = "casey.morgan.q7zm@acme-corp.example.com"
     _add_blindspot_contact(db, email, thread_id="suspected", date_epoch=1_700_001_000)
 
     with (
-        patch("fieldkit.commands.gmail.query.connect", return_value=db),
+        patch("fieldkit.commands.gmail.query.query_domain.connect", return_value=db),
         patch("fieldkit.commands.gmail.query.get_accounts_config", return_value={}),
-        patch("fieldkit.commands.gmail.query.get_internal_domains", return_value=[]),
+        patch("fieldkit.gmail.query_domain.get_internal_domains", return_value=[]),
     ):
         result = CliRunner().invoke(
             cli, ["blindspots", "acme-corp", "--db", str(tmp_path / "fake.db"), "--min-messages", "1"]
@@ -593,7 +619,7 @@ def test_cmd_blindspots_missing_domains_preserves_matching_shape(tmp_path: Path)
 def test_cmd_blindspots_empty_json_keeps_suspected_metadata_schema(tmp_path: Path) -> None:
     db = _make_db()
 
-    with patch("fieldkit.commands.gmail.query.connect", return_value=db):
+    with patch("fieldkit.commands.gmail.query.query_domain.connect", return_value=db):
         result = CliRunner().invoke(
             cli,
             ["blindspots", "nonexistent-account", "--db", str(tmp_path / "fake.db"), "--json"],
@@ -619,7 +645,7 @@ def test_cmd_context_click_context_no_match_shows_not_found(tmp_path: Path) -> N
     db = _make_db()
     runner = CliRunner()
 
-    with patch("fieldkit.commands.gmail.query.connect", return_value=db):
+    with patch("fieldkit.commands.gmail.query.query_domain.connect", return_value=db):
         result = runner.invoke(cli, ["context", "Unknown Person", "--db", str(tmp_path / "fake.db")])
 
     assert result.exit_code == 0
@@ -629,17 +655,17 @@ def test_cmd_context_click_context_no_match_shows_not_found(tmp_path: Path) -> N
 def test_cmd_context_click_context_with_match_shows_threads(tmp_path: Path) -> None:
     """context command shows thread context when person is found."""
     db = _make_db()
-    _insert_person(db, "dave@acme-corp.com", "Dave Brown")
+    _insert_person(db, "dave@acme-corp.example.com", "Dave Brown")
     _insert_message(
         db,
         "t-001",
-        "dave@acme-corp.com",
+        "dave@acme-corp.example.com",
         subject="Dave's thread",
         body_plain="Some context here.",
     )
     runner = CliRunner()
 
-    with patch("fieldkit.commands.gmail.query.connect", return_value=db):
+    with patch("fieldkit.commands.gmail.query.query_domain.connect", return_value=db):
         result = runner.invoke(cli, ["context", "Dave Brown", "--db", str(tmp_path / "fake.db")])
 
     assert result.exit_code == 0

@@ -1,15 +1,37 @@
 """Tests for fieldkit.commands.sf.session_check."""
 
 import json
+import re
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+from click.testing import CliRunner
 
-from fieldkit.commands.sf.session_check import check_sf_session
+from fieldkit.commands.sf.session_check import check_sf_session, cli
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.mark.parametrize(("status", "block", "exit_code"), [(200, 0, 0), (401, 1, 2), (302, 2, 2)])
+def test_documentation_session_transcripts(tmp_path: Path, status: int, block: int, exit_code: int) -> None:
+    document = Path("docs/guides/salesforce-auth.md").read_text(encoding="utf-8")
+    transcripts = re.findall(r"```\n(Session:.*?)```", document, flags=re.DOTALL)
+    assert len(transcripts) == 3
+    cookie_file = _mock_cookie_file(
+        tmp_path, {"cookies": [{"name": "sid", "value": "fictional", "domain": ".yourorg.my.salesforce.com"}]}
+    )
+    with (
+        patch("fieldkit.commands.sf.session_check.get_cookie_file", return_value=cookie_file),
+        patch("fieldkit.commands.sf.session_check.httpx.get", return_value=httpx.Response(status)) as request,
+    ):
+        result = CliRunner().invoke(cli, [])
+    assert result.exit_code == exit_code, result.output
+    assert result.output == transcripts[block]
+    request.assert_called_once()
+    assert "fictional" not in result.output
+
 
 _COOKIE_DATA = {
     "cookies": [
@@ -31,6 +53,85 @@ def _make_response(status_code: int) -> MagicMock:
     return resp
 
 
+@pytest.mark.parametrize("as_json", [False, True])
+@pytest.mark.parametrize("outcome", ["success", "unexpected", "network", "missing", "malformed"])
+def test_session_diagnostics_are_payload_free(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, as_json: bool, outcome: str
+) -> None:
+    cookie_file = _mock_cookie_file(
+        tmp_path,
+        {
+            "cookies": [
+                {"name": "sid", "value": "private-token-sentinel", "domain": ".private-host-sentinel.my.salesforce.com"}
+            ]
+        },
+    )
+    if outcome == "missing":
+        cookie_file.unlink()
+    elif outcome == "malformed":
+        cookie_file.write_text("private-malformed-sentinel", encoding="utf-8")
+    with (
+        patch("fieldkit.commands.sf.session_check.get_cookie_file", return_value=cookie_file),
+        patch("fieldkit.commands.sf.session_check.time.sleep"),
+        patch(
+            "fieldkit.commands.sf.session_check.httpx.get",
+            return_value=httpx.Response(200 if outcome == "success" else 500),
+            side_effect=httpx.ConnectError("private-network-sentinel") if outcome == "network" else None,
+        ),
+        caplog.at_level("DEBUG", logger="fieldkit.commands.sf.session_check"),
+    ):
+        result = CliRunner().invoke(cli, ["--json"] if as_json else [])
+    assert result.exit_code == (0 if outcome == "success" else 2)
+    assert "private-" not in result.output + caplog.text
+    assert str(tmp_path) not in result.output + caplog.text
+
+
+@pytest.mark.parametrize(
+    "cookie_data",
+    [
+        {"cookies": [{"name": "sid", "value": "secret", "domain": "my.salesforce.com.example.com"}]},
+        {"cookies": [{"name": "sid", "value": "secret", "domain": "evilmy.salesforce.com"}]},
+        {"cookies": [{"name": "sid", "value": "secret", "domain": "org.my.salesforce.com@evil.example.com"}]},
+        {"cookies": [{"name": "sid", "value": "secret", "domain": "org.my.salesforce.com/path"}]},
+        {"cookies": [{"name": "sid", "value": {"secret": "value"}, "domain": "org.my.salesforce.com"}]},
+        {"cookies": [None]},
+        {"cookies": "private-malformed-sentinel"},
+        [],
+    ],
+)
+def test_unsafe_cookie_input_never_sends_credentials(tmp_path: Path, cookie_data: object) -> None:
+    cookie_file = tmp_path / "cookies.json"
+    cookie_file.write_text(json.dumps(cookie_data), encoding="utf-8")
+    with (
+        patch("fieldkit.commands.sf.session_check.get_cookie_file", return_value=cookie_file),
+        patch("fieldkit.commands.sf.session_check.httpx.get", return_value=httpx.Response(200)) as request,
+    ):
+        result = CliRunner().invoke(cli, [])
+    assert result.exit_code == 2
+    request.assert_not_called()
+    assert "private-" not in result.output
+
+
+@pytest.mark.parametrize("lookalike_first", [True, False])
+def test_mixed_valid_and_lookalike_sid_selects_only_valid_cookie(tmp_path: Path, lookalike_first: bool) -> None:
+    valid = {"name": "sid", "value": "selected-session-sentinel", "domain": ".org.my.salesforce.com"}
+    lookalike = {"name": "sid", "value": "ignored-session-sentinel", "domain": "org.my.salesforce.com.evil.example.com"}
+    cookies = [lookalike, valid] if lookalike_first else [valid, lookalike]
+    cookie_file = _mock_cookie_file(tmp_path, {"cookies": cookies})
+    with (
+        patch("fieldkit.commands.sf.session_check.get_cookie_file", return_value=cookie_file),
+        patch("fieldkit.commands.sf.session_check.httpx.get", return_value=httpx.Response(200)) as request,
+    ):
+        result = CliRunner().invoke(cli, [])
+    assert result.exit_code == 0
+    request.assert_called_once()
+    assert request.call_args.args[0].startswith("https://org.my.salesforce.com/")
+    assert request.call_args.kwargs["headers"] == {"Authorization": "Bearer selected-session-sentinel"}
+    assert "selected-session-sentinel" not in result.output
+    assert "ignored-session-sentinel" not in result.output
+    assert "evil.example.com" not in result.output
+
+
 def test_session_active(tmp_path: Path) -> None:
     cookie_file = _mock_cookie_file(tmp_path)
     with (
@@ -39,7 +140,7 @@ def test_session_active(tmp_path: Path) -> None:
     ):
         alive, msg = check_sf_session()
     assert alive is True
-    assert "instance:" in msg  # historic regression: return value is now "instance: {domain}"
+    assert msg == "Salesforce API session is active."
 
 
 def test_session_expired_401(tmp_path: Path) -> None:
@@ -101,7 +202,7 @@ def test_no_sid_cookie(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# historic regression regression: session_check MUST use Bearer auth, not Cookie auth
+# The session probe uses Bearer authentication rather than browser-cookie headers.
 # ---------------------------------------------------------------------------
 
 
@@ -143,13 +244,11 @@ def test_bearer_auth_regression_rejects_non_my_salesforce_domain(tmp_path: Path)
 
 
 # ---------------------------------------------------------------------------
-# historic regression regression: probe MUST hit an object-level endpoint, not just
-# GET /services/data/ (which passed even when real object-level calls fail
-# with 401 INVALID_SESSION_ID -- confirmed live 2026-08-15).
+# Probe Account metadata: the API root does not establish object-level access.
 # ---------------------------------------------------------------------------
 
 
-def test_bug_1453_probe_hits_object_level_describe_endpoint(tmp_path: Path) -> None:
+def test_probe_hits_account_describe_endpoint(tmp_path: Path) -> None:
     """The probe URL must be a real sobjects endpoint, not the bare /services/data/ listing."""
     cookie_file = _mock_cookie_file(tmp_path)
     captured_urls: list[str] = []
@@ -179,27 +278,20 @@ def test_bug_1453_probe_hits_object_level_describe_endpoint(tmp_path: Path) -> N
     )
 
 
-# ---------------------------------------------------------------------------
-# historic regression secondary: _PROBE_API_VERSION must match _API_VERSION in client.py.
-# A comment alone won't prevent drift when client.py bumps its version.
-# ---------------------------------------------------------------------------
+def test_probe_uses_canonical_api_version(tmp_path: Path) -> None:
+    """The health probe targets the same REST version as domain requests."""
+    from fieldkit.sf.client import API_VERSION
 
+    cookie_file = _mock_cookie_file(tmp_path)
+    with (
+        patch("fieldkit.commands.sf.session_check.get_cookie_file", return_value=cookie_file),
+        patch("fieldkit.commands.sf.session_check.httpx.get", return_value=httpx.Response(200)) as request,
+    ):
+        result = check_sf_session()
 
-def test_probe_api_version_matches_client_api_version() -> None:
-    """_PROBE_API_VERSION in session_check must stay in sync with _API_VERSION in client.
-
-    Both are intentionally separate constants (AGENTS.md forbids importing private names
-    across modules), but they MUST agree or the session-check probe hits a different API
-    version than the real SFDirectClient calls, which could produce false ACTIVE verdicts
-    on version-specific endpoints.
-    """
-    from fieldkit.commands.sf.session_check import _PROBE_API_VERSION
-    from fieldkit.sf.client import _API_VERSION
-
-    assert _PROBE_API_VERSION == _API_VERSION, (
-        f"_PROBE_API_VERSION ({_PROBE_API_VERSION!r}) in session_check.py must match "
-        f"_API_VERSION ({_API_VERSION!r}) in sf/client.py. "
-        "When bumping client._API_VERSION, also update session_check._PROBE_API_VERSION."
+    assert result[0] is True
+    assert request.call_args.args[0] == (
+        f"https://examplecrm.my.salesforce.com/services/data/{API_VERSION}/sobjects/Account/describe"
     )
 
 

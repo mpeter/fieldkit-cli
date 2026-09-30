@@ -1,4 +1,4 @@
-"""Unit tests for fieldkit/commands/issue/gh_store.py.
+"""Unit tests for the canonical GitHub issue domain.
 
 All gh CLI calls are mocked via subprocess.run — no live GitHub API calls.
 Tests cover: find, list_issues, create, update_status, mark_fixed, add_note, edit.
@@ -9,12 +9,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from fieldkit.commands.issue.gh_store import (
-    GHIssueStore,
-    _issue_from_gh,
-    _parse_fieldkit_id,
-    _status_from_github,
-)
+from fieldkit.errors import GitHubDataError, GitHubRequestError
+from fieldkit.issue import GHIssueStore, format_issue_id
+from fieldkit.issue.github import _issue_from_gh
+from fieldkit.issue.model import display_title, status_from_github
 
 pytestmark = pytest.mark.unit
 
@@ -116,22 +114,22 @@ def _mock_gh(stdout: str = "[]", returncode: int = 0, stderr: str = "") -> Magic
 
 @pytest.mark.unit
 def test_parse_fieldkit_id_is_lowercase_public_key() -> None:
-    assert _parse_fieldkit_id("fieldkit-042: some title") == "fieldkit-042"
+    assert format_issue_id(42) == "fieldkit-042"
 
 
 @pytest.mark.unit
 def test_parse_fieldkit_id_does_not_encode_issue_type() -> None:
-    assert _parse_fieldkit_id("fieldkit-017: a feature") == "fieldkit-017"
+    assert format_issue_id(17) == "fieldkit-017"
 
 
 @pytest.mark.unit
 def test_parse_fieldkit_id_no_match() -> None:
-    assert _parse_fieldkit_id("Some random title") is None
+    assert display_title("Some random title") == "Some random title"
 
 
 @pytest.mark.unit
 def test_parse_fieldkit_id_preserves_zero_padding() -> None:
-    assert _parse_fieldkit_id("fieldkit-001: first issue") == "fieldkit-001"
+    assert display_title("fieldkit-001: first issue") == "first issue"
 
 
 # ---------------------------------------------------------------------------
@@ -142,45 +140,60 @@ def test_parse_fieldkit_id_preserves_zero_padding() -> None:
 @pytest.mark.unit
 def test_status_open_uppercase() -> None:
     """GitHub returns 'OPEN' (uppercase) — must map to open status."""
-    assert _status_from_github("OPEN", None, []) == "open"
+    assert status_from_github("OPEN", None, []) == "open"
 
 
 @pytest.mark.unit
 def test_status_open_lowercase() -> None:
     """Lowercase 'open' is accepted for backward compatibility."""
-    assert _status_from_github("open", None, []) == "open"
+    assert status_from_github("open", None, []) == "open"
 
 
 @pytest.mark.unit
 def test_status_planned_uppercase() -> None:
     """GitHub 'OPEN' plus the planned label maps to planned."""
-    assert _status_from_github("OPEN", None, ["status:planned"]) == "planned"
+    assert status_from_github("OPEN", None, ["status:planned"]) == "planned"
 
 
 @pytest.mark.unit
 def test_status_planned() -> None:
-    assert _status_from_github("open", None, ["status:planned"]) == "planned"
+    assert status_from_github("open", None, ["status:planned"]) == "planned"
 
 
 @pytest.mark.unit
 def test_status_wont_fix() -> None:
-    assert _status_from_github("closed", "not_planned", []) == "wont-fix"
+    assert status_from_github("closed", "not_planned", []) == "wont-fix"
 
 
 @pytest.mark.unit
 def test_status_wont_fix_uppercase() -> None:
-    """GitHub 'CLOSED' (uppercase) with not_planned maps to wont-fix."""
-    assert _status_from_github("CLOSED", "not_planned", []) == "wont-fix"
+    """GitHub's uppercase NOT_PLANNED enum maps to wont-fix."""
+    assert status_from_github("CLOSED", "NOT_PLANNED", []) == "wont-fix"
+
+
+@pytest.mark.parametrize(
+    ("state", "state_reason"),
+    [("UNKNOWN", None), ("CLOSED", "UNKNOWN"), ("OPEN", "UNKNOWN")],
+)
+def test_status_rejects_unknown_provider_enums(state: str, state_reason: str | None) -> None:
+    with pytest.raises(GitHubDataError, match="state is incomplete or invalid"):
+        status_from_github(state, state_reason, [])
 
 
 @pytest.mark.unit
 def test_status_fixed() -> None:
-    assert _status_from_github("closed", "completed", ["status:fixed"]) == "fixed"
+    assert status_from_github("closed", "completed", ["status:fixed"]) == "fixed"
+
+
+@pytest.mark.parametrize("labels", [["status:planned", "status:planned"], ["status:future"]])
+def test_status_rejects_duplicate_or_unknown_status_labels(labels: list[str]) -> None:
+    with pytest.raises(GitHubDataError, match="status labels"):
+        status_from_github("OPEN", None, labels)
 
 
 @pytest.mark.unit
 def test_status_closed() -> None:
-    assert _status_from_github("closed", "completed", []) == "closed"
+    assert status_from_github("closed", "completed", []) == "closed"
 
 
 # ---------------------------------------------------------------------------
@@ -192,7 +205,7 @@ def test_status_closed() -> None:
 def test_issue_from_gh_open() -> None:
     issue = _issue_from_gh(_OPEN_ISSUE)
     assert issue is not None
-    assert issue.id == "fieldkit-007"
+    assert issue.id == "fieldkit-042"
     assert issue.type == "bug"
     assert issue.title == "something is broken"
     assert issue.status == "open"
@@ -239,9 +252,13 @@ def test_issue_from_gh_planned() -> None:
 
 
 @pytest.mark.unit
-def test_issue_from_gh_non_fieldkit_returns_none() -> None:
+def test_issue_from_gh_plain_title_with_managed_type_is_managed() -> None:
     data = {**_OPEN_ISSUE, "title": "Some unrelated issue"}
-    assert _issue_from_gh(data) is None
+    issue = _issue_from_gh(data)
+
+    assert issue is not None
+    assert issue.id == "fieldkit-042"
+    assert issue.title == "Some unrelated issue"
 
 
 # ---------------------------------------------------------------------------
@@ -253,10 +270,10 @@ def test_issue_from_gh_non_fieldkit_returns_none() -> None:
 def test_find_returns_matching_issue() -> None:
     store = _make_store()
     with patch("subprocess.run") as mock_run:
-        mock_run.return_value = _mock_gh(json.dumps([_OPEN_ISSUE]))
-        result = store.find("fieldkit-007")
+        mock_run.return_value = _mock_gh(json.dumps(_OPEN_ISSUE))
+        result = store.find("fieldkit-042")
     assert result is not None
-    assert result.id == "fieldkit-007"
+    assert result.id == "fieldkit-042"
     assert result.gh_number == 42
 
 
@@ -264,7 +281,7 @@ def test_find_returns_matching_issue() -> None:
 def test_find_returns_none_when_not_found() -> None:
     store = _make_store()
     with patch("subprocess.run") as mock_run:
-        mock_run.return_value = _mock_gh("[]")
+        mock_run.return_value = _mock_gh("", returncode=1, stderr="HTTP 404")
         result = store.find("fieldkit-999")
     assert result is None
 
@@ -295,161 +312,32 @@ def test_list_all_returns_all() -> None:
     assert len(result) == 3
 
 
-@pytest.mark.unit
-def test_list_gh_error_returns_empty() -> None:
+def test_list_filters_unmanaged_issue_before_status_validation() -> None:
     store = _make_store()
-    with patch("subprocess.run") as mock_run:
-        mock_run.return_value = _mock_gh("", returncode=1)
-        result = store.list_issues(status="open")
+    unmanaged = {**_OPEN_ISSUE, "labels": [{"name": "question"}], "stateReason": "future_value"}
+    with patch("subprocess.run", return_value=_mock_gh(json.dumps([unmanaged]))):
+        result = store.list_issues(status="all")
+
     assert result == []
 
 
-# ---------------------------------------------------------------------------
-# GHIssueStore._get_watermark / _set_watermark / next_id
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.unit
-def test_get_watermark_returns_none_when_label_missing() -> None:
+def test_list_rejects_duplicate_json_keys() -> None:
     store = _make_store()
-    with patch("subprocess.run") as mock_run:
-        mock_run.return_value = _mock_gh("", returncode=1, stderr="gh: Not Found (HTTP 404)")
-        result = store._get_watermark()
-    assert result is None
-
-
-@pytest.mark.unit
-def test_get_watermark_parses_valid_int() -> None:
-    store = _make_store()
-    with patch("subprocess.run") as mock_run:
-        mock_run.return_value = _mock_gh("42")
-        result = store._get_watermark()
-    assert result == 42
-
-
-@pytest.mark.unit
-def test_get_watermark_returns_none_for_non_numeric_description() -> None:
-    store = _make_store()
-    with patch("subprocess.run") as mock_run:
-        mock_run.return_value = _mock_gh("unset")
-        result = store._get_watermark()
-    assert result is None
-
-
-@pytest.mark.unit
-def test_get_watermark_reraises_non_404_errors() -> None:
-    store = _make_store()
+    payload = json.dumps([_OPEN_ISSUE]).replace('"number": 42', '"number": 41, "number": 42')
     with (
-        patch("subprocess.run") as mock_run,
-        pytest.raises(RuntimeError, match="failed"),
+        patch("subprocess.run", return_value=_mock_gh(payload)),
+        pytest.raises(GitHubDataError, match="invalid JSON"),
     ):
-        mock_run.return_value = _mock_gh("", returncode=1, stderr="Internal Server Error")
-        store._get_watermark()
+        store.list_issues(status="all")
 
 
 @pytest.mark.unit
-def test_set_watermark_patches_existing_label() -> None:
+def test_list_gh_error_propagates() -> None:
     store = _make_store()
     with patch("subprocess.run") as mock_run:
-        mock_run.return_value = _mock_gh("")
-        store._set_watermark(5)
-    argvs = _argvs(mock_run)
-    assert len(argvs) == 1
-    assert "PATCH" in argvs[0]
-    assert "description=5" in argvs[0]
-
-
-@pytest.mark.unit
-def test_set_watermark_creates_label_when_patch_404s() -> None:
-    store = _make_store()
-    with patch("subprocess.run") as mock_run:
-        mock_run.side_effect = [
-            _mock_gh("", returncode=1, stderr="gh: Not Found (HTTP 404)"),
-            _mock_gh(""),
-        ]
-        store._set_watermark(5)
-    argvs = _argvs(mock_run)
-    assert len(argvs) == 2
-    assert "PATCH" in argvs[0]
-    assert "POST" in argvs[1]
-    assert "description=5" in argvs[1]
-
-
-@pytest.mark.unit
-def test_set_watermark_reraises_non_404_patch_errors() -> None:
-    store = _make_store()
-    with (
-        patch("subprocess.run") as mock_run,
-        pytest.raises(RuntimeError, match="failed"),
-    ):
-        mock_run.return_value = _mock_gh("", returncode=1, stderr="Internal Server Error")
-        store._set_watermark(5)
-    assert len(_argvs(mock_run)) == 1, "must not attempt to create the label after a non-404 failure"
-
-
-@pytest.mark.unit
-def test_next_id_uses_watermark_without_rescanning_titles() -> None:
-    store = _make_store()
-    with patch("subprocess.run") as mock_run:
-        mock_run.side_effect = [_mock_gh("5"), _mock_gh("")]
-        result = store.next_id("bug")
-    assert result == "fieldkit-006"
-    argvs = _argvs(mock_run)
-    assert len(argvs) == 2, "must not touch the title-scan endpoint once a watermark exists"
-    assert not any("state=all" in argv for argv in argvs)
-
-
-@pytest.mark.unit
-def test_next_id_bootstraps_from_title_scan_when_no_watermark() -> None:
-    store = _make_store()
-    with patch("subprocess.run") as mock_run:
-        mock_run.side_effect = [
-            _mock_gh(""),  # no watermark yet
-            _mock_gh(json.dumps(["fieldkit-001: existing", "fieldkit-005: other"])),
-            _mock_gh(""),  # persist watermark -> 6
-        ]
-        result = store.next_id("enhancement")
-    assert result == "fieldkit-006"
-
-
-@pytest.mark.unit
-def test_next_id_key_not_reissued_after_issue_retitled() -> None:
-    """Once a key is allocated, retitling the issue that
-    held it must not free it for reissue.
-
-    Simulates two points in time against the same repo:
-      1. First allocation: no watermark yet, so next_id() bootstraps from a
-         title scan that sees the highest live title "fieldkit-005: ...", and
-         allocates and persists fieldkit-006.
-      2. A later allocation, *after* the issue holding "fieldkit-006" has been
-         retitled away (e.g. consolidated into a duplicate during triage).
-         A title scan at this point would no longer find fieldkit-006 anywhere,
-         and the pre-fix scan-only implementation would be fooled into
-         reissuing it. The watermark-based implementation must instead read
-         the persisted value and allocate fieldkit-007 without rescanning.
-    """
-    store = _make_store()
-
-    with patch("subprocess.run") as mock_run:
-        mock_run.side_effect = [
-            _mock_gh("", returncode=1, stderr="gh: Not Found (HTTP 404)"),
-            _mock_gh(json.dumps(["fieldkit-005: something is broken"])),
-            _mock_gh(""),
-        ]
-        first_id = store.next_id("bug")
-    assert first_id == "fieldkit-006"
-
-    # The watermark label now persists "6" (written above). A title scan at
-    # this point would no longer see fieldkit-006 anywhere, but next_id() must
-    # not rescan at all once a watermark exists.
-    with patch("subprocess.run") as mock_run:
-        mock_run.side_effect = [_mock_gh("6"), _mock_gh("")]
-        second_id = store.next_id("bug")
-
-    assert second_id == "fieldkit-007", "watermark must not be fooled by a retitled issue"
-    argvs = _argvs(mock_run)
-    assert len(argvs) == 2, "must not rescan issue titles once a watermark exists"
-    assert not any("state=all" in argv for argv in argvs)
+        mock_run.return_value = _mock_gh("", returncode=1)
+        with pytest.raises(GitHubRequestError, match="request failed"):
+            store.list_issues(status="open")
 
 
 # ---------------------------------------------------------------------------
@@ -460,12 +348,10 @@ def test_next_id_key_not_reissued_after_issue_retitled() -> None:
 @pytest.mark.unit
 def test_create_returns_gh_issue() -> None:
     store = _make_store()
-    watermark_response = _mock_gh("1")  # persisted watermark
-    patch_response = _mock_gh("")  # persist watermark -> 2
-    create_response = _mock_gh("43")  # REST API --jq .number returns just the number
+    create_response = _mock_gh('{"number": 43}')
 
     with patch("subprocess.run") as mock_run:
-        mock_run.side_effect = [watermark_response, patch_response, create_response]
+        mock_run.return_value = create_response
         issue = store.create(
             issue_type="bug",
             title="new bug",
@@ -475,7 +361,7 @@ def test_create_returns_gh_issue() -> None:
             source="test",
         )
 
-    assert issue.id == "fieldkit-002"
+    assert issue.id == "fieldkit-043"
     assert issue.title == "new bug"
     assert issue.gh_number == 43
     assert issue.status == "open"
@@ -484,15 +370,10 @@ def test_create_returns_gh_issue() -> None:
 @pytest.mark.unit
 def test_create_enh_gets_public_fieldkit_id() -> None:
     store = _make_store()
-    # No watermark yet (label exists but has no valid int description), so
-    # next_id() bootstraps from an (empty) title scan.
-    watermark_response = _mock_gh("")
-    scan_response = _mock_gh("[]")
-    patch_response = _mock_gh("")  # persist watermark -> 1
-    create_response = _mock_gh("100")  # REST API --jq .number returns just the number
+    create_response = _mock_gh('{"number": 100}')
 
     with patch("subprocess.run") as mock_run:
-        mock_run.side_effect = [watermark_response, scan_response, patch_response, create_response]
+        mock_run.return_value = create_response
         issue = store.create(
             issue_type="enhancement",
             title="new feature",
@@ -501,7 +382,42 @@ def test_create_enh_gets_public_fieldkit_id() -> None:
             source="user",
         )
 
-    assert issue.id == "fieldkit-001"
+    assert issue.id == "fieldkit-100"
+
+
+@pytest.mark.parametrize("payload", ["{}", "[{}]", '[{"number": 1}]'])
+def test_list_by_milestone_rejects_malformed_milestone_records(payload: str) -> None:
+    store = _make_store()
+    with (
+        patch("subprocess.run", return_value=_mock_gh(payload)),
+        pytest.raises(GitHubDataError, match="milestone response"),
+    ):
+        store.list_by_milestone("M1")
+
+
+@pytest.mark.parametrize("payload", ["{}", "[{}]"])
+def test_list_by_milestone_rejects_malformed_issue_records(payload: str) -> None:
+    store = _make_store()
+    with (
+        patch("subprocess.run") as mock_run,
+        pytest.raises(GitHubDataError, match="issue response"),
+    ):
+        mock_run.side_effect = [
+            _mock_gh('[{"number": 7, "title": "M1"}]'),
+            _mock_gh(payload),
+        ]
+        store.list_by_milestone("M1")
+
+
+def test_list_by_milestone_accepts_valid_empty_issue_list() -> None:
+    store = _make_store()
+    with patch("subprocess.run") as mock_run:
+        mock_run.side_effect = [
+            _mock_gh('[{"number": 7, "title": "M1"}]'),
+            _mock_gh("[]"),
+        ]
+        result = store.list_by_milestone("M1")
+    assert result == []
 
 
 # ---------------------------------------------------------------------------
@@ -512,14 +428,14 @@ def test_create_enh_gets_public_fieldkit_id() -> None:
 @pytest.mark.unit
 def test_mark_fixed_closes_with_completed_and_label() -> None:
     store = _make_store()
-    find_response = _mock_gh(json.dumps([_OPEN_ISSUE]))
+    find_response = _mock_gh(json.dumps(_OPEN_ISSUE))
     close_response = _mock_gh("")
     label_response = _mock_gh("")
     comment_response = _mock_gh("")
 
     with patch("subprocess.run") as mock_run:
         mock_run.side_effect = [find_response, close_response, label_response, comment_response]
-        result = store.mark_fixed("fieldkit-007", commit="abc1234", note="Tests pass")
+        result = store.mark_fixed("fieldkit-042", commit="abc1234", note="Tests pass")
 
     assert result is not None
     assert result.status == "fixed"
@@ -532,7 +448,7 @@ def test_mark_fixed_closes_with_completed_and_label() -> None:
 def test_mark_fixed_returns_none_when_not_found() -> None:
     store = _make_store()
     with patch("subprocess.run") as mock_run:
-        mock_run.return_value = _mock_gh("[]")
+        mock_run.return_value = _mock_gh("", returncode=1, stderr="HTTP 404")
         result = store.mark_fixed("fieldkit-999")
     assert result is None
 
@@ -545,12 +461,12 @@ def test_mark_fixed_returns_none_when_not_found() -> None:
 @pytest.mark.unit
 def test_update_status_wont_fix_uses_not_planned() -> None:
     store = _make_store()
-    find_response = _mock_gh(json.dumps([_OPEN_ISSUE]))
+    find_response = _mock_gh(json.dumps(_OPEN_ISSUE))
     close_response = _mock_gh("")
 
     with patch("subprocess.run") as mock_run:
         mock_run.side_effect = [find_response, close_response]
-        result = store.update_status("fieldkit-007", "wont-fix")
+        result = store.update_status("fieldkit-042", "wont-fix")
 
     assert result is not None
     calls = [str(c) for c in mock_run.call_args_list]
@@ -560,13 +476,13 @@ def test_update_status_wont_fix_uses_not_planned() -> None:
 @pytest.mark.unit
 def test_update_status_open_reopens_issue() -> None:
     store = _make_store()
-    find_response = _mock_gh(json.dumps([_CLOSED_COMPLETED]))
+    find_response = _mock_gh(json.dumps(_CLOSED_COMPLETED))
     reopen_response = _mock_gh("")
     edit_response = _mock_gh("")
 
     with patch("subprocess.run") as mock_run:
         mock_run.side_effect = [find_response, reopen_response, edit_response]
-        result = store.update_status("fieldkit-003", "open")
+        result = store.update_status("fieldkit-010", "open")
 
     assert result is not None
     calls = [str(c) for c in mock_run.call_args_list]
@@ -581,12 +497,12 @@ def test_update_status_open_reopens_issue() -> None:
 @pytest.mark.unit
 def test_add_note_posts_comment() -> None:
     store = _make_store()
-    find_response = _mock_gh(json.dumps([_OPEN_ISSUE]))
+    find_response = _mock_gh(json.dumps(_OPEN_ISSUE))
     comment_response = _mock_gh("")
 
     with patch("subprocess.run") as mock_run:
         mock_run.side_effect = [find_response, comment_response]
-        result = store.add_note("fieldkit-007", "Verified on staging")
+        result = store.add_note("fieldkit-042", "Verified on staging")
 
     assert result is not None
     calls = [str(c) for c in mock_run.call_args_list]
@@ -598,7 +514,7 @@ def test_add_note_posts_comment() -> None:
 def test_add_note_returns_none_when_not_found() -> None:
     store = _make_store()
     with patch("subprocess.run") as mock_run:
-        mock_run.return_value = _mock_gh("[]")
+        mock_run.return_value = _mock_gh("", returncode=1, stderr="HTTP 404")
         result = store.add_note("fieldkit-999", "note text")
     assert result is None
 
@@ -611,24 +527,25 @@ def test_add_note_returns_none_when_not_found() -> None:
 @pytest.mark.unit
 def test_edit_updates_title() -> None:
     store = _make_store()
-    find_response = _mock_gh(json.dumps([_OPEN_ISSUE]))
+    find_response = _mock_gh(json.dumps(_OPEN_ISSUE))
     edit_response = _mock_gh("")
 
     with patch("subprocess.run") as mock_run:
         mock_run.side_effect = [find_response, edit_response]
-        result = store.edit("fieldkit-007", title="new title")
+        result = store.edit("fieldkit-042", title="new title")
 
     assert result is not None
     assert result.title == "new title"
     calls = [str(c) for c in mock_run.call_args_list]
-    assert any("fieldkit-007: new title" in c for c in calls)
+    assert any("--title', 'new title'" in c for c in calls)
+    assert all("fieldkit-007: new title" not in c for c in calls)
 
 
 @pytest.mark.unit
 def test_edit_returns_none_when_not_found() -> None:
     store = _make_store()
     with patch("subprocess.run") as mock_run:
-        mock_run.return_value = _mock_gh("[]")
+        mock_run.return_value = _mock_gh("", returncode=1, stderr="HTTP 404")
         result = store.edit("fieldkit-999", title="x")
     assert result is None
 
@@ -675,75 +592,6 @@ def test_known_modules_contains_expected() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 4D.1 severity_rank
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.unit
-def test_severity_rank_known_severity() -> None:
-    """severity_rank returns 1 for 'high' severity."""
-    import datetime
-
-    from fieldkit.commands.issue.gh_store import GHIssue
-
-    issue = GHIssue(
-        id="fieldkit-001",
-        type="bug",
-        title="Test issue",
-        status="open",
-        severity="high",
-        module="sf",
-        gh_number=1,
-        created=datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC),
-    )
-    assert issue.severity_rank == 1
-
-
-@pytest.mark.unit
-def test_severity_rank_unknown_defaults_to_99() -> None:
-    """severity_rank returns 99 for unrecognised severity."""
-
-    from fieldkit.commands.issue.gh_store import _SEVERITY_RANK
-
-    # Temporarily test via the dict directly since IssueSeverity is a Literal
-    assert _SEVERITY_RANK.get("unknown", 99) == 99
-    assert _SEVERITY_RANK.get("critical") == 0
-    assert _SEVERITY_RANK.get("medium") == 2
-
-
-# ---------------------------------------------------------------------------
-# 4D.2 count_issues
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.unit
-def test_count_issues_returns_correct_counts() -> None:
-    """count_issues returns a dict with the right key names and integer values."""
-    from unittest.mock import patch
-
-    store = _make_store()
-
-    with patch.object(store, "list_issues") as mock_list:
-        mock_list.return_value = [
-            _issue_from_gh(
-                {
-                    **_OPEN_ISSUE,
-                    "labels": [{"name": "bug"}, {"name": "severity:high"}, {"name": "module:sf"}],
-                    "state": "open",
-                }
-            ),
-        ]
-        result = store.count_issues()
-
-    assert isinstance(result, dict)
-    assert "open_bugs" in result
-    assert "open_enhancements" in result
-    assert "closed" in result
-    assert "wontfix" in result
-    assert all(isinstance(v, int) for v in result.values())
-
-
-# ---------------------------------------------------------------------------
 # GHIssueStore.update_status — remaining transitions
 # GHIssueStore.list_by_milestone / link_milestone
 #
@@ -772,7 +620,7 @@ def test_update_status_returns_none_when_issue_not_found() -> None:
     """An unknown issue id is reported as None rather than raising."""
     store = _make_store()
     with patch("subprocess.run") as mock_run:
-        mock_run.return_value = _mock_gh("[]")
+        mock_run.return_value = _mock_gh("", returncode=1, stderr="HTTP 404")
         result = store.update_status("fieldkit-999", "closed")
 
     assert result is None
@@ -784,8 +632,8 @@ def test_update_status_planned_reopens_a_closed_issue_first() -> None:
     """Planning a closed issue must reopen it, or the label would land on a closed issue."""
     store = _make_store()
     with patch("subprocess.run") as mock_run:
-        mock_run.side_effect = [_mock_gh(json.dumps([_CLOSED_COMPLETED])), _mock_gh(""), _mock_gh("")]
-        result = store.update_status("fieldkit-003", "planned")
+        mock_run.side_effect = [_mock_gh(json.dumps(_CLOSED_COMPLETED)), _mock_gh(""), _mock_gh("")]
+        result = store.update_status("fieldkit-010", "planned")
 
     assert result is not None
     assert result.status == "planned"
@@ -800,8 +648,8 @@ def test_update_status_planned_does_not_reopen_an_already_open_issue() -> None:
     """An open issue is already in the right state; reopening it would be a redundant API write."""
     store = _make_store()
     with patch("subprocess.run") as mock_run:
-        mock_run.side_effect = [_mock_gh(json.dumps([_OPEN_ISSUE])), _mock_gh("")]
-        result = store.update_status("fieldkit-007", "planned")
+        mock_run.side_effect = [_mock_gh(json.dumps(_OPEN_ISSUE)), _mock_gh("")]
+        result = store.update_status("fieldkit-042", "planned")
 
     assert result is not None
     assert "reopen" not in _flat(mock_run)
@@ -812,8 +660,8 @@ def test_update_status_fixed_closes_as_completed_and_labels() -> None:
     """'fixed' is a completed close plus the status:fixed label that distinguishes it from 'closed'."""
     store = _make_store()
     with patch("subprocess.run") as mock_run:
-        mock_run.side_effect = [_mock_gh(json.dumps([_OPEN_ISSUE])), _mock_gh(""), _mock_gh("")]
-        result = store.update_status("fieldkit-007", "fixed")
+        mock_run.side_effect = [_mock_gh(json.dumps(_OPEN_ISSUE)), _mock_gh(""), _mock_gh("")]
+        result = store.update_status("fieldkit-042", "fixed")
 
     assert result is not None
     assert result.status == "fixed"
@@ -828,8 +676,8 @@ def test_update_status_closed_does_not_add_the_fixed_label() -> None:
     """'closed' and 'fixed' differ only by that label, so closed must not acquire it."""
     store = _make_store()
     with patch("subprocess.run") as mock_run:
-        mock_run.side_effect = [_mock_gh(json.dumps([_OPEN_ISSUE])), _mock_gh("")]
-        result = store.update_status("fieldkit-007", "closed")
+        mock_run.side_effect = [_mock_gh(json.dumps(_OPEN_ISSUE)), _mock_gh("")]
+        result = store.update_status("fieldkit-042", "closed")
 
     assert result is not None
     flat = _flat(mock_run)
@@ -842,8 +690,8 @@ def test_update_status_posts_the_note_as_a_comment() -> None:
     """A note accompanying a transition is recorded on the issue."""
     store = _make_store()
     with patch("subprocess.run") as mock_run:
-        mock_run.side_effect = [_mock_gh(json.dumps([_OPEN_ISSUE])), _mock_gh(""), _mock_gh("")]
-        result = store.update_status("fieldkit-007", "closed", note="superseded by fieldkit-003")
+        mock_run.side_effect = [_mock_gh(json.dumps(_OPEN_ISSUE)), _mock_gh(""), _mock_gh("")]
+        result = store.update_status("fieldkit-042", "closed", note="superseded by fieldkit-003")
 
     assert result is not None
     argvs = _argvs(mock_run)
@@ -863,7 +711,7 @@ def test_list_by_milestone_matches_the_title_case_insensitively() -> None:
         result = store.list_by_milestone("m001")
 
     assert len(result) == 1
-    assert result[0].id == "fieldkit-007"
+    assert result[0].id == "fieldkit-042"
     # The issue query must use the resolved number, not the title.
     issue_query = _argvs(mock_run)[1]
     assert issue_query[issue_query.index("--milestone") + 1] == "3"
@@ -882,11 +730,11 @@ def test_list_by_milestone_returns_empty_when_no_milestone_matches() -> None:
 
 
 @pytest.mark.unit
-def test_list_by_milestone_drops_issues_without_a_fieldkit_id() -> None:
-    """Issues in the milestone that are not fieldkit-tracked are filtered out, not returned as None."""
+def test_list_by_milestone_drops_issues_without_a_managed_type() -> None:
+    """Ordinary community issues without a managed type are filtered out."""
     store = _make_store()
     milestones = json.dumps([{"number": 3, "title": "M001"}])
-    items = json.dumps([_OPEN_ISSUE, {**_OPEN_ISSUE, "number": 99, "title": "Some unrelated issue"}])
+    items = json.dumps([_OPEN_ISSUE, {**_OPEN_ISSUE, "number": 99, "title": "Some unrelated issue", "labels": []}])
     with patch("subprocess.run") as mock_run:
         mock_run.side_effect = [_mock_gh(milestones), _mock_gh(items)]
         result = store.list_by_milestone("M001")
@@ -903,7 +751,7 @@ def test_link_milestone_returns_none_when_issue_not_found() -> None:
     """An unknown issue id is reported as None, and no milestone is created."""
     store = _make_store()
     with patch("subprocess.run") as mock_run:
-        mock_run.return_value = _mock_gh("[]")
+        mock_run.return_value = _mock_gh("", returncode=1, stderr="HTTP 404")
         result = store.link_milestone("fieldkit-999", "M001")
 
     assert result is None
@@ -916,11 +764,11 @@ def test_link_milestone_reuses_an_existing_milestone() -> None:
     store = _make_store()
     milestones = json.dumps([{"number": 7, "title": "M001"}])
     with patch("subprocess.run") as mock_run:
-        mock_run.side_effect = [_mock_gh(json.dumps([_OPEN_ISSUE])), _mock_gh(milestones), _mock_gh("")]
-        result = store.link_milestone("fieldkit-007", "m001")
+        mock_run.side_effect = [_mock_gh(json.dumps(_OPEN_ISSUE)), _mock_gh(milestones), _mock_gh("")]
+        result = store.link_milestone("fieldkit-042", "m001")
 
     assert result is not None
-    assert result.id == "fieldkit-007"
+    assert result.id == "fieldkit-042"
     flat = _flat(mock_run)
     assert "POST" not in flat, "an existing milestone must not be re-created"
     edit = _argvs(mock_run)[-1]
@@ -933,12 +781,12 @@ def test_link_milestone_creates_the_milestone_when_absent() -> None:
     store = _make_store()
     with patch("subprocess.run") as mock_run:
         mock_run.side_effect = [
-            _mock_gh(json.dumps([_OPEN_ISSUE])),
+            _mock_gh(json.dumps(_OPEN_ISSUE)),
             _mock_gh(json.dumps([{"number": 7, "title": "M001"}])),
             _mock_gh(json.dumps({"number": 12, "title": "M002"})),
             _mock_gh(""),
         ]
-        result = store.link_milestone("fieldkit-007", "M002")
+        result = store.link_milestone("fieldkit-042", "M002")
 
     assert result is not None
     flat = _flat(mock_run)
@@ -955,12 +803,12 @@ def test_link_milestone_posts_the_note_as_a_comment() -> None:
     milestones = json.dumps([{"number": 7, "title": "M001"}])
     with patch("subprocess.run") as mock_run:
         mock_run.side_effect = [
-            _mock_gh(json.dumps([_OPEN_ISSUE])),
+            _mock_gh(json.dumps(_OPEN_ISSUE)),
             _mock_gh(milestones),
             _mock_gh(""),
             _mock_gh(""),
         ]
-        result = store.link_milestone("fieldkit-007", "M001", note="scheduled for the M001 batch")
+        result = store.link_milestone("fieldkit-042", "M001", note="scheduled for the M001 batch")
 
     assert result is not None
     argvs = _argvs(mock_run)

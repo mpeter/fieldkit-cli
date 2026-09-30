@@ -15,7 +15,9 @@ import pytest
 from click.testing import CliRunner
 
 from fieldkit.commands.watch.cli import cli
-from fieldkit.watch.status import was_run_today
+from fieldkit.watch.integration_plan import IntegrationPlan
+from fieldkit.watch.slack_threads import SlackRunOutcome
+from fieldkit.watch.status import WatcherDailySnapshot, WatcherRunResult, was_run_today
 
 pytestmark = pytest.mark.unit
 
@@ -70,12 +72,25 @@ def _mock_was_run_today_false(watcher: str) -> bool:
     return False
 
 
+def _successful_slack_outcome() -> SlackRunOutcome:
+    return SlackRunOutcome(
+        run=WatcherRunResult("ok", True, "written"),
+        records_checked=0,
+        alerts_generated=0,
+        failures=0,
+        auth_error=False,
+        provider_error=False,
+        elapsed_seconds=0.0,
+        dry_run=False,
+    )
+
+
 def test_run_all_exits_early_when_already_run_today() -> None:
     """run-all with no --force exits 0 immediately when guard fires."""
     runner = CliRunner()
     with (
-        patch("fieldkit.watch.status.was_run_today", side_effect=_mock_was_run_today_true),
-        patch("fieldkit.watch.status.write_run_status"),
+        patch("fieldkit.watch.status.get_daily_run_snapshot", return_value=WatcherDailySnapshot(True, "ok")),
+        patch("fieldkit.watch.status.write_run_status", return_value="written"),
         # implementation note: bypass preflight checks in unit tests (no real credentials).
         patch("fieldkit.watch.preflight.preflight_check", return_value=[]),
     ):
@@ -89,8 +104,8 @@ def test_run_all_skips_watchers_when_guard_fires() -> None:
     runner = CliRunner()
 
     with (
-        patch("fieldkit.watch.status.was_run_today", side_effect=_mock_was_run_today_true),
-        patch("fieldkit.watch.status.write_run_status"),
+        patch("fieldkit.watch.status.get_daily_run_snapshot", return_value=WatcherDailySnapshot(True, "ok")),
+        patch("fieldkit.watch.status.write_run_status", return_value="written"),
         patch("fieldkit.watch.waiting_on_tracker._run") as mock_waiting,
         patch("fieldkit.watch.pursuit_stalls._run_pursuit_stalls") as mock_pursuit,
         patch("fieldkit.watch.close_date_countdown._run_countdown") as mock_countdown,
@@ -111,20 +126,39 @@ def test_run_all_skips_watchers_when_guard_fires() -> None:
 def test_run_all_force_bypasses_guard() -> None:
     """--force flag causes run-all to proceed despite guard returning True."""
     runner = CliRunner()
+    plan = IntegrationPlan((), ("backstory-health", "draft-queue", "slack-threads"), False, False, ())
 
     with (
-        patch("fieldkit.watch.status.was_run_today", side_effect=_mock_was_run_today_true),
-        patch("fieldkit.watch.status.write_run_status") as mock_write,
-        patch("fieldkit.watch.waiting_on_tracker._run", return_value=0) as mock_waiting,
-        patch("fieldkit.watch.pursuit_stalls._run_pursuit_stalls", return_value=0) as mock_pursuit,
-        patch("fieldkit.watch.close_date_countdown._run_countdown", return_value=0) as mock_countdown,
-        patch("fieldkit.watch.contract_expiry._run_contract_expiry", return_value=0) as mock_contract,
-        patch("fieldkit.watch.backstory_health._run_backstory_health", return_value=0) as mock_backstory,
-        patch("fieldkit.watch.slack_threads._run_slack_threads", return_value=0) as mock_slack,
-        patch("fieldkit.watch.draft_queue._run_draft_queue", return_value=0) as mock_drafts,
+        patch("fieldkit.watch.status.get_daily_run_snapshot", return_value=WatcherDailySnapshot(True, "ok")),
+        patch("fieldkit.watch.status.write_run_status", return_value="written") as mock_write,
+        patch(
+            "fieldkit.watch.waiting_on_tracker._run", return_value=WatcherRunResult("ok", True, "written")
+        ) as mock_waiting,
+        patch(
+            "fieldkit.watch.pursuit_stalls._run_pursuit_stalls", return_value=WatcherRunResult("ok", True, "written")
+        ) as mock_pursuit,
+        patch(
+            "fieldkit.watch.close_date_countdown._run_countdown", return_value=WatcherRunResult("ok", True, "written")
+        ) as mock_countdown,
+        patch(
+            "fieldkit.watch.contract_expiry._run_contract_expiry", return_value=WatcherRunResult("ok", True, "written")
+        ) as mock_contract,
+        patch(
+            "fieldkit.watch.backstory_health._run_backstory_health",
+            return_value=WatcherRunResult("ok", True, "written"),
+        ) as mock_backstory,
+        patch(
+            "fieldkit.watch.slack_threads._run_slack_threads", return_value=_successful_slack_outcome()
+        ) as mock_slack,
+        patch(
+            "fieldkit.watch.draft_queue._run_draft_queue", return_value=WatcherRunResult("ok", True, "written")
+        ) as mock_drafts,
+        patch("fieldkit.watch.integration_plan.build_integration_plan", return_value=plan),
         # implementation note: bypass preflight checks in unit tests (no real credentials).
         patch("fieldkit.watch.preflight.preflight_check", return_value=[]),
-        patch("fieldkit.commands.brief.generate._run_generate_inner", return_value=0),
+        patch(
+            "fieldkit.commands.brief.generate._run_generate_inner", return_value=WatcherRunResult("ok", True, "written")
+        ),
     ):
         result = runner.invoke(cli, ["run", "--all", "--force"])
 
@@ -143,22 +177,34 @@ def test_run_all_propagates_a_fatal_countdown_exit() -> None:
     """A fatal close-date-countdown run cannot leave the aggregate successful."""
     runner = CliRunner()
     with (
-        patch("fieldkit.watch.status.was_run_today", return_value=False),
-        patch("fieldkit.watch.status.write_run_status") as mock_write,
-        patch("fieldkit.watch.waiting_on_tracker._run", return_value=0),
-        patch("fieldkit.watch.pursuit_stalls._run_pursuit_stalls", return_value=0),
-        patch("fieldkit.watch.close_date_countdown._run_countdown", return_value=1),
-        patch("fieldkit.watch.contract_expiry._run_contract_expiry", return_value=0),
-        patch("fieldkit.watch.backstory_health._run_backstory_health", return_value=0),
-        patch("fieldkit.watch.slack_threads._run_slack_threads", return_value=0),
-        patch("fieldkit.watch.draft_queue._run_draft_queue", return_value=0),
+        patch("fieldkit.watch.status.get_daily_run_snapshot", return_value=WatcherDailySnapshot(False, None)),
+        patch("fieldkit.watch.status.write_run_status", return_value="written") as mock_write,
+        patch("fieldkit.watch.waiting_on_tracker._run", return_value=WatcherRunResult("ok", True, "written")),
+        patch(
+            "fieldkit.watch.pursuit_stalls._run_pursuit_stalls", return_value=WatcherRunResult("ok", True, "written")
+        ),
+        patch(
+            "fieldkit.watch.close_date_countdown._run_countdown",
+            return_value=WatcherRunResult("fatal", True, "written"),
+        ),
+        patch(
+            "fieldkit.watch.contract_expiry._run_contract_expiry", return_value=WatcherRunResult("ok", True, "written")
+        ),
+        patch(
+            "fieldkit.watch.backstory_health._run_backstory_health",
+            return_value=WatcherRunResult("ok", True, "written"),
+        ),
+        patch("fieldkit.watch.slack_threads._run_slack_threads", return_value=_successful_slack_outcome()),
+        patch("fieldkit.watch.draft_queue._run_draft_queue", return_value=WatcherRunResult("ok", True, "written")),
         patch("fieldkit.watch.preflight.preflight_check", return_value=[]),
-        patch("fieldkit.commands.brief.generate._run_generate_inner", return_value=0),
+        patch(
+            "fieldkit.commands.brief.generate._run_generate_inner", return_value=WatcherRunResult("ok", True, "written")
+        ),
     ):
         result = runner.invoke(cli, ["run", "--all", "--force"])
 
     assert result.exit_code == 1
-    assert mock_write.call_args.kwargs["outcome"] == "partial"
+    assert mock_write.call_args.kwargs["outcome"] == "fatal"
 
 
 # ---------------------------------------------------------------------------
@@ -171,13 +217,12 @@ def test_was_run_today_fatal_outcome_logs_warning_and_exits_1_for_pursuit_stalls
     from fieldkit.commands.watch import pursuit_stalls as wps
 
     with (
-        patch("fieldkit.watch.pursuit_stalls.was_run_today", return_value=True),
-        patch("fieldkit.watch.pursuit_stalls.get_last_run_outcome", return_value="fatal"),
+        patch("fieldkit.watch.pursuit_stalls.get_daily_run_snapshot", return_value=WatcherDailySnapshot(True, "fatal")),
         patch("fieldkit.watch.pursuit_stalls.watcher_logging"),
     ):
         rc = wps._run_pursuit_stalls(threshold=14, account=None, dry_run=False)
 
-    assert rc == 1, f"Expected exit 1 when prior outcome=fatal, got {rc}"
+    assert rc == WatcherRunResult("fatal", False, None), f"Expected exit 1 when prior outcome=fatal, got {rc}"
 
 
 def test_was_run_today_ok_outcome_exits_0_silently_for_pursuit_stalls() -> None:
@@ -185,22 +230,21 @@ def test_was_run_today_ok_outcome_exits_0_silently_for_pursuit_stalls() -> None:
     from fieldkit.commands.watch import pursuit_stalls as wps
 
     with (
-        patch("fieldkit.watch.pursuit_stalls.was_run_today", return_value=True),
-        patch("fieldkit.watch.pursuit_stalls.get_last_run_outcome", return_value="ok"),
+        patch("fieldkit.watch.pursuit_stalls.get_daily_run_snapshot", return_value=WatcherDailySnapshot(True, "ok")),
+        patch("fieldkit.watch.pursuit_stalls.write_run_status", return_value="written"),
         patch("fieldkit.watch.pursuit_stalls.watcher_logging"),
     ):
         rc = wps._run_pursuit_stalls(threshold=14, account=None, dry_run=False)
 
-    assert rc == 0, f"Expected exit 0 when prior outcome=ok, got {rc}"
+    assert rc == WatcherRunResult("ok", False, "written"), f"Expected exit 0 when prior outcome=ok, got {rc}"
 
 
 def test_run_all_fatal_prior_outcome_exits_1() -> None:
     """historic regression: run-all exits 1 (not 0) when last run was fatal and guard fires."""
     runner = CliRunner()
     with (
-        patch("fieldkit.watch.status.was_run_today", side_effect=lambda w: True),
-        patch("fieldkit.watch.status.write_run_status"),
-        patch("fieldkit.commands.watch.cli.get_last_run_outcome", return_value="fatal"),
+        patch("fieldkit.watch.status.get_daily_run_snapshot", return_value=WatcherDailySnapshot(True, "fatal")),
+        patch("fieldkit.watch.status.write_run_status", return_value="written"),
     ):
         result = runner.invoke(cli, ["run", "--all"])
     assert result.exit_code == 1, f"Expected exit 1 on fatal prior outcome, got {result.exit_code}"

@@ -1,59 +1,36 @@
-# Forecast
+# Calculate a local forecast
 
-Generates a probability-weighted pipeline forecast from pursuit frontmatter.
+Use `fieldkit pursuit forecast --json` to calculate deterministic scenarios from
+the configured workspace. Add `--account ACCOUNT` only with a confirmed literal
+account directory slug; a wildcard can broaden the scan.
+Add `--quota AMOUNT` to override the configured quota target; without it, the
+command uses `pipeline.quota.target` when that setting exists.
 
-## Gotchas
+## Understand which records and amounts count
 
-- **Stale vault signals** — run `/brief` first if data hasn't been refreshed today; this skill reads from cached files
-- **Trigger overlap with adjacent skills** — check that you need this specific skill and not a closely named one (e.g. `pipeline` skill's `ops/pipeline-health.md` vs `ops/engagement-health.md`)
+The command excludes closed-lost, pre-pipeline, and prospect pursuits. Unknown
+stages are skipped with a warning. A recognized pursuit with a zero selected
+amount remains in the result and produces a data-quality warning.
 
-## Constraints
+For standard or unspecified contract types, the selected amount prefers
+`sf_consulting_acv`, then `sf_acv`, then `sf_arr`. For `fixed_price`, it prefers
+`sf_acv`, then `sf_consulting_acv`, then `sf_arr`. An explicit zero is preserved.
 
-- **Never write to account files without explicit confirmation**
-- **Do not modify pursuit frontmatter mid-workflow** — only write at designated save steps
-- **Always surface output for review before sending externally**
+The stage weights are closed-won 100%, negotiate 75%, propose 50%, validate 25%,
+discover 10%, and qualify 5%. They are deterministic scenario weights, not
+measured win probabilities or current qualification evidence.
 
-## Quick Reference
+## Read the scenarios
 
-```bash
-# All accounts
-fieldkit pursuit forecast
+- Closed Won is the sum of included closed-won pursuits.
+- Commit is closed-won plus negotiate.
+- Weighted is each included amount multiplied by its stage weight; it includes
+  closed-won at 100%.
+- Best Case is the face-value sum of active pursuits and excludes closed-won.
 
-# With quota target
-fieldkit pursuit forecast --quota 5000000
+When quota is available, the command reports `quota - commit` and
+`quota - weighted`. It does not report a gap from Best Case.
 
-# Single account
-fieldkit pursuit forecast --account acme-corp --quota 2000000
-```
-
-## Stage Weights
-
-| Stage | Weight |
-|-------|--------|
-| closed-won | 100% |
-| negotiate | 75% |
-| propose | 50% |
-| validate | 25% |
-| discover | 10% |
-
-## Scenarios
-
-- **Commit** — closed-won + negotiate (high confidence)
-- **Weighted** — probability-weighted sum across all active deals
-- **Best Case** — sum of all active deals at face value
-
-## Output
-
-Prints a per-deal table sorted by stage weight (highest confidence first), then a scenario summary.
-If `--quota` is passed, shows gap-to-quota for both commit and weighted scenarios.
-
-## When to Use
-
-- Before forecast calls or pipeline reviews
-- When asked "what's my weighted number?" or "gap to quota"
-- After `fieldkit sf listview` to refresh ACV data in frontmatter
-
-## Related Skills
-
-- `pipeline` skill's `ops/pipeline-health.md` — risk scan of deals instead of a weighted projection
-- `deal-desk` — see `contract` skill's `ops/deal-desk.md` for pricing lookup and margin analysis
+The output is only as current as the local frontmatter. The command neither
+queries Salesforce nor writes files. Report skipped stages and zero-value deals
+with the totals; do not silently repair them or describe the result as live.

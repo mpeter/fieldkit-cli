@@ -112,12 +112,17 @@ def test_fieldkit_no_llm_returns_stub() -> None:
     assert result == _NO_LLM_STUB, f"Expected stub, got {result!r}"
 
 
-def test_no_llm_alias_still_returns_stub() -> None:
-    """Unprefixed NO_LLM=1 still returns the stub."""
-    with patch.dict(os.environ, {"NO_LLM": "1"}, clear=True):
-        result = synthesize("hello")
-    assert isinstance(result, str)
-    assert result == _NO_LLM_STUB, f"Expected stub, got {result!r}"
+def test_retired_no_llm_name_does_not_disable_provider() -> None:
+    captured: list[str] = []
+    mock_completion = _make_mock_completion(captured)
+    with (
+        patch.dict(os.environ, {"NO_LLM": "1"}, clear=True),
+        patch("litellm.completion", mock_completion),
+    ):
+        result = synthesize("hello", model="vertex_ai/test-model")
+
+    assert result == "response"
+    assert captured == ["vertex_ai/test-model"]
 
 
 # ---------------------------------------------------------------------------

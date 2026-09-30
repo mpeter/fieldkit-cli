@@ -13,7 +13,6 @@ Covers:
 
 import json
 import sqlite3
-import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -22,8 +21,35 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from fieldkit.driver.opencode import OpencodeOutcome
+from fieldkit.driver.prompt_source import FrozenPrompt
 
 pytestmark = pytest.mark.unit
+
+
+def _write_executable_work_order(repo: Path, path: Path, *, covers: tuple[str, ...] = ("src/example.py",)) -> None:
+    target_name = f"driver-target-{path.stem}.txt"
+    (repo / target_name).write_text(f"unique anchor {path.stem}\n", encoding="utf-8")
+    covers_yaml = "\n".join(f"  - {item}" for item in (*covers, target_name))
+    path.write_text(
+        f"---\ncovers:\n{covers_yaml}\n"
+        "edit_sites:\n  version: 1\n  sites:\n"
+        f"    - path: {target_name}\n      anchor: unique anchor {path.stem}\n"
+        "done_checks:\n  version: 1\n  checks:\n    - id: tests\n      argv: [pytest, -q]\n"
+        "---\n\n# Work Order\n",
+        encoding="utf-8",
+    )
+
+
+def _frozen_prompt(path: Path) -> FrozenPrompt:
+    from fieldkit.driver.prompt_contract import EditSite, PromptContract
+    from fieldkit.driver.prompt_source import PromptSource
+
+    return FrozenPrompt(
+        PromptSource(path, "work-order"),
+        None,
+        PromptContract(frozenset({"src/example.py"}), (), (EditSite("src/example.py", "anchor"),)),
+    )
+
 
 # ---------------------------------------------------------------------------
 # fieldkit.driver.github
@@ -53,6 +79,7 @@ def test_attempt_count_ignores_malformed() -> None:
 
 def test_get_pr_identity_requires_one_well_formed_open_pr() -> None:
     from fieldkit.driver.github import PullRequestIdentity, get_pr_identity
+    from fieldkit.util.bounded_process import BoundedProcessResult
 
     pr_payload = json.dumps(
         [
@@ -67,10 +94,10 @@ def test_get_pr_identity_requires_one_well_formed_open_pr() -> None:
         ]
     )
     responses = [
-        subprocess.CompletedProcess([], 0, pr_payload, ""),
-        subprocess.CompletedProcess([], 0, "42\n", ""),
+        BoundedProcessResult(0, pr_payload, ""),
+        BoundedProcessResult(0, "42\n", ""),
     ]
-    with patch("fieldkit.driver.github.subprocess.run", side_effect=responses):
+    with patch("fieldkit.driver.github.run_bounded_process", side_effect=responses):
         result = get_pr_identity("example/repo", "driver/issue-1-test")
 
     assert result == PullRequestIdentity(9, "example/repo", 42, "main", "driver/issue-1-test", "a" * 40)
@@ -79,13 +106,30 @@ def test_get_pr_identity_requires_one_well_formed_open_pr() -> None:
 def test_get_pr_identity_propagates_authentication_failure() -> None:
     from fieldkit.driver.github import get_pr_identity
     from fieldkit.errors import AuthError
+    from fieldkit.util.bounded_process import BoundedProcessResult
 
-    failure = subprocess.CompletedProcess([], 1, "", "authentication required")
+    failure = BoundedProcessResult(1, "", "authentication required fictional-secret /private/path")
     with (
-        patch("fieldkit.driver.github.subprocess.run", return_value=failure),
-        pytest.raises(AuthError, match="authentication"),
+        patch("fieldkit.driver.github.run_bounded_process", return_value=failure),
+        pytest.raises(AuthError, match="authentication") as captured,
     ):
         get_pr_identity("example/repo", "driver/issue-1-test")
+    assert "fictional-secret" not in str(captured.value)
+    assert "/private/path" not in str(captured.value)
+
+
+def test_get_pr_identity_classifies_rate_limited_http_403_as_retryable() -> None:
+    from fieldkit.driver.github import GitHubLookupError, get_pr_identity
+    from fieldkit.util.bounded_process import BoundedProcessResult
+
+    failure = BoundedProcessResult(1, "", "HTTP 403: API rate limit exceeded; fictional-secret")
+    with (
+        patch("fieldkit.driver.github.run_bounded_process", return_value=failure),
+        pytest.raises(GitHubLookupError, match="identity lookup failed") as caught,
+    ):
+        get_pr_identity("example/repo", "driver/issue-1-test")
+
+    assert "fictional-secret" not in str(caught.value)
 
 
 @pytest.mark.parametrize(
@@ -108,11 +152,25 @@ def test_get_pr_identity_propagates_authentication_failure() -> None:
 )
 def test_get_pr_identity_rejects_missing_ambiguous_or_mismatched_results(payload: list[dict[str, object]]) -> None:
     from fieldkit.driver.github import GitHubLookupError, get_pr_identity
+    from fieldkit.util.bounded_process import BoundedProcessResult
 
-    response = subprocess.CompletedProcess([], 0, json.dumps(payload), "")
+    response = BoundedProcessResult(0, json.dumps(payload), "")
     with (
-        patch("fieldkit.driver.github.subprocess.run", return_value=response),
+        patch("fieldkit.driver.github.run_bounded_process", return_value=response),
         pytest.raises(GitHubLookupError),
+    ):
+        get_pr_identity("example/repo", "driver/issue-1-test")
+
+
+@pytest.mark.parametrize("payload", [{}, [None], [[]], [{"number": 0}]])
+def test_get_pr_identity_rejects_wrong_json_shapes(payload: object) -> None:
+    from fieldkit.driver.github import GitHubLookupError, get_pr_identity
+    from fieldkit.util.bounded_process import BoundedProcessResult
+
+    response = BoundedProcessResult(0, json.dumps(payload), "")
+    with (
+        patch("fieldkit.driver.github.run_bounded_process", return_value=response),
+        pytest.raises(GitHubLookupError, match="malformed"),
     ):
         get_pr_identity("example/repo", "driver/issue-1-test")
 
@@ -173,13 +231,13 @@ def test_transition_to_failed_keeps_local_authority_when_projection_fails() -> N
 
 
 # ---------------------------------------------------------------------------
-# fieldkit.driver.runner.resolve_prompt_source — work order resolution
+# fieldkit.driver.prompt_source.resolve_prompt_source — work order resolution
 # ---------------------------------------------------------------------------
 
 
 def test_resolves_valid_work_order(tmp_path: Path) -> None:
     from fieldkit.driver.github import AgentIssue
-    from fieldkit.driver.runner import resolve_prompt_source
+    from fieldkit.driver.prompt_source import resolve_prompt_source
 
     wo_dir = tmp_path / "docs" / "work-orders"
     wo_dir.mkdir(parents=True)
@@ -193,13 +251,14 @@ def test_resolves_valid_work_order(tmp_path: Path) -> None:
         labels=[],
     )
     result = resolve_prompt_source(issue, tmp_path)
-    assert result == wo_file
+    assert result is not None
+    assert result.path == wo_file
 
 
-def test_resolves_backward_compat_brief_format(tmp_path: Path) -> None:
-    """Backward compat: 'Brief: docs/briefs/...' still resolves."""
+def test_rejects_retired_brief_format(tmp_path: Path) -> None:
+    """The retired Brief compatibility form does not resolve."""
     from fieldkit.driver.github import AgentIssue
-    from fieldkit.driver.runner import resolve_prompt_source
+    from fieldkit.driver.prompt_source import resolve_prompt_source
 
     briefs_dir = tmp_path / "docs" / "briefs"
     briefs_dir.mkdir(parents=True)
@@ -212,12 +271,12 @@ def test_resolves_backward_compat_brief_format(tmp_path: Path) -> None:
         labels=["agent-ready"],
     )
     result = resolve_prompt_source(issue, tmp_path)
-    assert result == wo_file.resolve()
+    assert result is None
 
 
 def test_returns_none_when_body_has_no_reference(tmp_path: Path) -> None:
     from fieldkit.driver.github import AgentIssue
-    from fieldkit.driver.runner import resolve_prompt_source
+    from fieldkit.driver.prompt_source import resolve_prompt_source
 
     issue = AgentIssue(number=1, title="T", body="No reference here.", labels=[])
     assert resolve_prompt_source(issue, tmp_path) is None
@@ -226,7 +285,7 @@ def test_returns_none_when_body_has_no_reference(tmp_path: Path) -> None:
 def test_bare_work_order_path_in_prose_does_not_match(tmp_path: Path) -> None:
     """A bare docs/work-orders/ path mentioned in prose must not fire without prefix."""
     from fieldkit.driver.github import AgentIssue
-    from fieldkit.driver.runner import resolve_prompt_source
+    from fieldkit.driver.prompt_source import resolve_prompt_source
 
     wo_dir = tmp_path / "docs" / "work-orders"
     wo_dir.mkdir(parents=True)
@@ -246,7 +305,7 @@ def test_bare_work_order_path_in_prose_does_not_match(tmp_path: Path) -> None:
 
 def test_returns_none_when_work_order_file_missing(tmp_path: Path) -> None:
     from fieldkit.driver.github import AgentIssue
-    from fieldkit.driver.runner import resolve_prompt_source
+    from fieldkit.driver.prompt_source import resolve_prompt_source
 
     issue = AgentIssue(
         number=1,
@@ -260,7 +319,7 @@ def test_returns_none_when_work_order_file_missing(tmp_path: Path) -> None:
 
 def test_rejects_path_traversal(tmp_path: Path) -> None:
     from fieldkit.driver.github import AgentIssue
-    from fieldkit.driver.runner import resolve_prompt_source
+    from fieldkit.driver.prompt_source import resolve_prompt_source
 
     # Craft a body where the regex could match a traversal path.
     # The regex only matches docs/work-orders/... so this must pass the regex,
@@ -268,7 +327,7 @@ def test_rejects_path_traversal(tmp_path: Path) -> None:
     # We simulate by patching the match to return a traversal path.
     issue = AgentIssue(number=1, title="T", body="", labels=[])
 
-    with patch("fieldkit.driver.runner._WORK_ORDER_RE") as mock_re:
+    with patch("fieldkit.driver.prompt_source._WORK_ORDER_RE") as mock_re:
         mock_match = MagicMock()
         mock_match.group.return_value = "docs/work-orders/../../etc/passwd"
         mock_re.search.return_value = mock_match
@@ -279,13 +338,13 @@ def test_rejects_path_traversal(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# fieldkit.driver.runner.resolve_prompt_source — OpenSpec and Speckit branches
+# fieldkit.driver.prompt_source.resolve_prompt_source — OpenSpec and Speckit branches
 # ---------------------------------------------------------------------------
 
 
 def test_resolves_openspec_tasks_md(tmp_path: Path) -> None:
     from fieldkit.driver.github import AgentIssue
-    from fieldkit.driver.runner import resolve_prompt_source
+    from fieldkit.driver.prompt_source import resolve_prompt_source
 
     change_dir = tmp_path / "openspec" / "changes" / "my-change"
     change_dir.mkdir(parents=True)
@@ -298,12 +357,14 @@ def test_resolves_openspec_tasks_md(tmp_path: Path) -> None:
         body="OpenSpec: openspec/changes/my-change/",
         labels=[],
     )
-    assert resolve_prompt_source(issue, tmp_path) == tasks
+    result = resolve_prompt_source(issue, tmp_path)
+    assert result is not None
+    assert result.path == tasks
 
 
 def test_openspec_falls_back_to_proposal_when_no_tasks_md(tmp_path: Path) -> None:
     from fieldkit.driver.github import AgentIssue
-    from fieldkit.driver.runner import resolve_prompt_source
+    from fieldkit.driver.prompt_source import resolve_prompt_source
 
     change_dir = tmp_path / "openspec" / "changes" / "my-change"
     change_dir.mkdir(parents=True)
@@ -316,13 +377,15 @@ def test_openspec_falls_back_to_proposal_when_no_tasks_md(tmp_path: Path) -> Non
         body="OpenSpec: openspec/changes/my-change/",
         labels=[],
     )
-    assert resolve_prompt_source(issue, tmp_path) == proposal
+    result = resolve_prompt_source(issue, tmp_path)
+    assert result is not None
+    assert result.path == proposal
 
 
 def test_openspec_resolves_via_origin_main_when_tasks_md_absent_on_disk(tmp_path: Path) -> None:
     """historic regression: OpenSpec sources self-heal when the shared checkout is stale."""
     from fieldkit.driver.github import AgentIssue
-    from fieldkit.driver.runner import resolve_prompt_source
+    from fieldkit.driver.prompt_source import resolve_prompt_source
 
     change_dir = tmp_path / "openspec" / "changes" / "my-change"
     change_dir.mkdir(parents=True)
@@ -334,13 +397,13 @@ def test_openspec_resolves_via_origin_main_when_tasks_md_absent_on_disk(tmp_path
         labels=[],
     )
 
-    with patch("fieldkit.driver.runner.subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(stdout="blob")
+    with patch("fieldkit.driver.prompt_source._bounded_git") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout=b"blob")
         result = resolve_prompt_source(issue, tmp_path)
 
-    assert result == expected
-    assert mock_run.call_args.args[0] == [
-        "git",
+    assert result is not None
+    assert result.path == expected
+    assert mock_run.call_args.args[1] == [
         "cat-file",
         "-t",
         "origin/main:openspec/changes/my-change/tasks.md",
@@ -350,7 +413,7 @@ def test_openspec_resolves_via_origin_main_when_tasks_md_absent_on_disk(tmp_path
 def test_openspec_uses_remote_fallback_when_primary_is_unavailable(tmp_path: Path) -> None:
     """historic regression: directory sources retain their fallback precedence remotely."""
     from fieldkit.driver.github import AgentIssue
-    from fieldkit.driver.runner import resolve_prompt_source
+    from fieldkit.driver.prompt_source import resolve_prompt_source
 
     change_dir = tmp_path / "openspec" / "changes" / "my-change"
     change_dir.mkdir(parents=True)
@@ -362,12 +425,13 @@ def test_openspec_uses_remote_fallback_when_primary_is_unavailable(tmp_path: Pat
         labels=[],
     )
 
-    with patch("fieldkit.driver.runner.subprocess.run") as mock_run:
-        mock_run.side_effect = [subprocess.CalledProcessError(1, "git"), MagicMock(stdout="blob")]
+    with patch("fieldkit.driver.prompt_source._bounded_git") as mock_run:
+        mock_run.side_effect = [MagicMock(returncode=1, stdout=b""), MagicMock(returncode=0, stdout=b"blob")]
         result = resolve_prompt_source(issue, tmp_path)
 
-    assert result == expected
-    assert [call.args[0][-1] for call in mock_run.call_args_list] == [
+    assert result is not None
+    assert result.path == expected
+    assert [call.args[1][-1] for call in mock_run.call_args_list] == [
         "origin/main:openspec/changes/my-change/tasks.md",
         "origin/main:openspec/changes/my-change/proposal.md",
     ]
@@ -375,7 +439,7 @@ def test_openspec_uses_remote_fallback_when_primary_is_unavailable(tmp_path: Pat
 
 def test_openspec_returns_none_when_dir_missing(tmp_path: Path) -> None:
     from fieldkit.driver.github import AgentIssue
-    from fieldkit.driver.runner import resolve_prompt_source
+    from fieldkit.driver.prompt_source import resolve_prompt_source
 
     (tmp_path / "openspec" / "changes").mkdir(parents=True)
     issue = AgentIssue(
@@ -389,7 +453,7 @@ def test_openspec_returns_none_when_dir_missing(tmp_path: Path) -> None:
 
 def test_resolves_speckit_tasks_md(tmp_path: Path) -> None:
     from fieldkit.driver.github import AgentIssue
-    from fieldkit.driver.runner import resolve_prompt_source
+    from fieldkit.driver.prompt_source import resolve_prompt_source
 
     spec_dir = tmp_path / "specs" / "039-test-infra"
     spec_dir.mkdir(parents=True)
@@ -402,12 +466,14 @@ def test_resolves_speckit_tasks_md(tmp_path: Path) -> None:
         body="Speckit: specs/039-test-infra/",
         labels=[],
     )
-    assert resolve_prompt_source(issue, tmp_path) == tasks
+    result = resolve_prompt_source(issue, tmp_path)
+    assert result is not None
+    assert result.path == tasks
 
 
 def test_speckit_falls_back_to_spec_md_when_no_tasks_md(tmp_path: Path) -> None:
     from fieldkit.driver.github import AgentIssue
-    from fieldkit.driver.runner import resolve_prompt_source
+    from fieldkit.driver.prompt_source import resolve_prompt_source
 
     spec_dir = tmp_path / "specs" / "039-test-infra"
     spec_dir.mkdir(parents=True)
@@ -420,13 +486,15 @@ def test_speckit_falls_back_to_spec_md_when_no_tasks_md(tmp_path: Path) -> None:
         body="Speckit: specs/039-test-infra/",
         labels=[],
     )
-    assert resolve_prompt_source(issue, tmp_path) == spec_md
+    result = resolve_prompt_source(issue, tmp_path)
+    assert result is not None
+    assert result.path == spec_md
 
 
 def test_speckit_resolves_via_origin_main_when_tasks_md_absent_on_disk(tmp_path: Path) -> None:
     """historic regression: Speckit sources self-heal when the shared checkout is stale."""
     from fieldkit.driver.github import AgentIssue
-    from fieldkit.driver.runner import resolve_prompt_source
+    from fieldkit.driver.prompt_source import resolve_prompt_source
 
     spec_dir = tmp_path / "specs" / "039-test-infra"
     spec_dir.mkdir(parents=True)
@@ -438,13 +506,13 @@ def test_speckit_resolves_via_origin_main_when_tasks_md_absent_on_disk(tmp_path:
         labels=[],
     )
 
-    with patch("fieldkit.driver.runner.subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(stdout="blob")
+    with patch("fieldkit.driver.prompt_source._bounded_git") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout=b"blob")
         result = resolve_prompt_source(issue, tmp_path)
 
-    assert result == expected
-    assert mock_run.call_args.args[0] == [
-        "git",
+    assert result is not None
+    assert result.path == expected
+    assert mock_run.call_args.args[1] == [
         "cat-file",
         "-t",
         "origin/main:specs/039-test-infra/tasks.md",
@@ -453,7 +521,7 @@ def test_speckit_resolves_via_origin_main_when_tasks_md_absent_on_disk(tmp_path:
 
 def test_speckit_returns_none_when_dir_missing(tmp_path: Path) -> None:
     from fieldkit.driver.github import AgentIssue
-    from fieldkit.driver.runner import resolve_prompt_source
+    from fieldkit.driver.prompt_source import resolve_prompt_source
 
     (tmp_path / "specs").mkdir(parents=True)
     issue = AgentIssue(
@@ -467,7 +535,7 @@ def test_speckit_returns_none_when_dir_missing(tmp_path: Path) -> None:
 
 def test_work_order_takes_priority_over_openspec(tmp_path: Path) -> None:
     from fieldkit.driver.github import AgentIssue
-    from fieldkit.driver.runner import resolve_prompt_source
+    from fieldkit.driver.prompt_source import resolve_prompt_source
 
     wo_dir = tmp_path / "docs" / "work-orders"
     wo_dir.mkdir(parents=True)
@@ -484,22 +552,24 @@ def test_work_order_takes_priority_over_openspec(tmp_path: Path) -> None:
         body="WorkOrder: docs/work-orders/foo.md\nOpenSpec: openspec/changes/bar/",
         labels=[],
     )
-    assert resolve_prompt_source(issue, tmp_path) == wo_file
+    result = resolve_prompt_source(issue, tmp_path)
+    assert result is not None
+    assert result.path == wo_file
 
 
 def test_rejects_openspec_path_traversal(tmp_path: Path) -> None:
     from fieldkit.driver.github import AgentIssue
-    from fieldkit.driver.runner import resolve_prompt_source
+    from fieldkit.driver.prompt_source import resolve_prompt_source
 
     (tmp_path / "openspec" / "changes").mkdir(parents=True)
     issue = AgentIssue(number=5, title="T", body="", labels=[])
 
-    with patch("fieldkit.driver.runner._OPENSPEC_RE") as mock_re:
+    with patch("fieldkit.driver.prompt_source._OPENSPEC_RE") as mock_re:
         mock_match = MagicMock()
         mock_match.group.return_value = "openspec/changes/../../etc/"
         mock_re.search.return_value = mock_match
         # Work order RE must NOT match so we fall through to openspec branch
-        with patch("fieldkit.driver.runner._WORK_ORDER_RE") as mock_wo_re:
+        with patch("fieldkit.driver.prompt_source._WORK_ORDER_RE") as mock_wo_re:
             mock_wo_re.search.return_value = None
             result = resolve_prompt_source(issue, tmp_path)
 
@@ -508,18 +578,18 @@ def test_rejects_openspec_path_traversal(tmp_path: Path) -> None:
 
 def test_rejects_speckit_path_traversal(tmp_path: Path) -> None:
     from fieldkit.driver.github import AgentIssue
-    from fieldkit.driver.runner import resolve_prompt_source
+    from fieldkit.driver.prompt_source import resolve_prompt_source
 
     (tmp_path / "specs").mkdir(parents=True)
     issue = AgentIssue(number=6, title="T", body="", labels=[])
 
-    with patch("fieldkit.driver.runner._SPECKIT_RE") as mock_re:
+    with patch("fieldkit.driver.prompt_source._SPECKIT_RE") as mock_re:
         mock_match = MagicMock()
         mock_match.group.return_value = "specs/../../etc/"
         mock_re.search.return_value = mock_match
-        with patch("fieldkit.driver.runner._WORK_ORDER_RE") as mock_wo_re:
+        with patch("fieldkit.driver.prompt_source._WORK_ORDER_RE") as mock_wo_re:
             mock_wo_re.search.return_value = None
-            with patch("fieldkit.driver.runner._OPENSPEC_RE") as mock_openspec_re:
+            with patch("fieldkit.driver.prompt_source._OPENSPEC_RE") as mock_openspec_re:
                 mock_openspec_re.search.return_value = None
                 result = resolve_prompt_source(issue, tmp_path)
 
@@ -576,7 +646,7 @@ def test_dry_run_skips_labels_and_git(tmp_path: Path) -> None:
 
     wo_dir = tmp_path / "docs" / "work-orders"
     wo_dir.mkdir(parents=True)
-    (wo_dir / "test.md").write_text("# Work Order")
+    _write_executable_work_order(tmp_path, wo_dir / "test.md")
 
     issue = AgentIssue(
         number=99,
@@ -589,6 +659,7 @@ def test_dry_run_skips_labels_and_git(tmp_path: Path) -> None:
         patch("fieldkit.driver.runner.list_ready_issues", return_value=[issue]),
         patch("fieldkit.driver.runner.get_github_repo", return_value="owner/repo"),
         patch("fieldkit.driver.runner.get_fieldkit_data", return_value=tmp_path),
+        patch("fieldkit.driver.runner.freeze_origin_main", return_value=None) as freeze,
         patch("fieldkit.driver.runner.busy_files", return_value={}),
         patch("fieldkit.driver.runner.create_worktree") as mock_worktree,
         patch("fieldkit.driver.runner.run_opencode", return_value=OpencodeOutcome(status="ok")) as mock_oc,
@@ -598,6 +669,7 @@ def test_dry_run_skips_labels_and_git(tmp_path: Path) -> None:
         result = run_driver(repo_root=tmp_path, dry_run=True)
 
     assert result.outcome == "dry-run"
+    freeze.assert_called_once_with(tmp_path, refresh=False)
     assert result.issue_number == 99
     mock_worktree.assert_not_called()
     mock_fail.assert_not_called()
@@ -635,13 +707,13 @@ def test_skipped_when_work_order_missing(tmp_path: Path) -> None:
 
 def test_skips_unlinked_then_executes_next(tmp_path: Path) -> None:
     # First issue has no work order — driver strips agent-ready and moves on.
-    # Second issue has a valid work order — driver executes it and returns ok.
+    # The second issue executes, but the invalid candidate keeps the tick partial.
     from fieldkit.driver.github import AgentIssue
     from fieldkit.driver.runner import run_driver
 
     wo_dir = tmp_path / "docs" / "work-orders"
     wo_dir.mkdir(parents=True)
-    (wo_dir / "good.md").write_text("# Work Order")
+    _write_executable_work_order(tmp_path, wo_dir / "good.md")
 
     bad_issue = AgentIssue(
         number=10,
@@ -680,9 +752,13 @@ def test_skips_unlinked_then_executes_next(tmp_path: Path) -> None:
     # Bad issue: agent-ready stripped, no attempt burned
     mock_remove.assert_called_once_with("owner/repo", 10, "agent-ready")
     mock_fail.assert_not_called()
-    # Good issue: executed successfully
-    assert result.outcome == "ok"
-    assert result.issue_number == 11
+    # Good issue: executed successfully; the aggregate does not hide the skip.
+    assert result.outcome == "failed"
+    assert result.issue_number is None
+    assert [(candidate.issue_number, candidate.outcome) for candidate in result.candidates] == [
+        (10, "skipped"),
+        (11, "ok"),
+    ]
     mock_ok.assert_called_once()
 
 
@@ -736,7 +812,9 @@ def test_acquires_and_releases_lock_across_runs(tmp_path: Path, monkeypatch: pyt
 # ---------------------------------------------------------------------------
 
 
-def _make_db(tmp_path: Path, rows: list[tuple]) -> Path:
+def _make_db(
+    tmp_path: Path, rows: list[tuple[str, str, str, str, str, int, int, int, float, str | None, str | None]]
+) -> Path:
     db = tmp_path / "llm-calls.db"
     with sqlite3.connect(str(db)) as conn:
         conn.execute("""
@@ -837,11 +915,20 @@ def test_spend_resolves_same_db_path_as_llm_log(tmp_path: Path, monkeypatch: pyt
     monkeypatch.setenv("FIELDKIT_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("FIELDKIT_LLM_LOG", str(custom_path))
 
-    resolved_path = spend_module.get_db_path()
+    resolved_path = log_get_db_path()
 
     assert resolved_path == custom_path
-    assert resolved_path == log_get_db_path()
-    assert spend_module.get_db_path is log_get_db_path
+    today = datetime.now(UTC).strftime("%Y-%m-%d")
+    db = _make_db(
+        tmp_path, [("selected", f"{today}T10:00:00", "driver-loop", "driver-issue-7", "m", 1, 1, 1, 0.75, None, None)]
+    )
+    db.rename(resolved_path)
+    _make_db(
+        tmp_path, [("default", f"{today}T10:00:00", "driver-loop", "driver-issue-7", "m", 1, 1, 1, 9.0, None, None)]
+    )
+    total = spend_module.get_daily_spend_total()
+
+    assert total == 0.75
 
 
 def test_run_driver_skips_when_daily_spend_cap_reached(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -903,44 +990,80 @@ def test_run_driver_dry_run_ignores_cap(tmp_path: Path, monkeypatch: pytest.Monk
 # ---------------------------------------------------------------------------
 
 
-def test_create_worktree_fetches_then_adds_off_origin_main(tmp_path: Path) -> None:
+def test_resolve_run_work_order_rejects_missing_frozen_prompt(tmp_path: Path) -> None:
+    from fieldkit.driver.prompt_source import PromptSourceError
+    from fieldkit.driver.runner import _resolve_run_work_order
+
+    repo = tmp_path / "repo"
+    worktree = tmp_path / "worktree"
+    source = repo / "docs" / "work-orders" / "work.md"
+    source.parent.mkdir(parents=True)
+    source.write_text("source", encoding="utf-8")
+    worktree.mkdir()
+
+    with pytest.raises(PromptSourceError, match="does not contain"):
+        _resolve_run_work_order(source, repo, worktree, revision_bound=True)
+
+
+@pytest.mark.parametrize(
+    ("returncode", "stdout", "expected"),
+    [
+        pytest.param(0, b"", True, id="clean"),
+        pytest.param(0, b"?? untracked.txt\0", False, id="untracked"),
+        pytest.param(0, b" M tracked.py\0", False, id="modified"),
+        pytest.param(1, b"", False, id="git-failure"),
+    ],
+)
+def test_execution_worktree_requires_every_change_to_be_submitted(
+    tmp_path: Path, returncode: int, stdout: bytes, expected: bool
+) -> None:
+    from fieldkit.driver.runner import _execution_worktree_is_clean
+    from fieldkit.util.bounded_process import BoundedProcessBytesResult
+
+    with patch(
+        "fieldkit.driver.runner.run_bounded_process_bytes",
+        return_value=BoundedProcessBytesResult(returncode, stdout, b"private provider detail"),
+    ):
+        result = _execution_worktree_is_clean(tmp_path)
+
+    assert result is expected
+
+
+def test_create_worktree_adds_from_frozen_revision(tmp_path: Path) -> None:
     from fieldkit.driver.runner import create_worktree
 
     with (
         patch("fieldkit.driver.runner._worktrees_root", return_value=tmp_path / "wt"),
-        patch("fieldkit.driver.runner.subprocess") as mock_sub,
+        patch("fieldkit.driver.runner.run_bounded_process") as mock_run,
     ):
-        mock_sub.run.return_value = MagicMock(returncode=0, stderr="")
-        result = create_worktree("driver/issue-99-test", tmp_path, 99)
+        mock_run.return_value = MagicMock(returncode=0, stderr="")
+        result = create_worktree("driver/issue-99-test", tmp_path, 99, base_revision="a" * 40)
 
     assert result is not None
     assert result.parent == tmp_path / "wt"
     assert result.name.startswith("issue-99-")
-    # First call fetches origin/main; second adds the worktree with -B off origin/main.
-    assert mock_sub.run.call_count == 2
-    fetch_args = mock_sub.run.call_args_list[0][0][0]
-    assert fetch_args[:2] == ["git", "fetch"] and "main" in fetch_args
-    add_args = mock_sub.run.call_args_list[1][0][0]
+    assert mock_run.call_count == 1
+    add_args = mock_run.call_args_list[0][0][0]
     assert add_args[:3] == ["git", "worktree", "add"]
     assert "-B" in add_args and "driver/issue-99-test" in add_args
-    assert add_args[-1] == "origin/main"
+    assert add_args[-1] == "a" * 40
 
 
-def test_create_worktree_returns_none_when_fetch_fails(tmp_path: Path) -> None:
+def test_create_worktree_returns_none_when_add_fails(tmp_path: Path) -> None:
     from fieldkit.driver.runner import create_worktree
 
     with (
         patch("fieldkit.driver.runner._worktrees_root", return_value=tmp_path / "wt"),
-        patch("fieldkit.driver.runner.subprocess") as mock_sub,
+        patch("fieldkit.driver.runner.remove_worktree"),
+        patch("fieldkit.driver.runner.run_bounded_process") as mock_run,
     ):
-        mock_sub.CalledProcessError = subprocess.CalledProcessError
-        mock_sub.TimeoutExpired = subprocess.TimeoutExpired
-        mock_sub.run.side_effect = subprocess.CalledProcessError(1, "git fetch", stderr="boom")
+        from fieldkit.util.bounded_process import BoundedProcessError
+
+        mock_run.side_effect = BoundedProcessError("git worktree add failed", reason="start")
         result = create_worktree("driver/issue-99-test", tmp_path, 99)
 
     assert result is None
-    # Never attempted the worktree add after the fetch failed.
-    assert mock_sub.run.call_count == 1
+    assert mock_run.call_count == 1
 
 
 def test_create_worktree_cleans_up_when_add_fails(tmp_path: Path) -> None:
@@ -949,15 +1072,11 @@ def test_create_worktree_cleans_up_when_add_fails(tmp_path: Path) -> None:
     with (
         patch("fieldkit.driver.runner._worktrees_root", return_value=tmp_path / "wt"),
         patch("fieldkit.driver.runner.remove_worktree") as mock_rm,
-        patch("fieldkit.driver.runner.subprocess") as mock_sub,
+        patch("fieldkit.driver.runner.run_bounded_process") as mock_run,
     ):
-        mock_sub.CalledProcessError = subprocess.CalledProcessError
-        mock_sub.TimeoutExpired = subprocess.TimeoutExpired
-        # fetch OK, then worktree add fails.
-        mock_sub.run.side_effect = [
-            MagicMock(returncode=0, stderr=""),
-            subprocess.CalledProcessError(1, "git worktree add", stderr="exists"),
-        ]
+        from fieldkit.util.bounded_process import BoundedProcessError
+
+        mock_run.side_effect = BoundedProcessError("git worktree add failed", reason="start")
         result = create_worktree("driver/issue-99-test", tmp_path, 99)
 
     assert result is None
@@ -967,14 +1086,14 @@ def test_create_worktree_cleans_up_when_add_fails(tmp_path: Path) -> None:
 def test_remove_worktree_removes_and_prunes(tmp_path: Path) -> None:
     from fieldkit.driver.runner import remove_worktree
 
-    with patch("fieldkit.driver.runner.subprocess") as mock_sub:
-        mock_sub.run.return_value = MagicMock(returncode=0, stderr="")
+    with patch("fieldkit.driver.runner.run_bounded_process") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stderr="")
         remove_worktree(tmp_path / "wt" / "issue-99", tmp_path)
 
-    assert mock_sub.run.call_count == 2
-    remove_args = mock_sub.run.call_args_list[0][0][0]
+    assert mock_run.call_count == 2
+    remove_args = mock_run.call_args_list[0][0][0]
     assert remove_args[:3] == ["git", "worktree", "remove"] and "--force" in remove_args
-    prune_args = mock_sub.run.call_args_list[1][0][0]
+    prune_args = mock_run.call_args_list[1][0][0]
     assert prune_args == ["git", "worktree", "prune"]
 
 
@@ -988,11 +1107,13 @@ def test_comment_on_issue_calls_gh(monkeypatch: pytest.MonkeyPatch) -> None:
     """comment_on_issue posts a comment via gh CLI."""
     calls: list[list[str]] = []
 
-    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
-        calls.append(cmd)
-        return subprocess.CompletedProcess(cmd, 0, "", "")
+    from fieldkit.util.bounded_process import BoundedProcessResult
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    def fake_run(cmd: list[str], **kwargs: Any) -> BoundedProcessResult:
+        calls.append(cmd)
+        return BoundedProcessResult(0, "", "")
+
+    monkeypatch.setattr("fieldkit.driver.github.run_bounded_process", fake_run)
     from fieldkit.driver.github import comment_on_issue
 
     result = comment_on_issue("owner/repo", 42, "test body")
@@ -1006,30 +1127,115 @@ def test_comment_on_issue_calls_gh(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_comment_on_issue_returns_false_on_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     """comment_on_issue returns False when gh CLI fails."""
 
-    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
-        raise subprocess.CalledProcessError(1, cmd, "", "gh: error")
+    from fieldkit.util.bounded_process import BoundedProcessError
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    def fake_run(cmd: list[str], **kwargs: Any) -> None:
+        raise BoundedProcessError("driver support process failed", reason="start")
+
+    monkeypatch.setattr("fieldkit.driver.github.run_bounded_process", fake_run)
     from fieldkit.driver.github import comment_on_issue
 
     result = comment_on_issue("owner/repo", 42, "test body")
     assert result is False
 
 
-def test_last_failure_comment_returns_latest_driver_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The retry prompt receives the most recent prior driver failure comment."""
+@pytest.mark.parametrize(
+    ("stderr", "expected"),
+    [
+        pytest.param("authentication required: fictional-secret", "AuthError", id="auth"),
+        pytest.param("temporary transport failure: fictional-secret", "GitHubRequestError", id="transport"),
+    ],
+)
+def test_list_ready_issues_fails_closed_without_provider_payload(
+    monkeypatch: pytest.MonkeyPatch, stderr: str, expected: str
+) -> None:
+    """A failed queue source is never reinterpreted as a valid empty queue."""
+    from fieldkit.driver.github import list_ready_issues
+    from fieldkit.errors import AuthError, GitHubRequestError
+    from fieldkit.util.bounded_process import BoundedProcessResult
 
-    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
-        assert cmd[:3] == ["gh", "issue", "view"]
-        assert cmd[3] == "42"
-        return subprocess.CompletedProcess(cmd, 0, "⚠️ **Driver failed**\n\nprevious failure\n", "")
+    exception = AuthError if expected == "AuthError" else GitHubRequestError
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
-    from fieldkit.driver.github import last_failure_comment
+    def fake_run(cmd: list[str], **kwargs: Any) -> BoundedProcessResult:
+        return BoundedProcessResult(1, "", stderr)
 
-    result = last_failure_comment("owner/repo", 42)
+    monkeypatch.setattr("fieldkit.driver.github.run_bounded_process", fake_run)
 
-    assert result == "⚠️ **Driver failed**\n\nprevious failure"
+    with pytest.raises(exception) as caught:
+        list_ready_issues("owner/repo")
+
+    assert "fictional-secret" not in str(caught.value)
+
+
+def test_list_ready_issues_classifies_rate_limited_http_403_as_retryable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fieldkit.driver.github import list_ready_issues
+    from fieldkit.errors import GitHubRequestError
+    from fieldkit.util.bounded_process import BoundedProcessResult
+
+    monkeypatch.setattr(
+        "fieldkit.driver.github.run_bounded_process",
+        lambda *_args, **_kwargs: BoundedProcessResult(1, "", "HTTP 403: API rate limit exceeded; fictional-secret"),
+    )
+
+    with pytest.raises(GitHubRequestError, match="queue is unavailable") as caught:
+        list_ready_issues("owner/repo")
+
+    assert "fictional-secret" not in str(caught.value)
+
+
+def test_list_ready_issues_rejects_malformed_provider_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fieldkit.driver.github import list_ready_issues
+    from fieldkit.errors import GitHubRequestError
+    from fieldkit.util.bounded_process import BoundedProcessResult
+
+    monkeypatch.setattr(
+        "fieldkit.driver.github.run_bounded_process",
+        lambda cmd, **kwargs: BoundedProcessResult(0, "not-json", ""),
+    )
+
+    with pytest.raises(GitHubRequestError, match="queue response"):
+        list_ready_issues("owner/repo")
+
+
+def test_list_ready_issues_rejects_oversized_provider_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fieldkit.driver.github import list_ready_issues
+    from fieldkit.errors import GitHubRequestError
+    from fieldkit.util.bounded_process import BoundedProcessError
+
+    monkeypatch.setattr(
+        "fieldkit.driver.github.run_bounded_process",
+        MagicMock(
+            side_effect=BoundedProcessError("driver support process output exceeded its limit", reason="overflow")
+        ),
+    )
+
+    with pytest.raises(GitHubRequestError, match="queue is unavailable"):
+        list_ready_issues("owner/repo")
+
+
+def test_list_ready_issues_does_not_schedule_partial_queue(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fieldkit.driver.github import list_ready_issues
+    from fieldkit.errors import GitHubRequestError
+    from fieldkit.util.bounded_process import BoundedProcessResult
+
+    ready = [{"number": 7, "title": "ready", "body": "", "labels": [{"name": "agent-ready"}]}]
+    calls = 0
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> BoundedProcessResult:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return BoundedProcessResult(0, json.dumps(ready), "")
+        return BoundedProcessResult(1, "", "temporary provider failure")
+
+    monkeypatch.setattr("fieldkit.driver.github.run_bounded_process", fake_run)
+
+    with pytest.raises(GitHubRequestError, match="queue is unavailable"):
+        list_ready_issues("owner/repo")
+
+    assert calls == 2
 
 
 @pytest.mark.unit
@@ -1076,12 +1282,14 @@ def test_list_ready_issues_unions_fresh_and_retryable(monkeypatch: pytest.Monkey
         {"number": 5, "title": "at-cap", "body": "", "labels": [{"name": "agent-failed"}, {"name": "attempt:3"}]},
     ]
 
-    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+    from fieldkit.util.bounded_process import BoundedProcessResult
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> BoundedProcessResult:
         label = cmd[cmd.index("--label") + 1]
         payload = ready if label == "agent-ready" else failed
-        return subprocess.CompletedProcess(cmd, 0, json.dumps(payload), "")
+        return BoundedProcessResult(0, json.dumps(payload), "")
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr("fieldkit.driver.github.run_bounded_process", fake_run)
     from fieldkit.driver.github import list_ready_issues
 
     issues = list_ready_issues("owner/repo")
@@ -1163,7 +1371,7 @@ def test_run_driver_reexecutes_retryable_failed_issue(tmp_path: Path) -> None:
 
     wo_dir = tmp_path / "docs" / "work-orders"
     wo_dir.mkdir(parents=True)
-    (wo_dir / "wo-7.md").write_text("# Work Order\n")
+    _write_executable_work_order(tmp_path, wo_dir / "wo-7.md")
 
     failed_payload = [
         {
@@ -1174,17 +1382,17 @@ def test_run_driver_reexecutes_retryable_failed_issue(tmp_path: Path) -> None:
         }
     ]
 
-    def fake_gh(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+    from fieldkit.util.bounded_process import BoundedProcessResult
+
+    def fake_gh(cmd: list[str], **kwargs: Any) -> BoundedProcessResult:
         label = cmd[cmd.index("--label") + 1]
         payload = [] if label == "agent-ready" else failed_payload
-        return subprocess.CompletedProcess(cmd, 0, json.dumps(payload), "")
+        return BoundedProcessResult(0, json.dumps(payload), "")
 
     with (
-        patch("fieldkit.driver.github.subprocess.run", side_effect=fake_gh),
+        patch("fieldkit.driver.github.run_bounded_process", side_effect=fake_gh),
         patch("fieldkit.driver.runner.get_github_repo", return_value="owner/repo"),
         patch("fieldkit.driver.runner.get_fieldkit_data", return_value=tmp_path),
-        patch("fieldkit.driver.runner._fetch_main"),
-        patch("fieldkit.driver.runner.last_failure_comment", return_value=""),
         patch("fieldkit.driver.runner.busy_files", return_value={}),
         patch("fieldkit.driver.runner.create_worktree", side_effect=lambda b, r, n: tmp_path / f"wt-{n}"),
         patch("fieldkit.driver.runner.remove_worktree"),
@@ -1211,14 +1419,13 @@ def test_run_driver_caps_retries_when_github_mutations_fail(tmp_path: Path) -> N
 
     work_order = tmp_path / "docs" / "work-orders" / "retry.md"
     work_order.parent.mkdir(parents=True)
-    work_order.write_text("# Work Order\n", encoding="utf-8")
+    _write_executable_work_order(tmp_path, work_order)
     issue = AgentIssue(42, "retry", "WorkOrder: docs/work-orders/retry.md", ["agent-failed"])
 
     with (
         patch("fieldkit.driver.runner.list_ready_issues", return_value=[issue]),
         patch("fieldkit.driver.runner.get_github_repo", return_value="owner/repo"),
         patch("fieldkit.driver.runner.get_fieldkit_data", return_value=tmp_path),
-        patch("fieldkit.driver.runner._fetch_main"),
         patch("fieldkit.driver.runner.busy_files", return_value={}),
         patch("fieldkit.driver.runner.create_worktree", return_value=tmp_path / "worktree"),
         patch("fieldkit.driver.runner.remove_worktree"),
@@ -1245,14 +1452,13 @@ def test_run_driver_rate_limit_exhaustion_blocks_fourth_run_and_explains_reset(t
 
     work_order = tmp_path / "docs" / "work-orders" / "retry.md"
     work_order.parent.mkdir(parents=True)
-    work_order.write_text("# Work Order\n", encoding="utf-8")
+    _write_executable_work_order(tmp_path, work_order)
     issue = AgentIssue(42, "retry", "WorkOrder: docs/work-orders/retry.md", ["agent-failed"])
 
     with (
         patch("fieldkit.driver.runner.list_ready_issues", return_value=[issue]),
         patch("fieldkit.driver.runner.get_github_repo", return_value="owner/repo"),
         patch("fieldkit.driver.runner.get_fieldkit_data", return_value=tmp_path),
-        patch("fieldkit.driver.runner._fetch_main"),
         patch("fieldkit.driver.runner.busy_files", return_value={}),
         patch("fieldkit.driver.runner.create_worktree", return_value=tmp_path / "worktree"),
         patch("fieldkit.driver.runner.remove_worktree"),
@@ -1270,7 +1476,8 @@ def test_run_driver_rate_limit_exhaustion_blocks_fourth_run_and_explains_reset(t
     assert [result.outcome for result in results] == ["skipped", "skipped", "skipped", "skipped"]
     assert mock_oc.call_count == 3
     message = mock_comment.call_args.args[3]
-    assert "provider quota exhausted" in message
+    assert "provider quota exhausted" not in message
+    assert "rate-limited" in message
     assert "local reserved attempt is charged" in message
     assert "fieldkit driver retry status" in message
     assert "fieldkit driver retry reset" in message
@@ -1283,7 +1490,7 @@ def test_run_driver_skips_before_worktree_when_reservation_fails(tmp_path: Path)
 
     work_order = tmp_path / "docs" / "work-orders" / "retry.md"
     work_order.parent.mkdir(parents=True)
-    work_order.write_text("# Work Order\n", encoding="utf-8")
+    _write_executable_work_order(tmp_path, work_order)
     issue = AgentIssue(42, "retry", "WorkOrder: docs/work-orders/retry.md", ["agent-ready"])
     denied = RetryDecision(False, "owner/repo#42", None, 0, None, "could not persist retry reservation")
 
@@ -1291,7 +1498,6 @@ def test_run_driver_skips_before_worktree_when_reservation_fails(tmp_path: Path)
         patch("fieldkit.driver.runner.list_ready_issues", return_value=[issue]),
         patch("fieldkit.driver.runner.get_github_repo", return_value="owner/repo"),
         patch("fieldkit.driver.runner.get_fieldkit_data", return_value=tmp_path),
-        patch("fieldkit.driver.runner._fetch_main"),
         patch("fieldkit.driver.runner.busy_files", return_value={}),
         patch("fieldkit.driver.runner.reserve_attempt", return_value=denied),
         patch("fieldkit.driver.runner.create_worktree") as mock_worktree,
@@ -1313,7 +1519,7 @@ def test_run_driver_finalizes_worktree_creation_failure(tmp_path: Path, finaliza
 
     work_order = tmp_path / "docs" / "work-orders" / "retry.md"
     work_order.parent.mkdir(parents=True)
-    work_order.write_text("# Work Order\n", encoding="utf-8")
+    _write_executable_work_order(tmp_path, work_order)
     issue = AgentIssue(42, "retry", "WorkOrder: docs/work-orders/retry.md", ["agent-ready"])
     finalized = RetryDecision(finalization_allowed, "owner/repo#42", "retryable", 1, 1, "finalization result")
 
@@ -1321,7 +1527,6 @@ def test_run_driver_finalizes_worktree_creation_failure(tmp_path: Path, finaliza
         patch("fieldkit.driver.runner.list_ready_issues", return_value=[issue]),
         patch("fieldkit.driver.runner.get_github_repo", return_value="owner/repo"),
         patch("fieldkit.driver.runner.get_fieldkit_data", return_value=tmp_path),
-        patch("fieldkit.driver.runner._fetch_main"),
         patch("fieldkit.driver.runner.busy_files", return_value={}),
         patch("fieldkit.driver.runner.create_worktree", return_value=None),
         patch("fieldkit.driver.runner.run_opencode") as mock_oc,
@@ -1331,8 +1536,15 @@ def test_run_driver_finalizes_worktree_creation_failure(tmp_path: Path, finaliza
         result = run_driver(repo_root=tmp_path)
 
     assert result.outcome == "failed"
-    assert result.error == f"Could not create worktree for {result.branch}"
-    mock_finalize.assert_called_once_with("owner/repo", 42, succeeded=False, outcome=result.error, data_root=tmp_path)
+    assert result.error == "The driver could not create its isolated worktree."
+    mock_finalize.assert_called_once_with(
+        "owner/repo",
+        42,
+        succeeded=False,
+        outcome=result.error,
+        failure_code="worktree-failed",
+        data_root=tmp_path,
+    )
     mock_oc.assert_not_called()
     if finalization_allowed:
         mock_transition.assert_called_once_with("owner/repo", issue, attempt=1, error=result.error)
@@ -1350,7 +1562,7 @@ def test_run_driver_does_not_project_outcome_when_finalization_fails(
 
     work_order = tmp_path / "docs" / "work-orders" / "success.md"
     work_order.parent.mkdir(parents=True)
-    work_order.write_text("# Work Order\n", encoding="utf-8")
+    _write_executable_work_order(tmp_path, work_order)
     issue = AgentIssue(42, "success", "WorkOrder: docs/work-orders/success.md", ["agent-ready"])
     failed_finalization = RetryDecision(False, "owner/repo#42", None, 0, None, "could not finalize retry state")
 
@@ -1358,7 +1570,6 @@ def test_run_driver_does_not_project_outcome_when_finalization_fails(
         patch("fieldkit.driver.runner.list_ready_issues", return_value=[issue]),
         patch("fieldkit.driver.runner.get_github_repo", return_value="owner/repo"),
         patch("fieldkit.driver.runner.get_fieldkit_data", return_value=tmp_path),
-        patch("fieldkit.driver.runner._fetch_main"),
         patch("fieldkit.driver.runner.busy_files", return_value={}),
         patch("fieldkit.driver.runner.create_worktree", return_value=tmp_path / "worktree"),
         patch("fieldkit.driver.runner.remove_worktree") as mock_remove,
@@ -1389,7 +1600,7 @@ def test_run_driver_does_not_comment_on_rate_limit_when_finalization_fails(tmp_p
 
     work_order = tmp_path / "docs" / "work-orders" / "rate-limit.md"
     work_order.parent.mkdir(parents=True)
-    work_order.write_text("# Work Order\n", encoding="utf-8")
+    _write_executable_work_order(tmp_path, work_order)
     issue = AgentIssue(42, "rate limit", "WorkOrder: docs/work-orders/rate-limit.md", ["agent-ready"])
     failed_finalization = RetryDecision(False, "owner/repo#42", None, 0, None, "could not finalize retry state")
 
@@ -1397,7 +1608,6 @@ def test_run_driver_does_not_comment_on_rate_limit_when_finalization_fails(tmp_p
         patch("fieldkit.driver.runner.list_ready_issues", return_value=[issue]),
         patch("fieldkit.driver.runner.get_github_repo", return_value="owner/repo"),
         patch("fieldkit.driver.runner.get_fieldkit_data", return_value=tmp_path),
-        patch("fieldkit.driver.runner._fetch_main"),
         patch("fieldkit.driver.runner.busy_files", return_value={}),
         patch("fieldkit.driver.runner.create_worktree", return_value=tmp_path / "worktree"),
         patch("fieldkit.driver.runner.remove_worktree"),
@@ -1422,7 +1632,7 @@ def test_run_driver_does_not_comment_on_rate_limit_when_finalization_fails(tmp_p
     ("body", "expected"),
     [
         ("WorkOrder: docs/work-orders/foo.md", True),
-        ("Brief: docs/briefs/foo.md", True),
+        ("Brief: docs/briefs/foo.md", False),
         ("OpenSpec: openspec/changes/my-change/", True),
         ("Speckit: specs/039-thing/", True),
         ("Just prose describing a bug, with no reference.", False),
@@ -1431,14 +1641,14 @@ def test_run_driver_does_not_comment_on_rate_limit_when_finalization_fails(tmp_p
 )
 def test_has_prompt_reference_detects_references(body: str, expected: bool) -> None:
     """Bug 2: True for a WorkOrder/OpenSpec/Speckit body, False for prose."""
-    from fieldkit.driver.runner import _has_prompt_reference
+    from fieldkit.driver.prompt_source import has_prompt_reference
 
-    assert _has_prompt_reference(body) is expected
+    assert has_prompt_reference(body) is expected
 
 
 def test_exists_on_main_or_disk_true_when_on_disk(tmp_path: Path) -> None:
     """Bug 2: a work order present in the working tree resolves True."""
-    from fieldkit.driver.runner import _exists_on_main_or_disk
+    from fieldkit.driver.prompt_source import _exists_on_main_or_disk
 
     wo = tmp_path / "docs" / "work-orders" / "wo.md"
     wo.parent.mkdir(parents=True)
@@ -1449,41 +1659,38 @@ def test_exists_on_main_or_disk_true_when_on_disk(tmp_path: Path) -> None:
 
 def test_exists_on_main_or_disk_true_when_blob_on_origin_main(tmp_path: Path) -> None:
     """An origin/main blob resolves before it reaches the shared checkout."""
-    from fieldkit.driver.runner import _exists_on_main_or_disk
+    from fieldkit.driver.prompt_source import _exists_on_main_or_disk
 
     work_order = tmp_path / "docs" / "work-orders" / "wo.md"
 
-    with patch("fieldkit.driver.runner.subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(stdout="blob")
+    with patch("fieldkit.driver.prompt_source._bounded_git") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout=b"blob")
         result = _exists_on_main_or_disk(tmp_path, work_order)
 
     assert result is True
-    assert mock_run.call_args.args[0][:3] == ["git", "cat-file", "-t"]
+    assert mock_run.call_args.args[1][:2] == ["cat-file", "-t"]
 
 
 def test_exists_on_main_or_disk_rejects_tree_on_origin_main(tmp_path: Path) -> None:
     """A remote directory is not a usable prompt file."""
-    from fieldkit.driver.runner import _exists_on_main_or_disk
+    from fieldkit.driver.prompt_source import _exists_on_main_or_disk
 
     candidate = tmp_path / "openspec" / "changes" / "change" / "tasks.md"
 
-    with patch("fieldkit.driver.runner.subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(stdout="tree")
+    with patch("fieldkit.driver.prompt_source._bounded_git") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout=b"tree")
         result = _exists_on_main_or_disk(tmp_path, candidate)
 
     assert result is False
 
 
 def test_exists_on_main_or_disk_false_when_absent_everywhere(tmp_path: Path) -> None:
-    """Bug 2: absent on disk and ``git cat-file`` failing (CalledProcessError) → False."""
-    from fieldkit.driver.runner import _exists_on_main_or_disk
+    """Bug 2: absent on disk and bounded ``git cat-file`` failure returns False."""
+    from fieldkit.driver.prompt_source import PromptSourceError, _exists_on_main_or_disk
 
     wo = tmp_path / "docs" / "work-orders" / "wo.md"
 
-    with patch(
-        "fieldkit.driver.runner.subprocess.run",
-        side_effect=subprocess.CalledProcessError(1, ["git", "cat-file", "-e"]),
-    ):
+    with patch("fieldkit.driver.prompt_source._bounded_git", side_effect=PromptSourceError("unavailable")):
         result = _exists_on_main_or_disk(tmp_path, wo)
 
     assert result is False
@@ -1647,7 +1854,7 @@ def test_execute_one_orders_snapshot_agent_verification_and_success(tmp_path: Pa
         result = _execute_one(
             "example/repo",
             issue,
-            tmp_path / "docs/work.md",
+            _frozen_prompt(tmp_path / "docs/work.md"),
             tmp_path,
             datetime.now(tz=UTC),
             0.0,
@@ -1658,6 +1865,47 @@ def test_execute_one_orders_snapshot_agent_verification_and_success(tmp_path: Pa
     assert events == ["snapshot", "agent", "verify", "complete", "github"]
     assert agent.call_args.kwargs["llm_log_path"] == durable_db
     spend.assert_called_once_with(1242, durable_db)
+
+
+def test_execute_one_rejects_unsubmitted_local_changes_before_head_verification(tmp_path: Path) -> None:
+    from fieldkit.driver.github import AgentIssue
+    from fieldkit.driver.prompt_source import FrozenPrompt
+    from fieldkit.driver.runner import _execute_one
+
+    issue = AgentIssue(1242, "verify", "", ["agent-ready"])
+    local_prompt = _frozen_prompt(tmp_path / "docs/work.md")
+    prompt = FrozenPrompt(local_prompt.source, "a" * 40, local_prompt.contract)
+    with (
+        patch("fieldkit.driver.runner.reserve_attempt", return_value=MagicMock(allowed=True, attempt=1, receipt=None)),
+        patch("fieldkit.driver.runner.create_worktree", return_value=tmp_path / "agent"),
+        patch("fieldkit.driver.runner._resolve_run_work_order", return_value=prompt.source.path),
+        patch("fieldkit.driver.runner._isolate_data_dir", return_value=tmp_path / "data"),
+        patch("fieldkit.driver.runner.create_trusted_snapshot", return_value=MagicMock()),
+        patch("fieldkit.driver.runner.run_opencode", return_value=OpencodeOutcome(status="ok")),
+        patch("fieldkit.driver.runner._execution_worktree_is_clean", return_value=False),
+        patch("fieldkit.driver.runner.verify_submitted_head") as verify,
+        patch("fieldkit.driver.runner.complete_attempt", return_value=MagicMock(allowed=True)) as complete,
+        patch("fieldkit.driver.runner.transition_to_failed"),
+        patch("fieldkit.driver.runner.get_spend_summary", return_value=""),
+        patch("fieldkit.driver.runner.get_fieldkit_data", return_value=tmp_path),
+        patch("fieldkit.driver.runner.get_harness_scratch_root", return_value=tmp_path),
+        patch("fieldkit.driver.runner.remove_worktree"),
+        patch("fieldkit.driver.runner.remove_snapshot"),
+    ):
+        result = _execute_one(
+            "example/repo",
+            issue,
+            prompt,
+            tmp_path,
+            datetime.now(tz=UTC),
+            0.0,
+            dry_run=False,
+        )
+
+    assert result.outcome == "failed"
+    assert result.error == "The submitted head failed independent verification."
+    assert complete.call_args.kwargs["failure_code"] == "verification-failed"
+    verify.assert_not_called()
 
 
 def test_execute_one_verification_failure_uses_retry_path(tmp_path: Path) -> None:
@@ -1687,7 +1935,7 @@ def test_execute_one_verification_failure_uses_retry_path(tmp_path: Path) -> Non
         result = _execute_one(
             "example/repo",
             issue,
-            tmp_path / "docs/work.md",
+            _frozen_prompt(tmp_path / "docs/work.md"),
             tmp_path,
             datetime.now(tz=UTC),
             0.0,
@@ -1695,7 +1943,7 @@ def test_execute_one_verification_failure_uses_retry_path(tmp_path: Path) -> Non
         )
 
     assert result.outcome == "failed"
-    assert "Independent verification failed" in result.error
+    assert result.error == "The submitted head failed independent verification."
     assert complete.call_args.kwargs["succeeded"] is False
     failed.assert_called_once()
     succeeded.assert_not_called()
@@ -1721,7 +1969,7 @@ def test_execute_one_snapshot_storage_failure_closes_attempt(tmp_path: Path) -> 
         result = _execute_one(
             "example/repo",
             issue,
-            tmp_path / "docs/work.md",
+            _frozen_prompt(tmp_path / "docs/work.md"),
             tmp_path,
             datetime.now(tz=UTC),
             0.0,
@@ -1729,10 +1977,54 @@ def test_execute_one_snapshot_storage_failure_closes_attempt(tmp_path: Path) -> 
         )
 
     assert result.outcome == "failed"
-    assert "no space" in result.error
+    assert result.error == "Independent verification setup failed."
+    assert "no space" not in result.error
     assert complete.call_args.kwargs["succeeded"] is False
+    assert complete.call_args.kwargs["failure_code"] == "setup-failed"
     failed.assert_called_once()
     agent.assert_not_called()
+
+
+def test_execute_one_malformed_final_identity_closes_attempt_without_payload(
+    tmp_path: Path,
+) -> None:
+    from fieldkit.driver.github import AgentIssue, GitHubLookupError
+    from fieldkit.driver.runner import _execute_one
+
+    issue = AgentIssue(1242, "verify", "", ["agent-ready"])
+    with (
+        patch("fieldkit.driver.runner.reserve_attempt", return_value=MagicMock(allowed=True, attempt=1)),
+        patch("fieldkit.driver.runner.create_worktree", return_value=tmp_path / "agent"),
+        patch("fieldkit.driver.runner._isolate_data_dir", return_value=tmp_path / "data"),
+        patch("fieldkit.driver.runner.create_trusted_snapshot", return_value=MagicMock()),
+        patch("fieldkit.driver.runner.run_opencode", return_value=OpencodeOutcome(status="ok")),
+        patch(
+            "fieldkit.driver.runner.verify_submitted_head",
+            side_effect=GitHubLookupError("fictional-secret /private/path"),
+        ),
+        patch("fieldkit.driver.runner.complete_attempt", return_value=MagicMock(allowed=True)) as complete,
+        patch("fieldkit.driver.runner.transition_to_failed") as failed,
+        patch("fieldkit.driver.runner.get_spend_summary", return_value=""),
+        patch("fieldkit.driver.runner.get_fieldkit_data", return_value=tmp_path),
+        patch("fieldkit.driver.runner.get_harness_scratch_root", return_value=tmp_path),
+        patch("fieldkit.driver.runner.remove_worktree"),
+        patch("fieldkit.driver.runner.remove_snapshot"),
+    ):
+        result = _execute_one(
+            "example/repo",
+            issue,
+            _frozen_prompt(tmp_path / "docs/work.md"),
+            tmp_path,
+            datetime.now(tz=UTC),
+            0.0,
+            dry_run=False,
+        )
+
+    assert result.outcome == "failed"
+    assert result.error == "Independent verification setup failed."
+    assert "fictional-secret" not in result.error
+    assert complete.call_args.kwargs["failure_code"] == "setup-failed"
+    failed.assert_called_once()
 
 
 def test_execute_one_auth_failure_closes_attempt_without_github_projection(tmp_path: Path) -> None:
@@ -1761,7 +2053,7 @@ def test_execute_one_auth_failure_closes_attempt_without_github_projection(tmp_p
         _execute_one(
             "example/repo",
             issue,
-            tmp_path / "docs/work.md",
+            _frozen_prompt(tmp_path / "docs/work.md"),
             tmp_path,
             datetime.now(tz=UTC),
             0.0,
@@ -1787,7 +2079,7 @@ def test_execute_one_dry_run_skips_snapshot_and_verification(tmp_path: Path) -> 
         result = _execute_one(
             "example/repo",
             issue,
-            tmp_path / "docs/work.md",
+            _frozen_prompt(tmp_path / "docs/work.md"),
             tmp_path,
             datetime.now(tz=UTC),
             0.0,
@@ -1927,7 +2219,7 @@ def test_run_driver_limits_capped_execution_to_one_admitted_issue(
 
     work_order = tmp_path / "docs" / "work-orders" / "work.md"
     work_order.parent.mkdir(parents=True)
-    work_order.write_text("---\ncovers:\n  - src/fieldkit/llm/log.py\n---\n")
+    _write_executable_work_order(tmp_path, work_order, covers=("src/fieldkit/llm/log.py",))
     issues = [AgentIssue(1, "one", f"WorkOrder: {work_order.relative_to(tmp_path)}", ["agent-ready"])]
     monkeypatch.setenv("FIELDKIT_DRIVER_SPEND_CAP", "10")
     with (
@@ -1935,7 +2227,6 @@ def test_run_driver_limits_capped_execution_to_one_admitted_issue(
         patch("fieldkit.driver.runner.get_driver_max_concurrent", return_value=4),
         patch("fieldkit.driver.runner.get_fieldkit_data", return_value=tmp_path),
         patch("fieldkit.driver.runner.get_github_repo", return_value="example/repo"),
-        patch("fieldkit.driver.runner._fetch_main"),
         patch("fieldkit.driver.runner.list_ready_issues", return_value=issues),
         patch("fieldkit.driver.runner.busy_files", return_value={}),
         patch("fieldkit.driver.runner.select_runnable", return_value=([], [])) as select,

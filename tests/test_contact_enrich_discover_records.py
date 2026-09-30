@@ -6,7 +6,7 @@ tests/test_contact_enrich_cmd.py). Distinct from tests/test_contact_enrich.py
 and tests/test_contact_enrich_pipeline.py, which cover other parts of this
 same domain module.
 
-discover_all_contacts, migrate_legacy_memory_files, and run_enrichment_pipeline
+discover_all_contacts and run_enrichment_pipeline
 are mocked so no real vault/Gmail scan or enrichment pipeline runs.
 enrich_dir() is redirected to tmp_path so the real write/backup/read code
 paths in discover() execute against an isolated directory rather than the
@@ -147,7 +147,6 @@ def test_enrich_records_account_none_passes_all_raw_contacts() -> None:
     """No account filter -> every raw contact reaches the pipeline unchanged."""
     raw_contacts = [_make_contact(account="acme-corp"), _make_contact(account="beta-inc")]
     with (
-        patch(f"{_MOD}.migrate_legacy_memory_files", return_value=0),
         patch(f"{_MOD}.load_raw_contacts", return_value=raw_contacts),
         patch(f"{_MOD}.run_enrichment_pipeline", return_value=(2, 0)) as mock_pipeline,
     ):
@@ -162,7 +161,6 @@ def test_enrich_records_account_filters_to_matching_slug() -> None:
     acme = _make_contact(account="acme-corp")
     beta = _make_contact(account="beta-inc")
     with (
-        patch(f"{_MOD}.migrate_legacy_memory_files", return_value=0),
         patch(f"{_MOD}.load_raw_contacts", return_value=[acme, beta]),
         patch(f"{_MOD}.run_enrichment_pipeline", return_value=(1, 0)) as mock_pipeline,
     ):
@@ -172,29 +170,21 @@ def test_enrich_records_account_filters_to_matching_slug() -> None:
     assert result.total_raw_contacts == 1
 
 
-def test_enrich_records_empty_after_filter_skips_pipeline_but_still_migrates() -> None:
-    """No contacts matching the account filter -> pipeline is skipped entirely.
-
-    Migration still ran first, so migrated_legacy_files reflects whatever
-    migrate_legacy_memory_files() returned rather than always 0.
-    """
+def test_enrich_records_empty_after_filter_skips_pipeline() -> None:
+    """No contacts matching the account filter -> pipeline is skipped entirely."""
     with (
-        patch(f"{_MOD}.migrate_legacy_memory_files", return_value=4),
         patch(f"{_MOD}.load_raw_contacts", return_value=[_make_contact(account="beta-inc")]),
         patch(f"{_MOD}.run_enrichment_pipeline") as mock_pipeline,
     ):
         result = enrich_records(account="acme-corp")
 
     mock_pipeline.assert_not_called()
-    assert result == EnrichRecordsResult(
-        total_enriched=0, total_failed=0, migrated_legacy_files=4, total_raw_contacts=0
-    )
+    assert result == EnrichRecordsResult(total_enriched=0, total_failed=0, total_raw_contacts=0)
 
 
 def test_enrich_records_empty_raw_contacts_from_loader_skips_pipeline() -> None:
     """load_raw_contacts() returning [] hits the same "nothing to do" early return."""
     with (
-        patch(f"{_MOD}.migrate_legacy_memory_files", return_value=0),
         patch(f"{_MOD}.load_raw_contacts", return_value=[]),
         patch(f"{_MOD}.run_enrichment_pipeline") as mock_pipeline,
     ):
@@ -204,18 +194,14 @@ def test_enrich_records_empty_raw_contacts_from_loader_skips_pipeline() -> None:
     assert result.total_raw_contacts == 0
 
 
-def test_enrich_records_happy_path_plumbs_pipeline_and_migration_counts() -> None:
-    """Non-empty contacts -> pipeline runs once; its return tuple and the migration
-    count are plumbed through verbatim, not hardcoded or swapped."""
+def test_enrich_records_happy_path_plumbs_pipeline_counts() -> None:
+    """Non-empty contacts -> pipeline counts appear in the result."""
     raw_contacts = [_make_contact(account="acme-corp"), _make_contact(account="acme-corp")]
     with (
-        patch(f"{_MOD}.migrate_legacy_memory_files", return_value=3),
         patch(f"{_MOD}.load_raw_contacts", return_value=raw_contacts),
         patch(f"{_MOD}.run_enrichment_pipeline", return_value=(5, 2)) as mock_pipeline,
     ):
         result = enrich_records()
 
     mock_pipeline.assert_called_once_with(raw_contacts)
-    assert result == EnrichRecordsResult(
-        total_enriched=5, total_failed=2, migrated_legacy_files=3, total_raw_contacts=2
-    )
+    assert result == EnrichRecordsResult(total_enriched=5, total_failed=2, total_raw_contacts=2)

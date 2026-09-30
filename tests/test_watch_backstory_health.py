@@ -14,6 +14,8 @@ Covers:
 """
 
 import json
+from collections.abc import Mapping
+from contextlib import AbstractContextManager
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -29,24 +31,28 @@ from click.testing import CliRunner  # noqa: E402
 
 import fieldkit.watch.backstory_health as wbh  # noqa: E402
 from fieldkit.commands.watch.backstory_health import cli  # noqa: E402
+from fieldkit.config import ConfigError  # noqa: E402
+from fieldkit.watch.mcp import MCPAuthError  # noqa: E402
+from fieldkit.watch.status import write_run_status as real_write_run_status  # noqa: E402
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.fixture(autouse=True)
+def _configured_backstory_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(wbh, "get_mcp_endpoint", lambda _name: "https://gateway.example.com/backstory")
 
 
 def test_state_paths_use_the_configured_roots(tmp_path: Path) -> None:
     """Path helpers keep all health-watcher artifacts under their canonical roots."""
     with (
-        patch.object(wbh, "get_fieldkit_home", return_value=tmp_path / "home"),
         patch.object(wbh, "get_watchers_dir", return_value=tmp_path / "watchers"),
     ):
-        wbh._accounts_config.cache_clear()
         wbh._alerts_file.cache_clear()
         wbh._state_file.cache_clear()
-        accounts_path = wbh._accounts_config()
         alerts_path = wbh._alerts_file()
         state_path = wbh._state_file()
 
-    assert accounts_path == tmp_path / "home" / "config" / "accounts.yaml"
     assert alerts_path == tmp_path / "watchers" / "backstory-alerts.md"
     assert state_path == tmp_path / "watchers" / "backstory-health-state.json"
 
@@ -102,8 +108,8 @@ def _mock_session(
 # ── TestComputeHealthScore (flattened) ─────────────────────────────────────────────
 
 
-def test_compute_health_score_empty_list_returns_zero() -> None:
-    assert wbh.compute_health_score([]) == 0.0
+def test_compute_health_score_empty_list_is_unavailable() -> None:
+    assert wbh.compute_health_score([]) is None
 
 
 def test_compute_health_score_single_opportunity() -> None:
@@ -115,14 +121,14 @@ def test_compute_health_score_mean_of_multiple() -> None:
     assert wbh.compute_health_score(opps) == pytest.approx(50.0)
 
 
-def test_compute_health_score_opportunities_missing_engagement_level_are_excluded() -> None:
-    opps = [{"engagement_level": 80}, {"name": "opp_without_level"}]
-    assert wbh.compute_health_score(opps) == pytest.approx(80.0)
+def test_compute_health_score_missing_engagement_level_is_unavailable() -> None:
+    opps: list[dict[str, object]] = [{"engagement_level": 80}, {"name": "opp_without_level"}]
+    assert wbh.compute_health_score(opps) is None
 
 
-def test_compute_health_score_all_missing_engagement_levels_returns_zero() -> None:
+def test_compute_health_score_all_missing_engagement_levels_is_unavailable() -> None:
     opps = [{"name": "no_level"}, {"other": "key"}]
-    assert wbh.compute_health_score(opps) == 0.0
+    assert wbh.compute_health_score(opps) is None
 
 
 # ---------------------------------------------------------------------------
@@ -139,7 +145,7 @@ def test_append_alert_alert_written_to_file(tmp_path: Path) -> None:
         patch.object(wbh, "_alerts_file", return_value=alerts_file),
         patch.object(wbh, "get_watchers_dir", return_value=tmp_path),
     ):
-        wbh.append_alert(
+        result = wbh.append_alert(
             account_key="test-corp",
             current_score=55.0,
             previous_score=75.0,
@@ -147,7 +153,8 @@ def test_append_alert_alert_written_to_file(tmp_path: Path) -> None:
             risk_count=2,
             dry_run=False,
         )
-    content = alerts_file.read_text()
+    assert result is True
+    content = alerts_file.read_text(encoding="utf-8")
     assert "test-corp" in content
     assert "55.0" in content
     assert "Δ -20.0" in content
@@ -161,7 +168,7 @@ def test_append_alert_dry_run_does_not_write_file(tmp_path: Path) -> None:
         patch.object(wbh, "_alerts_file", return_value=alerts_file),
         patch.object(wbh, "get_watchers_dir", return_value=tmp_path),
     ):
-        wbh.append_alert(
+        result = wbh.append_alert(
             account_key="test-corp",
             current_score=30.0,
             previous_score=None,
@@ -169,6 +176,7 @@ def test_append_alert_dry_run_does_not_write_file(tmp_path: Path) -> None:
             risk_count=0,
             dry_run=True,
         )
+    assert result is False
     assert not alerts_file.exists()
 
 
@@ -257,9 +265,8 @@ def test_save_and_load(tmp_path: Path) -> None:
         patch.object(wbh, "get_watchers_dir", return_value=watchers_dir),
     ):
         data = {"acme": {"health_score": 72.5, "checked_at": "2026-01-01T07:00:00Z"}}
-        result = wbh.save_state(data)
+        wbh.save_state(data)
         loaded = wbh.load_state()
-    assert result is None
     assert loaded == data
 
 
@@ -521,7 +528,7 @@ def test_api_failure_writes_error_line(tmp_path: Path) -> None:
 
 
 def test_api_failure_in_main_counted_in_summary(tmp_path: Path) -> None:
-    """main() does not exit 1 on per-account API failure; it counts failures."""
+    """The command reports a partial failure when the provider fails for an account."""
     accounts_yaml = tmp_path / "accounts.yaml"
     accounts_yaml.write_text("accounts:\n  bad-corp:\n    keywords:\n      - Bad\n", encoding="utf-8")
     state_file = tmp_path / "state.json"
@@ -549,8 +556,7 @@ def test_api_failure_in_main_counted_in_summary(tmp_path: Path) -> None:
     ):
         result = CliRunner().invoke(cli, [])
 
-    # Process must not crash (exit 0 even with per-account failure)
-    assert result.exit_code == 0
+    assert result.exit_code == 1
     assert alerts_file.exists()
     content = alerts_file.read_text()
     assert "bad-corp" in content
@@ -644,22 +650,127 @@ def test_get_risk_count_returns_zero_when_no_risks_section() -> None:
 # ── TestNonNumericEngagementLevel (flattened) ─────────────────────────────────────────────
 
 
-def test_mixed_numeric_and_string_returns_numeric_mean() -> None:
-    """String 'high' is skipped; numeric 75 is kept; result is 75.0."""
-    opps = [{"engagement_level": "high"}, {"engagement_level": 75}]
-    assert wbh.compute_health_score(opps) == pytest.approx(75.0)
+def test_mixed_numeric_and_string_is_unavailable() -> None:
+    """A malformed score makes the provider result unavailable."""
+    opps: list[dict[str, object]] = [{"engagement_level": "high"}, {"engagement_level": 75}]
+    assert wbh.compute_health_score(opps) is None
 
 
-def test_none_engagement_level_is_skipped() -> None:
-    """None engagement_level is skipped without raising."""
-    opps = [{"engagement_level": None}, {"engagement_level": 50.0}]
-    assert wbh.compute_health_score(opps) == pytest.approx(50.0)
+def test_none_engagement_level_is_unavailable() -> None:
+    """A missing numeric score cannot be reported as healthy data."""
+    opps: list[dict[str, object]] = [{"engagement_level": None}, {"engagement_level": 50.0}]
+    assert wbh.compute_health_score(opps) is None
 
 
-def test_all_non_numeric_returns_zero() -> None:
-    """All non-numeric engagement levels → 0.0 (no crash)."""
-    opps = [{"engagement_level": "low"}, {"engagement_level": "high"}, {"engagement_level": None}]
-    assert wbh.compute_health_score(opps) == 0.0
+def test_all_non_numeric_is_unavailable() -> None:
+    """All non-numeric engagement levels cannot manufacture a zero score."""
+    opps: list[dict[str, object]] = [
+        {"engagement_level": "low"},
+        {"engagement_level": "high"},
+        {"engagement_level": None},
+    ]
+    assert wbh.compute_health_score(opps) is None
+
+
+@pytest.mark.parametrize("value", [True, float("nan"), float("inf"), -1, 101])
+def test_compute_health_score_rejects_invalid_numeric_values(value: object) -> None:
+    assert wbh.compute_health_score([{"engagement_level": value}]) is None
+
+
+def test_check_account_missing_scorable_opportunities_records_failure_without_alert_or_state() -> None:
+    session = MagicMock(spec=wbh.MCPSession)
+    session.call_tool.return_value = {"peopleai_account_id": 1, "opportunities": []}
+    alert = MagicMock()
+    api_error = MagicMock()
+
+    with (
+        patch.object(wbh, "append_alert", alert),
+        patch.object(wbh, "append_api_error", api_error),
+    ):
+        result = wbh.check_account(
+            session=session,
+            account_key="acme",
+            account_cfg={"keywords": ["Acme"]},
+            state={},
+            default_threshold=60,
+            dry_run=False,
+        )
+
+    assert result is None
+    alert.assert_not_called()
+    api_error.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "provider_result",
+    [
+        {"peopleai_account_id": True, "opportunities": [{"engagement_level": 50}]},
+        {"peopleai_account_id": -1, "opportunities": [{"engagement_level": 50}]},
+        {"peopleai_account_id": 1},
+        {"peopleai_account_id": 1, "opportunities": "private payload"},
+        {"peopleai_account_id": 1, "opportunities": ["private payload"]},
+    ],
+)
+def test_check_account_rejects_malformed_provider_shape(provider_result: object) -> None:
+    session = MagicMock(spec=wbh.MCPSession)
+    session.call_tool.return_value = provider_result
+    alert = MagicMock()
+
+    with patch.object(wbh, "append_alert", alert):
+        result = wbh.check_account(
+            session=session,
+            account_key="acme",
+            account_cfg={"keywords": ["Acme"]},
+            state={},
+            default_threshold=60,
+            dry_run=False,
+        )
+
+    assert result is None
+    alert.assert_not_called()
+
+
+def test_malformed_backstory_result_preserves_existing_state_without_write() -> None:
+    state = {"acme": {"health_score": 72.0, "checked_at": "2026-09-27T00:00:00Z"}}
+    session = MagicMock(spec=wbh.MCPSession)
+    session.call_tool.return_value = {"peopleai_account_id": 1, "opportunities": []}
+    save_state = MagicMock()
+
+    with (
+        patch.object(wbh, "get_accounts_config", return_value={"accounts": {"acme": {}}}),
+        patch.object(wbh, "load_state", return_value=state),
+        patch.object(wbh, "_open_mcp_session", return_value=session),
+        patch.object(wbh, "save_state", save_state),
+        patch.object(wbh, "append_api_error"),
+        patch.object(wbh, "write_run_status", return_value="written"),
+        patch.object(wbh, "watcher_logging"),
+    ):
+        result = wbh._run_backstory_health(threshold=60, account=None, dry_run=False)
+
+    assert result.exit_code == 1
+    save_state.assert_not_called()
+
+
+def test_invalid_previous_score_is_not_rendered_in_health_alert() -> None:
+    session = MagicMock(spec=wbh.MCPSession)
+    session.call_tool.side_effect = [
+        {"peopleai_account_id": 1, "opportunities": [{"engagement_level": 50}]},
+        "no risks",
+    ]
+    append_alert = MagicMock()
+
+    with patch.object(wbh, "append_alert", append_alert):
+        result = wbh.check_account(
+            session=session,
+            account_key="acme",
+            account_cfg={},
+            state={"acme": {"health_score": float("nan")}},
+            default_threshold=60,
+            dry_run=False,
+        )
+
+    assert result is not None
+    assert append_alert.call_args.kwargs["previous_score"] is None
 
 
 # ── TestRunBackstoryHealthExceptionHandling (flattened) ─────────────────────────────────────────────
@@ -691,8 +802,7 @@ def test_check_account_raises_increments_api_failures_and_returns_zero(tmp_path:
     ):
         rc = wbh._run_backstory_health(threshold=60, account=None, dry_run=False)
 
-    # Exit code must be 0 (not a fatal crash)
-    assert rc == 0
+    assert rc.exit_code == 1
 
 
 # ---------------------------------------------------------------------------
@@ -705,8 +815,8 @@ def test_check_account_raises_increments_api_failures_and_returns_zero(tmp_path:
 
 def _make_patches_bug213_internal_account_skip(
     tmp_path: Path,
-    accounts_cfg: dict[str, object],
-) -> tuple[object, ...]:
+    accounts_cfg: Mapping[str, object],
+) -> tuple[AbstractContextManager[object], ...]:
     """Return context-manager patches for a _run_backstory_health call."""
     state_file = tmp_path / "state.json"
     alerts_file = tmp_path / "backstory-alerts.md"
@@ -746,8 +856,10 @@ def test_internal_account_is_not_checked(tmp_path: Path) -> None:
     ):
         rc = wbh._run_backstory_health(threshold=60, account=None, dry_run=False)
 
+    assert rc.outcome == "ok"
+    assert rc.completed is True
+    assert rc.exit_code == 0
     mock_check.assert_not_called()
-    assert rc == 0
 
 
 def test_internal_false_account_is_checked(tmp_path: Path) -> None:
@@ -770,7 +882,7 @@ def test_internal_false_account_is_checked(tmp_path: Path) -> None:
     ):
         rc = wbh._run_backstory_health(threshold=60, account=None, dry_run=False)
 
-    assert rc == 0
+    assert rc.exit_code == 0
     mock_check.assert_called_once()
 
 
@@ -795,7 +907,7 @@ def test_mixed_accounts_only_non_internal_checked(tmp_path: Path) -> None:
     ):
         rc = wbh._run_backstory_health(threshold=60, account=None, dry_run=False)
 
-    assert rc == 0
+    assert rc.exit_code == 0
     # Only the non-internal account should have been checked
     assert mock_check.call_count == 1
     call_kwargs = mock_check.call_args.kwargs
@@ -988,24 +1100,22 @@ def test_no_prior_state_always_fires(tmp_path: Path) -> None:
 
 
 @pytest.mark.unit
-def test_run_backstory_health_handles_empty_accounts(tmp_path: Path) -> None:
-    """_run_backstory_health returns exit code 1 when accounts config is empty."""
+def test_run_backstory_health_dry_run_does_not_read_accounts_or_provider(tmp_path: Path) -> None:
+    """A preview reports the skipped provider input without reading configuration."""
     from unittest.mock import patch
 
     from fieldkit.watch.backstory_health import _run_backstory_health
 
-    # Patch load_accounts_config to return a config with no accounts
     empty_config: dict[str, object] = {"accounts": {}}
 
     with (
-        patch("fieldkit.watch.backstory_health.load_accounts_config", return_value=empty_config),
-        patch("fieldkit.watch.backstory_health.get_fieldkit_home", return_value=tmp_path),
+        patch("fieldkit.watch.backstory_health.get_accounts_config", return_value=empty_config) as load,
         patch("fieldkit.watch.backstory_health.watcher_logging"),
     ):
         rc = _run_backstory_health(threshold=60, account=None, dry_run=True)
 
-    # Empty accounts → exit 1 (no accounts to check is a configuration error)
-    assert rc == 1
+    assert rc.exit_code == 0
+    load.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -1018,8 +1128,8 @@ def test_run_backstory_health_handles_empty_accounts(tmp_path: Path) -> None:
 
 def _make_patches_run_backstory_health_branches(
     tmp_path: Path,
-    accounts_cfg: dict[str, object],
-) -> tuple[object, ...]:
+    accounts_cfg: Mapping[str, object],
+) -> tuple[AbstractContextManager[object], ...]:
     state_file = tmp_path / "state.json"
     alerts_file = tmp_path / "backstory-alerts.md"
 
@@ -1039,14 +1149,14 @@ def _make_patches_run_backstory_health_branches(
     )
 
 
-def test_load_accounts_config_failure_returns_exit_1(tmp_path: Path) -> None:
-    """Lines 479-480: RuntimeError from load_accounts_config → return 1."""
+def test_account_read_runtime_failure_returns_exit_1(tmp_path: Path) -> None:
+    """An unexpected retryable read failure remains a partial result."""
     state_file = tmp_path / "state.json"
     alerts_file = tmp_path / "backstory-alerts.md"
 
     with (
         patch(
-            "fieldkit.watch.backstory_health.load_accounts_config",
+            "fieldkit.watch.backstory_health.get_accounts_config",
             side_effect=RuntimeError("config error"),
         ),
         patch.object(wbh, "_state_file", return_value=state_file),
@@ -1056,7 +1166,7 @@ def test_load_accounts_config_failure_returns_exit_1(tmp_path: Path) -> None:
     ):
         rc = wbh._run_backstory_health(threshold=60, account=None, dry_run=False)
 
-    assert rc == 1
+    assert rc.exit_code == 1
 
 
 def test_mcp_initialize_failure_returns_exit_1(tmp_path: Path) -> None:
@@ -1081,17 +1191,84 @@ def test_mcp_initialize_failure_returns_exit_1(tmp_path: Path) -> None:
     ):
         rc = wbh._run_backstory_health(threshold=60, account=None, dry_run=False)
 
-    assert rc == 1
+    assert rc.exit_code == 1
 
 
-def test_unknown_account_filter_returns_exit_1(tmp_path: Path) -> None:
-    """Line 542: account filter not in accounts → return 1."""
+def test_missing_backstory_endpoint_is_invalid_configuration(tmp_path: Path) -> None:
+    """An unconfigured optional provider cannot be reported as a successful run."""
+    cfg = {"accounts": {"acme": {"keywords": ["Acme Corp"]}}}
+
+    with (
+        patch("fieldkit.watch.backstory_health.get_accounts_config", return_value=cfg),
+        patch.object(wbh, "get_mcp_endpoint", return_value=None),
+        patch.object(wbh, "watcher_logging"),
+        patch.object(wbh, "MCPSession") as session,
+        pytest.raises(ConfigError, match=r"mcp_endpoints\.backstory"),
+    ):
+        wbh._run_backstory_health(threshold=60, account=None, dry_run=False)
+
+    session.assert_not_called()
+
+
+def test_fatal_account_config_failure_writes_status_and_json(capsys: pytest.CaptureFixture[str]) -> None:
+    write_status = MagicMock(return_value="written")
+    with (
+        patch.object(wbh, "get_accounts_config", side_effect=RuntimeError("private path")),
+        patch.object(wbh, "watcher_logging"),
+        patch.object(wbh, "write_run_status", write_status),
+    ):
+        rc = wbh._run_backstory_health(threshold=60, account=None, dry_run=False, as_json=True)
+
+    assert rc.exit_code == 1
+    assert json.loads(capsys.readouterr().out)["outcome"] == "fatal"
+    assert write_status.call_args.kwargs["outcome"] == "fatal"
+    assert write_status.call_args.kwargs["failures"] == 1
+
+
+def test_fatal_provider_initialization_writes_status_and_json(capsys: pytest.CaptureFixture[str]) -> None:
+    write_status = MagicMock(return_value="written")
+    with (
+        patch.object(wbh, "get_accounts_config", return_value={"accounts": {"acme": {}}}),
+        patch.object(wbh, "load_state", return_value={}),
+        patch.object(wbh, "_open_mcp_session", return_value=None),
+        patch.object(wbh, "watcher_logging"),
+        patch.object(wbh, "write_run_status", write_status),
+    ):
+        rc = wbh._run_backstory_health(threshold=60, account=None, dry_run=False, as_json=True)
+
+    assert rc.exit_code == 1
+    assert json.loads(capsys.readouterr().out)["outcome"] == "fatal"
+    assert write_status.call_args.kwargs["records_checked"] == 0
+
+
+def test_backstory_auth_failure_propagates_for_exit_two(tmp_path: Path) -> None:
+    """Credential rejection is not downgraded to a retryable watcher failure."""
+    cfg = {"accounts": {"acme": {"keywords": ["Acme Corp"]}}}
+
+    with (
+        patch("fieldkit.watch.backstory_health.get_accounts_config", return_value=cfg),
+        patch.object(wbh, "load_state", return_value={}),
+        patch.object(wbh.MCPSession, "initialize", side_effect=MCPAuthError("authentication failed")),
+        patch.object(wbh, "watcher_logging"),
+        pytest.raises(MCPAuthError, match="authentication failed"),
+    ):
+        wbh._run_backstory_health(threshold=60, account=None, dry_run=False)
+
+
+def test_unknown_account_filter_is_invalid_configuration(tmp_path: Path) -> None:
+    """An explicitly selected unknown account is invalid data."""
     cfg = {"accounts": {"acme": {"keywords": ["Acme Corp"]}}}
     patches = _make_patches_run_backstory_health_branches(tmp_path, cfg)
-    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
-        rc = wbh._run_backstory_health(threshold=60, account="nonexistent", dry_run=False)
-
-    assert rc == 1
+    with (
+        patches[0],
+        patches[1],
+        patches[2],
+        patches[3],
+        patches[4],
+        patches[5],
+        pytest.raises(ConfigError, match="not configured"),
+    ):
+        wbh._run_backstory_health(threshold=60, account="nonexistent", dry_run=False)
 
 
 def test_non_dict_account_cfg_is_skipped(tmp_path: Path) -> None:
@@ -1115,7 +1292,7 @@ def test_non_dict_account_cfg_is_skipped(tmp_path: Path) -> None:
     ):
         rc = wbh._run_backstory_health(threshold=60, account=None, dry_run=False)
 
-    assert rc == 0
+    assert rc.exit_code == 0
     # Only the valid account should be checked
     assert mock_check.call_count == 1
     assert mock_check.call_args.kwargs["account_key"] == "acme"
@@ -1138,9 +1315,13 @@ def test_dry_run_does_not_save_state(tmp_path: Path, capsys: pytest.CaptureFixtu
     ):
         rc = wbh._run_backstory_health(threshold=60, account=None, dry_run=True)
 
-    assert rc == 0
-    assert capsys.readouterr().out == "[DRY-RUN] backstory-health: 1 account(s) scanned, 0 alert(s) would fire\n"
+    assert rc.exit_code == 0
+    assert capsys.readouterr().out == (
+        "[DRY-RUN] backstory-health: provider input was not requested; no files were written\n"
+    )
     mock_save.assert_not_called()
+    assert rc.completed is True
+    assert rc.status_write is None
 
 
 def test_state_write_failure_is_fatal(tmp_path: Path) -> None:
@@ -1157,60 +1338,142 @@ def test_state_write_failure_is_fatal(tmp_path: Path) -> None:
         patches[5],
         patch.object(wbh, "check_account", return_value=fake_result),
         patch.object(wbh, "save_state", side_effect=OSError("disk full")),
-        patch.object(wbh, "write_run_status") as write_status,
+        patch.object(wbh, "write_run_status", return_value="written") as write_status,
     ):
         rc = wbh._run_backstory_health(threshold=60, account=None, dry_run=False)
 
-    assert rc == 1
+    assert rc.exit_code == 1
     assert write_status.call_args.kwargs["outcome"] == "fatal"
     assert write_status.call_args.kwargs["failures"] == 1
 
 
-# ---------------------------------------------------------------------------
-# Additional coverage for find_account_id and account_threshold helpers
-# ---------------------------------------------------------------------------
-
-
-# ── TestFindAccountId (flattened) ─────────────────────────────────────────────
-
-
-def test_find_account_id_returns_account_id_on_success() -> None:
-    session = MagicMock(spec=wbh.MCPSession)
-    session.call_tool.return_value = {"peopleai_account_id": 42}
-    result = wbh.find_account_id(session, "Acme Corp")
-    assert result == 42
-
-
-def test_find_account_id_returns_none_on_runtime_error() -> None:
-    session = MagicMock(spec=wbh.MCPSession)
-    session.call_tool.side_effect = RuntimeError("MCP error")
-    result = wbh.find_account_id(session, "Acme Corp")
-    assert result is None
-
-
-def test_find_account_id_returns_none_for_non_dict_response() -> None:
-    session = MagicMock(spec=wbh.MCPSession)
-    session.call_tool.return_value = "unexpected string"
-    result = wbh.find_account_id(session, "Acme Corp")
-    assert result is None
-
-
-def test_find_account_id_returns_none_when_id_missing() -> None:
-    session = MagicMock(spec=wbh.MCPSession)
-    session.call_tool.return_value = {"opportunities": []}
-    result = wbh.find_account_id(session, "Acme Corp")
-    assert result is None
-
-
-def test_find_account_id_returns_none_when_id_is_string() -> None:
-    """peopleai_account_id must be int; string is rejected."""
-    session = MagicMock(spec=wbh.MCPSession)
-    session.call_tool.return_value = {"peopleai_account_id": "not-an-int"}
-    result = wbh.find_account_id(session, "Acme Corp")
-    assert result is None
-
-
 # ── TestAccountThreshold (flattened) ─────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("failure", [None, RuntimeError("lookup failed")])
+def test_total_scan_failure_has_no_successful_accounts(failure: object) -> None:
+    with patch.object(
+        wbh, "check_account", side_effect=failure if isinstance(failure, Exception) else None, return_value=None
+    ):
+        result = wbh._check_all_accounts(
+            accounts={"acme": {}, "example": {}}, session=MagicMock(), state={}, threshold=60, dry_run=False
+        )
+    assert result.accounts_checked == 0
+    assert result.accounts_attempted == 2
+    assert result.api_failures == 2
+
+
+@pytest.mark.parametrize("failure", [None, RuntimeError("lookup failed")])
+@pytest.mark.parametrize("useful", [False, True])
+def test_scan_result_reports_total_fatal_or_completed_partial(
+    failure: object, useful: bool, capsys: pytest.CaptureFixture[str]
+) -> None:
+    checks = [{"health_score": 80.0}, failure] if useful else [failure, failure]
+    with (
+        patch.object(wbh, "_load_and_filter_accounts", return_value={"acme": {}, "example": {}}),
+        patch.object(wbh, "_open_mcp_session", return_value=MagicMock()),
+        patch.object(wbh, "load_state", return_value={}),
+        patch.object(wbh, "check_account", side_effect=checks),
+        patch.object(wbh, "save_state"),
+        patch.object(wbh, "write_run_status", return_value="written") as writer,
+        patch.object(wbh, "watcher_logging"),
+    ):
+        result = wbh._run_backstory_health(threshold=60, account=None, dry_run=False, as_json=True)
+    assert result.outcome == ("partial" if useful else "fatal")
+    assert result.completed is True
+    assert result.status_write == "written"
+    assert result.exit_code == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["outcome"] == result.outcome
+    assert payload["records_checked"] == int(useful)
+    assert payload["failures"] == 2 - int(useful)
+    assert writer.call_args.kwargs["records_checked"] == int(useful)
+
+
+def test_backstory_status_destination_failure_preserves_prior_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from fieldkit.watch import status
+
+    target = tmp_path / "watchers" / "watcher-run-status.json"
+    target.parent.mkdir()
+    prior = '{"backstory-health": {"outcome": "ok"}}'
+    target.write_text(prior, encoding="utf-8")
+
+    def fail_destination(path: Path, *args: object, **kwargs: object) -> None:
+        assert path == target
+        raise OSError("destination unavailable")
+
+    monkeypatch.setattr(status, "get_fieldkit_home", lambda: tmp_path)
+    monkeypatch.setattr(status, "locked_json_update", fail_destination)
+    with (
+        patch.object(wbh, "_load_and_filter_accounts", return_value={"acme": {}}),
+        patch.object(wbh, "_open_mcp_session", return_value=MagicMock()),
+        patch.object(wbh, "load_state", return_value={}),
+        patch.object(wbh, "check_account", return_value={"health_score": 80.0}),
+        patch.object(wbh, "save_state"),
+        patch.object(wbh, "write_run_status", real_write_run_status),
+        patch.object(wbh, "watcher_logging"),
+    ):
+        result = wbh._run_backstory_health(threshold=60, account=None, dry_run=False, as_json=True)
+    assert result.outcome == "fatal"
+    assert result.completed is True
+    assert result.status_write == "failed"
+    assert json.loads(capsys.readouterr().out)["failures"] == 1
+    assert target.read_text(encoding="utf-8") == prior
+
+
+@pytest.mark.parametrize("error", [OSError("publication failed"), RuntimeError("publication failed")])
+def test_required_alert_failure_is_fatal_after_useful_work(
+    error: Exception, capsys: pytest.CaptureFixture[str]
+) -> None:
+    session = _mock_session(find_account_result=_make_find_account_result(account_id=7, opportunity_levels=[50.0]))
+    with (
+        patch.object(wbh, "_load_and_filter_accounts", return_value={"acme": {}, "example": {}}),
+        patch.object(wbh, "_open_mcp_session", return_value=session),
+        patch.object(wbh, "load_state", return_value={}),
+        patch.object(wbh, "append_alert", side_effect=[True, error]),
+        patch.object(wbh, "save_state"),
+        patch.object(wbh, "write_run_status", return_value="written") as writer,
+        patch.object(wbh, "watcher_logging"),
+    ):
+        result = wbh._run_backstory_health(threshold=60, account=None, dry_run=False, as_json=True)
+    assert result.outcome == "fatal"
+    assert result.completed is True
+    assert result.status_write == "written"
+    assert json.loads(capsys.readouterr().out)["records_checked"] == 1
+    assert writer.call_args.kwargs["failures"] == 1
+    assert writer.call_args.kwargs["alerts_generated"] == 1
+
+
+@pytest.mark.parametrize("operation", ["lookup", "publication"])
+def test_account_config_error_propagates(operation: str) -> None:
+    session = _mock_session(find_account_result=_make_find_account_result(account_id=7, opportunity_levels=[50.0]))
+    if operation == "lookup":
+        session.call_tool.side_effect = ConfigError("invalid provider configuration")
+    with (
+        patch.object(wbh, "append_alert", side_effect=ConfigError("invalid provider configuration")),
+        pytest.raises(ConfigError, match="invalid provider configuration"),
+    ):
+        wbh._check_all_accounts(accounts={"acme": {}}, session=session, state={}, threshold=60, dry_run=False)
+
+
+@pytest.mark.parametrize("status_write, failures", [("written", 1), ("failed", 2)])
+def test_provider_failure_counts_status_failure(
+    status_write: str, failures: int, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with (
+        patch.object(wbh, "_load_and_filter_accounts", return_value={"acme": {}}),
+        patch.object(wbh, "load_state", return_value={}),
+        patch.object(wbh, "_open_mcp_session", return_value=None),
+        patch.object(wbh, "write_run_status", return_value=status_write),
+        patch.object(wbh, "watcher_logging"),
+    ):
+        result = wbh._run_backstory_health(threshold=60, account=None, dry_run=False, as_json=True)
+    assert result.outcome == "fatal"
+    assert result.completed is False
+    assert result.status_write == status_write
+    assert json.loads(capsys.readouterr().out)["failures"] == failures
 
 
 def test_account_threshold_returns_configured_threshold() -> None:
@@ -1270,7 +1533,7 @@ def test_duplicate_alert_not_written(tmp_path: Path) -> None:
         patch.object(wbh, "get_watchers_dir", return_value=tmp_path),
     ):
         size_before = alerts_file.stat().st_size
-        wbh.append_alert(
+        result = wbh.append_alert(
             account_key=account_key,
             current_score=40.0,
             previous_score=None,
@@ -1280,33 +1543,52 @@ def test_duplicate_alert_not_written(tmp_path: Path) -> None:
         )
         size_after = alerts_file.stat().st_size
 
+    assert result is False
     assert size_after == size_before, "Duplicate alert must not grow the file"
 
 
+@pytest.mark.parametrize("duplicate", [False, True])
+def test_run_counts_only_published_health_alerts(
+    tmp_path: Path, duplicate: bool, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from datetime import UTC, datetime
+
+    from fieldkit.watch.status import WatcherRunResult
+
+    alerts_file = tmp_path / "backstory-alerts.md"
+    if duplicate:
+        today = datetime.now(UTC).date().isoformat()
+        alerts_file.write_text(f"## {today} — acme health alert\n", encoding="utf-8")
+    before = alerts_file.read_bytes() if duplicate else None
+    session = _mock_session(find_account_result=_make_find_account_result(opportunity_levels=[40.0]))
+    with (
+        patch.object(wbh, "_load_and_filter_accounts", return_value={"acme": {}}),
+        patch.object(wbh, "_open_mcp_session", return_value=session),
+        patch.object(wbh, "load_state", return_value={}),
+        patch.object(wbh, "save_state"),
+        patch.object(wbh, "_alerts_file", return_value=alerts_file),
+        patch.object(wbh, "get_watchers_dir", return_value=tmp_path),
+        patch.object(wbh, "write_run_status", return_value="written") as writer,
+        patch.object(wbh, "watcher_logging"),
+    ):
+        result = wbh._run_backstory_health(threshold=60, account=None, dry_run=False, as_json=True)
+    assert result == WatcherRunResult("ok", True, "written")
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["records_checked"] == 1
+    assert payload["alerts_generated"] == int(not duplicate)
+    assert writer.call_args.kwargs["alerts_generated"] == int(not duplicate)
+    if duplicate:
+        assert alerts_file.read_bytes() == before
+    else:
+        assert "40.0" in alerts_file.read_text(encoding="utf-8")
+
+
 # ---------------------------------------------------------------------------
-# Additional coverage: get_engagement_score, load_accounts_config, save_state
+# Additional coverage: save_state
 # ---------------------------------------------------------------------------
 
 
 # ── TestBackstoryHealthAdditionalBranches (flattened) ─────────────────────────────────────────────
-
-
-def test_get_engagement_score_returns_none() -> None:
-    """Lines 114-125: get_engagement_score always returns None (sentinel)."""
-    session = MagicMock()
-    result = wbh.get_engagement_score(session, account_id=1)
-    assert result is None
-
-
-def test_load_accounts_config_raises_on_failure() -> None:
-    """Lines 193-195: load_accounts_config wraps exception in RuntimeError."""
-    import re
-
-    with (
-        patch("fieldkit.watch.backstory_health.get_accounts_config", side_effect=Exception("yaml error")),
-        pytest.raises(RuntimeError, match=re.escape("accounts.yaml load failed")),
-    ):
-        wbh.load_accounts_config()
 
 
 def test_save_state_oserror_propagates(tmp_path: Path) -> None:
@@ -1350,7 +1632,7 @@ def test_run_backstory_health_account_filter_scopes_to_one(tmp_path: Path) -> No
     ):
         rc = wbh._run_backstory_health(threshold=60, account="acme", dry_run=False)
 
-    assert rc == 0
+    assert rc.exit_code == 0
     # Only acme should be checked
     assert mock_check.call_count == 1
     assert mock_check.call_args.kwargs["account_key"] == "acme"

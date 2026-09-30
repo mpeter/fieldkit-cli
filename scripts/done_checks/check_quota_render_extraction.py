@@ -15,7 +15,7 @@ _SYMBOLS = (
 )
 _COLLECTOR = "_collect_pursuits_for_quota"
 _OLD_PREFIX = "commands.pipeline.quota."
-_QUOTA_BINDING = '_CMD_QUOTA__QUOTA_MODULE = "fieldkit.commands.pipeline.quota"'
+_QUOTA_BINDING = '_CMD_QUOTA__QUOTA_MODULE = "fieldkit.pipeline.quota"'
 _CALC_BINDING = '_CMD_QUOTA__CALC_MODULE = "fieldkit.watch.morning_brief_render"'
 
 
@@ -74,6 +74,9 @@ def main(argv: list[str]) -> int:
         return 1
 
     failures: list[str] = []
+    old_command_quota = src_root / "fieldkit" / "commands" / "pipeline" / "quota.py"
+    if old_command_quota.exists():
+        failures.append(f"old command quota module remains at {old_command_quota}")
     for symbol in _SYMBOLS:
         if symbol in quota_bindings:
             failures.append(f"{symbol} remains in quota module")
@@ -81,6 +84,20 @@ def main(argv: list[str]) -> int:
             failures.append(f"{symbol} is re-exported from quota module")
         if render_bindings.count(symbol) != 1:
             failures.append(f"{symbol} must be bound exactly once in render module")
+    sf_quota_path = src_root / "fieldkit" / "sf" / "quota.py"
+    sf_quota = _read(sf_quota_path)
+    if sf_quota is None:
+        failures.append(f"missing Salesforce quota domain {sf_quota_path}")
+    else:
+        sf_bindings = _bound_names(sf_quota, str(sf_quota_path))
+        if sf_bindings is None:
+            failures.append("invalid Salesforce quota domain")
+        else:
+            for symbol in ("SFQuotaResult", "fetch_sf_closed_won", "_quota_accounts", "_resolve_missing_territory_ids"):
+                if sf_bindings.count(symbol) != 1:
+                    failures.append(f"{symbol} must be bound exactly once in Salesforce quota domain")
+                if symbol in quota_bindings or symbol in quota_imports:
+                    failures.append(f"{symbol} remains in pipeline quota module")
     if quota_bindings.count(_COLLECTOR) != 1:
         failures.append(f"{_COLLECTOR} must remain bound exactly once in quota module")
     if _COLLECTOR in render_bindings:

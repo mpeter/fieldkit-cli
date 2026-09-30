@@ -1,11 +1,10 @@
-"""fieldkit commands — machine-readable CLI registry (D4).
+"""fieldkit commands — machine-readable CLI registry.
 
 Usage:
     fieldkit commands            human-readable table of every leaf command
     fieldkit commands --json     full registry as JSON (the agent-facing form)
 
-See `openspec/changes/cli-ux-redesign/design.md` D4 and
-`src/fieldkit/cli_registry.py` for the introspection mechanism.
+See `src/fieldkit/cli_registry.py` for the shared introspection mechanism.
 """
 
 import json

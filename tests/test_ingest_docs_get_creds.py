@@ -3,8 +3,7 @@
 Verifies that:
 - token_path=None resolves via get_google_token_path(); an explicit token_path
   never calls it (call-count-0 contract on the `if token_path is None` guard).
-- A missing token file raises FileNotFoundError with a helpful message and
-  never reaches Credentials.from_authorized_user_file (call-count-0 contract).
+- A missing token file raises AuthError with a helpful, path-free message.
 - Non-expired credentials are returned as-is without calling .refresh().
 - Expired credentials with a refresh_token are refreshed exactly once.
 - Expired credentials WITHOUT a refresh_token are NOT refreshed (proves the
@@ -21,6 +20,7 @@ from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 
+from fieldkit.errors import AuthError
 from fieldkit.ingest.docs import _get_creds
 
 pytestmark = pytest.mark.unit
@@ -84,17 +84,33 @@ def test_get_creds_explicit_token_path_never_calls_config_resolver(tmp_path: Pat
     assert result is mock_creds
 
 
-def test_get_creds_missing_token_file_raises_and_never_loads_credentials(tmp_path: Path) -> None:
-    """Resolved token_path does not exist → FileNotFoundError; from_authorized_user_file never called."""
+def test_get_creds_missing_token_file_requires_authentication(tmp_path: Path) -> None:
+    """Missing credentials require authentication without exposing their private path."""
     missing_path = tmp_path / "does-not-exist.json"
 
     with (
-        patch("google.oauth2.credentials.Credentials.from_authorized_user_file") as mock_load,
-        pytest.raises(FileNotFoundError, match=r"OAuth token not found.*fieldkit gmail sync"),
+        patch("fieldkit.ingest.docs.refresh_google_credentials") as refresh,
+        pytest.raises(AuthError, match=r"Google credentials are missing.*fieldkit auth google") as error,
     ):
         _get_creds(token_path=missing_path)
 
-    mock_load.assert_not_called()
+    assert str(missing_path) not in str(error.value)
+    refresh.assert_not_called()
+
+
+def test_get_creds_token_disappears_during_load_requires_authentication(tmp_path: Path) -> None:
+    """A file removed during loading has the same payload-free authentication outcome."""
+    token_path = _make_token_file(tmp_path)
+    with (
+        patch(
+            "google.oauth2.credentials.Credentials.from_authorized_user_file",
+            side_effect=FileNotFoundError(str(token_path)),
+        ),
+        pytest.raises(AuthError, match="fieldkit auth google") as error,
+    ):
+        _get_creds(token_path)
+    assert str(token_path) not in str(error.value)
+    assert error.value.__suppress_context__
 
 
 def test_get_creds_non_expired_returns_directly_without_refresh(tmp_path: Path) -> None:

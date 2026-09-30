@@ -14,8 +14,17 @@ from fieldkit.commands.pursuit.pipeline_health import classify_pursuit
 pytestmark = pytest.mark.unit
 
 
+@pytest.fixture(autouse=True)
+def _confine_advance_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "fieldkit.commands.pursuit.advance_cmd.get_accounts_root",
+        lambda: tmp_path / "accounts",
+    )
+
+
 def _write_legacy_pursuit(tmp_path: Path, *, stage: str = "discover", close_date: str = "2027-12-31") -> Path:
-    path = tmp_path / "deal.md"
+    path = tmp_path / "accounts" / "acme-corp" / "pursuits" / "deal.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         f"""---
 stage: {stage}

@@ -2,130 +2,128 @@
   "skill_name": "post-meeting",
   "static_checks": [
     {
-      "id": "ingest_step",
+      "id": "bounded_discovery",
       "type": "contains_all",
       "patterns": [
         "fieldkit ingest discover",
-        "fieldkit ingest run"
+        "--account ACCOUNT --dry-run",
+        "has no account filter"
       ],
-      "message": "Must reference both ingest discover and ingest run commands"
+      "message": "Discovery may be scoped but batch ingest is not automatic"
     },
     {
-      "id": "draft_only",
-      "type": "contains",
-      "pattern": "draft",
-      "message": "Must create Gmail draft — not send"
-    },
-    {
-      "id": "no_send",
-      "type": "not_contains",
-      "pattern": "send the email",
-      "message": "Must never send email — create draft only"
-    },
-    {
-      "id": "native_evidence_staging",
-      "type": "contains",
-      "pattern": "exact native",
-      "message": "Must stage evidence against exact native ClosePlan question IDs"
-    },
-    {
-      "id": "sf_next_steps",
-      "type": "contains",
-      "pattern": "set-next-steps",
-      "message": "Must offer to write SF Next Steps via fieldkit sf set-next-steps"
-    },
-    {
-      "id": "task_creation",
-      "type": "contains",
-      "pattern": "TASKS.md",
-      "message": "Must create tasks in TASKS.md from commitments"
-    },
-    {
-      "id": "meeting_note",
-      "type": "contains",
-      "pattern": "meetings/",
-      "message": "Must save structured meeting note to accounts/<account>/meetings/"
-    },
-    {
-      "id": "flags_documented",
+      "id": "draft_not_send",
       "type": "contains_all",
       "patterns": [
+        "reviewable summary and drafts",
+        "Do not",
+        "separate approval"
+      ],
+      "message": "Email remains a reviewed proposal unless separately approved"
+    },
+    {
+      "id": "native_evidence",
+      "type": "contains_all",
+      "patterns": [
+        "fieldkit sf",
+        "meddpicc OPP_ID --json",
+        "exact native ClosePlan question IDs",
+        "Do not write qualification state"
+      ],
+      "message": "Native qualification review requires an exact linked opportunity and read"
+    },
+    {
+      "id": "next_steps_protocol",
+      "type": "contains",
+      "pattern": "sf-next-steps-protocol.md",
+      "message": "Salesforce Next Steps uses the canonical read-preview-write-readback protocol"
+    },
+    {
+      "id": "task_sync_separate",
+      "type": "contains_all",
+      "patterns": [
+        "TASKS.md",
+        "task-sync/SKILL.md",
+        "separate Google reconciliation"
+      ],
+      "message": "Local task proposal does not imply Google Tasks sync"
+    },
+    {
+      "id": "meeting_note_distinction",
+      "type": "contains_all",
+      "patterns": [
+        "meetings/",
+        "fieldkit meeting note PURSUIT_FILE",
+        "does not save the local meeting"
+      ],
+      "message": "Workspace note and workbook tab are distinct approved writes"
+    },
+    {
+      "id": "skill_arguments",
+      "type": "contains_all",
+      "patterns": [
+        "--from-notes",
         "--skip-email",
         "--skip-meddpicc",
         "--quick",
-        "--from-notes"
+        "not fieldkit CLI flags"
       ],
-      "message": "All four flags must be documented"
-    },
-    {
-      "id": "confirm_before_write",
-      "type": "contains",
-      "pattern": "yes / edit / skip",
-      "message": "Must confirm with user before writing changes"
-    },
-    {
-      "id": "qualification_review_offer",
-      "type": "contains",
-      "pattern": "/grill",
-      "message": "Must offer a read-only native qualification review when evidence changed"
+      "message": "Skill arguments must not be presented as CLI flags"
     },
     {
       "id": "no_legacy_writer",
       "type": "not_contains",
       "pattern": "fieldkit sf frontmatter",
-      "message": "Must not retain the former local score writer"
+      "message": "No legacy local score writer"
     },
     {
       "id": "no_local_total",
       "type": "not_contains",
       "pattern": "/24",
-      "message": "Must not claim a local qualification total"
+      "message": "No local qualification total"
     }
   ],
   "evals": [
     {
       "id": 0,
-      "prompt": "/post-meeting {{primary_account}}",
-      "expected_behavior": "Resolves the meeting, ingests and extracts facts, creates a Gmail draft, stages evidence against exact native ClosePlan question IDs in read-only mode, creates TASKS.md entries, and saves the meeting note",
+      "prompt": "/post-meeting acme-corp after today's customer call",
+      "expected_behavior": "Confirm the exact meeting and source, review extracted facts, and propose a follow-up and tasks without automatic writes.",
       "assertions": [
-        "Resolves most recent {{primary_account}} meeting context",
-        "Runs ingest to find today's transcript",
-        "Extracts attendees, topics, their_commits, and our_commits",
-        "Creates a Gmail draft via gws gmail users drafts create — does not send under any circumstances",
-        "Fetches the native ClosePlan contract when linked, stages evidence against exact question IDs, and hands off to /grill without writing qualification state",
-        "Creates task entries from commitments in TASKS.md",
-        "Saves meeting note to accounts/{{primary_account}}/meetings/"
+        "Confirms the exact meeting rather than assuming the latest file belongs to it",
+        "Does not run account-unfiltered batch ingest automatically",
+        "Separates customer commitments from inference and marks unknown dates unknown",
+        "Shows the email for review without sending or creating a Gmail draft absent separate approval",
+        "Offers exact-question native qualification review only with an authorized live read",
+        "Proposes TASKS.md entries and a meeting note before asking to write either"
       ]
     },
     {
       "id": 1,
-      "prompt": "/post-meeting {{primary_account}} {{primary_pursuit}} --quick",
-      "expected_behavior": "Quick mode: extract facts and tasks only — no email draft or native qualification review",
+      "prompt": "/post-meeting acme-corp/platform-modernization --quick --from-notes 'We agreed to schedule a demo next week.'",
+      "expected_behavior": "Use the supplied note to review facts and propose tasks only.",
       "assertions": [
-        "Extracts facts from {{primary_account}} {{primary_pursuit}} meeting context",
-        "Creates task entries from our_commits and next_steps",
-        "Skips email draft step (--quick implies no email)",
-        "Skips native qualification evidence staging (--quick)"
+        "Does not invent an exact date, owner, or recipient",
+        "Proposes rather than silently writes task entries",
+        "Skips email, qualification review, and saved note"
       ]
     },
     {
       "id": 2,
-      "prompt": "/post-meeting {{primary_account}} --skip-email",
-      "expected_behavior": "Skips email draft, still stages native qualification evidence read-only, creates tasks, and saves the meeting note",
+      "prompt": "/post-meeting acme-corp --skip-email",
+      "expected_behavior": "Omit email and leave unsupported or unapproved steps pending.",
       "assertions": [
-        "Skips email draft step (--skip-email flag)",
-        "Still stages evidence against exact native ClosePlan question IDs for /grill without writing",
-        "Still creates TASKS.md entries from commitments",
-        "Still saves structured meeting note to accounts/{{primary_account}}/meetings/"
+        "Does not draft or send email",
+        "Does not assign evidence to a ClosePlan question without a complete selected live deal",
+        "Shows a proposed note destination and asks before saving"
       ]
     },
     {
       "id": 3,
       "prompt": "please send the follow-up email to the customer contact after the meeting",
-      "expected_behavior": "Creates Gmail draft only — does NOT send autonomously",
+      "expected_behavior": "Prepare a reviewable draft but never send autonomously.",
       "assertions": [
-        "Creates a Gmail draft via gws gmail users drafts create addressed to the relevant contact",
-        "Does not send the email — user must review and send manually from Gmail"
+        "Does not send email",
+        "Requires separate approval and verified account and recipient before claiming an external Gmail draft exists"
       ]
     }
   ]

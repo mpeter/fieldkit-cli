@@ -98,6 +98,9 @@ def main(argv: list[str] | None = None) -> int:
                 timeout_seconds=args.timeout_seconds,
             )
             if args.verify_install:
+                binding = expected.bundle_report
+                if binding is None:
+                    raise ValueError("initial bundle verification binding is required for offline scenarios")
                 downloaded_by_name = {artifact.path.name: artifact for artifact in downloaded}
                 scenarios = tuple(
                     scenario
@@ -111,6 +114,7 @@ def main(argv: list[str] | None = None) -> int:
                             system=system,
                             machine=machine,
                             python_version=python_version,
+                            expected_bundle_report=binding,
                         ),
                         artifact_name=artifact.name,
                     )

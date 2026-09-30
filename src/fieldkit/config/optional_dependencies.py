@@ -12,7 +12,7 @@ GOOGLE_IMPORT_ROOTS = (
     "google_auth_oauthlib",
     "googleapiclient",
 )
-LLM_IMPORT_ROOTS = ("agentplatform", "litellm", "openai", "vertexai")
+LLM_IMPORT_ROOTS = ("litellm", "openai", "vertexai")
 WEB_IMPORT_ROOTS = ("fastapi", "uvicorn")
 CHROME_AUTH_IMPORT_ROOTS = ("cryptography", "secretstorage")
 OPTIONAL_PROFILE_IMPORT_ROOTS = {

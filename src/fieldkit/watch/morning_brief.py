@@ -1,29 +1,23 @@
-"""Morning brief watcher — domain module.
+"""Collect optional brief inputs and publish the artifact with run-status evidence.
 
-Moved from ``commands/watch/morning_brief.py`` (watch-domain-migration,
-implementation change slice 2.9). No Click imports — pure business logic.
-
-Note: _collect_pipeline_review, _run_generate, and _run_generate_inner live in
-commands/brief/generate.py because they depend on fieldkit.commands.pipeline.*
-(tach boundary: fieldkit.watch cannot depend on fieldkit.commands).
-
-This module provides:
-- Path helpers (get_watchers_dir, alert file paths)
-- _collect_alert_source
-- _collect_calendar_meetings
-- _write_brief_to_disk
+Publication and overall success are separate: a nonempty artifact can accompany
+degraded sources or failed status persistence. Pipeline-review orchestration lives
+in the brief command layer, preserving the watch domain's import boundary.
 """
 
 import logging
 from datetime import date
 from functools import cache
 from pathlib import Path
+from stat import S_IMODE
 from typing import Any
 
-from fieldkit.config import get_watchers_dir
-from fieldkit.util.atomic import assert_nonzero_write
-from fieldkit.watch._morning_brief_types import SourceNotReady
+from fieldkit.config import ConfigError, get_mcp_endpoint, get_watchers_dir
+from fieldkit.errors import AuthError
+from fieldkit.util.atomic import assert_nonzero_write, atomic_text_write, require_nonempty_output
+from fieldkit.watch._morning_brief_types import BriefWriteResult, SourceNotReady
 from fieldkit.watch.logging import watcher_logging
+from fieldkit.watch.mcp import MCPSession
 from fieldkit.watch.morning_brief_collect import (
     _accounts_dir,
     _email_domain,
@@ -34,7 +28,6 @@ from fieldkit.watch.morning_brief_collect import (
     get_latest_pursuit_files,
     resolve_user_email,
 )
-from fieldkit.watch.morning_brief_mcp import _MCP_CALENDAR_BASE, MCPSession
 from fieldkit.watch.morning_brief_render import (
     _collect_degraded_sources,
     _fmt_time,
@@ -42,7 +35,7 @@ from fieldkit.watch.morning_brief_render import (
     _render_degraded_section,
     _render_meetings_section,
 )
-from fieldkit.watch.status import write_run_status
+from fieldkit.watch.status import WatcherOutcome, WatcherRunResult, write_run_status
 
 log = logging.getLogger(__name__)
 
@@ -104,7 +97,7 @@ def _collect_alert_source(
         dry_run: When True and the file is missing but ``not_found_msg`` is
             provided (i.e., the source is optional), emit ``log.debug`` instead
             of ``log.warning``.  Optional sources are expected to be absent on
-            fresh installs; warning in dry-run mode is noise (implementation change).
+            fresh installs; warning in dry-run mode would obscure useful diagnostics.
     """
     try:
         blocks = extract_today_alerts(alert_file, target_date, lookback_days=3)
@@ -112,26 +105,19 @@ def _collect_alert_source(
         return blocks
     except FileNotFoundError:
         if not_found_msg:
-            # implementation change: In dry-run mode, missing optional sources are expected
-            # (the file may not have been generated yet).  Use debug-level so
-            # the information is available for troubleshooting without polluting
-            # the dry-run output with spurious warnings.
+            # Optional sources may not have run yet, especially during a preview.
             if dry_run:
-                log.debug("[%s] alert file not found (dry-run, optional source): %s", label, alert_file)
+                log.debug("[%s] optional alert input was not present for the preview", label)
             else:
-                log.warning("[%s] alert file not found: %s", label, alert_file)
-            # implementation note: return SourceNotReady (not a plain str) so source_failures
-            # is not inflated when an optional watcher simply hasn't run yet.
+                log.warning("[%s] alert input was not found", label)
+            # An optional source that has not run is distinct from a failed source.
             return SourceNotReady(not_found_msg)
         msg = f"[{label}] unavailable: file not found"
         log.warning(msg)
         return msg
-    except Exception as exc:  # noqa: BLE001
-        # Use a generic user-facing message to avoid leaking internal paths,
-        # hostnames, or API error bodies into the brief markdown. Full exception
-        # detail is preserved in the log for operator diagnosis.
+    except Exception:  # noqa: BLE001 -- one local source degrades the assembled brief
         msg = f"[{label}] unavailable: collection error (see logs)"
-        log.warning("[%s] collection error: %s", label, exc, exc_info=True)
+        log.warning("[%s] collection failed", label)
         return msg
 
 
@@ -139,24 +125,26 @@ def _collect_calendar_meetings(
     target_date: date,
     internal_domains: set[str],
     user_email: str,
-) -> list[dict[str, Any]] | str:
-    """Fetch external calendar meetings via MCP; return string on any failure."""
-    calendar_session = MCPSession(_MCP_CALENDAR_BASE)
+    *,
+    enabled: bool = True,
+) -> list[dict[str, Any]] | SourceNotReady | str:
+    """Fetch configured external calendar meetings without assuming a provider route."""
+    if not enabled:
+        return SourceNotReady("_Calendar input was not run for this local preview._")
+    endpoint = get_mcp_endpoint("calendar")
+    if endpoint is None:
+        return SourceNotReady("_Calendar integration not configured; calendar input was not run._")
+    calendar_session = MCPSession(endpoint)
     try:
         calendar_session.initialize()
         meetings = fetch_external_meetings(calendar_session, target_date, internal_domains, user_email)
         log.info("External meetings: %d fetched", len(meetings))
         return meetings
-    except Exception as exc:  # noqa: BLE001
-        # historic regression: escalate to WARNING and include a sanitised error summary in the
-        # returned string so the AE sees what kind of failure occurred.
-        # We use the exception type name + a short fixed-vocabulary suffix rather than
-        # the raw str(exc) to avoid leaking internal MCP hostnames, paths, or response
-        # fragments into the user-facing brief (Constitution VIII: Security by Default).
-        # The full exception is still logged at WARNING with exc_info for diagnostics.
-        log.warning("[Calendar] unavailable: %s", exc, exc_info=True)
-        exc_kind = type(exc).__name__
-        return f"_Calendar unavailable ({exc_kind}) — check logs for details_"
+    except (AuthError, ConfigError):
+        raise
+    except Exception:  # noqa: BLE001 -- optional provider failures degrade the assembled brief
+        log.warning("[Calendar] provider request failed")
+        return "_Calendar unavailable (provider failure) — retry later._"
     finally:
         calendar_session.close()
 
@@ -174,23 +162,24 @@ def _write_brief_to_disk(
     *,
     dry_run: bool,
     output_dir: Path | None = None,
-) -> int:
-    """Write the rendered brief markdown to disk and emit run_status. Returns exit code.
+) -> BriefWriteResult:
+    """Publish nonempty Markdown and report source and status-persistence failures.
 
-    output_dir defaults to get_watchers_dir() for backward compatibility; callers
-    consolidating brief output (e.g. `brief generate`) pass an explicit target.
+    An explicit output directory selects report storage; otherwise the workspace's
+    watcher directory is used. Artifact publication failures return fatal status
+    without claiming a write. Empty output retains the canonical data-error guard.
     """
     import click
 
+    require_nonempty_output(brief_md)
+    records_checked = len(sources)
+    source_failures = sum(1 for src in sources if isinstance(src, str))
     target_dir = output_dir if output_dir is not None else get_watchers_dir()
     brief_filename = f"morning-brief-{target_date.strftime('%Y-%m-%d')}.md"
     brief_path = target_dir / brief_filename
 
     brief_bytes = len(brief_md.encode())
-    # historic regression: threshold raised from 10KB to 15KB — a healthy post-003 brief
-    # with pipeline-review + champion-signals + quota sections is ~10.5KB.
-    # The old 10KB threshold was calibrated before those sections were added
-    # and was firing as a false positive on every run.
+    # Large reports can indicate repeated alert blocks across sections.
     if brief_bytes > 15_000:
         click.echo(
             f"[morning-brief] WARNING: brief is unusually large "
@@ -199,54 +188,63 @@ def _write_brief_to_disk(
             err=True,
         )
 
-    # implementation note: scan for pre-existing 0-byte morning-brief stubs before writing.
-    # Do not auto-delete — operator must decide whether to remove or investigate.
+    # Report existing empty artifacts for operator inspection without deleting them.
     for _stub in target_dir.glob("morning-brief-*.md") if target_dir.exists() else []:
         if _stub.stat().st_size == 0:
-            log.warning("Pre-existing 0-byte brief stub found: %s — manual cleanup required", _stub)
+            log.warning("Pre-existing 0-byte brief stub found: %s — manual cleanup required", _stub.name)
 
     try:
         target_dir.mkdir(parents=True, exist_ok=True)
-        brief_path.write_text(brief_md, encoding="utf-8")
-    except OSError as exc:
-        log.error("Failed to write brief to %s: %s", brief_path, exc, exc_info=True)
-        write_run_status(
+        mode = S_IMODE(brief_path.stat().st_mode) if brief_path.exists() else None
+        atomic_text_write(brief_path, brief_md, mode=mode)
+    except OSError:
+        log.error("Morning brief persistence failed")
+        status_result = write_run_status(
             watcher="morning-brief",
             outcome="fatal",
-            records_checked=5,
+            records_checked=records_checked,
             alerts_generated=0,
-            failures=5,
+            failures=source_failures + 1,
             elapsed_seconds=elapsed,
             dry_run=False,
         )
-        return 1
+        return BriefWriteResult(
+            written=False,
+            run=WatcherRunResult("fatal", False, status_result),
+            records_checked=records_checked,
+            alerts_generated=0,
+            failures=source_failures + 1 + int(status_result == "failed"),
+        )
 
-    # implementation note: post-write size guard — a 0-byte file means the write silently
-    # produced no content (e.g. empty string passed in, or a partial flush).
-    # Delete the stub and raise so cli_main() maps this to EXIT_DATA (3).
+    # A completed replacement must contain content before it can count as written.
     assert_nonzero_write(brief_path)
 
-    source_failures = sum(1 for src in sources if isinstance(src, str))
-    write_run_status(
+    outcome: WatcherOutcome = "ok" if source_failures == 0 else "partial"
+    status_result = write_run_status(
         watcher="morning-brief",
-        outcome="ok" if source_failures == 0 else "partial",
-        records_checked=5,
+        outcome=outcome,
+        records_checked=records_checked,
         alerts_generated=1,
         failures=source_failures,
         elapsed_seconds=elapsed,
         dry_run=dry_run,
     )
     log.info(
-        "Morning brief written — path=%s source_failures=%d duration=%.1fs",
-        brief_path,
+        "Morning brief written — file=%s source_failures=%d duration=%.1fs",
+        brief_path.name,
         source_failures,
         elapsed,
     )
-    return 0
+    return BriefWriteResult(
+        written=True,
+        run=WatcherRunResult("fatal" if status_result == "failed" else outcome, True, status_result),
+        records_checked=records_checked,
+        alerts_generated=1,
+        failures=source_failures + int(status_result == "failed"),
+    )
 
 
 __all__ = [
-    "_MCP_CALENDAR_BASE",
     "MCPSession",
     "SourceNotReady",
     "_accounts_dir",

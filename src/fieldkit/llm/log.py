@@ -34,7 +34,7 @@ Or use the context vars directly:
 Environment
 -----------
 FIELDKIT_LLM_LOG   — override the default DB path (<fieldkit_data>/llm-calls.db)
-NO_LLM             — when set, litellm is not imported; callbacks are not registered
+FIELDKIT_NO_LLM             — when set, litellm is not imported; callbacks are not registered
                      but init_db(), context vars, and set_skill_context still work.
 """
 

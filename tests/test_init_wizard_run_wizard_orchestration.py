@@ -30,7 +30,6 @@ def _make_inputs() -> InitInputs:
         salesforce_user_id="005Dn000001abcD",
         data_dir=Path("/tmp/fieldkit-data-fixture"),
         account_names=("Acme Corp",),
-        gcp_project="acme-gcp-project",
         oauth_id="acme-oauth-client-id",
         oauth_secret="acme-oauth-client-secret",
         shadowbot_assistant_id="acme-shadowbot-id",
@@ -135,7 +134,6 @@ def test_confirm_called_with_correct_positional_order(tmp_path: Path) -> None:
         inputs.salesforce_user_id,
         list(inputs.account_names),
         inputs.data_dir,
-        inputs.gcp_project,
         inputs.oauth_id,
         inputs.shadowbot_assistant_id,
     )
@@ -212,14 +210,12 @@ def test_confirm_true_writes_then_post_setup_and_returns_0(tmp_path: Path) -> No
         inputs.salesforce_user_id,
         list(inputs.account_names),
         inputs.data_dir,
-        inputs.gcp_project,
         inputs.oauth_id,
         inputs.oauth_secret,
         inputs.shadowbot_assistant_id,
+        dry_run=False,
     )
-    mock_post.assert_called_once_with(
-        inputs.oauth_id, inputs.gcp_project, inputs.shadowbot_assistant_id, install_skills=True
-    )
+    mock_post.assert_called_once_with(inputs.oauth_id, inputs.shadowbot_assistant_id, install_skills=True)
     assert call_order == ["write", "post_setup"]
 
 
@@ -243,6 +239,4 @@ def test_answers_mode_does_not_start_an_interactive_skill_install(tmp_path: Path
     mock_prompt.assert_not_called()
     mock_confirm.assert_not_called()
     mock_write.assert_called_once()
-    mock_post.assert_called_once_with(
-        answers.oauth_id, answers.gcp_project, answers.shadowbot_assistant_id, install_skills=False
-    )
+    mock_post.assert_called_once_with(answers.oauth_id, answers.shadowbot_assistant_id, install_skills=False)

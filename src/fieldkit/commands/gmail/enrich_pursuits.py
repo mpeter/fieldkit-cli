@@ -10,32 +10,28 @@ Generates one report per account (not per pursuit) with:
 Output: accounts/<acct>/gmail-intel.md
 """
 
-import functools
 import json
 import os
 import re
-import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, TypedDict
 
 import click
 
-from fieldkit.commands.gmail.query import date_to_epoch, query_blindspots, query_champion_signals, query_dig
-from fieldkit.config import get_account_names, get_accounts_config, get_accounts_root
+from fieldkit.config import ConfigError, get_accounts_config, get_accounts_root
+from fieldkit.gmail import query_domain
 from fieldkit.gmail.address_quality import account_domains, partition_suspected_masked
 from fieldkit.gmail.discover import get_gmail_db_path
 from fieldkit.gmail.exceptions import GmailDbNotFoundError
-from fieldkit.gmail.query_domain import connect
-
-try:
-    import yaml
-except ImportError:
-    yaml = None
+from fieldkit.pursuit.io import read_pursuit_text_snapshot
+from fieldkit.util.atomic import atomic_text_write
+from fieldkit.util.workspace_paths import resolve_workspace_output
 
 # Rolling lookback window — how far back to pull Gmail signals.
 # Expressed as days so it stays current without manual updates.
 _GMAIL_LOOKBACK_DAYS = 180
+_MAX_PURSUIT_DIRECTORY_ENTRIES = 10_000
 
 
 class EnrichAccountResult(TypedDict):
@@ -65,7 +61,7 @@ def _emit_enrich_complete(results: list[EnrichAccountResult], *, requested: str 
 
 
 def _resolve_enrich_accounts(account_slug: str | None, *, as_json: bool) -> list[str] | None:
-    accounts = _get_accounts()
+    accounts = list(get_accounts_config(strict=True).get("accounts", {}))
     if account_slug is None:
         return accounts
     if account_slug in accounts:
@@ -79,6 +75,7 @@ def _resolve_enrich_accounts(account_slug: str | None, *, as_json: bool) -> list
 
 
 def _enrich_one_account(account: str, *, as_json: bool) -> tuple[EnrichAccountResult, int]:
+    out_path = _account_output_path(account, "gmail-intel.md")
     _emit_enrich_header(account, as_json=as_json)
     report = build_account_report(account)
     if isinstance(report, int):
@@ -87,25 +84,21 @@ def _enrich_one_account(account: str, *, as_json: bool) -> tuple[EnrichAccountRe
         if not as_json:
             click.echo(f"  No pursuits found for {account}")
         return {"account": account, "status": "skipped", "path": None}, 0
-    out_path = get_accounts_root() / account / "gmail-intel.md"
-    _write_report(out_path, report)
+    out_path = _account_output_path(account, "gmail-intel.md")
+    atomic_text_write(out_path, report)
     if not as_json:
         click.echo(f"  -> {out_path}")
     return {"account": account, "status": "written", "path": str(out_path)}, 0
 
 
-def _write_report(path: Path, report: str) -> None:
-    """Atomically replace one generated report and clean up failed temporaries."""
-    fd, temporary_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", text=True)
-    temporary = Path(temporary_name)
+def _account_output_path(account: str, relative_path: str) -> Path:
+    """Resolve one account destination inside a stable configured namespace."""
+    if "/" in account:
+        raise ConfigError("Invalid Gmail enrichment account path")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(report)
-            handle.flush()
-            os.fsync(handle.fileno())
-        temporary.replace(path)
-    finally:
-        temporary.unlink(missing_ok=True)
+        return resolve_workspace_output(get_accounts_root(), f"{account}/{relative_path}")
+    except ValueError:
+        raise ConfigError("Invalid Gmail enrichment account path") from None
 
 
 def _since_date() -> str:
@@ -113,41 +106,10 @@ def _since_date() -> str:
     return (datetime.now(UTC) - timedelta(days=_GMAIL_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
 
 
-CONFIG_PATH = "config/accounts.yaml"
-
-
-def load_accounts() -> list[str]:
-    """Load account keys from accounts.yaml; returns [] when config is absent."""
-    names = get_account_names()
-    if names:
-        return names
-    # Fallback: try local config path
-    if yaml and Path(CONFIG_PATH).exists():
-        with Path(CONFIG_PATH).open(encoding="utf-8") as f:
-            cfg: dict[str, Any] = yaml.safe_load(f)
-        return list(cfg.get("accounts", {}).keys())
-    return []
-
-
-@functools.cache
-def _get_accounts() -> list[str]:
-    """Return account names, loading lazily on first call.
-
-    Uses lru_cache so accounts.yaml is read at most once per process,
-    and not at import time (which would crash --help when config is absent).
-
-    Test isolation note: tests that patch ``load_accounts`` or
-    ``get_account_names`` must call ``_get_accounts.cache_clear()`` in
-    teardown (e.g. via a fixture or ``monkeypatch`` finalizer) to prevent
-    the cached result from leaking across test cases.
-    """
-    return load_accounts()
-
-
 def get_pursuit_keywords(pursuit_path: str) -> list[str]:
     """Extract search keywords from pursuit file name and content."""
     stem = Path(pursuit_path).stem
-    text = Path(pursuit_path).read_text(encoding="utf-8")
+    text = read_pursuit_text_snapshot(Path(pursuit_path)).content
 
     keywords = set()
     # From filename
@@ -213,7 +175,7 @@ def _render_champion_signals(conn: Any, contacts_raw: list[Any]) -> list[str]:
         if local in checked:
             continue
         checked.add(local)
-        champ_out = query_champion_signals(conn, local)
+        champ_out = query_domain.query_champion_signals(conn, local)
         if not champ_out or "No people matched" in champ_out:
             continue
         display = name if name and name != email else local
@@ -235,7 +197,13 @@ def _render_pursuit_threads(conn: Any, account: str, pursuits: list[str]) -> lis
         lines += [f"### {pname}", f"Keywords searched: {', '.join(keywords)}", ""]
         found_any = False
         for kw in keywords:
-            dig_rows = query_dig(conn, account, kw, since=date_to_epoch(_since_date()), limit=8)
+            dig_rows = query_domain.query_dig(
+                conn,
+                account,
+                kw,
+                since=query_domain.date_to_epoch(_since_date()),
+                limit=8,
+            )
             if not dig_rows:
                 continue
             found_any = True
@@ -269,7 +237,27 @@ def _render_checklist(pursuits: list[str]) -> list[str]:
 
 def build_account_report(account: str) -> str | int | None:
     """Build a gmail-intel.md report for one account by aggregating pursuit-level email signals."""
-    pursuits = sorted(str(p) for p in (get_accounts_root() / account / "pursuits").glob("*.md"))
+    pursuit_root = _account_output_path(account, "pursuits")
+    try:
+        entries = os.scandir(pursuit_root)
+    except FileNotFoundError:
+        return None
+    except OSError:
+        click.echo("Error: Cannot scan Gmail enrichment pursuits; retry after restoring access.", err=True)
+        return 1
+    pursuits: list[str] = []
+    try:
+        with entries:
+            for count, entry in enumerate(entries, start=1):
+                if count > _MAX_PURSUIT_DIRECTORY_ENTRIES:
+                    click.echo("Error: Gmail enrichment pursuit directory exceeds the scan limit.", err=True)
+                    return 1
+                if entry.name.endswith(".md"):
+                    pursuits.append(str(_account_output_path(account, f"pursuits/{entry.name}")))
+    except OSError:
+        click.echo("Error: Cannot scan Gmail enrichment pursuits; retry after restoring access.", err=True)
+        return 1
+    pursuits.sort()
     if not pursuits:
         return None
 
@@ -281,12 +269,17 @@ def build_account_report(account: str) -> str | int | None:
     ]
 
     try:
-        conn = connect(get_gmail_db_path())
+        conn = query_domain.connect(get_gmail_db_path())
     except GmailDbNotFoundError:
         click.echo("Error: Gmail database not found. Run 'fieldkit gmail sync' first.", err=True)
         return 3
     try:
-        contacts_raw = query_blindspots(conn, account, since=date_to_epoch(_since_date()), limit=None)
+        contacts_raw = query_domain.query_blindspots(
+            conn,
+            account,
+            since=query_domain.date_to_epoch(_since_date()),
+            limit=None,
+        )
         domains = account_domains(get_accounts_config(), account)
         contacts, suspected = partition_suspected_masked(contacts_raw, domains)
         contacts = contacts[:40]
@@ -341,7 +334,3 @@ def _run_enrich(account_slug: str | None = None, *, as_json: bool = False) -> in
 
     _emit_enrich_complete(results, requested=account_slug, as_json=as_json)
     return 0
-
-
-if __name__ == "__main__":
-    cli()

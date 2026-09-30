@@ -159,29 +159,29 @@ def test_fetch_quote_lines_empty_when_no_lines() -> None:
         assert _fetch_quote_lines(_QUOTE_ID) == []
 
 
-def test_fetch_quote_lines_empty_on_no_sid() -> None:
-    with patch("fieldkit.commands.sf.quote.get_sf_session_id", return_value=None):
-        assert _fetch_quote_lines(_QUOTE_ID) == []
+def test_fetch_quote_lines_missing_session_requires_auth() -> None:
+    with patch("fieldkit.commands.sf.quote.get_sf_session_id", return_value=None), pytest.raises(SystemExit) as exc:
+        _fetch_quote_lines(_QUOTE_ID)
+    assert exc.value.code == 2
 
 
-def test_fetch_quote_lines_empty_on_api_error(caplog: pytest.LogCaptureFixture) -> None:
-    from fieldkit.sf.client import SFAPIError
+def test_fetch_quote_lines_api_error_is_retryable() -> None:
+    from fieldkit.sf.errors import SFAPIError
 
     p1, p2 = _base_session_patches()
-    with caplog.at_level("WARNING"), p1, p2, patch("fieldkit.sf.client.SFDirectClient") as mock_cls:
+    with p1, p2, patch("fieldkit.sf.client.SFDirectClient") as mock_cls, pytest.raises(SystemExit) as exc:
         mock_cls.return_value.__enter__.return_value.fetch_related_list_records.side_effect = SFAPIError("boom")
-        assert _fetch_quote_lines(_QUOTE_ID) == []
-    # WARNING must be emitted so the operator knows lines were unavailable.
-    assert any("Quote lines unavailable" in r.message for r in caplog.records)
+        _fetch_quote_lines(_QUOTE_ID)
+    assert exc.value.code == 1
 
 
-def test_fetch_quote_lines_empty_on_auth_error() -> None:
-    from fieldkit.sf.client import SFAuthError
+def test_fetch_quote_lines_auth_error_propagates() -> None:
+    from fieldkit.sf.errors import SFAuthError
 
     p1, p2 = _base_session_patches()
-    with p1, p2, patch("fieldkit.sf.client.SFDirectClient") as mock_cls:
+    with p1, p2, patch("fieldkit.sf.client.SFDirectClient") as mock_cls, pytest.raises(SFAuthError, match="auth sf"):
         mock_cls.return_value.__enter__.return_value.fetch_related_list_records.side_effect = SFAuthError("expired")
-        assert _fetch_quote_lines(_QUOTE_ID) == []
+        _fetch_quote_lines(_QUOTE_ID)
 
 
 # ── run_quote / CLI: human output ───────────────────────────────────────────
@@ -287,7 +287,7 @@ def test_fetch_quote_no_sid_exits_2() -> None:
 
 def test_fetch_quote_not_found_exits_3() -> None:
     """Quote ID not found in SF → run_quote propagates SystemExit(3)."""
-    from fieldkit.sf.client import SFNotFoundError
+    from fieldkit.sf.errors import SFNotFoundError
 
     p1, p2 = _base_session_patches()
     with (
@@ -303,14 +303,14 @@ def test_fetch_quote_not_found_exits_3() -> None:
 
 def test_fetch_quote_auth_error_reraised() -> None:
     """SF auth failure → run_quote re-raises SFAuthError."""
-    from fieldkit.sf.client import SFAuthError
+    from fieldkit.sf.errors import SFAuthError
 
     p1, p2 = _base_session_patches()
     with (
         p1,
         p2,
         patch("fieldkit.sf.client.SFDirectClient") as mock_cls,
-        pytest.raises(SFAuthError, match=r"expired"),
+        pytest.raises(SFAuthError, match=r"auth sf"),
     ):
         mock_cls.return_value.__enter__.return_value.fetch_sobject.side_effect = SFAuthError("expired")
         run_quote(_QUOTE_ID)
@@ -325,3 +325,62 @@ def test_fetch_quote_success_returns_record(capsys: pytest.CaptureFixture[str]) 
     assert rc == 0
     out = capsys.readouterr().out
     assert "Q-00042" in out
+
+
+@pytest.mark.parametrize("as_json", [False, True])
+@pytest.mark.parametrize("stage", ["fetch_sobject", "fetch_related_list_records"])
+@pytest.mark.parametrize("failure,expected_exit", [("auth", 2), ("api", 1)])
+def test_actual_cli_quote_failures_are_sanitized(
+    as_json: bool, stage: str, failure: str, expected_exit: int, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from fieldkit.__main__ import main
+    from fieldkit.sf.errors import SFAPIError, SFAuthError
+
+    private_detail = "provider-payload https://private.example.com/session?sid=secret-session"
+    error = SFAuthError(private_detail) if failure == "auth" else SFAPIError(private_detail)
+    p1, p2 = _base_session_patches()
+    with p1, p2, patch("fieldkit.__main__.load_dotenv_safe"), patch("fieldkit.sf.client.SFDirectClient") as mock_cls:
+        client = _make_sf_client_mock(mock_cls, quote_rec=_sample_quote_rec(), lines=[])
+        getattr(client, stage).side_effect = error
+        result = main(["sf", "quote", _QUOTE_ID, *(["--json"] if as_json else [])])
+    assert result == expected_exit
+    captured = capsys.readouterr()
+    output = captured.out + captured.err
+    assert private_detail not in output
+    assert "private.example.com" not in output
+    assert "secret-session" not in output
+    assert '"status": "ok"' not in output
+    assert "no quote lines found" not in output
+    assert "auth sf" in output if failure == "auth" else "retry" in output.lower()
+
+
+@pytest.mark.parametrize("as_json", [False, True])
+def test_actual_cli_successfully_empty_quote_lines(as_json: bool) -> None:
+    from fieldkit.__main__ import cli as main_cli
+
+    p1, p2 = _base_session_patches()
+    with p1, p2, patch("fieldkit.sf.client.SFDirectClient") as mock_cls:
+        _make_sf_client_mock(mock_cls, quote_rec=_sample_quote_rec(), lines=[])
+        result = CliRunner().invoke(main_cli, ["sf", "quote", _QUOTE_ID, *(["--json"] if as_json else [])])
+    assert result.exit_code == 0
+    if as_json:
+        assert json.loads(result.stdout)["lines"] == []
+    else:
+        assert "no quote lines found" in result.stdout
+
+
+@pytest.mark.parametrize("accessor", ["get_sf_session_id", "get_sf_rest_base_url"])
+@pytest.mark.parametrize("missing_at", ["header", "lines"])
+def test_actual_cli_missing_quote_configuration(accessor: str, missing_at: str) -> None:
+    from fieldkit.__main__ import cli as main_cli
+
+    p1, p2 = _base_session_patches()
+    with p1, p2, patch("fieldkit.sf.client.SFDirectClient") as mock_cls:
+        _make_sf_client_mock(mock_cls, quote_rec=_sample_quote_rec(), lines=[])
+        with patch(
+            f"fieldkit.commands.sf.quote.{accessor}",
+            side_effect=[None] if missing_at == "header" else ["configured", None],
+        ):
+            result = CliRunner().invoke(main_cli, ["sf", "quote", _QUOTE_ID, "--json"])
+    assert result.exit_code == 2
+    assert '"status": "ok"' not in result.output

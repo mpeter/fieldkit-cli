@@ -12,8 +12,9 @@ import zipfile
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
+from typing import TYPE_CHECKING
 
-if __package__:
+if TYPE_CHECKING or __package__:
     from scripts.json_policy import reject_duplicate_json_keys
 else:
     from json_policy import reject_duplicate_json_keys
@@ -305,14 +306,14 @@ def scan_documents(
                 matches = tuple(rule.pattern.finditer(line))
                 if not matches:
                     continue
-                allowance = allowances.get((rule.rule_id, document.policy_path))
+                matched_allowance = allowances.get((rule.rule_id, document.policy_path))
                 for match in matches:
                     classified = (
                         any(
                             allowed_match.start() <= match.start() and allowed_match.end() >= match.end()
-                            for allowed_match in allowance.pattern.finditer(line)
+                            for allowed_match in matched_allowance.pattern.finditer(line)
                         )
-                        if allowance is not None
+                        if matched_allowance is not None
                         else False
                     )
                     if classified:

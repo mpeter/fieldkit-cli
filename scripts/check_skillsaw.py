@@ -1,10 +1,9 @@
 """Check skillsaw grade density ratchet.
 
-Runs skillsaw in JSON mode (no baseline) and fails if the grade density
+Runs skillsaw in JSON mode and fails if the grade density
 (weighted violations per 10k tokens) exceeds the recorded ceiling.
 
-This makes the 210 info-level violations that count toward the grade
-visible as a ratchet: the density can only decrease (improve) over time.
+Info-level violations count toward the grade and density ratchet.
 New violations that push density above the ceiling fail CI immediately.
 
 Usage:
@@ -18,40 +17,28 @@ Exit codes:
 from __future__ import annotations
 
 import json
+import math
 import subprocess
 import sys
+from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
 
-# Density ceiling: weighted violations per 10k tokens.
-# 2026-07-08: 2.6 after autofix of 58 unlinked-ref violations.
-# 2026-07-11: 2.53 after baselineing .claude/ agent-frontmatter + context-budget
-#             violations. .claude/ is kept as a Claude Code runtime fallback per
-#             succession plan 1.4; its violations are structural, not regressions.
-# To tighten after improvement: lower this value and commit.
-# To accept a regression: raise this value with a comment explaining why.
-# 2026-07-20: raised 2.6 → 3.1 after the proctor skill was added (severity labels in
-#             its reference files trigger content-critical-position warnings).
-# 2026-07-25: density 2.52 after re-baselining 4 synced .claude/ mirrors (gaze-reporter,
-#             gaze-test-generator, journeyman, true-up) whose fingerprints changed when
-#             drift was corrected. Violations are structural, not regressions.
-# 2026-07-25: lowered 3.1 → 2.6 (ratchet). The 3.1 raise paid for proctor being present
-#             twice — src/fieldkit/skills/proctor/ shipped alongside the .opencode/ copy.
-#             The duplicate is gone; the surviving copy is still linted via the
-#             .claude/skills symlink. Measured 2.52, so this restores the pre-proctor
-#             ceiling with ~0.08 headroom rather than inventing a new number.
-# 2026-07-28: raised 2.6 → 2.7 after re-baselining 3 pre-existing context-budget
-#             overages (address-feedback.md, true-up.md, agent-brief.md/
-#             check-skill-integrity.md) uncovered by fixing .opencode/.claude mirror
-#             drift during the review-council/review-pr reference cleanup (sweep 16).
-#             These command files were already near or over the token budget before
-#             this PR touched them; the overage is pre-existing, not a new regression.
-#             Measured 2.63.
+if __package__:
+    from scripts import process_supervision
+else:
+    import process_supervision
+
+# Frozen density ceiling: weighted violations per 10k tokens.
 _DENSITY_CEILING = 2.7
+_SKILLSAW_TIMEOUT_SECONDS = 120
+_OUTPUT_LIMIT_BYTES = 8 * 1024**2
+_SKILLSAW_VERSION = "0.16.0"
 
-# Letter grade floor. Grades: A, B, C, D, F (A is best).
+# Letter grade floor in Skillsaw's ordered grading scale.
 # Fail if grade drops below this letter.
 _GRADE_FLOOR = "A"
 
-_GRADE_ORDER = ["A", "B", "C", "D", "F"]
+_GRADE_ORDER = ["A+", "A", "A-", "B+", "B", "B-", "C+", "C", "C-", "D+", "D", "F"]
 
 
 def _grade_ok(actual: str, floor: str) -> bool:
@@ -62,23 +49,69 @@ def _grade_ok(actual: str, floor: str) -> bool:
         return False
 
 
-def main() -> None:
-    result = subprocess.run(
-        ["uvx", "skillsaw==0.16.0", "--format", "json", "--no-progress"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+def _validate_report(data: object) -> None:
+    """Reject incomplete or invalid metrics before applying the frozen gates."""
+    if not isinstance(data, dict) or not isinstance(data.get("summary"), dict):
+        raise ValueError("missing summary object")
+    summary = data["summary"]
+    for field in ("errors", "warnings", "info", "baseline_suppressed"):
+        value = summary.get(field)
+        if type(value) is not int or value < 0:
+            raise ValueError(f"invalid {field} count")
+    grade = summary.get("grade")
+    if not isinstance(grade, dict) or grade.get("letter") not in _GRADE_ORDER:
+        raise ValueError("missing or invalid grade")
+    density = grade.get("density")
+    if isinstance(density, bool) or not isinstance(density, (int, float)):
+        raise ValueError("invalid grade density")
+    if not math.isfinite(density) or density < 0:
+        raise ValueError("invalid grade density")
 
-    if result.returncode != 0 and not result.stdout.strip():
+
+def run_check(repo: Path, *, allow_baseline: bool) -> None:
+    """Apply the frozen metrics; baseline use requires an explicit caller policy."""
+    try:
+        if version("skillsaw") != _SKILLSAW_VERSION:
+            raise ValueError("installed skillsaw version does not match the locked policy")
+        result = process_supervision.run_bounded(
+            [
+                sys.executable,
+                "-I",
+                "-m",
+                "skillsaw",
+                "lint",
+                ".",
+                "--format",
+                "json",
+                "--no-progress",
+                "--fail-on",
+                "warning",
+                "--no-custom-rules",
+                "--no-plugins",
+                *([] if allow_baseline else ["--no-baseline"]),
+            ],
+            timeout_seconds=_SKILLSAW_TIMEOUT_SECONDS,
+            output_limit=_OUTPUT_LIMIT_BYTES,
+            cwd=repo,
+        )
+    except (
+        OSError,
+        ValueError,
+        PackageNotFoundError,
+        process_supervision.ProcessError,
+        subprocess.TimeoutExpired,
+    ) as exc:
+        print(f"skillsaw could not complete: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+
+    if result.returncode != 0:
         print(f"skillsaw failed (exit {result.returncode}):", file=sys.stderr)
-        print(result.stderr[:500], file=sys.stderr)
-        raise SystemExit(1)
 
     try:
         data = json.loads(result.stdout)
-    except json.JSONDecodeError as exc:
-        print(f"skillsaw: malformed JSON output: {exc}", file=sys.stderr)
+        _validate_report(data)
+    except (ValueError, RecursionError) as exc:
+        print(f"skillsaw: invalid report: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
 
     summary = data.get("summary", {})
@@ -97,22 +130,27 @@ def main() -> None:
 
     failures: list[str] = []
 
+    if result.returncode != 0:
+        failures.append(f"  tool exited with status {result.returncode}")
+
+    if suppressed and not allow_baseline:
+        failures.append("  baseline suppressions are forbidden in the public gate")
+
     if errors > 0:
         failures.append(f"  {errors} error(s) — fix before merge")
 
     if warnings > 0:
-        failures.append(f"  {warnings} warning(s) — fix or baseline")
+        failures.append(f"  {warnings} warning(s) — fix before merge")
 
     if density is not None and density > _DENSITY_CEILING:
         failures.append(
             f"  grade density {density:.2f} exceeds ceiling {_DENSITY_CEILING:.2f} — "
-            "new violations added; fix or update ceiling with a comment"
+            "fix violations without changing the frozen ceiling"
         )
 
     if letter != "?" and not _grade_ok(letter, _GRADE_FLOOR):
         failures.append(
-            f"  grade {letter} below floor {_GRADE_FLOOR} — "
-            "quality regressed; fix violations or lower _GRADE_FLOOR with a comment"
+            f"  grade {letter} below floor {_GRADE_FLOOR} — fix violations without changing the frozen grade floor"
         )
 
     if failures:
@@ -122,6 +160,11 @@ def main() -> None:
         raise SystemExit(1)
 
     print("skillsaw ✓")
+
+
+def main() -> None:
+    """Run the public gate without baseline suppressions."""
+    run_check(Path.cwd(), allow_baseline=False)
 
 
 if __name__ == "__main__":

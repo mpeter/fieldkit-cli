@@ -4,12 +4,430 @@ import json
 import os
 import subprocess
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
+import yaml
 
-from scripts import export_public_tree
+from fieldkit.util.text_snapshot import TextSnapshot, read_text_snapshot
+from scripts import export_public_tree, quality_source, release_approval_archive
 
 pytestmark = pytest.mark.unit
+
+
+def test_git_output_is_bounded_before_return(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo, revision, policy = _repository(tmp_path)
+    oid = _git(repo, "rev-parse", f"{revision}:{policy.relative_to(repo).as_posix()}")
+    monkeypatch.setattr(quality_source, "GIT_OUTPUT_LIMIT_BYTES", 80)
+    with pytest.raises(export_public_tree.ExportError, match=r"bounded|output|overflow"):
+        export_public_tree._git(repo, "cat-file", "blob", oid)
+
+
+def test_inventory_count_precedes_record_decoding(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(quality_source, "MAX_ENTRY_COUNT", 2)
+    monkeypatch.setattr(export_public_tree, "_git", lambda *args: b"malformed\0malformed\0malformed\0")
+    with pytest.raises(export_public_tree.ExportError, match=r"inventory.*bound"):
+        export_public_tree._source_entries(tmp_path, "a" * 40)
+
+
+def test_policy_loading_refuses_leaf_symlink(tmp_path: Path) -> None:
+    policy = _policy(tmp_path / "policy.json")
+    linked = tmp_path / "linked-policy.json"
+    linked.symlink_to(policy)
+    with pytest.raises(export_public_tree.ExportError, match=r"stable regular|cannot load"):
+        export_public_tree._load_policy(linked)
+
+
+def test_working_policy_is_bounded_before_json_parse(tmp_path: Path) -> None:
+    policy = tmp_path / "oversized-policy.json"
+    policy.write_bytes(b" " * (2 * 1024 * 1024 + 1))
+    with pytest.raises(export_public_tree.ExportError, match=r"stable regular|size bound"):
+        export_public_tree._load_policy(policy)
+
+
+@pytest.mark.parametrize("probe", [False, True])
+def test_fd_member_size_is_checked_before_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    probe: bool,
+) -> None:
+    (tmp_path / "large").write_bytes(b"x" * 81)
+    monkeypatch.setattr(quality_source, "GIT_OUTPUT_LIMIT_BYTES", 80)
+    reader = MagicMock()
+    reader.read.side_effect = AssertionError("oversized member reached read")
+
+    def fdopen(descriptor: int, mode: str) -> MagicMock:
+        reader.fileno.return_value = descriptor
+        reader.__enter__.return_value = reader
+        reader.__exit__.side_effect = lambda *args: os.close(descriptor)
+        return reader
+
+    if probe:
+        monkeypatch.setattr(os, "fdopen", fdopen)
+    directory_fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        with pytest.raises(export_public_tree.ExportError, match="byte bound"):
+            export_public_tree._read_file_at(directory_fd, "large")
+    finally:
+        os.close(directory_fd)
+    reader.read.assert_not_called()
+
+
+def test_materialized_member_cannot_exceed_read_bound(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo, revision, policy = _repository(tmp_path)
+    destination = tmp_path / "public"
+    manifest = export_public_tree.export_tree(repo, revision, policy, destination, tmp_path / "manifest.json")
+    assert manifest.source_commit == revision
+    (destination / "README.md").write_bytes(b"x" * 81)
+    monkeypatch.setattr(quality_source, "GIT_OUTPUT_LIMIT_BYTES", 80)
+    with pytest.raises(export_public_tree.ExportError, match="byte bound"):
+        export_public_tree._materialized_entries(destination, manifest)
+
+
+def test_committed_policy_parses_only_captured_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo, revision, policy_path = _repository(tmp_path)
+    expected = export_public_tree._load_policy(policy_path)
+    captured = 0
+
+    def capture(path: Path, *, max_bytes: int) -> TextSnapshot:
+        nonlocal captured
+        result = read_text_snapshot(path, max_bytes=max_bytes)
+        if path == policy_path:
+            captured += 1
+            policy = json.loads(result.content)
+            policy["expected_repository"] = "example/substituted"
+            path.write_text(json.dumps(policy), encoding="utf-8")
+        return result
+
+    monkeypatch.setattr(export_public_tree, "read_text_snapshot", capture)
+    result = export_public_tree._load_committed_policy(repo, revision, policy_path)
+    assert result[0] == expected
+    assert captured == 1
+
+
+@pytest.mark.parametrize("mutation", ["bytes", "replacement", "ancestor"])
+def test_export_refuses_manifest_change_during_final_tree_verification(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    repo, revision, policy = _repository(tmp_path)
+    manifest_parent = tmp_path / "manifests"
+    manifest_parent.mkdir()
+    manifest_path = manifest_parent / "manifest.json"
+    verify_tree = export_public_tree._verify_tree_at
+    calls = 0
+
+    def change_manifest(root_fd: int, entries: tuple[export_public_tree.TreeEntry, ...]) -> None:
+        nonlocal calls
+        calls += 1
+        verify_tree(root_fd, entries)
+        if calls == 3:
+            if mutation == "bytes":
+                manifest_path.write_bytes(b"changed")
+            elif mutation == "replacement":
+                content = manifest_path.read_bytes()
+                manifest_path.unlink()
+                manifest_path.write_bytes(content)
+            else:
+                manifest_parent.rename(tmp_path / "retained-manifests")
+                manifest_parent.mkdir()
+                manifest_path.write_bytes(b"sentinel")
+
+    monkeypatch.setattr(export_public_tree, "_verify_tree_at", change_manifest)
+    descriptors_before = set(Path("/proc/self/fd").iterdir())
+    with pytest.raises(export_public_tree.ExportError, match=r"manifest|parent directory identity"):
+        export_public_tree.export_tree(repo, revision, policy, tmp_path / "public", manifest_path)
+    assert calls == 3
+    assert (tmp_path / "public" / "README.md").read_bytes() == b"public\n"
+    assert manifest_path.exists()
+    assert set(Path("/proc/self/fd").iterdir()) == descriptors_before
+
+
+def test_export_staging_substitution_preserves_unrelated_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo, revision, policy = _repository(tmp_path)
+    protected = tmp_path / "protected"
+    protected.mkdir()
+    (protected / "README.md").write_bytes(b"sentinel")
+    real_git = export_public_tree._git
+    substituted = False
+
+    def substitute_staging(repository: Path, *args: str) -> bytes:
+        nonlocal substituted
+        if args[:2] == ("cat-file", "blob") and not substituted:
+            stages = list(tmp_path.glob(".public-*"))
+            if stages:
+                stage = stages[0]
+                stage.rename(tmp_path / "retained-stage")
+                stage.symlink_to(protected, target_is_directory=True)
+                substituted = True
+        return real_git(repository, *args)
+
+    monkeypatch.setattr(export_public_tree, "_git", substitute_staging)
+    descriptors_before = set(Path("/proc/self/fd").iterdir())
+    with pytest.raises(export_public_tree.ExportError, match=r"identity|redirected|substitut"):
+        export_public_tree.export_tree(repo, revision, policy, tmp_path / "public", tmp_path / "manifest.json")
+    assert substituted
+    assert (protected / "README.md").read_bytes() == b"sentinel"
+    assert set(protected.iterdir()) == {protected / "README.md"}
+    assert not (tmp_path / "manifest.json").exists()
+    assert set(Path("/proc/self/fd").iterdir()) == descriptors_before
+
+
+@pytest.mark.parametrize("occupied", ["public", "manifest.json"])
+def test_export_rejects_dangling_output_symlink(tmp_path: Path, occupied: str) -> None:
+    repo, revision, policy = _repository(tmp_path)
+    path = tmp_path / occupied
+    path.symlink_to(tmp_path / "missing")
+    with pytest.raises(export_public_tree.ExportError, match="must not exist"):
+        export_public_tree.export_tree(repo, revision, policy, tmp_path / "public", tmp_path / "manifest.json")
+    assert path.is_symlink()
+    assert not (tmp_path / "missing").exists()
+
+
+@pytest.mark.parametrize("occupied", ["public", "manifest.json"])
+@pytest.mark.parametrize("kind", ["file", "directory", "dangling-symlink"])
+def test_export_concurrent_occupied_output_is_preserved(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    occupied: str,
+    kind: str,
+) -> None:
+    repo, revision, policy = _repository(tmp_path)
+    real_git = export_public_tree._git
+    path = tmp_path / occupied
+    planted = False
+
+    def occupy_output(repository: Path, *args: str) -> bytes:
+        nonlocal planted
+        if args[:2] == ("cat-file", "blob") and list(tmp_path.glob(".public-*")) and not planted:
+            if kind == "file":
+                path.write_bytes(b"sentinel")
+            elif kind == "directory":
+                path.mkdir()
+                (path / "sentinel").write_bytes(b"sentinel")
+            else:
+                path.symlink_to(tmp_path / "missing")
+            planted = True
+        return real_git(repository, *args)
+
+    monkeypatch.setattr(export_public_tree, "_git", occupy_output)
+    with pytest.raises(export_public_tree.ExportError, match="must not already exist"):
+        export_public_tree.export_tree(repo, revision, policy, tmp_path / "public", tmp_path / "manifest.json")
+    assert planted
+    if kind == "file":
+        assert path.read_bytes() == b"sentinel"
+    elif kind == "directory":
+        assert (path / "sentinel").read_bytes() == b"sentinel"
+    else:
+        assert path.is_symlink()
+        assert not (tmp_path / "missing").exists()
+
+
+@pytest.mark.parametrize("parent", ["export-parent", "manifest-parent"])
+def test_export_parent_substitution_does_not_redirect_writes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    parent: str,
+) -> None:
+    repo, revision, policy = _repository(tmp_path)
+    export_parent = tmp_path / "export-parent"
+    manifest_parent = tmp_path / "manifest-parent"
+    export_parent.mkdir()
+    manifest_parent.mkdir()
+    protected = tmp_path / "protected"
+    protected.mkdir()
+    (protected / "sentinel").write_bytes(b"sentinel")
+    real_git = export_public_tree._git
+    substituted = False
+
+    def redirect_parent(repository: Path, *args: str) -> bytes:
+        nonlocal substituted
+        if args[:2] == ("cat-file", "blob") and list(export_parent.glob(".public-*")) and not substituted:
+            original = tmp_path / parent
+            original.rename(tmp_path / "retained-parent")
+            original.symlink_to(protected, target_is_directory=True)
+            substituted = True
+        return real_git(repository, *args)
+
+    monkeypatch.setattr(export_public_tree, "_git", redirect_parent)
+    descriptors_before = set(Path("/proc/self/fd").iterdir())
+    with pytest.raises(export_public_tree.ExportError, match=r"real path components|identity"):
+        export_public_tree.export_tree(
+            repo, revision, policy, export_parent / "public", manifest_parent / "manifest.json"
+        )
+    assert substituted
+    assert set(protected.iterdir()) == {protected / "sentinel"}
+    assert (protected / "sentinel").read_bytes() == b"sentinel"
+    assert set(Path("/proc/self/fd").iterdir()) == descriptors_before
+
+
+def test_export_member_substitution_is_refused_without_following_symlink(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo, revision, policy = _repository(tmp_path)
+    protected = tmp_path / "protected"
+    protected.mkdir()
+    (protected / "sentinel").write_bytes(b"sentinel")
+    real_git = export_public_tree._git
+
+    def redirect_member(repository: Path, *args: str) -> bytes:
+        stages = list(tmp_path.glob(".public-*"))
+        if args[:2] == ("cat-file", "blob") and stages and not (stages[0] / "docs").exists():
+            (stages[0] / "docs").symlink_to(protected, target_is_directory=True)
+        return real_git(repository, *args)
+
+    monkeypatch.setattr(export_public_tree, "_git", redirect_member)
+    with pytest.raises(export_public_tree.ExportError, match="publication failed"):
+        export_public_tree.export_tree(repo, revision, policy, tmp_path / "public", tmp_path / "manifest.json")
+    assert set(protected.iterdir()) == {protected / "sentinel"}
+    assert (protected / "sentinel").read_bytes() == b"sentinel"
+
+
+def test_export_refuses_post_publish_byte_substitution_and_retains_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo, revision, policy = _repository(tmp_path)
+    destination = tmp_path / "public"
+    write_manifest = export_public_tree._write_manifest
+
+    def modify_published(
+        path: Path, manifest: export_public_tree.ExportManifest, *, parent_fd: int
+    ) -> tuple[int, bytes]:
+        binding = write_manifest(path, manifest, parent_fd=parent_fd)
+        (destination / "README.md").write_bytes(b"changed")
+        return binding
+
+    monkeypatch.setattr(export_public_tree, "_write_manifest", modify_published)
+    with pytest.raises(export_public_tree.ExportError, match="bytes or mode changed"):
+        export_public_tree.export_tree(repo, revision, policy, destination, tmp_path / "manifest.json")
+    assert (destination / "README.md").read_bytes() == b"changed"
+    assert (tmp_path / "manifest.json").is_file()
+
+
+@pytest.mark.parametrize("substitution", ["directory", "symlink", "bytes"])
+def test_export_refuses_substitution_during_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    substitution: str,
+) -> None:
+    repo, revision, policy = _repository(tmp_path)
+    protected = tmp_path / "protected"
+    protected.mkdir()
+    (protected / "README.md").write_bytes(b"sentinel")
+    rename = release_approval_archive._rename_no_replace_at
+
+    def substitute_then_rename(parent_fd: int, source: str, destination: str) -> None:
+        stage = tmp_path / source
+        if destination == "public":
+            if substitution == "bytes":
+                (stage / "README.md").write_bytes(b"changed")
+            else:
+                stage.rename(tmp_path / "retained-stage")
+                if substitution == "directory":
+                    stage.mkdir()
+                    (stage / "README.md").write_bytes(b"replacement")
+                else:
+                    stage.symlink_to(protected, target_is_directory=True)
+        rename(parent_fd, source, destination)
+
+    monkeypatch.setattr(release_approval_archive, "_rename_no_replace_at", substitute_then_rename)
+    descriptors_before = set(Path("/proc/self/fd").iterdir())
+    with pytest.raises(export_public_tree.ExportError, match=r"identity|bytes or mode"):
+        export_public_tree.export_tree(repo, revision, policy, tmp_path / "public", tmp_path / "manifest.json")
+    assert (protected / "README.md").read_bytes() == b"sentinel"
+    assert not (tmp_path / "manifest.json").exists()
+    assert (tmp_path / "public").exists()
+    assert set(Path("/proc/self/fd").iterdir()) == descriptors_before
+
+
+def test_export_manifest_temporary_substitution_preserves_unrelated_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo, revision, policy = _repository(tmp_path)
+    protected = tmp_path / "protected.json"
+    protected.write_bytes(b"sentinel")
+    rename = release_approval_archive._rename_no_replace_at
+
+    def substitute_manifest(parent_fd: int, source: str, destination: str) -> None:
+        if source.startswith(".manifest.json-"):
+            path = tmp_path / source
+            path.rename(tmp_path / "retained-manifest.json")
+            path.symlink_to(protected)
+        rename(parent_fd, source, destination)
+
+    monkeypatch.setattr(release_approval_archive, "_rename_no_replace_at", substitute_manifest)
+    with pytest.raises(export_public_tree.ExportError, match="publication failed"):
+        export_public_tree.export_tree(repo, revision, policy, tmp_path / "public", tmp_path / "manifest.json")
+    assert protected.read_bytes() == b"sentinel"
+    assert (tmp_path / "public" / "README.md").read_bytes() == b"public\n"
+    assert (tmp_path / "manifest.json").is_symlink()
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "tests/test_companion_exact_permissions.py",
+        "tests/test_companion_feed_permissions.py",
+        "tests/test_companion_quota_permissions.py",
+        "tests/test_meeting_base_profile.py",
+        "tests/test_saved_report_viewers.py",
+    ],
+)
+def test_cleanup_regressions_have_exact_public_export_ownership(path: str) -> None:
+    policy = export_public_tree._load_policy(
+        Path(__file__).parents[1] / "docs/release-readiness/public-tree-policy.json"
+    )
+    included, excluded = export_public_tree._classify(((path, "100644", "a" * 40),), policy)
+    assert len(included) == 1
+    assert included[0].rule_id == "include-tests"
+    assert included[0].category == "test"
+    assert excluded == ()
+
+
+@pytest.mark.parametrize("module", ["first_user_guides_contract", "sf_auth_guide_contract"])
+def test_pending_guide_modules_have_exact_public_export_ownership(module: str) -> None:
+    policy = export_public_tree._load_policy(
+        Path(__file__).parents[1] / "docs/release-readiness/public-tree-policy.json"
+    )
+    path = f"tests/test_{module}.py"
+    included, excluded = export_public_tree._classify(((path, "100644", "a" * 40),), policy)
+    assert [entry.path for entry in included] == [path]
+    assert included[0].rule_id == "include-tests"
+    assert excluded == ()
+    adjacent = f"tests/test_{module}_unreviewed.py"
+    with pytest.raises(export_public_tree.ExportError, match="unclassified tracked path"):
+        export_public_tree._classify(((adjacent, "100644", "a" * 40),), policy)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "docs/autonomy-roadmap.md",
+        "docs/true-up-ledger-2026-07-18.md",
+        "docs/true-up-ledger-2026-07-28.md",
+    ],
+)
+def test_private_execution_records_are_not_public_pages(path: str) -> None:
+    root = Path(__file__).parents[1]
+    policy = export_public_tree._load_policy(root / "docs/release-readiness/public-tree-policy.json")
+    included, excluded = export_public_tree._classify(((path, "100644", "a" * 40),), policy)
+
+    assert included == ()
+    assert len(excluded) == 1
+    assert excluded[0].category == "private_history"
+    surface = json.loads((root / "docs/release-readiness/public-surface-policy.json").read_text(encoding="utf-8"))
+    assert path in surface["categories"]["private_history_excluded"]
+    site = yaml.safe_load((root / "mkdocs.yml").read_text(encoding="utf-8"))
+    relative = path.removeprefix("docs/")
+    assert relative in site["exclude_docs"].splitlines()
+    assert relative not in json.dumps(site["nav"])
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -152,6 +570,127 @@ def test_public_release_contracts_are_classified_for_clean_export() -> None:
     assert contracts <= set(public_repository_only)
 
 
+def test_typing_shadow_inventory_is_explicitly_owned() -> None:
+    """Only the reviewed third-party stub may enter the type checker's shadow path."""
+    root = Path(__file__).parents[1]
+    expected = {"typings/google_auth_httplib2/__init__.pyi"}
+    observed = {path.relative_to(root).as_posix() for path in (root / "typings").rglob("*") if path.is_file()}
+    assert observed == expected
+    policy = export_public_tree._load_policy(root / "docs/release-readiness/public-tree-policy.json")
+    included, excluded = export_public_tree._classify(
+        tuple((path, "100644", "a" * 40) for path in sorted(expected)), policy
+    )
+    assert {entry.path for entry in included} == expected
+    assert all(entry.category == "build" for entry in included)
+    assert excluded == ()
+    with pytest.raises(export_public_tree.ExportError, match="unclassified"):
+        export_public_tree._classify((("typings/unreviewed.pyi", "100644", "a" * 40),), policy)
+
+
+@pytest.mark.parametrize("path", [".skillsaw-baseline.json", ".opencode/check_skillsaw.py"])
+def test_private_agent_baseline_is_not_exported(path: str) -> None:
+    """Public quality gates must not inherit exceptions for private agent files."""
+    repo_root = Path(__file__).parents[1]
+    policy = export_public_tree._load_policy(repo_root / "docs/release-readiness/public-tree-policy.json")
+    included, excluded = export_public_tree._classify(((path, "100644", "a" * 40),), policy)
+
+    assert included == ()
+    assert len(excluded) == 1
+    assert excluded[0].category == "local_tool_state"
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["docs/adr/0011-require-meeting-task-writeback.md", "docs/adr/0012-journal-prepared-ingest-output.md"],
+)
+def test_private_ingest_decision_history_stays_private(path: str) -> None:
+    """The internal decision record is excluded from export, inventory, and rendering."""
+    repo_root = Path(__file__).parents[1]
+    policy = export_public_tree._load_policy(repo_root / "docs/release-readiness/public-tree-policy.json")
+    included, excluded = export_public_tree._classify(((path, "100644", "a" * 40),), policy)
+    assert included == ()
+    assert len(excluded) == 1
+    assert excluded[0].category == "private_history"
+    surface = json.loads((repo_root / "docs/release-readiness/public-surface-policy.json").read_text(encoding="utf-8"))
+    assert path in surface["categories"]["private_history_excluded"]
+    site = yaml.safe_load((repo_root / "mkdocs.yml").read_text(encoding="utf-8"))
+    assert path.removeprefix("docs/") in site["exclude_docs"].splitlines()
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "scripts/oc_event_watcher.py",
+        ".devcontainer/devcontainer.json",
+        "scripts/check_work_order_done_checks.py",
+        "tests/test_check_work_order_done_checks.py",
+    ],
+)
+def test_private_operator_material_is_not_exported(path: str) -> None:
+    """Private launchers and work-order validation are not public contributor tooling."""
+    repo_root = Path(__file__).parents[1]
+    policy = export_public_tree._load_policy(repo_root / "docs/release-readiness/public-tree-policy.json")
+
+    included, excluded = export_public_tree._classify(((path, "100644", "a" * 40),), policy)
+
+    assert included == ()
+    assert len(excluded) == 1
+    assert excluded[0].category == "private_operations"
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["scripts/new_helper.py", "scripts/skill_integrity/new_helper.py", "tests/test_new.py", "tests/fixtures/new.json"],
+)
+def test_new_infrastructure_requires_explicit_export_classification(path: str) -> None:
+    """Adding a helper cannot implicitly approve its public distribution."""
+    repo_root = Path(__file__).parents[1]
+    policy = export_public_tree._load_policy(repo_root / "docs/release-readiness/public-tree-policy.json")
+
+    with pytest.raises(export_public_tree.ExportError, match="unclassified tracked path"):
+        export_public_tree._classify(((path, "100644", "a" * 40),), policy)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "tests/test_privacy_guide_contract.py",
+        "tests/test_gmail_guide_contract.py",
+        "tests/test_gmail_refresh_input_selection.py",
+    ],
+)
+def test_guide_contract_export_is_exact_not_a_wildcard(path: str) -> None:
+    root = Path(__file__).parents[1]
+    policy = export_public_tree._load_policy(root / "docs/release-readiness/public-tree-policy.json")
+
+    included, excluded = export_public_tree._classify(((path, "100644", "a" * 40),), policy)
+
+    assert [entry.path for entry in included] == [path]
+    assert included[0].category == "test"
+    assert excluded == ()
+    with pytest.raises(export_public_tree.ExportError, match="unclassified tracked path"):
+        export_public_tree._classify(((path.removesuffix(".py") + "_unreviewed.py", "100644", "a" * 40),), policy)
+
+
+@pytest.mark.parametrize("namespace", ["scripts", "tests"])
+def test_infrastructure_policy_is_literal_and_matches_tracked_inventory(namespace: str) -> None:
+    """Reject wildcard approval and stale includes; excluded paths may be absent in exports."""
+    repo_root = Path(__file__).parents[1]
+    policy = export_public_tree._load_policy(repo_root / "docs/release-readiness/public-tree-policy.json")
+    included: set[str] = set()
+    excluded: set[str] = set()
+    for rule in policy.rules:
+        for pattern in rule.patterns:
+            if pattern.startswith(f"{namespace}/"):
+                assert not any(token in pattern for token in ("*", "?", "[")), pattern
+                (included if rule.action == "include" else excluded).add(pattern)
+
+    tracked = set(_git(repo_root, "ls-files", "-z", "--", f"{namespace}/").split("\0")) - {""}
+
+    assert included == tracked - excluded
+    assert included.isdisjoint(excluded)
+
+
 def test_export_rejects_ambiguous_rules(tmp_path: Path) -> None:
     """Rule order cannot decide whether a tracked path is public."""
     repo, revision, policy_path = _repository(tmp_path)
@@ -184,19 +723,22 @@ def test_export_rejects_existing_destination(tmp_path: Path) -> None:
         export_public_tree.export_tree(repo, revision, policy, destination, tmp_path / "manifest.json")
 
 
-def test_export_rejects_duplicate_policy_keys(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "key", ["schema_version", "synthetic-secret\x1b[31m\n", "x" * 8192], ids=["schema", "control", "large"]
+)
+def test_export_rejects_duplicate_policy_keys(tmp_path: Path, key: str) -> None:
     """Duplicate JSON keys cannot silently replace reviewed policy values."""
     repo, _, policy = _repository(tmp_path)
-    policy.write_text(
-        '{"schema_version":1,"schema_version":1,"expected_repository":"example/fieldkit-cli"}',
-        encoding="utf-8",
-    )
+    encoded = json.dumps(key)
+    policy.write_text(f'{{{encoded}:1,{encoded}:1,"expected_repository":"example/fieldkit-cli"}}', encoding="utf-8")
     _git(repo, "add", policy.relative_to(repo).as_posix())
     _git(repo, "commit", "-qm", "commit malformed policy")
     revision = _git(repo, "rev-parse", "HEAD")
 
-    with pytest.raises(export_public_tree.ExportError, match="duplicate JSON key: schema_version"):
+    with pytest.raises(export_public_tree.ExportError, match="invalid JSON input") as caught:
         export_public_tree.export_tree(repo, revision, policy, tmp_path / "public", tmp_path / "manifest.json")
+    assert "invalid JSON input" in str(caught.value)
+    assert key not in str(caught.value)
 
 
 def test_export_rejects_dirty_policy(tmp_path: Path) -> None:
@@ -322,7 +864,7 @@ def test_verify_rejects_schema_invalid_manifest_identity(tmp_path: Path) -> None
     manifest["source_commit"] = "not-an-object-id"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
-    with pytest.raises(export_public_tree.ExportError, match=r"schema violation.*source_commit"):
+    with pytest.raises(export_public_tree.ExportError, match=r"export manifest schema violation \(pattern\)"):
         export_public_tree.verify_export(repo, destination, manifest_path, policy)
 
 
@@ -378,3 +920,19 @@ def test_export_does_not_follow_predictable_manifest_temporary_symlink(tmp_path:
     export_public_tree.export_tree(repo, revision, policy, tmp_path / "public", manifest_path)
 
     assert protected.read_text(encoding="utf-8") == "preserve me\n"
+
+
+@pytest.mark.parametrize("field", ["schema_version", "unknown-private-field"])
+def test_schema_errors_do_not_reflect_supplied_values(field: str) -> None:
+    schema_path = Path(__file__).parents[1] / "docs/release-readiness/public-history-source.schema.json"
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    value: dict[str, object] = {}
+    value.update(dict.fromkeys(schema["required"]))
+    value[field] = "private-schema-sentinel\x1b[31m" * 1000
+    with pytest.raises(export_public_tree.ExportError, match="schema violation") as caught:
+        export_public_tree._validate_schema(value, schema_path, "source")
+    assert "private-schema-sentinel" not in str(caught.value)
+    if field == "unknown-private-field":
+        assert field not in str(caught.value)
+    assert len(str(caught.value)) < 160
+    assert caught.value.__cause__ is None

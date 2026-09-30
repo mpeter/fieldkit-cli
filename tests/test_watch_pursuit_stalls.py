@@ -19,17 +19,71 @@ import datetime
 import json
 import re
 import textwrap
+from collections.abc import Iterator
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
 import pytest
+from click.testing import CliRunner
 
 import fieldkit.watch._pursuit_stall_render as stall_render
 import fieldkit.watch._pursuit_stall_scan as stall_scan
 import fieldkit.watch._pursuit_stall_state as stall_state
 import fieldkit.watch.pursuit_stalls as wps
+from fieldkit.watch.status import WatcherDailySnapshot, WatcherOutcome, WatcherRunResult
+
+
+@pytest.mark.parametrize("outcome", ["ok", "partial", "fatal"])
+def test_cli_uses_typed_pursuit_result_exit_code(outcome: WatcherOutcome) -> None:
+    from fieldkit.commands.watch import pursuit_stalls as command
+
+    run = WatcherRunResult(outcome, True, "written")
+    with patch.object(command, "_run_pursuit_stalls", return_value=run):
+        result = CliRunner().invoke(command.cli, ["--dry-run"])
+    assert result.exit_code == run.exit_code
+
+
+@pytest.mark.parametrize("outcome", ["partial", "fatal", "unknown", None])
+def test_daily_guard_preserves_prior_nonpassing_snapshot(tmp_path: Path, outcome: str | None) -> None:
+    from fieldkit.watch import status
+
+    status_file = tmp_path / "watchers" / "watcher-run-status.json"
+    status_file.parent.mkdir()
+    entry = {"last_run": datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")}
+    if outcome is not None:
+        entry["outcome"] = outcome
+    status_file.write_text(json.dumps({"pursuit-stalls": entry}), encoding="utf-8")
+    before = status_file.read_bytes()
+    with (
+        patch.object(status, "get_fieldkit_home", return_value=tmp_path),
+        patch.object(status, "_load_run_status", wraps=status._load_run_status) as load,
+        patch.object(wps, "write_run_status", return_value="written") as writer,
+    ):
+        result = wps._check_already_ran(False)
+    assert result == WatcherRunResult("partial" if outcome == "partial" else "fatal", False, None)
+    assert load.call_count == 1
+    writer.assert_not_called()
+    assert status_file.read_bytes() == before
+
+
+@pytest.mark.parametrize("write_result", ["written", "skipped", "failed"])
+def test_successful_daily_guard_carries_exact_writer_fact(write_result: str) -> None:
+    from fieldkit.watch import status
+
+    entry = {"last_run": datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"), "outcome": "ok"}
+    with (
+        patch.object(status, "_load_run_status", return_value={"pursuit-stalls": entry}) as load,
+        patch.object(wps, "write_run_status", return_value=write_result),
+    ):
+        result = wps._check_already_ran(False)
+    assert isinstance(result, WatcherRunResult)
+    assert result.outcome == ("ok" if write_result == "written" else "fatal")
+    assert result.completed is False
+    assert result.status_write == write_result
+    assert load.call_count == 1
+
 
 # ---------------------------------------------------------------------------
 
@@ -74,7 +128,7 @@ def _make_pursuit_md(
 # ── TestScanPursuitFileStall (flattened) ─────────────────────────────────────────────
 
 
-def _patch_fieldkit_home_scan_pursuit_file_stall(tmp_path: Path) -> None:
+def _patch_fieldkit_home_scan_pursuit_file_stall(tmp_path: Path) -> Iterator[None]:
     with patch("fieldkit.watch._pursuit_stall_scan.get_fieldkit_home", return_value=tmp_path):
         yield
 
@@ -604,11 +658,12 @@ def test_stage_change_resets_days_to_zero(tmp_path: Path) -> None:
         patch("fieldkit.watch.pursuit_stalls.get_accounts_config", return_value=config),
         patch.object(stall_state, "state_file", return_value=state_file),
         patch.object(stall_render, "_alerts_file", return_value=alerts_file),
-        patch("fieldkit.watch.pursuit_stalls.was_run_today", return_value=False),
+        patch("fieldkit.watch.pursuit_stalls.get_daily_run_snapshot", return_value=WatcherDailySnapshot(False, None)),
     ):
         rc = wps._run_pursuit_stalls(threshold=14, account=None, dry_run=False)
 
-    assert rc == 0
+    assert isinstance(rc, WatcherRunResult)
+    assert rc.exit_code == 0
 
     saved = json.loads(state_file.read_text(encoding="utf-8"))
     entry = saved.get("acme/deal", {})
@@ -656,11 +711,12 @@ def test_stage_change_resets_alerted_days_tier(tmp_path: Path) -> None:
         patch("fieldkit.watch.pursuit_stalls.get_accounts_config", return_value=config),
         patch.object(stall_state, "state_file", return_value=state_file),
         patch.object(stall_render, "_alerts_file", return_value=alerts_file),
-        patch("fieldkit.watch.pursuit_stalls.was_run_today", return_value=False),
+        patch("fieldkit.watch.pursuit_stalls.get_daily_run_snapshot", return_value=WatcherDailySnapshot(False, None)),
     ):
         rc = wps._run_pursuit_stalls(threshold=14, account=None, dry_run=False)
 
-    assert rc == 0
+    assert isinstance(rc, WatcherRunResult)
+    assert rc.exit_code == 0
     saved = json.loads(state_file.read_text(encoding="utf-8"))
     entry = saved.get("acme/deal", {})
     assert entry["stage"] == "validate", "Stage must be updated to new value"
@@ -702,11 +758,12 @@ def test_no_stage_change_preserves_days(tmp_path: Path) -> None:
         patch("fieldkit.watch.pursuit_stalls.get_accounts_config", return_value=config),
         patch.object(stall_state, "state_file", return_value=state_file),
         patch.object(stall_render, "_alerts_file", return_value=alerts_file),
-        patch("fieldkit.watch.pursuit_stalls.was_run_today", return_value=False),
+        patch("fieldkit.watch.pursuit_stalls.get_daily_run_snapshot", return_value=WatcherDailySnapshot(False, None)),
     ):
         rc = wps._run_pursuit_stalls(threshold=14, account=None, dry_run=False)
 
-    assert rc == 0
+    assert isinstance(rc, WatcherRunResult)
+    assert rc.exit_code == 0
     saved = json.loads(state_file.read_text(encoding="utf-8"))
     entry = saved.get("acme/deal", {})
     assert entry["days_since_transition"] == 20, "Days should reflect actual frontmatter"
@@ -749,14 +806,15 @@ def test_no_frontmatter_produces_warning(tmp_path: Path, caplog: pytest.LogCaptu
         patch("fieldkit.watch.pursuit_stalls.get_accounts_config", return_value=config),
         patch.object(stall_state, "state_file", return_value=state_file),
         patch.object(stall_render, "_alerts_file", return_value=alerts_file),
-        patch("fieldkit.watch.pursuit_stalls.was_run_today", return_value=False),
+        patch("fieldkit.watch.pursuit_stalls.get_daily_run_snapshot", return_value=WatcherDailySnapshot(False, None)),
         patch.object(wps, "watcher_logging", return_value=nullcontext()),
         caplog.at_level(logging.WARNING),
     ):
         rc = wps._run_pursuit_stalls(threshold=14, account=None, dry_run=False)
 
     # historic regression: skipped=1 returns exit code 1 (partial).
-    assert rc == 1
+    assert isinstance(rc, WatcherRunResult)
+    assert rc.exit_code == 1
     # A1: scan_pursuit_file must emit WARNING mentioning the file name.
     warning_msgs = [
         r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING and "bad-deal" in r.getMessage()
@@ -795,7 +853,7 @@ def test_oserror_file_produces_warning(tmp_path: Path, caplog: pytest.LogCapture
         patch("fieldkit.watch.pursuit_stalls.get_accounts_config", return_value=config),
         patch.object(stall_state, "state_file", return_value=state_file),
         patch.object(stall_render, "_alerts_file", return_value=alerts_file),
-        patch("fieldkit.watch.pursuit_stalls.was_run_today", return_value=False),
+        patch("fieldkit.watch.pursuit_stalls.get_daily_run_snapshot", return_value=WatcherDailySnapshot(False, None)),
         patch.object(wps, "watcher_logging", return_value=nullcontext()),
         # Inject the non-existent path so scan_pursuit_file is called with it
         patch.object(stall_scan, "collect_pursuit_files_details", return_value=([(missing_file, 14)], 0, 0, set())),
@@ -804,7 +862,8 @@ def test_oserror_file_produces_warning(tmp_path: Path, caplog: pytest.LogCapture
         rc = wps._run_pursuit_stalls(threshold=14, account=None, dry_run=False)
 
     # historic regression: skipped=1 (OSError) now returns exit code 1 (partial).
-    assert rc == 1
+    assert isinstance(rc, WatcherRunResult)
+    assert rc.exit_code == 1
     # A WARNING must be emitted from scan_pursuit_file for the OSError
     warning_msgs = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
     assert any("missing-deal" in msg for msg in warning_msgs), (
@@ -839,12 +898,13 @@ def test_intentional_only_run_is_ok(tmp_path: Path) -> None:
     with (
         patch("fieldkit.watch._pursuit_stall_scan.get_fieldkit_home", return_value=tmp_path),
         patch("fieldkit.watch.pursuit_stalls.get_accounts_config", return_value=config),
-        patch("fieldkit.watch.pursuit_stalls.was_run_today", return_value=False),
-        patch.object(wps, "write_run_status") as write_status,
+        patch("fieldkit.watch.pursuit_stalls.get_daily_run_snapshot", return_value=WatcherDailySnapshot(False, None)),
+        patch.object(wps, "write_run_status", return_value="written") as write_status,
     ):
         rc = wps._run_pursuit_stalls(threshold=14, account=None, dry_run=True)
 
-    assert rc == 0
+    assert isinstance(rc, WatcherRunResult)
+    assert rc.exit_code == 0
     assert write_status.call_args.kwargs["outcome"] == "ok"
     assert write_status.call_args.kwargs["failures"] == 0
 
@@ -860,7 +920,7 @@ def test_intentional_only_run_is_ok(tmp_path: Path) -> None:
     ],
 )
 def test_watcher_outcome_distinguishes_empty_failure_and_intentional_runs(
-    checked: int, failures: int, exclusions: int, expected: wps.WatcherOutcome
+    checked: int, failures: int, exclusions: int, expected: WatcherOutcome
 ) -> None:
     assert wps._watcher_outcome(checked, failures, exclusions) == expected
 
@@ -873,12 +933,13 @@ def test_empty_noninternal_pursuit_directory_is_fatal(tmp_path: Path) -> None:
     with (
         patch("fieldkit.watch._pursuit_stall_scan.get_fieldkit_home", return_value=tmp_path),
         patch("fieldkit.watch.pursuit_stalls.get_accounts_config", return_value=config),
-        patch("fieldkit.watch.pursuit_stalls.was_run_today", return_value=False),
-        patch.object(wps, "write_run_status") as write_status,
+        patch("fieldkit.watch.pursuit_stalls.get_daily_run_snapshot", return_value=WatcherDailySnapshot(False, None)),
+        patch.object(wps, "write_run_status", return_value="written") as write_status,
     ):
         rc = wps._run_pursuit_stalls(threshold=14, account=None, dry_run=True)
 
-    assert rc == 1
+    assert isinstance(rc, WatcherRunResult)
+    assert rc.exit_code == 1
     assert write_status.call_args.kwargs["outcome"] == "fatal"
 
 
@@ -895,12 +956,13 @@ def test_empty_account_filtered_pursuit_directory_is_fatal(tmp_path: Path) -> No
     with (
         patch("fieldkit.watch._pursuit_stall_scan.get_fieldkit_home", return_value=tmp_path),
         patch("fieldkit.watch.pursuit_stalls.get_accounts_config", return_value=config),
-        patch("fieldkit.watch.pursuit_stalls.was_run_today", return_value=False),
-        patch.object(wps, "write_run_status") as write_status,
+        patch("fieldkit.watch.pursuit_stalls.get_daily_run_snapshot", return_value=WatcherDailySnapshot(False, None)),
+        patch.object(wps, "write_run_status", return_value="written") as write_status,
     ):
         rc = wps._run_pursuit_stalls(threshold=14, account="acme", dry_run=True)
 
-    assert rc == 1
+    assert isinstance(rc, WatcherRunResult)
+    assert rc.exit_code == 1
     assert write_status.call_args.kwargs["outcome"] == "fatal"
 
 
@@ -918,12 +980,13 @@ def test_mixed_data_failures_produce_partial_outcome(tmp_path: Path) -> None:
     with (
         patch("fieldkit.watch._pursuit_stall_scan.get_fieldkit_home", return_value=tmp_path),
         patch("fieldkit.watch.pursuit_stalls.get_accounts_config", return_value=config),
-        patch("fieldkit.watch.pursuit_stalls.was_run_today", return_value=False),
-        patch.object(wps, "write_run_status") as write_status,
+        patch("fieldkit.watch.pursuit_stalls.get_daily_run_snapshot", return_value=WatcherDailySnapshot(False, None)),
+        patch.object(wps, "write_run_status", return_value="written") as write_status,
     ):
         rc = wps._run_pursuit_stalls(threshold=14, account=None, dry_run=True)
 
-    assert rc == 1
+    assert isinstance(rc, WatcherRunResult)
+    assert rc.exit_code == 1
     assert write_status.call_args.kwargs["outcome"] == "partial"
     assert write_status.call_args.kwargs["failures"] == 2
 
@@ -1100,11 +1163,12 @@ def test_run_prunes_stale_ghost_entries(tmp_path: Path) -> None:
         patch("fieldkit.watch.pursuit_stalls.get_accounts_config", return_value=config),
         patch.object(stall_state, "state_file", return_value=state_file),
         patch.object(stall_render, "_alerts_file", return_value=alerts_file),
-        patch("fieldkit.watch.pursuit_stalls.was_run_today", return_value=False),
+        patch("fieldkit.watch.pursuit_stalls.get_daily_run_snapshot", return_value=WatcherDailySnapshot(False, None)),
     ):
         rc = wps._run_pursuit_stalls(threshold=14, account=None, dry_run=False)
 
-    assert rc == 0
+    assert isinstance(rc, WatcherRunResult)
+    assert rc.exit_code == 0
     saved = json.loads(state_file.read_text(encoding="utf-8"))
     # Ghost deal must not be persisted in saved state
     assert "acme/ghost-deal" not in saved
@@ -1144,14 +1208,12 @@ def test_skips_when_already_ran_today(tmp_path: Path) -> None:
         patch.object(stall_state, "state_file", return_value=state_file),
         patch.object(stall_render, "_alerts_file", return_value=alerts_file),
         # historic regression: simulate watcher already ran today
-        patch("fieldkit.watch.pursuit_stalls.was_run_today", return_value=True),
-        # historic regression: get_last_run_outcome reads the live watcher-run-status.json;
-        # mock it to "ok" so the test is isolated from whatever the live file says.
-        patch("fieldkit.watch.pursuit_stalls.get_last_run_outcome", return_value="ok"),
+        patch("fieldkit.watch.pursuit_stalls.get_daily_run_snapshot", return_value=WatcherDailySnapshot(True, "ok")),
     ):
         rc = wps._run_pursuit_stalls(threshold=14, account=None, dry_run=False)
 
-    assert rc == 0
+    assert isinstance(rc, WatcherRunResult)
+    assert rc.exit_code == 0
     # No pursuits were processed — state file must not have been written
     assert not state_file.exists(), "State file must not be written when skipping"
     # No alerts written
@@ -1181,11 +1243,12 @@ def test_runs_normally_when_not_run_today(tmp_path: Path) -> None:
         patch("fieldkit.watch.pursuit_stalls.get_accounts_config", return_value=config),
         patch.object(stall_state, "state_file", return_value=state_file),
         patch.object(stall_render, "_alerts_file", return_value=alerts_file),
-        patch("fieldkit.watch.pursuit_stalls.was_run_today", return_value=False),
+        patch("fieldkit.watch.pursuit_stalls.get_daily_run_snapshot", return_value=WatcherDailySnapshot(False, None)),
     ):
         rc = wps._run_pursuit_stalls(threshold=14, account=None, dry_run=False)
 
-    assert rc == 0
+    assert isinstance(rc, WatcherRunResult)
+    assert rc.exit_code == 0
     # State file should have been written — pursuits were scanned
     assert state_file.exists(), "State file must be written when running normally"
 
@@ -1214,11 +1277,14 @@ def test_dry_run_bypasses_guard(tmp_path: Path) -> None:
         patch("fieldkit.watch.pursuit_stalls.get_accounts_config", return_value=config),
         patch.object(stall_state, "state_file", return_value=state_file),
         patch.object(stall_render, "_alerts_file", return_value=alerts_file),
-        patch("fieldkit.watch.pursuit_stalls.was_run_today", return_value=True) as mock_wrt,
+        patch(
+            "fieldkit.watch.pursuit_stalls.get_daily_run_snapshot", return_value=WatcherDailySnapshot(True, "ok")
+        ) as mock_wrt,
     ):
         rc = wps._run_pursuit_stalls(threshold=14, account=None, dry_run=True)
 
-    assert rc == 0
+    assert isinstance(rc, WatcherRunResult)
+    assert rc.exit_code == 0
     # Guard must not have been consulted in dry_run mode
     mock_wrt.assert_not_called()
 
@@ -1289,7 +1355,7 @@ def test_unreadable_file_produces_warning(tmp_path: Path, caplog: pytest.LogCapt
 _STALE_DATE_append_stall_alert_dedup = (_TODAY - datetime.timedelta(days=20)).isoformat()
 
 
-def _patch_fieldkit_home_append_stall_alert_dedup(tmp_path: Path) -> None:
+def _patch_fieldkit_home_append_stall_alert_dedup(tmp_path: Path) -> Iterator[None]:
     with patch("fieldkit.watch._pursuit_stall_scan.get_fieldkit_home", return_value=tmp_path):
         yield
 
@@ -1443,16 +1509,14 @@ def test_dedup_suppresses_repeated_stall_alert(tmp_path: Path) -> None:
         patch("fieldkit.watch.pursuit_stalls.get_accounts_config", return_value=config),
         patch.object(stall_state, "state_file", return_value=state_file),
         patch.object(stall_render, "_alerts_file", return_value=alerts_file),
-        patch("fieldkit.watch.pursuit_stalls.was_run_today", return_value=False),
+        patch("fieldkit.watch.pursuit_stalls.get_daily_run_snapshot", return_value=WatcherDailySnapshot(False, None)),
         patch.object(stall_render, "append_stall_alert") as mock_alert,
     ):
         rc = wps._run_pursuit_stalls(threshold=14, account=None, dry_run=False)
 
-    assert rc == 0
-    (
-        mock_alert.assert_not_called(),
-        ("Stall alert must be suppressed when the same tier was already alerted in state"),
-    )
+    assert isinstance(rc, WatcherRunResult)
+    assert rc.exit_code == 0
+    mock_alert.assert_not_called()
 
 
 def test_emits_cross_account_stall_alert(tmp_path: Path) -> None:
@@ -1479,12 +1543,13 @@ def test_emits_cross_account_stall_alert(tmp_path: Path) -> None:
         patch("fieldkit.watch.pursuit_stalls.get_accounts_config", return_value=config),
         patch.object(stall_state, "state_file", return_value=state_file),
         patch.object(stall_render, "_alerts_file", return_value=alerts_file),
-        patch("fieldkit.watch.pursuit_stalls.was_run_today", return_value=False),
+        patch("fieldkit.watch.pursuit_stalls.get_daily_run_snapshot", return_value=WatcherDailySnapshot(False, None)),
         patch.object(stall_render, "append_stall_alert") as mock_alert,
     ):
         rc = wps._run_pursuit_stalls(threshold=14, account=None, dry_run=False)
 
-    assert rc == 0
+    assert isinstance(rc, WatcherRunResult)
+    assert rc.exit_code == 0
     assert mock_alert.call_count == 2, f"Expected 2 stall alerts (one per account), got {mock_alert.call_count}"
     alerted_accounts = {call.args[0]["account"] for call in mock_alert.call_args_list}
     assert "acme" in alerted_accounts, "acme pursuit must have generated a stall alert"
@@ -1526,12 +1591,13 @@ def test_fatal_prior_run_returns_exit_1(tmp_path: Path) -> None:
         patch("fieldkit.watch.pursuit_stalls.get_accounts_config", return_value=config),
         patch.object(stall_state, "state_file", return_value=state_file),
         patch.object(stall_render, "_alerts_file", return_value=alerts_file),
-        patch("fieldkit.watch.pursuit_stalls.was_run_today", return_value=True),
-        patch("fieldkit.watch.pursuit_stalls.get_last_run_outcome", return_value="fatal"),
+        patch("fieldkit.watch.pursuit_stalls.get_daily_run_snapshot", return_value=WatcherDailySnapshot(True, "ok")),
+        patch("fieldkit.watch.pursuit_stalls.get_daily_run_snapshot", return_value=WatcherDailySnapshot(True, "fatal")),
     ):
         rc = wps._run_pursuit_stalls(threshold=14, account=None, dry_run=False)
 
-    assert rc == 1
+    assert isinstance(rc, WatcherRunResult)
+    assert rc.exit_code == 1
 
 
 def test_empty_accounts_returns_exit_1(tmp_path: Path) -> None:
@@ -1546,11 +1612,12 @@ def test_empty_accounts_returns_exit_1(tmp_path: Path) -> None:
         patch("fieldkit.watch.pursuit_stalls.get_config_path", return_value=tmp_path / "accounts.yaml"),
         patch.object(stall_state, "state_file", return_value=state_file),
         patch.object(stall_render, "_alerts_file", return_value=alerts_file),
-        patch("fieldkit.watch.pursuit_stalls.was_run_today", return_value=False),
+        patch("fieldkit.watch.pursuit_stalls.get_daily_run_snapshot", return_value=WatcherDailySnapshot(False, None)),
     ):
         rc = wps._run_pursuit_stalls(threshold=14, account=None, dry_run=False)
 
-    assert rc == 1
+    assert isinstance(rc, WatcherRunResult)
+    assert rc.exit_code == 1
 
 
 def test_unknown_account_filter_returns_exit_1(tmp_path: Path) -> None:
@@ -1564,11 +1631,12 @@ def test_unknown_account_filter_returns_exit_1(tmp_path: Path) -> None:
         patch("fieldkit.watch.pursuit_stalls.get_accounts_config", return_value=config),
         patch.object(stall_state, "state_file", return_value=state_file),
         patch.object(stall_render, "_alerts_file", return_value=alerts_file),
-        patch("fieldkit.watch.pursuit_stalls.was_run_today", return_value=False),
+        patch("fieldkit.watch.pursuit_stalls.get_daily_run_snapshot", return_value=WatcherDailySnapshot(False, None)),
     ):
         rc = wps._run_pursuit_stalls(threshold=14, account="nonexistent", dry_run=False)
 
-    assert rc == 1
+    assert isinstance(rc, WatcherRunResult)
+    assert rc.exit_code == 1
 
 
 def test_state_write_failure_is_fatal_and_returns_nonzero(tmp_path: Path) -> None:
@@ -1583,13 +1651,14 @@ def test_state_write_failure_is_fatal_and_returns_nonzero(tmp_path: Path) -> Non
         patch("fieldkit.watch.pursuit_stalls.get_accounts_config", return_value=config),
         patch.object(stall_state, "state_file", return_value=state_file),
         patch.object(stall_render, "_alerts_file", return_value=alerts_file),
-        patch("fieldkit.watch.pursuit_stalls.was_run_today", return_value=False),
+        patch("fieldkit.watch.pursuit_stalls.get_daily_run_snapshot", return_value=WatcherDailySnapshot(False, None)),
         patch.object(stall_state, "save_state", side_effect=OSError("disk full")),
-        patch.object(wps, "write_run_status") as write_status,
+        patch.object(wps, "write_run_status", return_value="written") as write_status,
     ):
         rc = wps._run_pursuit_stalls(threshold=14, account=None, dry_run=False)
 
-    assert rc == 1
+    assert isinstance(rc, WatcherRunResult)
+    assert rc.exit_code == 1
     assert write_status.call_args.kwargs["outcome"] == "fatal"
     assert write_status.call_args.kwargs["failures"] == 1
 
@@ -1627,12 +1696,13 @@ def test_snoozed_pursuit_counted_but_not_alerted(tmp_path: Path) -> None:
         patch("fieldkit.watch.pursuit_stalls.get_accounts_config", return_value=config),
         patch.object(stall_state, "state_file", return_value=state_file),
         patch.object(stall_render, "_alerts_file", return_value=alerts_file),
-        patch("fieldkit.watch.pursuit_stalls.was_run_today", return_value=False),
+        patch("fieldkit.watch.pursuit_stalls.get_daily_run_snapshot", return_value=WatcherDailySnapshot(False, None)),
         patch.object(stall_render, "append_stall_alert") as mock_alert,
     ):
         rc = wps._run_pursuit_stalls(threshold=14, account=None, dry_run=False)
 
-    assert rc == 0
+    assert isinstance(rc, WatcherRunResult)
+    assert rc.exit_code == 0
     mock_alert.assert_not_called()
 
 
@@ -1683,11 +1753,12 @@ def test_account_scoped_prune_preserves_other_accounts(tmp_path: Path) -> None:
         patch("fieldkit.watch.pursuit_stalls.get_accounts_config", return_value=config),
         patch.object(stall_state, "state_file", return_value=state_file),
         patch.object(stall_render, "_alerts_file", return_value=alerts_file),
-        patch("fieldkit.watch.pursuit_stalls.was_run_today", return_value=False),
+        patch("fieldkit.watch.pursuit_stalls.get_daily_run_snapshot", return_value=WatcherDailySnapshot(False, None)),
     ):
         rc = wps._run_pursuit_stalls(threshold=14, account="acme", dry_run=False)
 
-    assert rc == 0
+    assert isinstance(rc, WatcherRunResult)
+    assert rc.exit_code == 0
     saved = json.loads(state_file.read_text(encoding="utf-8"))
     # globalpay entry must be preserved (not pruned) when filtering to acme only
     assert "globalpay/other-deal" in saved, "Other-account state must be preserved when account filter is set"
@@ -1711,11 +1782,12 @@ def test_collection_failure_preserves_existing_state_for_unavailable_account(tmp
         patch("fieldkit.watch.pursuit_stalls.get_accounts_config", return_value=config),
         patch.object(stall_state, "state_file", return_value=state_file),
         patch.object(stall_render, "_alerts_file", return_value=tmp_path / "stall-alerts.md"),
-        patch("fieldkit.watch.pursuit_stalls.was_run_today", return_value=False),
+        patch("fieldkit.watch.pursuit_stalls.get_daily_run_snapshot", return_value=WatcherDailySnapshot(False, None)),
     ):
         rc = wps._run_pursuit_stalls(threshold=14, account=None, dry_run=False)
 
-    assert rc == 1
+    assert isinstance(rc, WatcherRunResult)
+    assert rc.exit_code == 1
     saved = json.loads(state_file.read_text(encoding="utf-8"))
     assert saved["unavailable/old-deal"] == prior_state["unavailable/old-deal"]
 
@@ -1738,11 +1810,12 @@ def test_non_dict_account_config_is_data_failure(tmp_path: Path) -> None:
         patch("fieldkit.watch.pursuit_stalls.get_accounts_config", return_value=config),
         patch.object(stall_state, "state_file", return_value=state_file),
         patch.object(stall_render, "_alerts_file", return_value=alerts_file),
-        patch("fieldkit.watch.pursuit_stalls.was_run_today", return_value=False),
+        patch("fieldkit.watch.pursuit_stalls.get_daily_run_snapshot", return_value=WatcherDailySnapshot(False, None)),
     ):
         rc = wps._run_pursuit_stalls(threshold=14, account=None, dry_run=False)
 
-    assert rc == 1
+    assert isinstance(rc, WatcherRunResult)
+    assert rc.exit_code == 1
 
 
 def test_invalid_stall_threshold_uses_default(tmp_path: Path) -> None:
@@ -1764,12 +1837,13 @@ def test_invalid_stall_threshold_uses_default(tmp_path: Path) -> None:
         patch("fieldkit.watch.pursuit_stalls.get_accounts_config", return_value=config),
         patch.object(stall_state, "state_file", return_value=state_file),
         patch.object(stall_render, "_alerts_file", return_value=alerts_file),
-        patch("fieldkit.watch.pursuit_stalls.was_run_today", return_value=False),
+        patch("fieldkit.watch.pursuit_stalls.get_daily_run_snapshot", return_value=WatcherDailySnapshot(False, None)),
         patch.object(stall_render, "append_stall_alert") as mock_alert,
     ):
         rc = wps._run_pursuit_stalls(threshold=14, account=None, dry_run=False)
 
-    assert rc == 0
+    assert isinstance(rc, WatcherRunResult)
+    assert rc.exit_code == 0
     # 20 days > default threshold of 14 → should still stall
     mock_alert.assert_called_once()
 
@@ -1958,13 +2032,14 @@ def test_run_pursuit_stalls_injects_cli_threshold_for_accounts_without_override(
         patch("fieldkit.watch.pursuit_stalls.get_accounts_config", return_value=config),
         patch.object(stall_state, "state_file", return_value=state_file),
         patch.object(stall_render, "_alerts_file", return_value=alerts_file),
-        patch("fieldkit.watch.pursuit_stalls.was_run_today", return_value=False),
+        patch("fieldkit.watch.pursuit_stalls.get_daily_run_snapshot", return_value=WatcherDailySnapshot(False, None)),
         patch.object(stall_render, "append_stall_alert") as mock_alert,
     ):
         # Use threshold=7 (lower than 20 days) so the pursuit is stalled
         rc = wps._run_pursuit_stalls(threshold=7, account=None, dry_run=False)
 
-    assert rc == 0
+    assert isinstance(rc, WatcherRunResult)
+    assert rc.exit_code == 0
     # 20 days > 7 threshold → stall alert should fire
     mock_alert.assert_called_once()
 
@@ -2032,12 +2107,13 @@ def test_detected_transition_date_persisted_on_stage_change(tmp_path: Path) -> N
         patch("fieldkit.watch.pursuit_stalls.get_accounts_config", return_value=config),
         patch.object(stall_state, "state_file", return_value=state_file),
         patch.object(stall_render, "_alerts_file", return_value=alerts_file),
-        patch("fieldkit.watch.pursuit_stalls.was_run_today", return_value=False),
+        patch("fieldkit.watch.pursuit_stalls.get_daily_run_snapshot", return_value=WatcherDailySnapshot(False, None)),
         patch.object(stall_render, "append_stall_alert"),
     ):
         rc = wps._run_pursuit_stalls(threshold=30, account=None, dry_run=False)
 
-    assert rc == 0
+    assert isinstance(rc, WatcherRunResult)
+    assert rc.exit_code == 0
     saved = json.loads(state_file.read_text(encoding="utf-8"))
     entry = saved.get("acme/deal", {})
     # detected_transition_date must be set to today
@@ -2080,12 +2156,13 @@ def test_stall_timer_uses_detected_date_on_subsequent_run(tmp_path: Path) -> Non
         patch("fieldkit.watch.pursuit_stalls.get_accounts_config", return_value=config),
         patch.object(stall_state, "state_file", return_value=state_file),
         patch.object(stall_render, "_alerts_file", return_value=alerts_file),
-        patch("fieldkit.watch.pursuit_stalls.was_run_today", return_value=False),
+        patch("fieldkit.watch.pursuit_stalls.get_daily_run_snapshot", return_value=WatcherDailySnapshot(False, None)),
         patch.object(stall_render, "append_stall_alert") as mock_alert,
     ):
         rc = wps._run_pursuit_stalls(threshold=30, account=None, dry_run=False)
 
-    assert rc == 0
+    assert isinstance(rc, WatcherRunResult)
+    assert rc.exit_code == 0
     saved = json.loads(state_file.read_text(encoding="utf-8"))
     entry = saved.get("acme/deal", {})
     # days_since_transition must reflect detected_date (2 days), not stale frontmatter (40 days).

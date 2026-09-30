@@ -4,7 +4,7 @@ This file records changes in fieldkit's public release history. Development
 history from before the public 1.0 baseline remains in the original private
 repository and is intentionally not presented as a supported release history.
 
-The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
+The format is inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 fieldkit uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) for
 public releases.
 
@@ -15,7 +15,11 @@ No public changes yet.
 ## [1.0.0]
 
 Planned first public release. This entry remains a release candidate until the
-signed tag, GitHub release, and package publication are complete.
+signed tag, GitHub release, and package publication are complete. The contents
+below describe the proposed release; live repository controls, authenticated
+deployment, the synthetic Gmail rehearsal, final clean-history export and
+user/contributor journeys, exact-candidate gates, and final independent review
+remain pending.
 
 ### Added
 

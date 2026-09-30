@@ -1,13 +1,13 @@
 """fieldkit.sf.client — Thin synchronous httpx client for the Salesforce REST API.
 
 Provides SOSL-based opportunity search and UI-API record fetch without
-requiring browser automation.  Playwright-based listview scraping was retired
-in D009/D010; this module is the sole SF data access path.
+requiring browser automation. This module owns the synchronous Salesforce
+data-access client used by commands and domain helpers.
 
 Public API:
   SFDirectClient(session_id, base_url)          Stateful REST client.
-  SFAuthError                                   Raised on HTTP 401 (re-auth needed).
-  SFAPIError                                    Raised on all other HTTP / network errors.
+  sf_errors.SFAuthError                                   Raised on HTTP 401 (re-auth needed).
+  sf_errors.SFAPIError                                    Raised on all other HTTP / network errors.
 
 Higher-level helpers:
   client.search_opportunities(keywords, account_name)          SOSL opportunity search → listview dicts.
@@ -30,14 +30,12 @@ from typing import Any, cast
 
 import httpx
 
-from fieldkit.config import get_salesforce_org_url
 from fieldkit.config.retry import (
     RETRY_MAX_ATTEMPTS,
     RETRY_TRANSIENT_STATUSES,
-    connect_retry,
-    transient_retry,
 )
-from fieldkit.errors import AuthError, FieldkitError
+from fieldkit.sf import _responses, _transport
+from fieldkit.sf import errors as sf_errors
 from fieldkit.sf.types import (
     AccountResolution,
     DealSplitRecord,
@@ -52,33 +50,18 @@ from fieldkit.sf.types import (
 # Constants
 # ---------------------------------------------------------------------------
 
-_API_VERSION = "v59.0"
-_SOSL_URL_PATH = f"/services/data/{_API_VERSION}/search/"
-_SOBJECT_PATH = f"/services/data/{_API_VERSION}/sobjects/Opportunity/{{record_id}}"
+API_VERSION = "v59.0"
+_SOSL_URL_PATH = f"/services/data/{API_VERSION}/search/"
+_SOBJECT_PATH = f"/services/data/{API_VERSION}/sobjects/Opportunity/{{record_id}}"
 _UI_API_CHILD_RELATIONSHIP_PAGE_SIZE = "100"
-
-# Retry policy lives in fieldkit.config.retry. _RETRY_BACKOFF (a leftover manual
-# backoff table from before the implementation note tenacity migration) and its length assert
-# are deleted here: tenacity computes the backoff, so the table was dead.
-#
-# PATCH is idempotent *for this client*: both PATCH call sites
-# (update_sobject_fields, update_opportunity_fields) send an absolute field
-# assignment via json=fields, so applying one twice leaves exactly the state
-# applying it once does. historic regression routed them through retry deliberately and ships
-# a test for it. POST is excluded — a resource-creating POST is not safe to repeat.
-# There are no POST call sites today; this is a rail for the next one.
-_IDEMPOTENT_METHODS = frozenset({"GET", "HEAD", "PUT", "DELETE", "PATCH"})
 
 # SOSL field list for Opportunity searches.
 # OpportunityNumber__c: the custom field API name for the SF Opportunity Number
 # (the numeric join key for Varicent attainment reports, e.g. '71721820').
 #
-# VERIFIED (implementation change review HIGH-3, 2026-07-13): confirmed against the live org via
-# GET /services/data/v59.0/sobjects/Opportunity/describe (your configured Salesforce host).
-# The API name is "OpportunityNumber__c" (no underscores); "Opportunity_Number__c" does
-# NOT exist (203 fields) and an invalid field in a SOSL RETURNING clause is rejected with
-# HTTP 400 (INVALID_FIELD) — which breaks *every* Opportunity search (listview, pursuit
-# matching), it does NOT silently return null.
+# The supported field is "OpportunityNumber__c", not "Opportunity_Number__c".
+# An invalid field in a SOSL RETURNING clause rejects the whole search rather
+# than yielding a null value. See fieldkit.sf.types for supported record shapes.
 _OPPORTUNITY_FIELDS = (
     "Id, Name, StageName, CloseDate, Amount, Consulting_Total_USD__c, "
     "Training_Total_USD__c, Account.Id, OpportunityNumber__c"
@@ -90,63 +73,16 @@ _SERVICES_FILTER = "Consulting_Total_USD__c > 0 OR Training_Total_USD__c > 0"
 # Fields for Account sObject fetch via SOSL
 _ACCOUNT_SOSL_FIELDS = "Id, Name, Industry, Owner.Name, Owner.Email, BillingCity, BillingState, Account_Segment__c"
 
-# historic regression: the field names fetch_deal_splits() maps. Absence of BOTH is the signature
-# of UI API response drift; presence with null values is a legitimately empty split.
-_SPLIT_FIELD_NAMES = frozenset({"Offering_Group__c", "Services_Percentage__c"})
-
 
 def _http_date(value: str) -> str:
     """Convert a Salesforce UI API timestamp into an HTTP conditional-date value."""
     try:
         observed_at = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError as exc:
-        raise SFAPIError("Salesforce conditional-write timestamp is invalid") from exc
+    except ValueError:
+        raise sf_errors.SFAPIError("Salesforce conditional-write timestamp is invalid") from None
     if observed_at.tzinfo is None:
-        raise SFAPIError("Salesforce conditional-write timestamp lacks a timezone")
+        raise sf_errors.SFAPIError("Salesforce conditional-write timestamp lacks a timezone")
     return format_datetime(observed_at.astimezone(UTC), usegmt=True)
-
-
-def _is_value_object(entry: Any) -> bool:
-    """True if a UI API field entry still has the expected ``{"value": ...}`` shape.
-
-    Drift observed in historic regression replaces that object with one carrying only
-    ``displayValue``, or with a bare scalar. Either way the mapping silently yields
-    nothing, so shape — not nullity — is what distinguishes drift from empty data.
-    """
-    return isinstance(entry, dict) and "value" in entry
-
-
-# ---------------------------------------------------------------------------
-# Exceptions
-# ---------------------------------------------------------------------------
-
-
-class SFAuthError(AuthError):
-    """Raised when the SF session ID is expired or invalid (HTTP 401).
-
-    The caller should prompt the user to run ``fieldkit auth sf``
-    to inject a fresh sid cookie from browser DevTools at yourorg.my.salesforce.com.
-    """
-
-
-class SFNotFoundError(FieldkitError):
-    """Raised when the requested SF record does not exist (HTTP 404)."""
-
-
-class SFDataAccessError(FieldkitError):
-    """Raised when Salesforce denies access to a requested record (HTTP 403)."""
-
-
-class SFAPIError(FieldkitError):
-    """Raised on non-auth HTTP errors, connection failures, or unexpected responses."""
-
-
-class SFConditionalWriteConflict(FieldkitError):
-    """Raised when Salesforce rejects a guarded mutation as stale (HTTP 412)."""
-
-
-class SFConditionalWriteOutcomeUnknown(FieldkitError):
-    """Raised when a one-shot guarded mutation may have reached Salesforce."""
 
 
 # ---------------------------------------------------------------------------
@@ -154,96 +90,6 @@ class SFConditionalWriteOutcomeUnknown(FieldkitError):
 # ---------------------------------------------------------------------------
 
 logger = logging.getLogger(__name__)
-
-
-def _check_sobject_read_access(response: httpx.Response, sobject_type: str, record_id: str) -> None:
-    if response.status_code == 404:
-        raise SFNotFoundError(f"{sobject_type} {record_id} not found in Salesforce.")
-    if response.status_code == 403:
-        raise SFDataAccessError(f"{sobject_type} {record_id} is not readable in Salesforce.")
-
-
-def reauth_hint_message() -> str:
-    """Return a human-readable re-auth hint for Salesforce session errors.
-
-    Derives the hint from the configured Salesforce org URL so the message
-    names the actual org hostname rather than a generic placeholder.
-
-    Uses ``get_salesforce_org_url()`` (NOT ``get_sf_rest_base_url()``) because
-    the latter raises ``ConfigError`` on malformed URLs and must not be called
-    from a help-text path.  This function MUST NOT raise under any config state.
-
-    Returns:
-        A string instructing the user to run ``fieldkit auth sf``
-        with the org hostname if configured, or generic phrasing if not.
-    """
-    url = get_salesforce_org_url()
-    if url:
-        hostname = url.rstrip("/").removeprefix("https://").removeprefix("http://").split("/")[0]
-        return f"run 'fieldkit auth sf' — copy the 'sid' cookie from browser DevTools at {hostname}"
-    return "run 'fieldkit auth sf' — copy the 'sid' cookie from your Salesforce org's browser DevTools"
-
-
-# ---------------------------------------------------------------------------
-# Retry helpers (implementation note: migrated from manual loop to tenacity)
-# ---------------------------------------------------------------------------
-
-
-def _is_sf_transient(exc: BaseException) -> bool:
-    """True for retryable SF HTTP errors ({429, 500, 502, 503, 504})."""
-    return isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in RETRY_TRANSIENT_STATUSES
-
-
-def _raw_sf_request(client: httpx.Client, method: str, url: str, **kwargs: Any) -> httpx.Response:
-    """Make an HTTP request, raising httpx.HTTPStatusError on retryable status codes.
-
-    Module-level function so tenacity can decorate it without binding to self.
-    The caller (_request_with_retry) handles auth errors and non-retryable responses.
-
-    Args:
-        client: The httpx.Client to use.
-        method: HTTP method string.
-        url:    Fully-qualified URL.
-        **kwargs: Passed through to client.request.
-
-    Returns:
-        The httpx.Response.
-
-    Raises:
-        httpx.HTTPStatusError: for status codes in RETRY_TRANSIENT_STATUSES (triggers retry).
-        httpx.HTTPError:        for connection errors (propagates immediately, not retried).
-    """
-    resp = client.request(method, url, **kwargs)
-    # Raise httpx.HTTPStatusError for retryable codes (tenacity retries on these)
-    # and for 401 (not retryable — _is_sf_transient returns False, tenacity re-raises).
-    # We raise manually rather than calling resp.raise_for_status() so the exception
-    # is raised even when resp is a MagicMock in tests (MagicMock.raise_for_status()
-    # returns a MagicMock rather than raising).
-    if resp.status_code in RETRY_TRANSIENT_STATUSES or resp.status_code == 401:
-        raise httpx.HTTPStatusError(
-            f"HTTP {resp.status_code}",
-            request=httpx.Request(method, url),
-            response=resp,
-        )
-    return resp
-
-
-# One function serves reads and writes, so the policy cannot be chosen at
-# decoration time. Decorate twice; dispatch on the method.
-_sf_request_idempotent = transient_retry(_is_sf_transient, logger)(_raw_sf_request)
-_sf_request_unsafe = connect_retry(logger)(_raw_sf_request)
-
-
-def _sf_request(client: httpx.Client, method: str, url: str, **kwargs: Any) -> httpx.Response:
-    """Make an HTTP request under the retry policy appropriate to the method.
-
-    Idempotent methods get the full transient policy (connect failures, timeouts,
-    429/5xx). Anything else retries only connect-phase failures, where the request
-    provably never reached the server and replaying it cannot duplicate an effect.
-    """
-    if method.upper() in _IDEMPOTENT_METHODS:
-        return _sf_request_idempotent(client, method, url, **kwargs)
-    return _sf_request_unsafe(client, method, url, **kwargs)
 
 
 def _fmt_currency(value: Any) -> float | None:
@@ -256,7 +102,7 @@ def _fmt_currency(value: Any) -> float | None:
         return None
 
 
-# historic regression: SOSL metacharacters that can break out of a SOSL expression.
+# SOSL metacharacters that can break out of an expression.
 # & is intentionally excluded — it appears in legitimate company names (AT&T, etc.)
 # and is safe inside SOSL phrase quotes.
 _SOSL_METACHAR_RE = _re.compile(r'[?|!(){}^~*:\\"]')
@@ -265,7 +111,7 @@ _SOSL_METACHAR_RE = _re.compile(r'[?|!(){}^~*:\\"]')
 def _quote_keyword(keyword: str) -> str:
     """Sanitize and phrase-quote a keyword for safe SOSL expression embedding.
 
-    historic regression: Strips SOSL injection metacharacters before building the query.
+    Strips SOSL injection metacharacters before building the query.
     Preserves & (common in company names like AT&T, Procter & Gamble).
     Always phrase-quotes keywords that contain & or spaces.
     Raises ValueError if the keyword is empty or becomes empty after stripping.
@@ -274,97 +120,13 @@ def _quote_keyword(keyword: str) -> str:
     if sanitized != keyword:
         import click as _click
 
-        _click.echo(
-            f"Warning: SOSL keyword sanitized: {keyword!r} → {sanitized!r}",
-            err=True,
-        )
+        _click.echo("Warning: SOSL keyword contained unsupported characters and was sanitized.", err=True)
     if not sanitized:
-        raise ValueError(f"SOSL keyword is empty after sanitization: {keyword!r}. Remove or replace this keyword.")
+        raise ValueError("SOSL keyword is empty after sanitization. Remove or replace this keyword.")
     # Always phrase-quote if multi-word OR contains & (safe inside SOSL phrases)
     if " " in sanitized or "&" in sanitized:
         return f'"{sanitized}"'
     return sanitized
-
-
-# ---------------------------------------------------------------------------
-# Safe error detail helper (historic regression)
-# ---------------------------------------------------------------------------
-
-
-def _parse_json_response(resp: httpx.Response, context: str) -> dict[str, Any]:
-    """Parse a JSON response, raising SFAuthError when SF returns HTML (expired session).
-
-    historic regression: SF returns `200 text/html` (login redirect) when the session expires.
-    Calling resp.json() unconditionally crashes with JSONDecodeError — this function
-    catches it and raises a clear SFAuthError with the auth sf hint.
-
-    Callers must check `resp.status_code == 200` before calling this — SF error bodies
-    are JSON arrays, not dicts, and are rejected below rather than silently miscast.
-    """
-    ct = resp.headers.get("content-type", "")
-    if "text/html" in ct:
-        raise SFAuthError("Salesforce session expired — received HTML login page. Run 'fieldkit auth sf' to refresh.")
-    try:
-        data = resp.json()
-    except Exception as exc:
-        raise SFAPIError(f"SF {context}: failed to parse JSON response (content-type {ct!r})") from exc
-    if not isinstance(data, dict):
-        raise SFAPIError(f"SF {context}: expected a JSON object response, got {type(data).__name__}")
-    return cast(dict[str, Any], data)
-
-
-def _ui_api_record_collection(data: dict[str, Any], *, context: str, subject: str) -> UIAPIRecordCollection:
-    """Validate UI API collection shape and retain explicit completeness evidence."""
-    if "records" not in data:
-        logger.debug("%s: response has no records collection for %s", context, subject)
-        return UIAPIRecordCollection(
-            records=[], reported_count=None, complete=False, issues=["records collection is missing"]
-        )
-    raw = data.get("records")
-    if not isinstance(raw, list):
-        logger.debug("%s: unexpected response shape for %s", context, subject)
-        return UIAPIRecordCollection(
-            records=[], reported_count=None, complete=False, issues=["records collection has an invalid shape"]
-        )
-    records = [record for record in raw if isinstance(record, dict)]
-    issues: list[str] = []
-    malformed_count = len(raw) - len(records)
-    if malformed_count:
-        issues.append(f"records collection contains {malformed_count} non-object member(s)")
-    reported_count = data.get("count")
-    if isinstance(reported_count, bool) or not isinstance(reported_count, int) or reported_count < 0:
-        issues.append("reported count is missing or invalid")
-        return UIAPIRecordCollection(records=records, reported_count=None, complete=False, issues=issues)
-    if reported_count != len(raw):
-        issues.append(f"reported count {reported_count} does not match {len(raw)} returned record(s)")
-    return UIAPIRecordCollection(
-        records=records,
-        reported_count=reported_count,
-        complete=not issues,
-        issues=issues,
-    )
-
-
-def _safe_error_detail(resp: httpx.Response) -> str:
-    """Return a sanitized error summary from an SF API response.
-
-    historic regression: SF error bodies can contain session tokens or PII. This function
-    extracts only the top-level 'message' field from JSON errors, or returns
-    a generic content-type descriptor for non-JSON responses (e.g. HTML login
-    pages returned when the session expires).
-
-    Never includes raw response body text in its output.
-    """
-    try:
-        data = resp.json()
-        if isinstance(data, list) and data:
-            return str(data[0].get("message", "(no message)"))
-        if isinstance(data, dict):
-            return str(data.get("message", "(no message)"))
-    except Exception:  # noqa: BLE001
-        pass
-    ct = resp.headers.get("content-type", "unknown")
-    return f"(non-JSON response, content-type={ct})"
 
 
 # ---------------------------------------------------------------------------
@@ -376,8 +138,8 @@ class SFDirectClient:
     """Synchronous httpx client for the Salesforce REST API.
 
     Authenticates via the ``sid`` session cookie obtained from the browser.
-    Use :func:`lib.config.get_sf_session_id` to retrieve the sid and
-    :func:`lib.config.get_sf_rest_base_url` to derive the base_url from the
+    Use :func:`fieldkit.config.get_sf_session_id` to retrieve the sid and
+    :func:`fieldkit.config.get_sf_rest_base_url` to derive the base_url from the
     org's Lightning URL.
 
     Args:
@@ -455,8 +217,8 @@ class SFDirectClient:
     def _request_with_retry(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
         """Wrap ``self._client.request`` with retry logic for transient SF errors.
 
-        implementation note: Delegates to module-level ``_sf_request``, which selects the retry
-        policy by HTTP method (see ``_IDEMPOTENT_METHODS``).
+        Delegates to ``_transport._sf_request``, which selects the retry
+        policy by HTTP method (see ``_transport._IDEMPOTENT_METHODS``).
         Raises immediately on 401 (auth failure, not retried).
 
         Args:
@@ -468,18 +230,25 @@ class SFDirectClient:
             The ``httpx.Response`` (any non-retryable status code).
 
         Raises:
-            SFAuthError: immediately on HTTP 401.
-            SFAPIError:  after retries exhausted on transient codes.
+            sf_errors.SFAuthError: immediately on HTTP 401.
+            sf_errors.SFAPIError: after the selected retry policy stops on HTTP or transport errors.
         """
         try:
-            resp = _sf_request(self._require_open(), method, url, **kwargs)
+            resp = _transport._sf_request(self._require_open(), method, url, **kwargs)
         except httpx.HTTPStatusError as exc:
             status = exc.response.status_code
             if status == 401:
-                raise SFAuthError(f"Salesforce authentication failed (HTTP 401). {reauth_hint_message()}") from exc
-            raise SFAPIError(f"SF request failed after {RETRY_MAX_ATTEMPTS} attempts (last HTTP {status})") from exc
+                raise sf_errors.SFAuthError(
+                    f"Salesforce authentication failed (HTTP 401). {sf_errors.reauth_hint_message()}"
+                ) from None
+            attempts = RETRY_MAX_ATTEMPTS if method.upper() in _transport._IDEMPOTENT_METHODS else 1
+            raise sf_errors.SFAPIError(f"SF request failed after {attempts} attempts (last HTTP {status})") from None
+        except httpx.RequestError:
+            raise sf_errors.SFAPIError("SF request failed; check Salesforce availability and configuration.") from None
         if resp.status_code == 401:
-            raise SFAuthError(f"Salesforce authentication failed (HTTP 401). {reauth_hint_message()}")
+            raise sf_errors.SFAuthError(
+                f"Salesforce authentication failed (HTTP 401). {sf_errors.reauth_hint_message()}"
+            )
         return resp
 
     # ------------------------------------------------------------------
@@ -499,24 +268,24 @@ class SFDirectClient:
             in the RETURNING clause of *sosl_query* will be populated.
 
         Raises:
-            SFAuthError: on HTTP 401.
-            SFAPIError: on other HTTP errors or connection failures.
+            sf_errors.SFAuthError: on HTTP 401.
+            sf_errors.SFAPIError: on other HTTP errors or connection failures.
         """
         url = self._base_url + _SOSL_URL_PATH
-        logger.debug("SOSL query: %r", sosl_query)
-        try:
-            resp = self._request_with_retry("GET", url, headers=self._auth_headers(), params={"q": sosl_query})
-        except httpx.ConnectError as exc:
-            raise SFAPIError(f"SF connection failed: {exc}") from exc
-        except httpx.RequestError as exc:
-            raise SFAPIError(f"SF request error: {exc}") from exc
+        logger.debug("SOSL search started")
+        resp = self._request_with_retry("GET", url, headers=self._auth_headers(), params={"q": sosl_query})
 
         if resp.status_code != 200:
-            logger.warning("SOSL error HTTP %s: %s", resp.status_code, _safe_error_detail(resp))
-            raise SFAPIError(f"SF SOSL search failed with HTTP {resp.status_code}: {_safe_error_detail(resp)}")
+            logger.warning("SOSL error HTTP %s", resp.status_code)
+            raise sf_errors.SFAPIError(
+                f"SF SOSL search failed with HTTP {resp.status_code}: {_responses._safe_error_detail(resp)}"
+            )
 
-        data = _parse_json_response(resp, "SOSL search")
-        records: list[SoslRecord] = cast(list[SoslRecord], data.get("searchRecords", []))
+        data = _responses._parse_json_response(resp, "SOSL search")
+        raw_records = data.get("searchRecords")
+        if not isinstance(raw_records, list) or any(not isinstance(record, dict) for record in raw_records):
+            raise sf_errors.SFAPIError("SF SOSL search returned an invalid response shape")
+        records = cast(list[SoslRecord], raw_records)
         logger.debug("SOSL returned %d record(s)", len(records))
         return records
 
@@ -538,27 +307,24 @@ class SFDirectClient:
             (``total=False`` on the TypedDict keeps that legal).
 
         Raises:
-            SFAuthError: on HTTP 401.
-            SFAPIError: on other HTTP errors or connection failures.
+            sf_errors.SFAuthError: on HTTP 401.
+            sf_errors.SFAPIError: on other HTTP errors or connection failures.
         """
         # Fetch specific fields to avoid hitting field-level security limits
         fields = (fields or _OPPORTUNITY_FIELDS).replace(" ", "")
         path = _SOBJECT_PATH.format(record_id=record_id)
         url = self._base_url + path
-        try:
-            resp = self._request_with_retry("GET", url, headers=self._auth_headers(), params={"fields": fields})
-        except httpx.ConnectError as exc:
-            raise SFAPIError(f"SF connection failed: {exc}") from exc
-        except httpx.RequestError as exc:
-            raise SFAPIError(f"SF request error: {exc}") from exc
+        resp = self._request_with_retry("GET", url, headers=self._auth_headers(), params={"fields": fields})
 
         if resp.status_code == 404:
-            raise SFNotFoundError(f"Opportunity {record_id} not found in Salesforce.")
+            raise sf_errors.SFNotFoundError("Salesforce record not found.")
         if resp.status_code != 200:
-            logger.warning("fetch_record error HTTP %s: %s", resp.status_code, _safe_error_detail(resp))
-            raise SFAPIError(f"SF record fetch failed with HTTP {resp.status_code}: {_safe_error_detail(resp)}")
+            logger.warning("fetch_record error HTTP %s", resp.status_code)
+            raise sf_errors.SFAPIError(
+                f"SF record fetch failed with HTTP {resp.status_code}: {_responses._safe_error_detail(resp)}"
+            )
 
-        return cast(OpportunitySObject, _parse_json_response(resp, "fetch_record"))
+        return cast(OpportunitySObject, _responses._parse_json_response(resp, "fetch_record"))
 
     def fetch_sobject(
         self,
@@ -577,50 +343,42 @@ class SFDirectClient:
             The parsed JSON response dict.
 
         Raises:
-            SFAuthError:    on HTTP 401.
-            SFNotFoundError: on HTTP 404.
-            SFAPIError:     on other HTTP errors or connection failures.
+            sf_errors.SFAuthError:    on HTTP 401.
+            sf_errors.SFNotFoundError: on HTTP 404.
+            sf_errors.SFAPIError:     on other HTTP errors or connection failures.
         """
-        url = f"{self._base_url}/services/data/{_API_VERSION}/sobjects/{sobject_type}/{record_id}"
-        try:
-            resp = self._request_with_retry("GET", url, headers=self._auth_headers(), params={"fields": fields})
-        except httpx.ConnectError as exc:
-            raise SFAPIError(f"SF connection failed: {exc}") from exc
-        except httpx.RequestError as exc:
-            raise SFAPIError(f"SF request error: {exc}") from exc
+        url = f"{self._base_url}/services/data/{API_VERSION}/sobjects/{sobject_type}/{record_id}"
+        resp = self._request_with_retry("GET", url, headers=self._auth_headers(), params={"fields": fields})
 
-        _check_sobject_read_access(resp, sobject_type, record_id)
+        _responses._check_sobject_read_access(resp, sobject_type, record_id)
         if resp.status_code != 200:
-            logger.warning("fetch_sobject error HTTP %s: %s", resp.status_code, _safe_error_detail(resp))
-            raise SFAPIError(f"SF {sobject_type} fetch failed with HTTP {resp.status_code}: {_safe_error_detail(resp)}")
-        return _parse_json_response(resp, "fetch_sobject")
+            logger.warning("fetch_sobject error HTTP %s", resp.status_code)
+            raise sf_errors.SFAPIError(
+                f"SF record fetch failed with HTTP {resp.status_code}: {_responses._safe_error_detail(resp)}"
+            )
+        return _responses._parse_json_response(resp, "fetch_sobject")
 
     def describe_sobject(self, sobject_type: str) -> dict[str, Any]:
         """Return describe metadata for a Salesforce sObject.
 
         Raises:
-            SFAuthError: on HTTP 401 or an expired-session HTML login response.
-            SFNotFoundError: on HTTP 404.
-            SFAPIError: on other HTTP errors or connection failures.
+            sf_errors.SFAuthError: on HTTP 401 or an expired-session HTML login response.
+            sf_errors.SFNotFoundError: on HTTP 404.
+            sf_errors.SFAPIError: on other HTTP errors or connection failures.
         """
-        url = f"{self._base_url}/services/data/{_API_VERSION}/sobjects/{sobject_type}/describe"
-        try:
-            resp = self._request_with_retry("GET", url, headers=self._auth_headers())
-        except httpx.ConnectError as exc:
-            raise SFAPIError(f"SF connection failed: {exc}") from exc
-        except httpx.RequestError as exc:
-            raise SFAPIError(f"SF request error: {exc}") from exc
+        url = f"{self._base_url}/services/data/{API_VERSION}/sobjects/{sobject_type}/describe"
+        resp = self._request_with_retry("GET", url, headers=self._auth_headers())
 
         if resp.status_code == 404:
-            raise SFNotFoundError(f"Salesforce object {sobject_type} not found.")
+            raise sf_errors.SFNotFoundError("Salesforce object not found.")
         if resp.status_code == 403:
-            raise SFDataAccessError(f"Salesforce object {sobject_type} is not readable.")
+            raise sf_errors.SFDataAccessError("Salesforce object is not readable; check permissions.")
         if resp.status_code != 200:
-            logger.warning("describe_sobject error HTTP %s: %s", resp.status_code, _safe_error_detail(resp))
-            raise SFAPIError(
-                f"SF {sobject_type} describe failed with HTTP {resp.status_code}: {_safe_error_detail(resp)}"
+            logger.warning("describe_sobject error HTTP %s", resp.status_code)
+            raise sf_errors.SFAPIError(
+                f"SF object describe failed with HTTP {resp.status_code}: {_responses._safe_error_detail(resp)}"
             )
-        return _parse_json_response(resp, "describe_sobject")
+        return _responses._parse_json_response(resp, "describe_sobject")
 
     def update_sobject_fields(
         self,
@@ -636,21 +394,23 @@ class SFDirectClient:
             fields:       Dict of API field names to new values.
 
         Raises:
-            SFAuthError: on HTTP 401.
-            SFAPIError:  on HTTP 400/403/4xx or connection errors.
+            sf_errors.SFAuthError: on HTTP 401.
+            sf_errors.SFAPIError:  on HTTP 400/403/4xx or connection errors.
         """
-        url = f"{self._base_url}/services/data/{_API_VERSION}/sobjects/{sobject_type}/{record_id}"
-        # historic regression: route through _request_with_retry so transient 5xx errors are retried
+        url = f"{self._base_url}/services/data/{API_VERSION}/sobjects/{sobject_type}/{record_id}"
+        # Absolute field assignments permit retrying transient responses.
         resp = self._request_with_retry(
             "PATCH",
             url,
             headers={**self._auth_headers(), "Content-Type": "application/json"},
             json=fields,
         )
-        # Note: 401 is already raised as SFAuthError by _request_with_retry — no re-check needed.
+        # Note: 401 is already raised as sf_errors.SFAuthError by _request_with_retry — no re-check needed.
         if resp.status_code not in (200, 204):
-            raise SFAPIError(f"SF {sobject_type} update failed HTTP {resp.status_code}: {_safe_error_detail(resp)}")
-        logger.debug("update_sobject_fields: %s %s updated OK (HTTP %s)", sobject_type, record_id, resp.status_code)
+            raise sf_errors.SFAPIError(
+                f"SF object update failed HTTP {resp.status_code}: {_responses._safe_error_detail(resp)}"
+            )
+        logger.debug("Salesforce object update succeeded (HTTP %s)", resp.status_code)
 
     def conditional_update_sobject_fields(
         self,
@@ -669,14 +429,14 @@ class SFDirectClient:
         what happened.
 
         Raises:
-            SFAuthError: if Salesforce rejects the session (HTTP 401).
-            SFConditionalWriteConflict: if Salesforce rejects the precondition
+            sf_errors.SFAuthError: if Salesforce rejects the session (HTTP 401).
+            sf_errors.SFConditionalWriteConflict: if Salesforce rejects the precondition
                 as stale (HTTP 412).
-            SFConditionalWriteOutcomeUnknown: if the request's effect cannot be
+            sf_errors.SFConditionalWriteOutcomeUnknown: if the request's effect cannot be
                 established from its one response.
-            SFAPIError: for a definite non-successful API response.
+            sf_errors.SFAPIError: for a definite non-successful API response.
         """
-        url = f"{self._base_url}/services/data/{_API_VERSION}/sobjects/{sobject_type}/{record_id}"
+        url = f"{self._base_url}/services/data/{API_VERSION}/sobjects/{sobject_type}/{record_id}"
         headers = {
             **self._auth_headers(),
             "Content-Type": "application/json",
@@ -684,23 +444,27 @@ class SFDirectClient:
         }
         try:
             response = self._require_open().request("PATCH", url, headers=headers, json=fields)
-        except httpx.RequestError as exc:
-            raise SFConditionalWriteOutcomeUnknown(
+        except httpx.RequestError:
+            raise sf_errors.SFConditionalWriteOutcomeUnknown(
                 "Salesforce guarded write outcome is unknown; reread the exact record before another write."
-            ) from exc
+            ) from None
 
         if response.status_code in (200, 204):
             return
         if response.status_code == 401:
-            raise SFAuthError(f"Salesforce authentication failed (HTTP 401). {reauth_hint_message()}")
+            raise sf_errors.SFAuthError(
+                f"Salesforce authentication failed (HTTP 401). {sf_errors.reauth_hint_message()}"
+            )
         if response.status_code == 412:
-            raise SFConditionalWriteConflict("Salesforce rejected the guarded write because its precondition is stale.")
+            raise sf_errors.SFConditionalWriteConflict(
+                "Salesforce rejected the guarded write because its precondition is stale."
+            )
         if response.status_code in RETRY_TRANSIENT_STATUSES:
-            raise SFConditionalWriteOutcomeUnknown(
+            raise sf_errors.SFConditionalWriteOutcomeUnknown(
                 "Salesforce guarded write outcome is unknown; reread the exact record before another write."
             )
-        raise SFAPIError(
-            f"SF guarded {sobject_type} update failed HTTP {response.status_code}: {_safe_error_detail(response)}"
+        raise sf_errors.SFAPIError(
+            f"SF guarded object update failed HTTP {response.status_code}: {_responses._safe_error_detail(response)}"
         )
 
     def update_opportunity_fields(
@@ -716,22 +480,24 @@ class SFDirectClient:
                        Example: ``{"Next_Steps__c": "Schedule POC kickoff"}``
 
         Raises:
-            SFAuthError: on HTTP 401 (session expired).
-            SFAPIError:  on HTTP 400/403/4xx or connection errors.
+            sf_errors.SFAuthError: on HTTP 401 (session expired).
+            sf_errors.SFAPIError:  on HTTP 400/403/4xx or connection errors.
         """
         path = _SOBJECT_PATH.format(record_id=record_id)
         url = self._base_url + path
-        # historic regression: route through _request_with_retry so transient 5xx errors are retried
+        # Absolute field assignments permit retrying transient responses.
         resp = self._request_with_retry(
             "PATCH",
             url,
             headers={**self._auth_headers(), "Content-Type": "application/json"},
             json=fields,
         )
-        # Note: 401 is already raised as SFAuthError by _request_with_retry — no re-check needed.
+        # Note: 401 is already raised as sf_errors.SFAuthError by _request_with_retry — no re-check needed.
         if resp.status_code not in (200, 204):
-            raise SFAPIError(f"SF field update failed HTTP {resp.status_code}: {_safe_error_detail(resp)}")
-        logger.debug("update_opportunity_fields: record %s updated OK (HTTP %s)", record_id, resp.status_code)
+            raise sf_errors.SFAPIError(
+                f"SF field update failed HTTP {resp.status_code}: {_responses._safe_error_detail(resp)}"
+            )
+        logger.debug("Salesforce opportunity update succeeded (HTTP %s)", resp.status_code)
 
     # ------------------------------------------------------------------
     # Public API — higher-level
@@ -749,31 +515,25 @@ class SFDirectClient:
     ) -> UIAPIRecordCollection:
         """GET UI API records with explicit collection-completeness evidence.
 
-        The connect-error / request-error / 404 / non-200 / non-list-shape
-        preamble, once, for the UI API call sites that shared it. A 404 is a
+        Shared transport policy and collection validation serve the UI API
+        call sites. A 404 is a
         complete empty relationship unless the caller requires count-bearing
         evidence. Missing or malformed records/count data returns an explicitly
         incomplete collection.
 
         ``context`` is the calling method name (log prefix + JSON-parse
         context), ``subject`` the record id for log messages, and
-        ``error_label`` the phrase opening the SFAPIError raised on a non-200
-        (e.g. ``"SF deal splits fetch"``), which keeps each caller's message
-        byte-identical.
+        ``error_label`` the phrase opening the sf_errors.SFAPIError raised on a non-200
+        (e.g. ``"SF deal splits fetch"``), supplied as a fixed caller label.
 
         Raises:
-            SFAuthError: on HTTP 401 (from ``_request_with_retry``).
-            SFAPIError:  on connection failure or any non-200 other than 404.
+            sf_errors.SFAuthError: on HTTP 401 (from ``_request_with_retry``).
+            sf_errors.SFAPIError:  on connection failure or any non-200 other than 404.
         """
-        try:
-            resp = self._request_with_retry("GET", url, headers=self._auth_headers(), params=params)
-        except httpx.ConnectError as exc:
-            raise SFAPIError(f"SF connection failed: {exc}") from exc
-        except httpx.RequestError as exc:
-            raise SFAPIError(f"SF request error: {exc}") from exc
+        resp = self._request_with_retry("GET", url, headers=self._auth_headers(), params=params)
 
         if resp.status_code == 404:
-            logger.debug("%s: not found for %s (404)", context, subject)
+            logger.debug("%s: record collection not found (HTTP 404)", context)
             if not_found_issue is not None:
                 return UIAPIRecordCollection(
                     records=[],
@@ -783,10 +543,14 @@ class SFDirectClient:
                 )
             return UIAPIRecordCollection(records=[], reported_count=0, complete=True, issues=[])
         if resp.status_code != 200:
-            logger.warning("%s error HTTP %s: %s", context, resp.status_code, _safe_error_detail(resp))
-            raise SFAPIError(f"{error_label} failed with HTTP {resp.status_code}: {_safe_error_detail(resp)}")
+            logger.warning("%s error HTTP %s", context, resp.status_code)
+            raise sf_errors.SFAPIError(
+                f"{error_label} failed with HTTP {resp.status_code}: {_responses._safe_error_detail(resp)}"
+            )
 
-        return _ui_api_record_collection(_parse_json_response(resp, context), context=context, subject=subject)
+        return _responses._ui_api_record_collection(
+            _responses._parse_json_response(resp, context), context=context, subject=subject
+        )
 
     def fetch_deal_splits(self, opp_id: str) -> list[DealSplitRecord]:
         """Fetch deal split records for a Salesforce Opportunity via the UI API.
@@ -803,11 +567,11 @@ class SFDirectClient:
             the relationship is absent.
 
         Raises:
-            SFAuthError: on HTTP 401.
-            SFAPIError:  on other HTTP errors or connection failures.
+            sf_errors.SFAuthError: on HTTP 401.
+            sf_errors.SFAPIError:  on other HTTP errors or connection failures.
         """
         url = (
-            f"{self._base_url}/services/data/{_API_VERSION}/ui-api/records/{opp_id}/child-relationships/Deal_Splits1__r"
+            f"{self._base_url}/services/data/{API_VERSION}/ui-api/records/{opp_id}/child-relationships/Deal_Splits1__r"
         )
         params = {"fields": "Deal_Splits__c.Offering_Group__c,Deal_Splits__c.Services_Percentage__c"}
         collection = self._get_ui_api_records(
@@ -817,48 +581,7 @@ class SFDirectClient:
             subject=opp_id,
             error_label="SF deal splits fetch",
         )
-        raw_records = collection.records
-
-        # historic regression: a reshaped UI API response (e.g. fields.X.displayValue replacing
-        # fields.X.value) makes every record fail the "both values None" check, so the
-        # method returns [] with no signal. The discriminator for drift is whether the
-        # expected KEYS are present — not whether their values are null. A split row
-        # that legitimately has no values yet is normal, and warning about it would
-        # train operators to ignore the warning before it ever fires for real drift.
-        results: list[DealSplitRecord] = []
-        drifted = 0
-        for rec in raw_records:
-            fields = rec.get("fields", {})
-            if not isinstance(fields, dict) or _SPLIT_FIELD_NAMES.isdisjoint(fields):
-                drifted += 1
-                continue
-            if any(not _is_value_object(fields[n]) for n in _SPLIT_FIELD_NAMES if n in fields):
-                drifted += 1
-                continue
-            offering_group_raw = fields.get("Offering_Group__c", {}).get("value")
-            services_pct_raw = fields.get("Services_Percentage__c", {}).get("value")
-            if offering_group_raw is None and services_pct_raw is None:
-                # Present, well-formed, and unvalued — a legitimately empty split row.
-                continue
-            results.append(
-                {
-                    "offering_group": str(offering_group_raw) if offering_group_raw is not None else "",
-                    "services_pct": float(services_pct_raw) if services_pct_raw is not None else 0.0,
-                }
-            )
-
-        if drifted:
-            logger.warning(
-                "fetch_deal_splits: %d of %d record(s) for %s have no well-formed %r field "
-                "— possible UI API response shape drift",
-                drifted,
-                len(raw_records),
-                opp_id,
-                sorted(_SPLIT_FIELD_NAMES),
-            )
-        else:
-            logger.debug("fetch_deal_splits: %d split(s) found for %s", len(results), opp_id)
-        return results
+        return _responses._project_deal_splits(collection.records)
 
     def fetch_related_list_records(
         self,
@@ -891,10 +614,10 @@ class SFDirectClient:
             Returns ``[]`` when the related list is empty or absent (HTTP 404).
 
         Raises:
-            SFAuthError: on HTTP 401 (or an HTML login page).
-            SFAPIError:  on other HTTP errors or connection failures.
+            sf_errors.SFAuthError: on HTTP 401 (or an HTML login page).
+            sf_errors.SFAPIError:  on other HTTP errors or connection failures.
         """
-        url = f"{self._base_url}/services/data/{_API_VERSION}/ui-api/related-list-records/{parent_id}/{related_list_id}"
+        url = f"{self._base_url}/services/data/{API_VERSION}/ui-api/related-list-records/{parent_id}/{related_list_id}"
         params = {"fields": fields} if fields else {}
         collection = self._get_ui_api_records(
             url,
@@ -904,10 +627,8 @@ class SFDirectClient:
             error_label="SF related-list fetch",
         )
         logger.debug(
-            "fetch_related_list_records: %d record(s) for %s/%s",
+            "fetch_related_list_records: %d record(s)",
             len(collection.records),
-            parent_id,
-            related_list_id,
         )
         return collection.records
 
@@ -935,8 +656,8 @@ class SFDirectClient:
             ``training_acv``.  Returns ``[]`` when no opportunities match.
 
         Raises:
-            SFAuthError: on HTTP 401.
-            SFAPIError: on other HTTP errors or connection failures.
+            sf_errors.SFAuthError: on HTTP 401.
+            sf_errors.SFAPIError: on other HTTP errors or connection failures.
         """
         return self._search_opportunities(keywords=keywords, account_name=account_name, services_only=True).records
 
@@ -957,24 +678,23 @@ class SFDirectClient:
         services_only: bool,
     ) -> OpportunitySearchResult:
         if not keywords:
-            logger.debug("search_opportunities: no keywords for %r, returning empty", account_name)
+            logger.debug("search_opportunities: no keywords; returning empty")
             return OpportunitySearchResult(records=[], capped=False)
 
         quoted = " OR ".join(_quote_keyword(k) for k in keywords)
         # Use IN NAME FIELDS (not IN ALL FIELDS) to restrict matching to the
         # Opportunity Name field only.  IN ALL FIELDS also searches free-text
         # fields like Next_Steps__c, causing false-positive account matches when
-        # next-steps text mentions another account's name.  (implementation change)
-        # historic regression: add LIMIT 2000 (SF max) to SOSL RETURNING clause; warn if at cap
+        # next-steps text mentions another account's name.
+        # Reaching the SOSL limit leaves result completeness unproven.
         where = f" WHERE {_SERVICES_FILTER}" if services_only else ""
         sosl = f"FIND {{{quoted}}} IN NAME FIELDS RETURNING Opportunity({_OPPORTUNITY_FIELDS}{where} LIMIT 2000)"
 
-        logger.debug("searching opportunities for account %r with %d keyword(s)", account_name, len(keywords))
+        logger.debug("searching opportunities with %d keyword(s)", len(keywords))
         records = self.sosl_search(sosl)
         if len(records) == 2000:
             logger.warning(
-                "SOSL returned 2000 records (maximum) for account %r — results may be truncated.",
-                account_name,
+                "SOSL returned 2000 records (maximum); results may be truncated.",
             )
 
         results: list[OpportunityRecord] = []
@@ -998,7 +718,7 @@ class SFDirectClient:
                 }
             )
 
-        logger.debug("search_opportunities: %d opportunity/ies mapped for %r", len(results), account_name)
+        logger.debug("search_opportunities: %d opportunity/ies mapped", len(results))
         return OpportunitySearchResult(records=results, capped=len(records) == 2000)
 
     def resolve_account_id_by_keywords(
@@ -1016,17 +736,17 @@ class SFDirectClient:
 
         Args:
             keywords:     Account keywords used for SOSL discovery.
-            account_name: Used for logging context only.
+            account_name: Account configuration key retained for API compatibility.
 
         Returns:
             The 18-char Salesforce Account ID, or ``None`` if no match is found.
 
         Raises:
-            SFAuthError: on HTTP 401.
-            SFAPIError: on other HTTP errors or connection failures.
+            sf_errors.SFAuthError: on HTTP 401.
+            sf_errors.SFAPIError: on other HTTP errors or connection failures.
         """
         if not keywords:
-            logger.debug("resolve_account_id_by_keywords: no keywords for %r", account_name)
+            logger.debug("resolve_account_id_by_keywords: no keywords")
             return None
 
         # Search with Account.Id included in RETURNING clause.
@@ -1035,28 +755,23 @@ class SFDirectClient:
         quoted = " OR ".join(_quote_keyword(k) for k in keywords)
         sosl = f"FIND {{{quoted}}} IN NAME FIELDS RETURNING Opportunity(Id, Account.Id WHERE {_SERVICES_FILTER} LIMIT 2000)"
 
-        logger.debug("resolve_account_id_by_keywords: SOSL for account %r", account_name)
-        try:
-            records = self.sosl_search(sosl)
-        except SFAPIError:
-            logger.debug("resolve_account_id_by_keywords: SOSL failed for %r", account_name)
-            return None
+        logger.debug("resolve_account_id_by_keywords: search started")
+        records = self.sosl_search(sosl)
 
         if len(records) > 1:
             logger.debug(
-                "SOSL multi-candidate accounts for %r: %s",
-                account_name,
-                [(r.get("Account") or {}).get("Id") for r in records],
+                "resolve_account_id_by_keywords: %d candidate records",
+                len(records),
             )
 
         for rec in records:
             account = rec.get("Account") or {}
             acct_id = account.get("Id")
             if acct_id:
-                logger.debug("resolve_account_id_by_keywords: resolved %r → Account %s", account_name, acct_id)
+                logger.debug("resolve_account_id_by_keywords: account resolved")
                 return str(acct_id)
 
-        logger.debug("resolve_account_id_by_keywords: no Account.Id found for %r", account_name)
+        logger.debug("resolve_account_id_by_keywords: no account found")
         return None
 
     def fetch_account_by_id(
@@ -1079,13 +794,13 @@ class SFDirectClient:
             record is not found.
 
         Raises:
-            SFAuthError: on HTTP 401.
-            SFAPIError: on other HTTP errors or connection failures.
+            sf_errors.SFAuthError: on HTTP 401.
+            sf_errors.SFAPIError: on other HTTP errors or connection failures.
         """
         try:
             return cast(AccountResolution, self.fetch_sobject("Account", account_id, fields or _ACCOUNT_SOSL_FIELDS))
-        except SFNotFoundError:
-            logger.debug("fetch_account_by_id: Account %s not found", account_id)
+        except sf_errors.SFNotFoundError:
+            logger.debug("fetch_account_by_id: account not found")
             return None
 
     def fetch_closeplan_deals(self, opp_id: str) -> UIAPIRecordCollection:
@@ -1104,12 +819,10 @@ class SFDirectClient:
         reported ``count`` equals the number of returned records.
 
         Raises:
-            SFAuthError: on HTTP 401.
-            SFAPIError:  on other HTTP errors or connection failures.
+            sf_errors.SFAuthError: on HTTP 401.
+            sf_errors.SFAPIError:  on other HTTP errors or connection failures.
         """
-        url = (
-            f"{self._base_url}/services/data/{_API_VERSION}/ui-api/records/{opp_id}/child-relationships/TSPC__Deals__r"
-        )
+        url = f"{self._base_url}/services/data/{API_VERSION}/ui-api/records/{opp_id}/child-relationships/TSPC__Deals__r"
         params = {
             "fields": (
                 "TSPC__Deal__c.Id,"
@@ -1136,16 +849,12 @@ class SFDirectClient:
         Retrieves per-element (MEDDPICC dimension) questions, scores, and
         answers linked to the given ``TSPC__Deal__c`` record.
 
-        historic regression: this previously queried ``TSPC__DealQuestionAnswers__r`` over
-        a ``TSPC__DealQuestionAnswer__c`` object with a ``TSPC__CategoryName__c``
-        field -- these fields are not part of the supported schema observed via
-        ``GET /ui-api/object-info/TSPC__Deal__c``, which previously crashed
-        this method on every call. The real relationship is
-        ``TSPC__DealQuestions__r`` over ``TSPC__DealQuestion__c``. There is no
-        separate category field: the MEDDPICC element name is embedded as a
-        prefix in the question's own ``Name`` (e.g. "ECONOMIC BUYER -
-        Individual within..."), and the answer lives in ``TSPC__TextAnswer__c``
-        or ``TSPC__RichTextAnswer__c`` rather than a single ``TSPC__Answer__c``.
+        The supported relationship is
+        ``TSPC__DealQuestions__r`` over ``TSPC__DealQuestion__c``. The client
+        returns raw fields; the domain derives the MEDDPICC element from the
+        question's ``Name`` prefix and display answer text from
+        ``TSPC__TextAnswer__c`` or ``TSPC__RichTextAnswer__c``. Native answer
+        fields remain separate from derived display text.
         See ``fieldkit.sf.meddpicc.extract_category`` / ``extract_answer`` for
         how the domain derives category and display answer text
         from these raw fields.
@@ -1157,11 +866,11 @@ class SFDirectClient:
             Raw records plus reported count and explicit completeness evidence.
 
         Raises:
-            SFAuthError: on HTTP 401.
-            SFAPIError:  on other HTTP errors or connection failures.
+            sf_errors.SFAuthError: on HTTP 401.
+            sf_errors.SFAPIError:  on other HTTP errors or connection failures.
         """
         url = (
-            f"{self._base_url}/services/data/{_API_VERSION}"
+            f"{self._base_url}/services/data/{API_VERSION}"
             f"/ui-api/records/{deal_id}/child-relationships/TSPC__DealQuestions__r"
         )
         params = {
@@ -1210,7 +919,7 @@ class SFDirectClient:
     def fetch_closeplan_template_answers(self, template_question_id: str) -> UIAPIRecordCollection:
         """Fetch every exact answer choice defined by a ClosePlan template question."""
         url = (
-            f"{self._base_url}/services/data/{_API_VERSION}"
+            f"{self._base_url}/services/data/{API_VERSION}"
             f"/ui-api/records/{template_question_id}/child-relationships/TSPC__Answers__r"
         )
         params = {

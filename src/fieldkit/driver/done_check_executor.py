@@ -1,17 +1,14 @@
 """Trusted-base snapshotting and exact-head completion-check execution."""
 
 import hashlib
-import json
 import os
 import shutil
-import signal
 import subprocess
 import sys
 import threading
 import time
 import uuid
 from collections import deque
-from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -28,6 +25,7 @@ from fieldkit.config._timeouts import (
     TIMEOUT_DRIVER_RUN,
     TIMEOUT_PROCESS_KILL_GRACE,
 )
+from fieldkit.driver.change_authority import ChangeAuthorityError, validate_change_authority
 from fieldkit.driver.done_check_evidence import CheckEvidence, EvidenceRecord, OutputEvidence, write_evidence
 from fieldkit.driver.done_checks import (
     ArgvCheck,
@@ -38,9 +36,20 @@ from fieldkit.driver.done_checks import (
     parse_done_checks,
 )
 from fieldkit.driver.github import GitHubLookupError, PullRequestIdentity, get_pr_identity
+from fieldkit.driver.prompt_contract import PromptContract, PromptContractError, parse_prompt_contract
 from fieldkit.errors import AuthError
+from fieldkit.util.bounded_process import (
+    BoundedProcessError,
+    BoundedProcessResult,
+    process_exited_unreaped,
+    require_unreaped_exit_observation,
+    run_bounded_process,
+    run_bounded_process_bytes,
+    terminate_process_group,
+)
 
 _SHA_RE = frozenset("0123456789abcdef")
+_DRIVER_GIT_OUTPUT_BYTES = 8 * 1024 * 1024
 _AGGREGATE_MAKE = frozenset({"quality", "quality-full", "gazepy"})
 _AUTHORITY_FILES = frozenset(
     {
@@ -83,6 +92,7 @@ class TrustedCheckSnapshot:
     work_order_sha256: str
     contract_sha256: str
     contract: DoneCheckContract
+    prompt_contract: PromptContract
     checkers: tuple[TrustedChecker, ...]
     authority: tuple[tuple[str, str, str], ...]
     executables: tuple[tuple[str, str, str], ...]
@@ -164,57 +174,47 @@ class _StreamCapture:
         return OutputEvidence(self.count, self.digest.hexdigest(), self.complete)  # type: ignore[attr-defined]
 
 
-def _git(
-    repo_root: Path, *args: str, check: bool = True, timeout: float = TIMEOUT_DRIVER_GIT
-) -> subprocess.CompletedProcess[str]:
+def _git(repo_root: Path, *args: str, check: bool = True, timeout: float = TIMEOUT_DRIVER_GIT) -> BoundedProcessResult:
     try:
-        result = subprocess.run(
-            ["git", *args], cwd=repo_root, capture_output=True, text=True, check=False, timeout=timeout
+        result = run_bounded_process(
+            ["git", *args],
+            cwd=repo_root,
+            timeout=timeout,
+            stdout_limit=_DRIVER_GIT_OUTPUT_BYTES,
+            stderr_limit=_DRIVER_GIT_OUTPUT_BYTES,
+            cleanup_timeout=TIMEOUT_PROCESS_KILL_GRACE,
         )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise VerificationError(f"git {' '.join(args)} failed: {exc}") from exc
+    except BoundedProcessError as exc:
+        raise VerificationError("git command did not complete within its bounds") from exc
     if check and result.returncode != 0:
-        detail = result.stderr.strip() or f"git {' '.join(args)} failed"
         if any(
-            marker in detail.lower()
+            marker in result.stderr.lower()
             for marker in ("authentication failed", "could not read username", "permission denied (publickey)")
         ):
-            raise AuthError(detail)
-        raise VerificationError(detail)
+            raise AuthError("git authentication failed during driver verification")
+        raise VerificationError("git command failed during driver verification")
     return result
 
 
 def _git_bytes(repo_root: Path, *args: str) -> bytes:
     try:
-        result = subprocess.run(
-            ["git", *args], cwd=repo_root, capture_output=True, check=False, timeout=TIMEOUT_DRIVER_GIT
+        result = run_bounded_process_bytes(
+            ["git", *args],
+            cwd=repo_root,
+            timeout=TIMEOUT_DRIVER_GIT,
+            stdout_limit=_DRIVER_GIT_OUTPUT_BYTES,
+            stderr_limit=_DRIVER_GIT_OUTPUT_BYTES,
+            cleanup_timeout=TIMEOUT_PROCESS_KILL_GRACE,
         )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise VerificationError(f"git {' '.join(args)} failed: {exc}") from exc
+    except BoundedProcessError as exc:
+        raise VerificationError("git command did not complete within its bounds") from exc
     if result.returncode != 0:
-        raise VerificationError(result.stderr.decode(errors="replace").strip() or f"git {' '.join(args)} failed")
+        raise VerificationError("git command failed during driver verification")
     return result.stdout
 
 
 def _sha256(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
-
-
-def _contract_hash(contract: DoneCheckContract) -> str:
-    records: list[dict[str, object]] = []
-    for check in contract.checks:
-        record: dict[str, object] = {
-            "id": check.id,
-            "expected_exit": check.expected_exit,
-            "expected_stdout": check.expected_stdout.decode("utf-8") if check.expected_stdout is not None else None,
-        }
-        if isinstance(check, ArgvCheck):
-            record["argv"] = check.argv
-        else:
-            record.update({"checker": check.checker, "args": check.args})
-        records.append(record)
-    payload = json.dumps({"version": contract.version, "checks": records}, sort_keys=True, separators=(",", ":"))
-    return _sha256(payload.encode())
 
 
 def _authority_manifest(repo_root: Path, revision: str) -> tuple[tuple[str, str, str], ...]:
@@ -274,45 +274,64 @@ def _prepare_tool_environment(repo_root: Path, base_sha: str, snapshot_dir: Path
     uv = shutil.which("uv")
     if uv is None:
         raise VerificationError("trusted executable is unavailable: uv")
-    result = subprocess.run(
-        [
-            uv,
-            "sync",
-            "--frozen",
-            "--no-install-project",
-            "--python",
-            sys.executable,
-            "--project",
-            str(project),
-        ],
-        cwd=snapshot_dir,
-        env={"PATH": str(Path(uv).parent), "UV_NO_PROGRESS": "1", "UV_PROJECT_ENVIRONMENT": str(environment)},
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=TIMEOUT_DRIVER_CHECK,
-    )
+    try:
+        result = run_bounded_process(
+            [
+                uv,
+                "sync",
+                "--frozen",
+                "--no-install-project",
+                "--python",
+                sys.executable,
+                "--project",
+                str(project),
+            ],
+            cwd=snapshot_dir,
+            env={"PATH": str(Path(uv).parent), "UV_NO_PROGRESS": "1", "UV_PROJECT_ENVIRONMENT": str(environment)},
+            timeout=TIMEOUT_DRIVER_CHECK,
+            stdout_limit=DRIVER_CHECK_OUTPUT_BYTES,
+            stderr_limit=DRIVER_CHECK_OUTPUT_BYTES,
+            cleanup_timeout=TIMEOUT_PROCESS_KILL_GRACE,
+        )
+    except BoundedProcessError as exc:
+        raise VerificationError("trusted verifier environment setup did not complete") from exc
     if result.returncode != 0:
-        raise VerificationError(result.stderr.strip() or "trusted verifier environment setup failed")
+        raise VerificationError("trusted verifier environment setup failed")
     _make_tree_read_only(environment)
     project.chmod(0o500)
     return environment
 
 
-def _trusted_contract(repo_root: Path, work_order_path: Path, base_sha: str) -> tuple[str, bytes, DoneCheckContract]:
+def _trusted_contract(
+    repo_root: Path,
+    work_order_path: Path,
+    contract_path: Path,
+    base_sha: str,
+) -> tuple[str, bytes, bytes, DoneCheckContract, PromptContract]:
     try:
         relative = work_order_path.resolve().relative_to(repo_root.resolve()).as_posix()
+        contract_relative = contract_path.resolve().relative_to(repo_root.resolve()).as_posix()
     except ValueError as exc:
-        raise VerificationError("work order lies outside the repository") from exc
+        raise VerificationError("driver prompt authority lies outside the repository") from exc
     blob = _git_bytes(repo_root, "show", f"{base_sha}:{relative}")
+    contract_blob = (
+        blob if contract_relative == relative else _git_bytes(repo_root, "show", f"{base_sha}:{contract_relative}")
+    )
     try:
-        text = blob.decode("utf-8")
+        contract_text = contract_blob.decode("utf-8")
     except UnicodeDecodeError as exc:
-        raise VerificationError("work order is not valid UTF-8") from exc
+        raise VerificationError("driver prompt authority is not valid UTF-8") from exc
+    prompt_kind: Literal["work-order", "openspec"] = "work-order"
+    done_check_text = contract_text
+    if contract_relative != relative:
+        prompt_kind = "openspec"
+        done_check_text = f"---\n{contract_text}\n---\n"
     try:
-        return relative, blob, parse_done_checks(text)
-    except DoneCheckError as exc:
-        raise VerificationError(f"invalid trusted done-check contract: {exc}") from exc
+        done_contract = parse_done_checks(done_check_text)
+        prompt_contract = parse_prompt_contract(contract_text, kind=prompt_kind)
+        return relative, blob, contract_blob, done_contract, prompt_contract
+    except (DoneCheckError, PromptContractError) as exc:
+        raise VerificationError(f"invalid trusted driver contract: {exc}") from exc
 
 
 def _snapshot_checkers(
@@ -334,16 +353,19 @@ def _snapshot_checkers(
     validator = snapshot_dir / "check_done_checkers.py"
     validator.write_bytes(validator_blob)
     validator.chmod(0o400)
-    validation = subprocess.run(
-        [sys.executable, "-I", str(validator)],
-        cwd=snapshot_dir,
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=TIMEOUT_DRIVER_CHECK,
-    )
+    try:
+        validation = run_bounded_process(
+            [sys.executable, "-I", str(validator)],
+            cwd=snapshot_dir,
+            timeout=TIMEOUT_DRIVER_CHECK,
+            stdout_limit=DRIVER_CHECK_OUTPUT_BYTES,
+            stderr_limit=DRIVER_CHECK_OUTPUT_BYTES,
+            cleanup_timeout=TIMEOUT_PROCESS_KILL_GRACE,
+        )
+    except BoundedProcessError as exc:
+        raise VerificationError("checker policy did not complete within its bounds") from exc
     if validation.returncode != 0:
-        raise VerificationError(validation.stdout.strip() or validation.stderr.strip() or "checker policy failed")
+        raise VerificationError("checker policy failed")
     checker_root.chmod(0o500)
     return tuple(checkers)
 
@@ -352,17 +374,21 @@ def create_trusted_snapshot(
     repo_root: Path,
     work_order_path: Path,
     *,
+    contract_path: Path,
+    base_revision: str | None,
     repository: str,
     issue_number: int,
     attempt: int,
     branch: str,
     snapshot_root: Path,
 ) -> TrustedCheckSnapshot:
-    """Capture validated work-order and checker blobs from ``origin/main``."""
-    base_sha = _git(repo_root, "rev-parse", "origin/main").stdout.strip().lower()
+    """Capture validated work-order and checker blobs from the executed revision."""
+    base_sha = (base_revision or "").lower()
     if len(base_sha) != 40 or any(character not in _SHA_RE for character in base_sha):
-        raise VerificationError("origin/main did not resolve to a full commit SHA")
-    relative_work_order, work_order_blob, contract = _trusted_contract(repo_root, work_order_path, base_sha)
+        raise VerificationError("the executed source revision is not a full commit SHA")
+    relative_work_order, work_order_blob, contract_blob, contract, prompt_contract = _trusted_contract(
+        repo_root, work_order_path, contract_path, base_sha
+    )
     attempt_id = uuid.uuid4().hex
     snapshot_root.mkdir(mode=0o700, parents=True, exist_ok=True)
     snapshot_root.chmod(0o700)
@@ -389,8 +415,9 @@ def create_trusted_snapshot(
             base_sha=base_sha,
             work_order_path=relative_work_order,
             work_order_sha256=_sha256(work_order_blob),
-            contract_sha256=_contract_hash(contract),
+            contract_sha256=_sha256(contract_blob),
             contract=contract,
+            prompt_contract=prompt_contract,
             checkers=checkers,
             authority=_authority_manifest(repo_root, base_sha),
             executables=executables,
@@ -486,21 +513,7 @@ def _minimal_environment(snapshot: TrustedCheckSnapshot, candidate: Path, check:
 
 
 def _terminate(process: subprocess.Popen[bytes]) -> None:
-    try:
-        os.killpg(process.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        return
-    with suppress(subprocess.TimeoutExpired):
-        process.wait(timeout=TIMEOUT_PROCESS_KILL_GRACE)
-    try:
-        os.killpg(process.pid, 0)
-    except ProcessLookupError:
-        pass
-    else:
-        with suppress(ProcessLookupError):
-            os.killpg(process.pid, signal.SIGKILL)
-    with suppress(subprocess.TimeoutExpired):
-        process.wait(timeout=TIMEOUT_PROCESS_KILL_GRACE)
+    terminate_process_group(process, cleanup_timeout=TIMEOUT_PROCESS_KILL_GRACE)
 
 
 def _drain_stream(
@@ -531,12 +544,10 @@ def _drain_stream(
 def _wait_for_process(
     process: subprocess.Popen[bytes], overflow: threading.Event, started: float, timeout: float
 ) -> str:
-    while process.poll() is None:
+    while not process_exited_unreaped(process):
         if overflow.is_set():
-            _terminate(process)
             return "output-overflow"
         if time.monotonic() - started >= timeout:
-            _terminate(process)
             return "timeout"
         time.sleep(0.02)
     return "completed"
@@ -583,6 +594,7 @@ def _run_check(
     argv = _check_argv(snapshot, check, candidate, artifacts)
     executable_digest = _verified_executable(snapshot, argv)
     timeout = _check_timeout(check, deadline)
+    require_unreaped_exit_observation()
     process = subprocess.Popen(
         argv,
         cwd=candidate,
@@ -607,16 +619,20 @@ def _run_check(
     for thread in threads:
         thread.start()
     status = _wait_for_process(process, overflow, started, timeout)
-    for thread in threads:
-        thread.join(timeout=TIMEOUT_DRIVER_OUTPUT_DRAIN)
+    if status == "completed":
+        for thread in threads:
+            thread.join(timeout=TIMEOUT_DRIVER_OUTPUT_DRAIN)
+    _terminate(process)
+    if status != "completed":
+        for thread in threads:
+            thread.join(timeout=TIMEOUT_DRIVER_OUTPUT_DRAIN)
     if overflow.is_set() and status == "completed":
         status = "output-overflow"
     if any(thread.is_alive() for thread in threads):
         status = "stream-error"
         stdout.complete = False
         stderr.complete = False
-    _terminate(process)
-    exit_code = process.poll()
+    exit_code = process.returncode
     status = _completed_status(check, status, exit_code, stdout)
     return CheckResult(
         check.id,
@@ -636,6 +652,23 @@ def _candidate_clean(candidate: Path, head_sha: str) -> bool:
     if _git(candidate, "rev-parse", "HEAD").stdout.strip().lower() != head_sha:
         return False
     return not _git(candidate, "status", "--porcelain", "--untracked-files=all").stdout
+
+
+def _validate_change_authority(snapshot: TrustedCheckSnapshot, repo_root: Path, head_sha: str) -> None:
+    output = _git_bytes(
+        repo_root,
+        "diff",
+        "--name-status",
+        "-z",
+        "--find-renames",
+        snapshot.base_sha,
+        head_sha,
+        "--",
+    )
+    try:
+        validate_change_authority(output, snapshot.prompt_contract.covers)
+    except ChangeAuthorityError as exc:
+        raise VerificationError(str(exc)) from exc
 
 
 def _evidence_record(
@@ -698,6 +731,7 @@ def _execute_verification(
     _git(repo_root, "fetch", "origin", progress.identity.head_sha)
     if _authority_manifest(repo_root, progress.identity.head_sha) != snapshot.authority:
         raise VerificationError("authority_changed")
+    _validate_change_authority(snapshot, repo_root, progress.identity.head_sha)
     progress.worktree = verifier_root / f"head-{snapshot.attempt_id}"
     verifier_root.mkdir(mode=0o700, parents=True, exist_ok=True)
     verifier_root.chmod(0o700)

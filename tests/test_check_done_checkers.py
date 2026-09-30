@@ -132,6 +132,15 @@ def test_quota_checker_preserves_exact_extraction_counts(tmp_path: Path) -> None
     pipeline_test = tests / "test_pipeline.py"
     src.mkdir()
     tests.mkdir()
+    sf_quota = src / "fieldkit" / "sf" / "quota.py"
+    sf_quota.parent.mkdir(parents=True)
+    sf_quota.write_text(
+        "class SFQuotaResult: pass\n"
+        "def fetch_sf_closed_won(): pass\n"
+        "def _quota_accounts(): pass\n"
+        "def _resolve_missing_territory_ids(): pass\n",
+        encoding="utf-8",
+    )
     quota.write_text("def _collect_pursuits_for_quota(): pass\n", encoding="utf-8")
     render.write_text(
         "QUOTA_STAGE_WEIGHTS = {}\n"
@@ -141,7 +150,7 @@ def test_quota_checker_preserves_exact_extraction_counts(tmp_path: Path) -> None
         encoding="utf-8",
     )
     pipeline_test.write_text(
-        '_CMD_QUOTA__QUOTA_MODULE = "fieldkit.commands.pipeline.quota"\n'
+        '_CMD_QUOTA__QUOTA_MODULE = "fieldkit.pipeline.quota"\n'
         '_CMD_QUOTA__CALC_MODULE = "fieldkit.watch.morning_brief_render"\n',
         encoding="utf-8",
     )
@@ -171,6 +180,11 @@ def test_quota_checker_preserves_exact_extraction_counts(tmp_path: Path) -> None
         encoding="utf-8",
     )
     origin_reexport = _run("check_quota_render_extraction.py", quota, render, src, tests, pipeline_test)
+    quota.write_text("def _collect_pursuits_for_quota(): pass\n", encoding="utf-8")
+    old_quota = src / "fieldkit" / "commands" / "pipeline" / "quota.py"
+    old_quota.parent.mkdir(parents=True)
+    old_quota.write_text("from fieldkit.pipeline.quota import _collect_pursuits_for_quota\n", encoding="utf-8")
+    old_origin = _run("check_quota_render_extraction.py", quota, render, src, tests, pipeline_test)
 
     assert passing.returncode == 0
     assert failing.returncode == 1
@@ -179,6 +193,8 @@ def test_quota_checker_preserves_exact_extraction_counts(tmp_path: Path) -> None
     assert "must be bound exactly once" in reexport.stdout
     assert origin_reexport.returncode == 1
     assert "calculate_quota_gap is re-exported" in origin_reexport.stdout
+    assert old_origin.returncode == 1
+    assert "old command quota module remains" in old_origin.stdout
 
 
 def test_morning_brief_render_checker_enforces_deleted_origin(tmp_path: Path) -> None:
@@ -201,7 +217,7 @@ def test_morning_brief_render_checker_enforces_deleted_origin(tmp_path: Path) ->
             "def render_brief():\n    _render_quota_section()\n    _render_project_health_section()\n"
             "    _render_companion_outbox_pointer()\n"
         ),
-        "fieldkit/commands/brief/generate.py": "quota_collector=_collect_pursuits_for_quota\n",
+        "fieldkit/brief/merged.py": "quota_collector=_collect_pursuits_for_quota\n",
         "fieldkit/companion/outbox.py": (
             "POINTER = 'watch/morning_brief_render.py:_render_companion_outbox_pointer'\n"
         ),
@@ -247,42 +263,3 @@ def test_morning_brief_render_checker_enforces_deleted_origin(tmp_path: Path) ->
     assert "stale pursuit parser guidance" in stale_guidance.stderr
     assert failing.returncode == 1
     assert "old command render module still exists" in failing.stderr
-
-
-def test_companion_checker_reads_junit_and_structural_contract(tmp_path: Path) -> None:
-    junit = tmp_path / "result.xml"
-    decide = tmp_path / "decide.py"
-    loop = tmp_path / "loop.py"
-    cli = tmp_path / "cli.py"
-    service = tmp_path / "service"
-    tests = tmp_path / "tests.py"
-    succession = tmp_path / "succession.md"
-    changelog = tmp_path / "changelog.md"
-    junit.write_text('<testsuite tests="2" failures="0" errors="0" skipped="0"/>', encoding="utf-8")
-    decide.write_text("Commands run at every tier without consulting the act allowlist.\n", encoding="utf-8")
-    for path in (loop, cli, service):
-        path.write_text("historic regression structurally inert\n", encoding="utf-8")
-    tests.write_text(
-        "@pytest.mark.characterization\n"
-        "def test_act_runs_allowlisted_mutation(): pass\n"
-        "@pytest.mark.characterization\n"
-        "def test_act_denies_non_allowlisted_mutation(): pass\n",
-        encoding="utf-8",
-    )
-    succession.write_text("structurally\nhistoric regression\n", encoding="utf-8")
-    changelog.write_text("historic regression\n", encoding="utf-8")
-
-    passing = _run("check_companion_inert_docs.py", junit, decide, loop, cli, service, tests, succession, changelog)
-    decide.write_text("The act allowlist controls every command.\n", encoding="utf-8")
-    stale_decide = _run(
-        "check_companion_inert_docs.py", junit, decide, loop, cli, service, tests, succession, changelog
-    )
-    decide.write_text("Commands run at every tier without consulting the act allowlist.\n", encoding="utf-8")
-    junit.write_text('<testsuite tests="2" failures="1" errors="0" skipped="0"/>', encoding="utf-8")
-    failing = _run("check_companion_inert_docs.py", junit, decide, loop, cli, service, tests, succession, changelog)
-
-    assert passing.returncode == 0
-    assert stale_decide.returncode == 1
-    assert "decide command_argv contract" in stale_decide.stdout
-    assert failing.returncode == 1
-    assert "found (2, 1, 0, 0)" in failing.stdout

@@ -25,7 +25,11 @@ def get_pipeline_quota() -> dict[str, object] | None:
     period = quota.get("period")
     if target is None or period is None:
         return None
-    return {"target": int(target), "period": str(period)}
+    try:
+        quota_target = int(target)
+    except (TypeError, ValueError, OverflowError):
+        raise _loader.ConfigError("Pipeline quota target must be an integer.") from None
+    return {"target": quota_target, "period": str(period)}
 
 
 def write_pipeline_quota(target: int, period: str) -> None:
@@ -51,6 +55,6 @@ def write_pipeline_quota(target: int, period: str) -> None:
 
     try:
         atomic_round_trip_yaml_update(_loader.CONFIG_PATH, update)
-    except (OSError, TypeError, UnicodeError, RoundTripYAMLError) as exc:
-        raise _loader.ConfigError(f"Could not update pipeline quota in {_loader.CONFIG_PATH}: {exc}") from exc
+    except (OSError, TypeError, UnicodeError, RoundTripYAMLError):
+        raise _loader.ConfigError("Could not update pipeline quota configuration.") from None
     _loader.clear_config_caches()

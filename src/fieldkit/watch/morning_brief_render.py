@@ -184,9 +184,11 @@ def _render_alert_blocks(blocks: list[str] | SourceNotReady | str, empty_msg: st
     return lines
 
 
-def _render_meetings_section(meetings: list[dict[str, Any]] | str) -> list[str]:
+def _render_meetings_section(meetings: list[dict[str, Any]] | SourceNotReady | str) -> list[str]:
     lines = ["## Today's External Meetings", ""]
-    if isinstance(meetings, str):
+    if isinstance(meetings, SourceNotReady):
+        lines.append(meetings.message)
+    elif isinstance(meetings, str):
         # historic regression: render the error string directly so the AE sees what failed.
         # The string already contains the sanitised error text from _collect_calendar_meetings.
         log.debug("Calendar section: rendering error string: %s", meetings)
@@ -450,7 +452,7 @@ def _render_companion_outbox_pointer() -> list[str]:
 def render_brief(
     target_date: date,
     *,
-    meetings: list[dict[str, Any]] | str,
+    meetings: list[dict[str, Any]] | SourceNotReady | str,
     backstory_alerts: list[str] | SourceNotReady | str,
     pursuit_stall_alerts: list[str] | SourceNotReady | str,
     slack_alerts: list[str] | SourceNotReady | str,

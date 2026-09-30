@@ -2,7 +2,6 @@
 
 import click
 
-from fieldkit.cli_exit import EXIT_AUTH, EXIT_SUCCESS
 from fieldkit.commands.doctor._result import DoctorResult
 from fieldkit.config import get_cookie_file
 
@@ -14,14 +13,18 @@ def _live_session_result() -> DoctorResult:
     alive, msg = check_sf_session()
     if alive:
         return DoctorResult("sf", healthy=True, configured=True, message=msg)
-    return DoctorResult("sf", healthy=False, configured=True, message=f"{msg} — run 'fieldkit auth sf'")
+    return DoctorResult(
+        "sf", healthy=False, failure_kind="auth", configured=True, message=f"{msg} — run 'fieldkit auth sf'"
+    )
 
 
 def check_sf() -> DoctorResult:
     """Check whether a Salesforce session cookie is present and still live."""
     cookie_file = get_cookie_file()
     if not cookie_file.exists():
-        return DoctorResult("sf", healthy=False, configured=False, message="run 'fieldkit auth sf'")
+        return DoctorResult(
+            "sf", healthy=False, failure_kind="auth", configured=False, message="run 'fieldkit auth sf'"
+        )
     return _live_session_result()
 
 
@@ -48,4 +51,4 @@ def doctor_sf_cmd(as_json: bool) -> None:
         )
     else:
         click.echo(result.render())
-    raise SystemExit(EXIT_SUCCESS if result.healthy else EXIT_AUTH)
+    raise SystemExit(result.exit_code)

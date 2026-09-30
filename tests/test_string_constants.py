@@ -13,7 +13,7 @@ from fieldkit.ingest.constants import (
     SOURCE_STATUS_PENDING,
     SOURCE_STATUS_PROCESSED,
 )
-from fieldkit.ingest.pipeline import ConfidenceLevel, TranscriptMeta, stage2_extract
+from fieldkit.ingest.pipeline import ConfidenceLevel, Stage1Result, TranscriptMeta, stage2_extract
 from fieldkit.watch.constants import KNOWN_WATCHERS
 from fieldkit.watch.status import was_run_today
 
@@ -77,7 +77,7 @@ def test_confidence_level_valid_values_pass_through() -> None:
     """
     valid_json = '{"confidence": "high", "participants": [], "action_items": [], "key_decisions": [], "key_topics": []}'
     with patch("fieldkit.ingest.pipeline.synthesize", return_value=valid_json):
-        meta = stage2_extract("Some transcript text that is long enough to pass the guard " * 3)
+        meta = stage2_extract(Stage1Result("Some transcript text that is long enough to pass the guard " * 3))
     assert meta.confidence == "high"
 
 
@@ -92,13 +92,13 @@ def test_confidence_level_invalid_value_normalised_to_low() -> None:
         '{"confidence": "very-high", "participants": [], "action_items": [], "key_decisions": [], "key_topics": []}'
     )
     with patch("fieldkit.ingest.pipeline.synthesize", return_value=invalid_json):
-        meta = stage2_extract("Some transcript text that is long enough to pass the guard " * 3)
+        meta = stage2_extract(Stage1Result("Some transcript text that is long enough to pass the guard " * 3))
     assert meta.confidence == "low"
 
 
 @pytest.mark.unit
 def test_confidence_level_stub_is_default() -> None:
-    """TranscriptMeta.confidence defaults to 'stub' — the NO_LLM sentinel value."""
+    """TranscriptMeta.confidence defaults to 'stub' — the FIELDKIT_NO_LLM sentinel value."""
     meta = TranscriptMeta()
     assert meta.confidence == "stub"
     # Verify 'stub' is a valid ConfidenceLevel (type checker would catch this at import time)

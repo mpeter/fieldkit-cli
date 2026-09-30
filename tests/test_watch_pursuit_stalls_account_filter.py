@@ -20,6 +20,7 @@ import pytest
 import fieldkit.watch._pursuit_stall_render as stall_render
 import fieldkit.watch._pursuit_stall_state as stall_state
 import fieldkit.watch.pursuit_stalls as wps
+from fieldkit.watch.status import WatcherDailySnapshot, WatcherRunResult
 
 pytestmark = pytest.mark.unit
 
@@ -225,14 +226,15 @@ def test_run_pursuit_stalls_account_filter_account_scoped_run_no_other_account_p
         patch.object(stall_render, "_alerts_file", return_value=watchers_dir / "pursuit-stall-alerts.md"),
         patch("fieldkit.watch.pursuit_stalls.get_accounts_config", return_value=accounts_config),
         patch("fieldkit.watch._pursuit_stall_scan.get_fieldkit_home", return_value=tmp_path),
-        patch("fieldkit.watch.pursuit_stalls.was_run_today", return_value=False),
-        patch("fieldkit.watch.pursuit_stalls.write_run_status"),
+        patch("fieldkit.watch.pursuit_stalls.get_daily_run_snapshot", return_value=WatcherDailySnapshot(False, None)),
+        patch("fieldkit.watch.pursuit_stalls.write_run_status", return_value="written"),
         patch("fieldkit.watch.pursuit_stalls.watcher_logging"),
         caplog.at_level(logging.INFO, logger="fieldkit.watch"),
     ):
         rc = wps._run_pursuit_stalls(threshold=14, account="acme-corp", dry_run=True)
 
-    assert rc == 0
+    assert isinstance(rc, WatcherRunResult)
+    assert rc.exit_code == 0
 
     # No historic regression messages for midwest-ins
     bug173_msgs = [r.message for r in caplog.records if "historic regression" in r.message]

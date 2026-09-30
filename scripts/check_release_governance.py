@@ -8,7 +8,10 @@ import json
 import sys
 from pathlib import Path
 
-from _release_governance import validate
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from scripts._release_governance import validate
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_POLICY = REPO_ROOT / "docs" / "release-readiness" / "release-governance-policy.json"

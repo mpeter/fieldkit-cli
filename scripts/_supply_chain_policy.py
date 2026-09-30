@@ -7,8 +7,11 @@ import json
 import re
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime
+from importlib import import_module
 from pathlib import Path
 from typing import Any
+
+from scripts import runtime_license_inventory as inventory
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 POLICY_PATH = Path("docs/release-readiness/dependency-security-policy.json")
@@ -49,7 +52,6 @@ _SEVERITY_RANK = {"low": 0, "moderate": 1, "high": 2, "critical": 3}
 _SPDX_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9.+-]*")
 _REVISION = re.compile(r"[0-9a-f]{40}")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
-_PYPI_NAME = re.compile(r"[-_.]+")
 _CODEQL_ACTION_REVISION = "cdf488f595d80d6e07e03d4674febd5ab45fa938"
 _SCORECARD_ACTION_REVISION = "2d1146689b8cda280b9bc96326124645441f03bc"
 
@@ -183,6 +185,9 @@ class LicenseEvidence:
     revision: str
     export_policy_sha256: str
     sbom_sha256: str
+    observations: dict[str, str]
+    platform_requirements: dict[str, str]
+    marker_environment: dict[str, str]
     observed_packages: int
     packages: tuple[LicenseObservation, ...]
     findings: tuple[Finding, ...]
@@ -196,6 +201,9 @@ class LicenseEvidence:
             "revision": self.revision,
             "export_policy_sha256": self.export_policy_sha256,
             "sbom_sha256": self.sbom_sha256,
+            "observations": self.observations,
+            "platform_requirements": self.platform_requirements,
+            "marker_environment": self.marker_environment,
             "observed_packages": self.observed_packages,
             "packages": [asdict(package) for package in self.packages],
             "findings": [asdict(finding) for finding in self.findings],
@@ -280,7 +288,7 @@ def _uses_only_action_revision(workflow: str, *, action: str, revision: str) -> 
 
 def load_policy(path: Path = REPO_ROOT / POLICY_PATH, *, today: date | None = None) -> DependencyPolicy:
     """Load and fail-closed validate the checked-in dependency policy."""
-    raw = _object(json.loads(path.read_text(encoding="utf-8")), str(path))
+    raw = _object(json.loads(inventory.read_snapshot(path)), str(path))
     _exact_keys(raw, _POLICY_KEYS, str(path))
     if raw["schema_version"] != 1:
         raise ValueError("dependency policy schema_version must be 1")
@@ -341,6 +349,9 @@ def validate_repository(repo_root: Path = REPO_ROOT, *, today: date | None = Non
         "--changes-env DEPENDENCY_CHANGES",
         "--upstream-outcome",
         "if: github.event.repository.visibility == 'public'",
+        "ref: ${{ github.event.pull_request.base.sha }}",
+        "--require-hashes --only-binary :all: trusted-tools/scripts/spdx-tool-requirements.txt",
+        ".dependency-review-tools/bin/python -I scripts/check_supply_chain_policy.py dependency-review",
     ):
         if expected not in dependency_review:
             findings.append(Finding("DEP201", str(DEPENDENCY_REVIEW_WORKFLOW_PATH), f"missing {expected!r}"))
@@ -400,14 +411,38 @@ def validate_repository(repo_root: Path = REPO_ROOT, *, today: date | None = Non
 
 
 def _license_identifiers(expression: str) -> tuple[str, ...]:
-    tokens = tuple(_SPDX_TOKEN.findall(expression))
-    return tuple(token for token in tokens if token not in {"AND", "OR", "WITH"})
+    """Validate SPDX grammar and retain both license and exception identifiers."""
+    try:
+        factory: object = getattr(import_module("license_expression"), "get_spdx_licensing", None)
+        if not callable(factory):
+            raise ValueError("SPDX validator factory is unavailable")
+        licensing: object = factory()
+        parse: object = getattr(licensing, "parse", None)
+        license_keys: object = getattr(licensing, "license_keys", None)
+        if not callable(parse) or not callable(license_keys):
+            raise ValueError("SPDX validator API is unavailable")
+        parsed: object = parse(expression, validate=True, strict=True)
+        if parsed is None:
+            raise ValueError("SPDX expression is empty")
+        identifiers: object = license_keys(parsed)
+        if (
+            not isinstance(identifiers, list)
+            or not identifiers
+            or not all(isinstance(identifier, str) and identifier for identifier in identifiers)
+        ):
+            raise ValueError("SPDX validator returned invalid identifiers")
+        return tuple(str(identifier) for identifier in identifiers)
+    except Exception as exc:
+        raise ValueError("SPDX expression is invalid or its validator is unavailable") from exc
 
 
-def package_url(name: str, version: str) -> str:
-    """Return the canonical exact-version PyPI package URL for metadata evidence."""
-    normalized_name = _PYPI_NAME.sub("-", name).casefold()
-    return f"pkg:pypi/{normalized_name}@{version}"
+def _license_rejection(expression: str, policy: DependencyPolicy) -> str | None:
+    try:
+        identifiers = _license_identifiers(expression)
+    except ValueError as exc:
+        return str(exc)
+    disallowed = sorted(set(identifiers) - set(policy.allowed_spdx_licenses))
+    return f"license is not allowlisted: {', '.join(disallowed)}" if disallowed else None
 
 
 def build_license_evidence(
@@ -418,6 +453,9 @@ def build_license_evidence(
     revision: str,
     export_policy_sha256: str,
     sbom_sha256: str,
+    observations_sha256: str,
+    platform_requirements_sha256: str,
+    marker_environment: dict[str, str],
     expected_package_urls: tuple[str, ...],
     today: date | None = None,
 ) -> LicenseEvidence:
@@ -430,8 +468,13 @@ def build_license_evidence(
         raise ValueError("export_policy_sha256 must be a 64-character lowercase SHA-256")
     if _SHA256.fullmatch(sbom_sha256) is None:
         raise ValueError("sbom_sha256 must be a 64-character lowercase SHA-256")
+    if _SHA256.fullmatch(observations_sha256) is None or _SHA256.fullmatch(platform_requirements_sha256) is None:
+        raise ValueError("license input digests must be 64-character lowercase SHA-256")
+    target_environment = inventory.validate_marker_environment(marker_environment)
     if not isinstance(raw_packages, list):
         raise ValueError("resolved package inventory must be a list")
+    if not expected_package_urls:
+        raise ValueError("expected target package inventory must not be empty")
     if len(expected_package_urls) != len(set(expected_package_urls)):
         raise ValueError("expected package URLs must be unique")
     if any(not package_url.startswith("pkg:pypi/") or "@" not in package_url for package_url in expected_package_urls):
@@ -442,7 +485,7 @@ def build_license_evidence(
     for index, value in enumerate(raw_packages):
         package = _object(value, f"resolved_packages[{index}]")
         _exact_keys(package, {"name", "version", "license_expression"}, f"resolved_packages[{index}]")
-        resolved_package_url = package_url(
+        resolved_package_url = inventory.package_url(
             _string(package["name"], f"resolved_packages[{index}].name"),
             _string(package["version"], f"resolved_packages[{index}].version"),
         )
@@ -450,8 +493,8 @@ def build_license_evidence(
             raise ValueError(f"resolved package inventory has duplicate package URL: {resolved_package_url}")
         seen_urls.add(resolved_package_url)
         raw_expression = package["license_expression"]
-        expression = raw_expression.strip() if isinstance(raw_expression, str) else ""
-        observations.append(LicenseObservation(resolved_package_url, expression or "UNKNOWN"))
+        expression = inventory.normalize_license_expression(raw_expression if isinstance(raw_expression, str) else "")
+        observations.append(LicenseObservation(resolved_package_url, expression))
 
     current_date = today or datetime.now(tz=UTC).date()
     exceptions = {item.package_url: item for item in policy.license_exceptions}
@@ -472,13 +515,15 @@ def build_license_evidence(
                     )
                 )
             continue
-        identifiers = _license_identifiers(observation.license_expression)
-        disallowed = sorted(set(identifiers) - set(policy.allowed_spdx_licenses))
-        if not identifiers or disallowed:
-            detail = ", ".join(disallowed) if disallowed else observation.license_expression
-            findings.append(Finding("DEP301", observation.package_url, f"license is not allowlisted: {detail}"))
+        rejection = _license_rejection(observation.license_expression, policy)
+        if rejection is not None:
+            findings.append(Finding("DEP301", observation.package_url, rejection))
     observed_urls = {observation.package_url for observation in observations}
     expected_urls = set(expected_package_urls)
+    for missing_package_url in sorted(expected_urls - observed_urls):
+        findings.append(
+            Finding("DEP304", missing_package_url, "locked target package is absent from resolved inventory")
+        )
     for unexpected_package_url in sorted(observed_urls - expected_urls):
         findings.append(
             Finding("DEP305", unexpected_package_url, "resolved inventory package is absent from locked requirements")
@@ -486,12 +531,15 @@ def build_license_evidence(
     ordered_observations = tuple(sorted(observations))
     ordered_findings = tuple(sorted(findings))
     return LicenseEvidence(
-        1,
+        2,
         "pass" if not ordered_findings else "fail",
         scope,
         revision,
         export_policy_sha256,
         sbom_sha256,
+        {"name": inventory.OBSERVATIONS_NAME, "sha256": observations_sha256},
+        {"name": inventory.PLATFORM_REQUIREMENTS_NAME, "sha256": platform_requirements_sha256},
+        target_environment,
         len(ordered_observations),
         ordered_observations,
         ordered_findings,
@@ -529,11 +577,9 @@ def review_dependency_changes(
                     Finding("DEP103", package_url, f"license exception expired on {exception.expires_on.isoformat()}")
                 )
         else:
-            identifiers = _license_identifiers(license_expression)
-            disallowed = sorted(set(identifiers) - set(policy.allowed_spdx_licenses))
-            if not identifiers or disallowed:
-                detail = ", ".join(disallowed) if disallowed else license_expression
-                findings.append(Finding("DEP101", package_url, f"license is not allowlisted: {detail}"))
+            rejection = _license_rejection(license_expression, policy)
+            if rejection is not None:
+                findings.append(Finding("DEP101", package_url, rejection))
         raw_vulnerabilities = change.get("vulnerabilities", [])
         if not isinstance(raw_vulnerabilities, list):
             raise ValueError(f"dependency_changes[{index}].vulnerabilities must be a list")

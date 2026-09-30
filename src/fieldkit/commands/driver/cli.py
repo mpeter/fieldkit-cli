@@ -1,7 +1,7 @@
-"""fieldkit driver — Autonomous brief-execution driver loop.
+"""fieldkit driver — autonomous prompt-execution driver loop.
 
 Usage:
-    fieldkit driver run          Run one iteration (picks oldest agent-ready issue)
+    fieldkit driver run          Run one bounded batch of eligible agent-ready issues
     fieldkit driver run --dry-run  Log what would happen without label changes or git
     fieldkit driver status       Show the last 10 driver run results
     fieldkit driver retry status Show local retry reservations
@@ -20,7 +20,7 @@ from fieldkit.cli_registry import declare_write
 from fieldkit.commands.driver._status import print_status
 from fieldkit.config import get_github_repo
 from fieldkit.driver.github import list_ready_issues
-from fieldkit.errors import FieldkitError
+from fieldkit.errors import AuthError, FieldkitError, GitHubRequestError
 
 
 def _repo_root() -> Path:
@@ -45,7 +45,7 @@ def _repo_root() -> Path:
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
 def cli() -> None:
-    """Autonomous brief-execution driver loop."""
+    """Autonomous prompt-execution driver loop."""
 
 
 @declare_write(
@@ -61,15 +61,43 @@ def cli() -> None:
 )
 @click.option("--json", "as_json", is_flag=True, default=False, help="Machine-readable JSON output.")
 def run(dry_run: bool, as_json: bool) -> None:
-    """Pick the oldest agent-ready issue and execute its brief.
+    """Pick a bounded batch of agent-ready issues and execute their prompts.
 
-    Exits 0 on success or skip (no issues).  Exits 1 on partial failure
-    (OpenCode non-zero or brief resolution error).
+    Exits 0 on success or an empty queue. Exits 1 on a blocked, uncertain,
+    or failed run.
     """
     with cli_main():
         from fieldkit.driver.runner import run_driver
 
-        result = run_driver(repo_root=_repo_root(), dry_run=dry_run)
+        try:
+            result = run_driver(repo_root=_repo_root(), dry_run=dry_run)
+        except (AuthError, GitHubRequestError) as exc:
+            error = (
+                "GitHub authentication required for driver execution"
+                if isinstance(exc, AuthError)
+                else "GitHub driver scheduling lookup failed"
+            )
+            if as_json:
+                click.echo(
+                    json.dumps(
+                        {
+                            "issue_number": None,
+                            "issue_title": "(none)",
+                            "branch": "",
+                            "outcome": "failed",
+                            "elapsed_seconds": 0.0,
+                            "spend_note": "",
+                            "error": error,
+                            "dry_run": dry_run,
+                        },
+                        indent=2,
+                    )
+                )
+            elif isinstance(exc, GitHubRequestError):
+                click.echo(f"Driver failed: {error}", err=True)
+            if isinstance(exc, GitHubRequestError):
+                raise SystemExit(EXIT_PARTIAL) from exc
+            raise AuthError(error) from None
 
         if as_json:
             # The exit code still encodes the outcome, so the document is emitted
@@ -86,18 +114,28 @@ def run(dry_run: bool, as_json: bool) -> None:
                         "spend_note": result.spend_note,
                         "error": result.error,
                         "dry_run": dry_run,
+                        "candidates": [asdict(candidate) for candidate in result.candidates],
                     },
                     indent=2,
                     default=str,
                 )
             )
-            if result.outcome == "failed":
+            if result.outcome == "failed" or (result.outcome == "skipped" and result.error):
                 raise SystemExit(EXIT_PARTIAL)
             return
 
         prefix = "[dry-run] " if dry_run else ""
 
+        if len(result.candidates) > 1:
+            for candidate in result.candidates:
+                detail = f" — {candidate.error}" if candidate.error else ""
+                persistence = " — status not persisted" if not candidate.status_persisted else ""
+                click.echo(f"{prefix}Issue #{candidate.issue_number}: {candidate.outcome}{detail}{persistence}")
+
         if result.outcome == "skipped":
+            if result.error:
+                click.echo(click.style(f"{prefix}Driver skipped: {result.error}", fg="yellow"), err=True)
+                raise SystemExit(EXIT_PARTIAL)
             click.echo(f"{prefix}No agent-ready issues — nothing to do.")
             return
 
@@ -108,7 +146,10 @@ def run(dry_run: bool, as_json: bool) -> None:
             "skipped": click.style("-", fg="yellow"),
         }.get(result.outcome, "?")
 
-        click.echo(f"{prefix}{status_sym} Issue #{result.issue_number}: {result.issue_title}")
+        subject = (
+            f"Issue #{result.issue_number}: {result.issue_title}" if result.issue_number is not None else "Driver tick"
+        )
+        click.echo(f"{prefix}{status_sym} {subject}")
         click.echo(f"  Branch:  {result.branch}")
         click.echo(f"  Outcome: {result.outcome}")
         click.echo(f"  Elapsed: {result.elapsed_seconds:.1f}s")

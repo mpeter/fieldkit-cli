@@ -2,13 +2,13 @@
 
 ## Supported versions
 
-Published 1.x releases are supported. The `main` branch receives fixes on a best-effort basis
-between releases; only published versions are supported releases.
+Security fixes follow the supported-release policy in [SUPPORT.md](SUPPORT.md#supported-releases).
 
 | Version | Security support |
 | --- | --- |
-| Published 1.x releases | Supported |
-| Unreleased `main` | Best-effort during development |
+| Latest patch of the latest minor release | Supported |
+| Older patch releases and older minor releases | Unsupported |
+| Unreleased `main` | Best-effort development; not a supported published release |
 
 ## Report a vulnerability privately
 

@@ -44,6 +44,9 @@ def test_main_runs_assessment_in_temporary_worktree_and_removes_it(monkeypatch: 
         return _completed(command, 0)
 
     monkeypatch.setattr(module, "_run", fake_run)
+    monkeypatch.setattr(module.git_worktree, "require_clean_worktree", lambda _repo: None)
+    monkeypatch.setattr(module.agentready_output, "begin_run", lambda _output: Path("run-output"))
+    monkeypatch.setattr(module.agentready_output, "publish_run", lambda _run, _output: None)
 
     exit_code = _run_main(monkeypatch, module)
 
@@ -63,6 +66,9 @@ def test_main_removes_worktree_when_assessment_fails(monkeypatch: pytest.MonkeyP
         return _completed(command, 7 if command[0] == "uvx" else 0)
 
     monkeypatch.setattr(module, "_run", fake_run)
+    monkeypatch.setattr(module.git_worktree, "require_clean_worktree", lambda _repo: None)
+    monkeypatch.setattr(module.agentready_output, "begin_run", lambda _output: Path("run-output"))
+    monkeypatch.setattr(module.agentready_output, "publish_run", lambda _run, _output: None)
 
     exit_code = _run_main(monkeypatch, module)
 
@@ -80,6 +86,9 @@ def test_main_stops_without_assessment_when_worktree_creation_fails(monkeypatch:
         return _completed(command, 4)
 
     monkeypatch.setattr(module, "_run", fake_run)
+    monkeypatch.setattr(module.git_worktree, "require_clean_worktree", lambda _repo: None)
+    monkeypatch.setattr(module.agentready_output, "begin_run", lambda _output: Path("run-output"))
+    monkeypatch.setattr(module.agentready_output, "publish_run", lambda _run, _output: None)
 
     exit_code = _run_main(monkeypatch, module)
 
@@ -102,6 +111,9 @@ def test_main_reports_worktree_creation_timeout_and_attempts_cleanup(
         return _completed(command, 0)
 
     monkeypatch.setattr(module, "_run", fake_run)
+    monkeypatch.setattr(module.git_worktree, "require_clean_worktree", lambda _repo: None)
+    monkeypatch.setattr(module.agentready_output, "begin_run", lambda _output: Path("run-output"))
+    monkeypatch.setattr(module.agentready_output, "publish_run", lambda _run, _output: None)
 
     exit_code = _run_main(monkeypatch, module)
 
@@ -121,6 +133,9 @@ def test_main_reports_cleanup_failure(monkeypatch: pytest.MonkeyPatch, capsys: p
         return _completed(command, 9 if command[4] == "remove" else 0)
 
     monkeypatch.setattr(module, "_run", fake_run)
+    monkeypatch.setattr(module.git_worktree, "require_clean_worktree", lambda _repo: None)
+    monkeypatch.setattr(module.agentready_output, "begin_run", lambda _output: Path("run-output"))
+    monkeypatch.setattr(module.agentready_output, "publish_run", lambda _run, _output: None)
 
     exit_code = _run_main(monkeypatch, module)
 
@@ -144,6 +159,9 @@ def test_main_removes_worktree_when_assessment_times_out(
         return _completed(command, 0)
 
     monkeypatch.setattr(module, "_run", fake_run)
+    monkeypatch.setattr(module.git_worktree, "require_clean_worktree", lambda _repo: None)
+    monkeypatch.setattr(module.agentready_output, "begin_run", lambda _output: Path("run-output"))
+    monkeypatch.setattr(module.agentready_output, "publish_run", lambda _run, _output: None)
 
     exit_code = _run_main(monkeypatch, module)
 
@@ -162,6 +180,31 @@ def _git(repository: Path, *args: str) -> str:
         timeout=_GIT_TEST_TIMEOUT_SECONDS,
     )
     return completed.stdout.strip()
+
+
+def test_success_without_new_report_cannot_reuse_previous_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A zero tool exit is not evidence that an assessment was produced."""
+    module = _load_module()
+    old_report = tmp_path / "assessment-old.json"
+    old_report.write_text("{}", encoding="utf-8")
+    latest = tmp_path / "assessment-latest.json"
+    latest.symlink_to(old_report.name)
+    monkeypatch.setattr(module, "_OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(module.git_worktree, "require_clean_worktree", lambda _repo: None)
+
+    def fake_run(command: list[str], *, timeout: int, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+        del timeout, cwd
+        return _completed(command, 0)
+
+    monkeypatch.setattr(module, "_run", fake_run)
+
+    exit_code = _run_main(monkeypatch, module)
+
+    assert exit_code == 1
+    assert not latest.exists()
+    assert old_report.read_text(encoding="utf-8") == "{}"
 
 
 def test_main_preserves_caller_branch_and_removes_real_worktree(
@@ -184,9 +227,11 @@ def test_main_preserves_caller_branch_and_removes_real_worktree(
     fake_uvx = executable_dir / "uvx"
     fake_uvx.write_text(
         f"#!{sys.executable}\n"
-        "import os\n"
+        "import os, sys\n"
         "from pathlib import Path\n"
-        "Path(os.environ['AGENTREADY_CWD_RECORD']).write_text(os.getcwd(), encoding='utf-8')\n",
+        "Path(os.environ['AGENTREADY_CWD_RECORD']).write_text(os.getcwd(), encoding='utf-8')\n"
+        "output = Path(sys.argv[sys.argv.index('--output-dir') + 1])\n"
+        "(output / 'assessment-latest.json').write_text('{}', encoding='utf-8')\n",
         encoding="utf-8",
     )
     fake_uvx.chmod(0o755)

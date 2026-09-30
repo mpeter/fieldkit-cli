@@ -1,141 +1,79 @@
-# Week Start
+# Week start
 
-Complete start-of-week setup in 3–5 minutes.
-Refreshes everything, surfaces risks, and sets confirmed priorities.
+Review the available evidence and agree on the week's priorities. This is an
+agent-assisted workflow, not a CLI subcommand, and has no guaranteed runtime.
 
-Runs on Monday morning, or whenever the week begins. This is the weekly
-counterpart to the daily brief: the brief orients you for today, this orients
-you for the week and sets confirmed priorities.
+## Establish scope and freshness
 
-Previously a standalone skill named `week-start`. Folded here under D1 Wave 5
-per the D4 fold mechanics — it is a brief cadence, so it lives with the brief.
+Confirm the accounts, week, and whether the operator wants a local review or a
+live refresh. Read the configured workspace's task and pursuit data. Missing
+sources are unavailable, not evidence that no risks exist.
 
-## Gotchas
+A local [brief preview](../SKILL.md) does not refresh Salesforce or Gmail.
+If a multi-source refresh is requested, first preview the exact phases:
 
-- **Stale vault signals** — run `/brief` first if data hasn't been refreshed today
-- **Trigger overlap with adjacent ops** — this is the Monday setup; `ops/week-end.md`
-  is the Friday close-out and the brief root is the daily start-of-day run
-
-## Constraints
-
-- **Never write to account or pursuit files without explicit confirmation**
-- **Always surface generated output for review before any external send**
-
-## Options
-
-- `--skip-snapshots` — skip per-account snapshot generation (faster; skip if already done)
-- `--account NAME` — run account snapshot for one account only instead of all
-
-Routes needed: **fieldkit-sales** (Backstory MCP exception) and `gws tasks` (Tasks sync).
-Vault markdown files are read directly from disk (native file reads).
-
----
-
-## Step 1: Full data refresh (including Salesforce)
-
-```bash
-fieldkit sync --sf
+```console
+fieldkit sync --sf --dry-run
 ```
 
-This runs: gmail sync → account-tags → enrich-pursuits → ingest → watchers → sf listview --all.
-Report completion status and any step failures.
+The preview does not execute a phase. Explain that the live command can contact
+Gmail and Salesforce, update local caches and workspace records, run ingestion,
+and run watchers. After approval for that scope, run `fieldkit sync --sf`.
+Inspect every phase's reported status and the process exit status. Do not report
+all sources refreshed because one phase succeeded. Failed authentication needs
+operator action; keep affected source claims unverified.
 
----
+## Review pipeline and engagement
 
-## Step 2: Pipeline review
+For a saved pipeline review without model synthesis:
 
-```bash
+```console
 fieldkit pipeline --no-llm
 ```
 
-Read output. Surface:
-- Deals in negotiate+ with close dates within 90 days
-- Native qualification state (`pending` for linked pursuits needing a live
-  ClosePlan read; `unavailable` when no Opportunity link exists)
-- Highest-risk deal per account
-- Any deals that crossed a stage gate this week
+This writes a review artifact; obtain permission for that write when the request
+was read-only. State source dates and distinguish local stage/close-date values
+from a fresh Salesforce read. A stage crossing requires dated transition evidence,
+not merely a current stage. Qualification remains pending a live ClosePlan review
+for linked pursuits and unavailable without linkage.
 
-The pipeline output does not prove a qualification pass. Offer `/grill` for an
-exact read-only ClosePlan question review on the deal that needs attention.
+Review available project dates and watcher results. Report missing or stale
+results explicitly. Optional engagement-provider signals are attributed leads
+to verify, not confirmed customer facts; do not assume a particular MCP server
+name or authentication session exists.
 
----
+For a read-only delivery-health report:
 
-## Step 3: Per-account snapshots (skip if --skip-snapshots)
-
-For each account in `config/accounts.yaml` (or the one specified with --account):
-
-Invoke the `meeting` skill's `src/fieldkit/skills/meeting/ops/account-snapshot.md` logic for [account].
-
-Save to `accounts/<account>/meetings/YYYY-WNN-weekly-snapshot.md`.
-
-Report: "N account snapshots generated."
-
----
-
-## Step 4: Engagement health
-
-```bash
-fieldkit pursuit projects
+```console
+fieldkit pursuit projects --json
 ```
 
-Surface:
-- Projects expiring within 30 days → flag as 'needs renewal conversation this week'
-- Zombie projects (past end date) → flag as 'needs formal closeout call'
-- Any account with score < 60 from Backstory → flag as 'low engagement — needs attention'
+Use the command's returned classifications. A `ZOMBIE`, `UNKNOWN`, or expiring
+project is an observation to review, not authorization to close, renew, or edit
+the project.
 
----
+## Optional account snapshots
 
-## Step 5: Backstory risk check
+When requested, load the [account snapshot workflow](../../meeting/ops/account-snapshot.md).
+Check its prerequisites and agree on each destination before writing. Count only
+non-empty, read-back artifacts as generated; preserve existing files unless
+replacement was authorized.
 
-Already covered by `fieldkit sync --sf` watchers in Step 1.
-Read `<fieldkit_home>/watchers/backstory-alerts.md` for accounts with score drops.
-Any account with score < 60: "flag as 'needs attention this week.'"
+## Agree on priorities
 
----
+Propose up to five priorities based on dated commitments, approaching close or
+project-end dates, documented stalls, and unfinished tasks. Explain the evidence
+and uncertainty behind each priority; numeric alert thresholds are review
+heuristics, not qualification policy.
 
-## Step 6: Set week priorities
+Ask the operator to confirm or edit the list. Confirmation of priorities is not
+permission to overwrite a managed task region. If persistence or Google Tasks
+reconciliation is requested, use the [task-sync workflow](../../task-sync/SKILL.md)
+with its account, pagination, write-approval, and read-back requirements.
 
-Present a suggested priority list (top 5) derived from:
-- Close dates within 30 days (ranked by urgency)
-- Deals stuck in stage > 21 days (ranked by days stalled)
-- Projects expiring within 30 days
-- Backstory scores below 60
-- TASKS.md Active items carried from last week
+## Report
 
-Ask: "Here are your suggested top 5 priorities for this week. Edit and confirm — I will add them to the Today section of TASKS.md."
-
-Write confirmed priorities to the **Today** section of TASKS.md.
-
----
-
-## Step 7: Sync tasks
-
-Run `/task-sync` logic: push TASKS.md Today section to Google Tasks.
-
----
-
-## Output Format
-
-```markdown
-## Week of [DATE]
-
-### 🔄 Data Refreshed
-SF: N pursuit files updated | Gmail: synced | Transcripts: N ingested | Watchers: N alerts
-
-### 📊 Pipeline Summary
-Commit (negotiate+): $N | Weighted: $N | Deals closing this month: N
-
-### 🏗️ Project Alerts
-- [project] at [account]: ZOMBIE — needs closure call
-- [project] at [account]: EXPIRING in N days — schedule renewal conversation
-
-### 📉 Backstory Alerts
-- [account]: score N/100 — engagement low — escalate this week
-
-### 🎯 This Week's Priorities (confirmed)
-1. [priority]
-2. [priority]
-3. [priority]
-4. [priority]
-5. [priority]
-```
+Separate observed source freshness, risks, proposed priorities, confirmed
+priorities, and completed writes. Give counts only for inspected evidence.
+List failed or omitted sources and remaining actions; do not label the entire
+workflow complete while a requested step is pending.

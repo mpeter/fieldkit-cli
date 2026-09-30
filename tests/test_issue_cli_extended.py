@@ -11,7 +11,7 @@ import pytest
 from click.testing import CliRunner
 
 from fieldkit.commands.issue.cli import cli
-from fieldkit.commands.issue.gh_store import GHIssue
+from fieldkit.issue import GHIssue
 
 pytestmark = pytest.mark.unit
 
@@ -131,7 +131,7 @@ def test_sync_milestone_completed_advances_planned_to_fixed() -> None:
 
 
 @pytest.mark.unit
-def test_sync_milestone_prose_exits_1_when_update_fails() -> None:
+def test_sync_milestone_prose_exits_3_when_issue_disappears() -> None:
     runner = _runner()
     issues = [_make_issue("historic regression", status="planned", gh_number=4)]
     store = _mock_store(milestone_return=issues)
@@ -140,7 +140,7 @@ def test_sync_milestone_prose_exits_1_when_update_fails() -> None:
     with patch("fieldkit.commands.issue.cli._store", return_value=store):
         result = runner.invoke(cli, ["sync-milestone", "M001", "--state", "completed"])
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert "update FAILED" in result.output
 
 

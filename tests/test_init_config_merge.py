@@ -1,7 +1,7 @@
 """Tests for fieldkit.commands.init config.yaml merge-write behaviour.
 
 Verifies that re-running setup preserves keys it does not manage
-(gmail_db, gmail_token, shadowbot_token, etc.).
+(unrelated paths, nested settings, and optional integration values).
 """
 
 from pathlib import Path
@@ -9,105 +9,134 @@ from pathlib import Path
 import pytest
 import yaml
 
-from fieldkit.commands.init import _wizard_write_config
+import fieldkit.commands.init.wizard as wizard
+import fieldkit.config as setup_config
+from fieldkit.commands.init.wizard import _wizard_write_config
 
 pytestmark = pytest.mark.unit
 
 
-def _write_config(config_path: Path, managed: dict[str, object]) -> None:
-    """Replicate the merge-write logic from fieldkit/setup/__init__.py.
-
-    This is a copy of the relevant section so the test stays hermetic.
-    If the production code changes, this test should break — that's intentional.
-    """
-    existing_raw: dict[str, object] = {}
-    if config_path.exists():
-        try:
-            parsed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-            if isinstance(parsed, dict):
-                existing_raw = parsed
-        except (OSError, yaml.YAMLError):
-            pass
-
-    merged: dict[str, object] = {**existing_raw, **managed}
-
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    with config_path.open("w", encoding="utf-8") as f:
-        yaml.dump(merged, f, default_flow_style=False, allow_unicode=True)
-
-
-# ── TestConfigMergeWrite (flattened) ────────────────────────────────────────
-
-
-def test_config_merge_write_unknown_keys_preserved_on_rewrite(tmp_path: Path) -> None:
-    """Unknown keys written before setup survive a setup re-run."""
+@pytest.mark.parametrize("source_mode", [False, True])
+@pytest.mark.parametrize("artifacts", [False, True])
+@pytest.mark.parametrize("override", [7, None, "", "  ", "relative-checkout"])
+def test_config_writer_rejects_invalid_existing_checkout_without_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source_mode: bool, artifacts: bool, override: object
+) -> None:
     config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump({"fieldkit_root": override}), encoding="utf-8")
+    original = config_path.read_bytes()
+    monkeypatch.setattr(setup_config, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(
+        wizard, "discover_source_checkout", lambda _module: tmp_path / "source" if source_mode else None
+    )
 
-    # Simulate a pre-existing config with extra keys setup doesn't manage.
-    initial = {
-        "data_repo": "/old/data",
-        "gmail_db": "/var/data/fieldkit/gmail.db",
-        "gmail_token": "/var/config/fieldkit/gmail-token.json",
-        "shadowbot_token": "tok_abc123",
-    }
-    config_path.write_text(yaml.dump(initial), encoding="utf-8")
+    with pytest.raises(setup_config.ConfigError, match="fieldkit_root") as caught:
+        if artifacts:
+            wizard._wizard_write_artifacts(
+                "Example User", "user@example.com", "", "", "", "", [], tmp_path / "workspace", "", ""
+            )
+        else:
+            _wizard_write_config(tmp_path / "workspace", "Example User", "user@example.com", "", "", "")
 
-    # Simulate setup re-running with updated managed keys.
-    managed = {
-        "data_repo": "/new/data",
-        "fieldkit_root": "/opt/fieldkit-cli",
-        "pipeline_db": "/new/data/data/pipeline.db",
-        "name": "Test User",
-    }
-    _write_config(config_path, managed)
-
-    result = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-
-    # Managed keys updated.
-    assert result["data_repo"] == "/new/data"
-    assert result["fieldkit_root"] == "/opt/fieldkit-cli"
-    assert result["name"] == "Test User"
-
-    # Unknown keys preserved.
-    assert result["gmail_db"] == "/var/data/fieldkit/gmail.db"
-    assert result["gmail_token"] == "/var/config/fieldkit/gmail-token.json"
-    assert result["shadowbot_token"] == "tok_abc123"
+    assert config_path.read_bytes() == original
+    assert "relative-checkout" not in str(caught.value)
+    assert not (tmp_path / "workspace").exists()
 
 
-def test_config_merge_write_managed_keys_win_on_conflict(tmp_path: Path) -> None:
-    """When the same key exists in both, the managed value wins."""
+def test_source_config_writer_preserves_explicit_checkout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_path = tmp_path / "config.yaml"
-    config_path.write_text(yaml.dump({"data_repo": "/old/data", "name": "Old Name"}), encoding="utf-8")
+    explicit = tmp_path / "explicit-checkout"
+    config_path.write_text(yaml.safe_dump({"fieldkit_root": str(explicit)}), encoding="utf-8")
+    monkeypatch.setattr(setup_config, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(wizard, "discover_source_checkout", lambda _module: tmp_path / "discovered")
 
-    _write_config(config_path, {"data_repo": "/new/data", "name": "New Name"})
+    result = _wizard_write_config(tmp_path / "workspace", "Example User", "user@example.com", "", "", "")
 
-    result = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    assert result["data_repo"] == "/new/data"
-    assert result["name"] == "New Name"
+    assert result is None
+    written = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert written["fieldkit_root"] == str(explicit)
 
 
-def test_config_merge_write_no_existing_config(tmp_path: Path) -> None:
-    """Works correctly when no config.yaml exists yet (first run)."""
+@pytest.mark.parametrize("explicit_override", [False, True])
+def test_installed_config_writer_omits_guessed_checkout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, explicit_override: bool
+) -> None:
     config_path = tmp_path / "config.yaml"
-    assert not config_path.exists()
+    module = tmp_path / "site-packages" / "fieldkit" / "commands" / "init" / "wizard.py"
+    module.parent.mkdir(parents=True)
+    module.write_text("", encoding="utf-8")
+    if explicit_override:
+        config_path.write_text(yaml.safe_dump({"fieldkit_root": str(tmp_path / "explicit-checkout")}), encoding="utf-8")
+    monkeypatch.setattr(setup_config, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(wizard, "__file__", str(module))
 
-    _write_config(config_path, {"data_repo": "/data", "fieldkit_root": "/repo"})
+    result = _wizard_write_config(tmp_path / "workspace", "Example User", "user@example.com", "", "", "")
 
-    result = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    assert result["data_repo"] == "/data"
-    assert result["fieldkit_root"] == "/repo"
+    assert result is None
+    written = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    if explicit_override:
+        assert written["fieldkit_root"] == str(tmp_path / "explicit-checkout")
+    else:
+        assert "fieldkit_root" not in written
+    assert written["fieldkit_home"] == str(tmp_path / "workspace")
 
 
-def test_config_merge_write_corrupt_existing_config_handled_gracefully(tmp_path: Path) -> None:
-    """Unreadable/corrupt config is silently replaced rather than crashing."""
+@pytest.mark.parametrize("existing", [None, {}, {"name": "Old Name", "custom": {"enabled": True}}])
+def test_production_config_writer_merges_managed_and_operator_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, existing: dict[str, object] | None
+) -> None:
     config_path = tmp_path / "config.yaml"
-    config_path.write_text(": : : not valid yaml : : :", encoding="utf-8")
+    data_dir = tmp_path / "workspace"
+    root = tmp_path / "repo"
+    if existing is not None:
+        config_path.write_text(yaml.safe_dump(existing), encoding="utf-8")
+    monkeypatch.setattr(setup_config, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(wizard, "discover_source_checkout", lambda _module: root)
 
-    # Should not raise.
-    _write_config(config_path, {"data_repo": "/data"})
+    result = _wizard_write_config(data_dir, "New User", "user@example.com", "", "", "")
 
-    result = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    assert result["data_repo"] == "/data"
+    assert result is None
+    written = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert written["fieldkit_home"] == str(data_dir)
+    assert written["fieldkit_root"] == str(root)
+    assert written["gmail_db"] == str(data_dir / "data" / "gmail.db")
+    assert written["pipeline_db"] == str(data_dir / "data" / "pipeline.db")
+    assert written["name"] == "New User"
+    if existing is not None and "custom" in existing:
+        assert written["custom"] == existing["custom"]
+
+
+def test_config_writer_preserves_unknown_operator_keys_without_writing_retired_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump({"custom": {"enabled": True}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(setup_config, "CONFIG_PATH", config_path)
+    monkeypatch.setattr(wizard, "discover_source_checkout", lambda _module: None)
+
+    result = _wizard_write_config(tmp_path / "workspace", "Example User", "user@example.com", "", "", "")
+
+    assert result is None
+    written = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert "gcp_project" not in written
+    assert written["custom"] == {"enabled": True}
+
+
+def test_production_config_writer_preserves_invalid_existing_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    original = b"private: [broken\n"
+    config_path.write_bytes(original)
+    monkeypatch.setattr(setup_config, "CONFIG_PATH", config_path)
+
+    with pytest.raises(setup_config.ConfigError, match="invalid YAML"):
+        _wizard_write_config(tmp_path / "workspace", "New User", "user@example.com", "", "", "")
+
+    assert config_path.read_bytes() == original
 
 
 # ── TestGmailDbPathConsistency (flattened) ──────────────────────────────────
@@ -120,14 +149,12 @@ def test_gmail_db_path_consistency_wizard_write_config_includes_gmail_db(tmp_pat
     import yaml
 
     config_path = tmp_path / "config.yaml"
-    data_dir = tmp_path / "fieldkit-data"
+    data_dir = tmp_path / "fieldkit-workspace"
 
     # Patch CONFIG_PATH and config.__file__ so setup writes to our tmp config.
-    import fieldkit.commands.init as setup_mod
-
     with (
-        patch.object(setup_mod.cfg, "CONFIG_PATH", config_path),
-        patch.object(setup_mod.cfg, "__file__", str(tmp_path / "fieldkit" / "config" / "__init__.py")),
+        patch.object(setup_config, "CONFIG_PATH", config_path),
+        patch.object(setup_config, "__file__", str(tmp_path / "fieldkit" / "config" / "__init__.py")),
     ):
         _wizard_write_config(
             data_dir=data_dir,
@@ -135,7 +162,6 @@ def test_gmail_db_path_consistency_wizard_write_config_includes_gmail_db(tmp_pat
             email="test@example.com",  # pii-guard: ignore
             role="",
             company="",
-            gcp_project="",
         )
 
     result = yaml.safe_load(config_path.read_text(encoding="utf-8"))
@@ -151,13 +177,11 @@ def test_gmail_db_path_consistency_get_gmail_db_path_matches_setup_output(tmp_pa
     from fieldkit.gmail.discover import get_gmail_db_path
 
     config_path = tmp_path / "config.yaml"
-    data_dir = tmp_path / "fieldkit-data"
-
-    import fieldkit.commands.init as setup_mod
+    data_dir = tmp_path / "fieldkit-workspace"
 
     with (
-        patch.object(setup_mod.cfg, "CONFIG_PATH", config_path),
-        patch.object(setup_mod.cfg, "__file__", str(tmp_path / "fieldkit" / "config" / "__init__.py")),
+        patch.object(setup_config, "CONFIG_PATH", config_path),
+        patch.object(setup_config, "__file__", str(tmp_path / "fieldkit" / "config" / "__init__.py")),
     ):
         _wizard_write_config(
             data_dir=data_dir,
@@ -165,7 +189,6 @@ def test_gmail_db_path_consistency_get_gmail_db_path_matches_setup_output(tmp_pa
             email="",
             role="",
             company="",
-            gcp_project="",
         )
 
     # get_gmail_db_path reads CONFIG_PATH — patch it to point to our written config.
@@ -188,13 +211,11 @@ def test_wizard_write_config_omits_unconfigured_github_repo(tmp_path: Path) -> N
     import yaml
 
     config_path = tmp_path / "config.yaml"
-    data_dir = tmp_path / "fieldkit-data"
-
-    import fieldkit.commands.init as setup_mod
+    data_dir = tmp_path / "fieldkit-workspace"
 
     with (
-        patch.object(setup_mod.cfg, "CONFIG_PATH", config_path),
-        patch.object(setup_mod.cfg, "__file__", str(tmp_path / "fieldkit" / "config" / "__init__.py")),
+        patch.object(setup_config, "CONFIG_PATH", config_path),
+        patch.object(setup_config, "__file__", str(tmp_path / "fieldkit" / "config" / "__init__.py")),
     ):
         _wizard_write_config(
             data_dir=data_dir,
@@ -202,7 +223,6 @@ def test_wizard_write_config_omits_unconfigured_github_repo(tmp_path: Path) -> N
             email="test@example.com",  # pii-guard: ignore
             role="",
             company="",
-            gcp_project="",
         )
 
     result = yaml.safe_load(config_path.read_text(encoding="utf-8"))
@@ -216,18 +236,16 @@ def test_issues_dir_consistency_wizard_write_config_preserves_custom_github_repo
     import yaml
 
     config_path = tmp_path / "config.yaml"
-    data_dir = tmp_path / "fieldkit-data"
+    data_dir = tmp_path / "fieldkit-workspace"
     custom_repo = "myorg/my-fieldkit"
 
     # Pre-seed config with a custom github_repo value.
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(yaml.dump({"github_repo": custom_repo}), encoding="utf-8")
 
-    import fieldkit.commands.init as setup_mod
-
     with (
-        patch.object(setup_mod.cfg, "CONFIG_PATH", config_path),
-        patch.object(setup_mod.cfg, "__file__", str(tmp_path / "fieldkit" / "config" / "__init__.py")),
+        patch.object(setup_config, "CONFIG_PATH", config_path),
+        patch.object(setup_config, "__file__", str(tmp_path / "fieldkit" / "config" / "__init__.py")),
     ):
         _wizard_write_config(
             data_dir=data_dir,
@@ -235,7 +253,6 @@ def test_issues_dir_consistency_wizard_write_config_preserves_custom_github_repo
             email="test@example.com",  # pii-guard: ignore
             role="",
             company="",
-            gcp_project="",
         )
 
     result = yaml.safe_load(config_path.read_text(encoding="utf-8"))
@@ -251,13 +268,11 @@ def test_get_github_repo_requires_explicit_post_setup_configuration(tmp_path: Pa
     from fieldkit.config import ConfigError, get_github_repo
 
     config_path = tmp_path / "config.yaml"
-    data_dir = tmp_path / "fieldkit-data"
-
-    import fieldkit.commands.init as setup_mod
+    data_dir = tmp_path / "fieldkit-workspace"
 
     with (
-        patch.object(setup_mod.cfg, "CONFIG_PATH", config_path),
-        patch.object(setup_mod.cfg, "__file__", str(tmp_path / "fieldkit" / "config" / "__init__.py")),
+        patch.object(setup_config, "CONFIG_PATH", config_path),
+        patch.object(setup_config, "__file__", str(tmp_path / "fieldkit" / "config" / "__init__.py")),
     ):
         _wizard_write_config(
             data_dir=data_dir,
@@ -265,7 +280,6 @@ def test_get_github_repo_requires_explicit_post_setup_configuration(tmp_path: Pa
             email="",
             role="",
             company="",
-            gcp_project="",
         )
 
     # get_github_repo reads CONFIG_PATH — patch it to point to our written config.

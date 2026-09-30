@@ -41,7 +41,7 @@ from fieldkit.config import get_shadowbot_client_id as _get_client_id
 from fieldkit.config import get_shadowbot_redirect_uri as _get_redirect_uri
 from fieldkit.config import get_shadowbot_token_endpoint as _get_token_endpoint
 from fieldkit.config._loader import _read_config_dict
-from fieldkit.errors import AuthError, MissingOptionalDependencyError
+from fieldkit.errors import AuthError, FieldkitError, MissingOptionalDependencyError
 
 logger = logging.getLogger(__name__)
 
@@ -873,6 +873,7 @@ def get_token() -> str:
 
     Raises:
         ShadowbotAuthError: If all auth paths are exhausted.
+        FieldkitError: If refreshed credentials cannot be saved.
     """
     global _cache  # noqa: PLW0603
 
@@ -892,8 +893,14 @@ def get_token() -> str:
         token_data["access_token"] = access_token
         token_data["refresh_token"] = new_rt
         token_data["captured_at"] = str(time.time())
-        with contextlib.suppress(OSError):
+        try:
             _save_token_file(token_data)
+        except OSError:
+            raise FieldkitError(
+                "Could not save refreshed ShadowBot credentials. "
+                "Check token storage permissions and available disk space, then reauthenticate "
+                "with fieldkit auth shadowbot; the previous refresh token may have been rotated."
+            ) from None
 
         _cache = TokenCache(
             token=access_token,

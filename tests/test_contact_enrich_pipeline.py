@@ -10,11 +10,15 @@ import pytest
 from fieldkit.contact._enrich_helpers import (
     discover_all_contacts,
     enrich_contact,
+    load_gmail_cache_contacts,
     query_gmail_cache,
     run_enrichment_pipeline,
     write_to_memory,
 )
 from fieldkit.enrich.schema import ContactRecord
+from fieldkit.errors import SQLiteSnapshotError
+from fieldkit.gmail.publication import GMAIL_QUERY_READY_KEY, apply_gmail_page, initialize_gmail_publication
+from fieldkit.sqlite_publication import SQLiteMutationConnection
 
 pytestmark = pytest.mark.unit
 
@@ -25,42 +29,44 @@ pytestmark = pytest.mark.unit
 
 
 def _make_gmail_db(tmp_path: Path) -> Path:
-    """Create a minimal in-memory-style gmail.db in tmp_path with one thread/message."""
+    """Create a ready published Gmail cache with one thread and message."""
     db_path = tmp_path / "gmail.db"
-    conn = sqlite3.connect(str(db_path))
-    conn.executescript(  # pii-guard: ignore
-        """
-        CREATE TABLE threads (
-            thread_id TEXT PRIMARY KEY,
-            subject TEXT,
-            message_count INTEGER DEFAULT 1,
-            updated_at TEXT
-        );
-        CREATE TABLE messages (
-            id INTEGER PRIMARY KEY,
-            thread_id TEXT,
-            from_addr TEXT,
-            to_addr TEXT,
-            cc_addr TEXT,
-            date_str TEXT,
-            date_epoch INTEGER,
-            subject TEXT,
-            body_plain TEXT
-        );
-        CREATE TABLE people (
-            email TEXT PRIMARY KEY,
-            display_name TEXT
-        );
-        CREATE INDEX idx_messages_from_addr ON messages(from_addr);
-        CREATE INDEX idx_messages_to_addr   ON messages(to_addr);
-        CREATE INDEX idx_messages_cc_addr   ON messages(cc_addr);
-        INSERT INTO threads VALUES ('t1', 'Hello contact', 1, '2024-03-15');
-        INSERT INTO messages VALUES (1, 't1', 'alice@example.com', 'me@internal.example.com', NULL,
-                                     '2024-03-15', 1710460800, 'Hello contact', 'Hi there');
-        INSERT INTO people VALUES ('alice@example.com', 'Alice');
-        """
-    )
-    conn.close()
+    initialize_gmail_publication(db_path)
+
+    def seed(connection: SQLiteMutationConnection) -> None:
+        connection.execute(
+            "INSERT INTO threads(thread_id, subject, message_count, updated_at) VALUES (?, ?, ?, ?)",
+            ("t1", "Hello contact", 1, "2024-03-15"),
+        )
+        connection.execute(
+            """
+            INSERT INTO messages(
+                message_id, thread_id, from_addr, to_addr, cc_addr, date_str,
+                date_epoch, subject, body_plain
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "m1",
+                "t1",
+                "alice@example.com",
+                "me@internal.example.com",
+                None,
+                "2024-03-15",
+                1710460800,
+                "Hello contact",
+                "Hi there",
+            ),
+        )
+        connection.execute(
+            "INSERT INTO people(email, display_name, account, is_internal) VALUES (?, ?, ?, ?)",
+            ("alice@example.com", "Alice", "acme-corp", 0),
+        )
+        connection.execute(
+            "INSERT OR REPLACE INTO sync_state(key, value) VALUES (?, 'true')",
+            (GMAIL_QUERY_READY_KEY,),
+        )
+
+    apply_gmail_page(db_path, seed)
     return db_path
 
 
@@ -113,6 +119,50 @@ def test_query_gmail_cache_no_matching_threads_leaves_fields_absent(tmp_path: Pa
         result = query_gmail_cache(contact)
     assert "email_frequency" not in result
     assert "last_contact_date" not in result
+
+
+def test_query_gmail_cache_refuses_an_unpublished_database_without_mutating_contact(tmp_path: Path) -> None:
+    db_path = tmp_path / "raw.db"
+    sqlite3.connect(db_path).close()
+    contact: dict[str, object] = {"email": "alex@acme-corp.example.com"}
+
+    with (
+        patch("fieldkit.contact._enrich_helpers.get_gmail_db_path", return_value=db_path),
+        pytest.raises(SQLiteSnapshotError, match="explicit import"),
+    ):
+        query_gmail_cache(contact)
+
+    assert contact == {"email": "alex@acme-corp.example.com"}
+
+
+def test_load_gmail_cache_contacts_reads_only_the_ready_publication(tmp_path: Path) -> None:
+    db_path = _make_gmail_db(tmp_path)
+
+    with patch("fieldkit.contact._enrich_helpers.get_gmail_db_path", return_value=db_path):
+        result = load_gmail_cache_contacts("acme-corp")
+
+    assert result == [
+        {
+            "full_name": "Alice",
+            "email": "alice@example.com",
+            "company": "Acme Corp",
+            "account": "acme-corp",
+            "email_frequency": 0,
+            "last_contact_date": None,
+            "source": "gmail",
+        }
+    ]
+
+
+def test_load_gmail_cache_contacts_refuses_an_unpublished_database(tmp_path: Path) -> None:
+    db_path = tmp_path / "raw.db"
+    sqlite3.connect(db_path).close()
+
+    with (
+        patch("fieldkit.contact._enrich_helpers.get_gmail_db_path", return_value=db_path),
+        pytest.raises(SQLiteSnapshotError, match="explicit import"),
+    ):
+        load_gmail_cache_contacts("acme-corp")
 
 
 # ── TestContactRecordConfidence (flattened) ─────────────────────────────────
@@ -205,7 +255,7 @@ def test_exclusion_guard_legitimate_contact_passes() -> None:
     from fieldkit.contact._enrich_helpers import _should_skip_contact
 
     assert _should_skip_contact("alice@acme-bank-com.example.com", "me@internal.example.com") is False
-    assert _should_skip_contact("alice@acme-corp.com", "me@internal.example.com") is False  # pii-guard: ignore
+    assert _should_skip_contact("alice@acme-corp.example.com", "me@internal.example.com") is False  # pii-guard: ignore
 
 
 def test_exclusion_guard_no_email_not_skipped() -> None:
@@ -512,49 +562,44 @@ def test_enrich_batch_mixed_batch_composes_all_guards() -> None:
 
 
 def _make_multi_thread_gmail_db(tmp_path: Path) -> Path:
-    """Create a gmail DB with 3 distinct threads from the same sender."""
+    """Create a ready cache with three distinct threads from the same sender."""
     db_path = tmp_path / "gmail-multi.db"
-    conn = sqlite3.connect(str(db_path))
-    conn.executescript(  # pii-guard: ignore
-        """
-        CREATE TABLE threads (
-            thread_id TEXT PRIMARY KEY,
-            subject TEXT,
-            message_count INTEGER DEFAULT 1,
-            updated_at TEXT
-        );
-        CREATE TABLE messages (
-            id INTEGER PRIMARY KEY,
-            thread_id TEXT,
-            from_addr TEXT,
-            to_addr TEXT,
-            cc_addr TEXT,
-            date_str TEXT,
-            date_epoch INTEGER,
-            subject TEXT,
-            body_plain TEXT
-        );
-        CREATE TABLE people (
-            email TEXT PRIMARY KEY,
-            display_name TEXT
-        );
-        CREATE INDEX idx_messages_from_addr ON messages(from_addr);
-        CREATE INDEX idx_messages_to_addr   ON messages(to_addr);
-        CREATE INDEX idx_messages_cc_addr   ON messages(cc_addr);
-        INSERT INTO threads VALUES ('t1', 'Thread 1', 1, '2024-03-15');
-        INSERT INTO threads VALUES ('t2', 'Thread 2', 1, '2024-03-16');
-        INSERT INTO threads VALUES ('t3', 'Thread 3', 1, '2024-03-17');
-        INSERT INTO messages VALUES (1, 't1', 'alice@example.com', 'me@your-org-com.example.com',
-                                     NULL, '2024-03-15', 1710460800, 'Thread 1', 'Hi');
-        INSERT INTO messages VALUES (2, 't2', 'alice@example.com', 'me@your-org-com.example.com',
-                                     NULL, '2024-03-16', 1710547200, 'Thread 2', 'Hi again');
-        INSERT INTO messages VALUES (3, 't3', 'alice@example.com', 'me@your-org-com.example.com',
-                                     NULL, '2024-03-17', 1710633600, 'Thread 3', 'Follow up');
-        INSERT INTO people VALUES ('alice@example.com', 'Alice');
-        """
-    )
-    conn.commit()
-    conn.close()
+    initialize_gmail_publication(db_path)
+
+    def seed(connection: SQLiteMutationConnection) -> None:
+        for index, day in enumerate((15, 16, 17), start=1):
+            connection.execute(
+                "INSERT INTO threads(thread_id, subject, message_count, updated_at) VALUES (?, ?, ?, ?)",
+                (f"t{index}", f"Thread {index}", 1, f"2024-03-{day}"),
+            )
+            connection.execute(
+                """
+                INSERT INTO messages(
+                    message_id, thread_id, from_addr, to_addr, date_str,
+                    date_epoch, subject, body_plain
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    f"m{index}",
+                    f"t{index}",
+                    "alice@example.com",
+                    "me@your-org-com.example.com",
+                    f"2024-03-{day}",
+                    1710460800 + ((index - 1) * 86400),
+                    f"Thread {index}",
+                    "Fictional note",
+                ),
+            )
+        connection.execute(
+            "INSERT INTO people(email, display_name, account, is_internal) VALUES (?, ?, ?, ?)",
+            ("alice@example.com", "Alice", "acme-corp", 0),
+        )
+        connection.execute(
+            "INSERT OR REPLACE INTO sync_state(key, value) VALUES (?, 'true')",
+            (GMAIL_QUERY_READY_KEY,),
+        )
+
+    apply_gmail_page(db_path, seed)
     return db_path
 
 

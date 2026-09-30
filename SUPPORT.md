@@ -4,6 +4,13 @@ fieldkit is maintained as an open-source side project. Community support is best
 commercial support contract, guaranteed response time, or promise that every integration or feature
 request will be accepted.
 
+## Supported releases
+
+Only the latest patch release of the latest minor version receives bug fixes and security fixes.
+Older patch releases and older minor versions are unsupported; upgrade to the supported release
+before asking for a fix. The `main` branch receives fixes on a best-effort basis during development
+and is not a supported published release.
+
 ## Before asking
 
 1. Check the [documentation](docs/index.md) and

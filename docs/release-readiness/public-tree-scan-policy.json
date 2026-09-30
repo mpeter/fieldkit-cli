@@ -99,13 +99,6 @@
     },
     {
       "rule_id": "PII001",
-      "path": "scripts/check_documentation_examples.py",
-      "pattern": "git@github[.]com",
-      "classification": "public_repository_transport",
-      "rationale": "The final-rehearsal verifier accepts Git's public SSH service account only in canonical upstream URLs."
-    },
-    {
-      "rule_id": "PII001",
       "path": "scripts/cutover_record.py",
       "pattern": "git@github[.]com",
       "classification": "public_repository_transport",
@@ -145,6 +138,55 @@
       "pattern": "(?i)(?:notifications@google[.]com|mailer@docusign[.]net|user@mail[.]google[.]com|user@na3[.]docusign[.]net|user@google[.]com)",
       "classification": "public_system_sender_test",
       "rationale": "System-address tests verify exact matching and non-matching for public Google and Docusign automated-sender domains."
+    },
+    {
+      "rule_id": "PII001",
+      "path": "scripts/public_history_source.py",
+      "pattern": "(?:^\\ \\ \\ \\ \\ \\ \\ \\ f\"git@github\\.com:\\{anchor\\.repository\\}\\.git\",\\ \\ \\#\\ pii\\-guard:\\ ignore\\ \\-\\ Git\\ SSH\\ service\\ account$|^\\ \\ \\ \\ \\ \\ \\ \\ f\"ssh:\\/\\/git@github\\.com\\/\\{anchor\\.repository\\}\\.git\",\\ \\ \\#\\ pii\\-guard:\\ ignore\\ \\-\\ Git\\ SSH\\ service\\ account$)",
+      "classification": "public_repository_transport",
+      "rationale": "Exact Git SSH service account in canonical upstream transport validation."
+    },
+    {
+      "rule_id": "PII001",
+      "path": "scripts/smoke_artifact.py",
+      "pattern": "(?:^\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \"gemini\\-notes@google\\.com\",$)",
+      "classification": "public_system_sender",
+      "rationale": "Exact public automated meeting-notes sender exercised by synthetic workflow fixtures."
+    },
+    {
+      "rule_id": "PII001",
+      "path": "tests/test_config_loader_hardening.py",
+      "pattern": "(?:^\\ \\ \\ \\ \\ \\ \\ \\ \"https:\\/\\/private\\-user\\-sentinel:private\\-password\\-sentinel@acme\\.my\\.salesforce\\.com\",\\ \\ \\#\\ pii\\-guard:\\ ignore\\ \u2014\\ synthetic\\ credential\\-userinfo\\ rejection\\ fixture$)",
+      "classification": "fictional_fixture",
+      "rationale": "Exact malformed-address or credential-userinfo negative fixture exercises fail-closed validation; it contains no user identity."
+    },
+    {
+      "rule_id": "PII001",
+      "path": "tests/test_gmail_cache.py",
+      "pattern": "(?:^\\ \\ \\ \\ \\ \\ \\ \\ \"a@\\.example\\.com\",$|^\\ \\ \\ \\ \\ \\ \\ \\ \"a@example\\.\\.com\",$)",
+      "classification": "fictional_fixture",
+      "rationale": "Exact malformed-address or credential-userinfo negative fixture exercises fail-closed validation; it contains no user identity."
+    },
+    {
+      "rule_id": "PII001",
+      "path": "tests/test_ingest_approval_effects.py",
+      "pattern": "(?:^\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \"Gemini\\ <gemini\\-notes@google\\.com>\",$)",
+      "classification": "public_system_sender",
+      "rationale": "Exact public automated meeting-notes sender exercised by synthetic workflow fixtures."
+    },
+    {
+      "rule_id": "PII001",
+      "path": "tests/test_ingest_workflow_scenarios.py",
+      "pattern": "(?:^\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \"Gemini\\ <gemini\\-notes@google\\.com>\",$)",
+      "classification": "public_system_sender",
+      "rationale": "Exact public automated meeting-notes sender exercised by synthetic workflow fixtures."
+    },
+    {
+      "rule_id": "PII001",
+      "path": "tests/test_release_check.py",
+      "pattern": "(?:^\\ \\ \\ \\ \\ \\ \\ \\ \"https:\\/\\/user@github\\.com\\/mpeter\\/fieldkit\\-cli\\/actions\\/workflows\\/release\\.yml\",$)",
+      "classification": "fictional_fixture",
+      "rationale": "Exact malformed-address or credential-userinfo negative fixture exercises fail-closed validation; it contains no user identity."
     }
   ],
   "binary_allowances": [

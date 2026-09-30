@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from fieldkit.commands.sf.account import _resolve_sf_account_id
+from fieldkit.errors import FieldkitError
 
 pytestmark = pytest.mark.unit
 
@@ -121,8 +122,8 @@ def test_resolve_via_pursuit_files_valid_opp_id_fetches_account(tmp_path: Path) 
     client.fetch_record.assert_not_called()
 
 
-def test_resolve_via_pursuit_files_invalid_opp_id_placeholder_skipped(tmp_path: Path) -> None:
-    """Placeholder IDs like 'NEEDS-LOOKUP' are skipped with a warning."""
+def test_resolve_via_pursuit_files_invalid_opp_id_placeholder_rejected(tmp_path: Path) -> None:
+    """An invalid identity cannot become a completed no-match scan."""
     pursuit = tmp_path / "accounts" / "acme" / "pursuits" / "deal.md"
     _write_pursuit(pursuit, sf_opportunity_id="NEEDS-LOOKUP")
 
@@ -134,10 +135,12 @@ def test_resolve_via_pursuit_files_invalid_opp_id_placeholder_skipped(tmp_path: 
             return_value={"accounts": {"acme": {}}},
         ),
         patch("fieldkit.commands.sf.account.get_fieldkit_home", return_value=tmp_path),
+        pytest.raises(FieldkitError, match="Salesforce pursuit opportunity identity is invalid") as caught,
     ):
-        result = _resolve_sf_account_id("acme", client, "https://sf.com")
+        _resolve_sf_account_id("acme", client, "https://sf.com")
 
-    assert result is None
+    assert "NEEDS-LOOKUP" not in str(caught.value)
+    client.sosl_search.assert_not_called()
     client.fetch_record.assert_not_called()
 
 
@@ -159,9 +162,9 @@ def test_resolve_via_pursuit_files_no_opp_id_in_frontmatter_skipped(tmp_path: Pa
     assert result is None
 
 
-def test_resolve_via_pursuit_files_api_error_on_sosl_search_returns_none(tmp_path: Path) -> None:
-    """implementation note: SFAPIError from sosl_search is caught; returns None."""
-    from fieldkit.sf.client import SFAPIError
+def test_resolve_via_pursuit_files_api_error_on_sosl_search_propagates(tmp_path: Path) -> None:
+    """Provider failure must remain distinguishable from no match."""
+    from fieldkit.sf.errors import SFAPIError
 
     opp_id1 = "006Pe000012n2GkIAI"
     opp_id2 = "006Pe000012n2GkIAA"
@@ -172,7 +175,7 @@ def test_resolve_via_pursuit_files_api_error_on_sosl_search_returns_none(tmp_pat
     _write_pursuit(pursuit2, sf_opportunity_id=opp_id2)
 
     client = _make_client(keyword_result=None)
-    # implementation note: both IDs collected, single sosl_search call raises SFAPIError → None
+    # Both IDs are collected into one request; its provider failure must propagate.
     client.sosl_search.side_effect = SFAPIError("500 error")
 
     with (
@@ -181,10 +184,9 @@ def test_resolve_via_pursuit_files_api_error_on_sosl_search_returns_none(tmp_pat
             return_value={"accounts": {"acme": {}}},
         ),
         patch("fieldkit.commands.sf.account.get_fieldkit_home", return_value=tmp_path),
+        pytest.raises(SFAPIError, match="500 error"),
     ):
-        result = _resolve_sf_account_id("acme", client, "https://sf.com")
-
-    assert result is None
+        _resolve_sf_account_id("acme", client, "https://sf.com")
 
 
 def test_resolve_via_pursuit_files_no_account_id_in_response_continues(tmp_path: Path) -> None:
@@ -224,8 +226,8 @@ def test_resolve_via_pursuit_files_account_info_not_dict_returns_none() -> None:
     client.resolve_account_id_by_keywords.assert_not_called()
 
 
-def test_resolve_via_pursuit_files_get_fieldkit_home_exception_returns_none() -> None:
-    """Exception from get_fieldkit_home returns None."""
+def test_resolve_via_pursuit_files_get_fieldkit_home_error_propagates() -> None:
+    """A failed local scan remains distinguishable from a completed no-match."""
     client = _make_client(keyword_result=None)
 
     with (
@@ -235,12 +237,11 @@ def test_resolve_via_pursuit_files_get_fieldkit_home_exception_returns_none() ->
         ),
         patch(
             "fieldkit.commands.sf.account.get_fieldkit_home",
-            side_effect=RuntimeError("no config"),
+            side_effect=OSError("no config"),
         ),
+        pytest.raises(OSError, match="no config"),
     ):
-        result = _resolve_sf_account_id("acme", client, "https://sf.com")
-
-    assert result is None
+        _resolve_sf_account_id("acme", client, "https://sf.com")
 
 
 def test_resolve_via_pursuit_files_pursuit_dir_not_dir_returns_none(tmp_path: Path) -> None:
@@ -260,17 +261,17 @@ def test_resolve_via_pursuit_files_pursuit_dir_not_dir_returns_none(tmp_path: Pa
     assert result is None
 
 
-def test_resolve_via_pursuit_files_custom_pursuit_dir_config(tmp_path: Path) -> None:
-    """pursuit_dir from config is respected."""
+def test_resolve_via_pursuit_files_legacy_directory_cannot_redirect_scan(tmp_path: Path) -> None:
+    """Only the canonical account namespace supplies pursuit identities."""
     custom_dir = tmp_path / "custom" / "pursuits"
     custom_dir.mkdir(parents=True)
     opp_id = "006Pe000012n2GkIAI"
-    pursuit = custom_dir / "deal.md"
-    _write_pursuit(pursuit, sf_opportunity_id=opp_id)
+    (custom_dir / "deal.md").write_text("---\nprivate-invalid: [unclosed\n---\n", encoding="utf-8")
+    _write_pursuit(tmp_path / "accounts" / "acme" / "pursuits" / "deal.md", sf_opportunity_id=opp_id)
 
     client = _make_client(keyword_result=None)
     # implementation note: sosl_search returns list[dict] directly
-    client.sosl_search.return_value = [{"AccountId": "001CUSTOM0000000000"}]
+    client.sosl_search.return_value = [{"AccountId": "001ABC123456789ABC"}]
 
     with (
         patch(
@@ -281,7 +282,8 @@ def test_resolve_via_pursuit_files_custom_pursuit_dir_config(tmp_path: Path) -> 
     ):
         result = _resolve_sf_account_id("acme", client, "https://sf.com")
 
-    assert result == "001CUSTOM0000000000"
+    assert result == "001ABC123456789ABC"
+    client.sosl_search.assert_called_once_with(f"FIND {{{opp_id}}} IN ALL FIELDS RETURNING Opportunity(AccountId)")
 
 
 # ---------------------------------------------------------------------------
@@ -292,8 +294,8 @@ def test_resolve_via_pursuit_files_custom_pursuit_dir_config(tmp_path: Path) -> 
 # ── TestResolveEdgeCases (flattened) ────────────────────────────────────────
 
 
-def test_resolve_edge_cases_yaml_parse_error_skipped(tmp_path: Path) -> None:
-    """A pursuit file with unparseable YAML is silently skipped."""
+def test_resolve_edge_cases_yaml_parse_error_propagates(tmp_path: Path) -> None:
+    """An incomplete local scan cannot become a completed no-match."""
     pursuit_dir = tmp_path / "accounts" / "acme" / "pursuits"
     pursuit_dir.mkdir(parents=True)
     bad_file = pursuit_dir / "bad.md"
@@ -308,17 +310,15 @@ def test_resolve_edge_cases_yaml_parse_error_skipped(tmp_path: Path) -> None:
             return_value={"accounts": {"acme": {}}},
         ),
         patch("fieldkit.commands.sf.account.get_fieldkit_home", return_value=tmp_path),
+        pytest.raises(FieldkitError, match=r"^Invalid pursuit frontmatter$"),
     ):
-        result = _resolve_sf_account_id("acme", client, "https://sf.com")
-
-    assert result is None
+        _resolve_sf_account_id("acme", client, "https://sf.com")
 
 
-def test_resolve_edge_cases_no_frontmatter_skipped(tmp_path: Path) -> None:
-    """A pursuit file with no frontmatter is silently skipped."""
+def test_resolve_edge_cases_no_frontmatter_rejected(tmp_path: Path) -> None:
+    """Missing frontmatter is invalid metadata, not a complete no-match."""
     pursuit_dir = tmp_path / "accounts" / "acme" / "pursuits"
     pursuit_dir.mkdir(parents=True)
-    pursuit_dir = tmp_path / "accounts" / "acme" / "pursuits"
     (pursuit_dir / "nofront.md").write_text("# No frontmatter\n", encoding="utf-8")
 
     client = _make_client(keyword_result=None)
@@ -329,10 +329,12 @@ def test_resolve_edge_cases_no_frontmatter_skipped(tmp_path: Path) -> None:
             return_value={"accounts": {"acme": {}}},
         ),
         patch("fieldkit.commands.sf.account.get_fieldkit_home", return_value=tmp_path),
+        pytest.raises(FieldkitError, match="Salesforce pursuit has no frontmatter block"),
     ):
-        result = _resolve_sf_account_id("acme", client, "https://sf.com")
+        _resolve_sf_account_id("acme", client, "https://sf.com")
 
-    assert result is None
+    client.sosl_search.assert_not_called()
+    client.fetch_record.assert_not_called()
 
 
 def test_resolve_edge_cases_opp_id_none_silently_skipped(tmp_path: Path) -> None:
@@ -360,7 +362,7 @@ def test_resolve_edge_cases_opp_id_none_silently_skipped(tmp_path: Path) -> None
 
 def test_resolve_edge_cases_auth_error_on_sosl_search_propagates(tmp_path: Path) -> None:
     """implementation note: SFAuthError from sosl_search propagates (not caught in batch loop)."""
-    from fieldkit.sf.client import SFAuthError
+    from fieldkit.sf.errors import SFAuthError
 
     opp_id = "006Pe000012n2GkIAI"
     pursuit = tmp_path / "accounts" / "acme" / "pursuits" / "deal.md"

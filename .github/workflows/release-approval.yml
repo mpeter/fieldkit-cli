@@ -40,7 +40,18 @@ jobs:
         run: |
           [[ "$SOURCE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
           run="$(timeout 60s gh api "repos/$RELEASE_INPUT_REPOSITORY/actions/runs/$SOURCE_RUN_ID")"
-          jq -e '.status == "completed" and .conclusion == "success" and (.run_attempt | type == "number") and (.head_sha | test("^[0-9a-f]{40}$"))' <<< "$run" > /dev/null
+          jq -e '
+            .repository.id == 1378745365 and
+            .repository.owner.id == 1717694 and
+            .head_repository.id == 1378745365 and
+            .workflow_id == 362870199 and
+            .event == "workflow_dispatch" and
+            .head_branch == "main" and
+            .path == ".github/workflows/retain-release-input.yml@main" and
+            .status == "completed" and .conclusion == "success" and
+            (.run_attempt | type == "number") and
+            (.head_sha | test("^[0-9a-f]{40}$"))
+          ' <<< "$run" > /dev/null
           attempt="$(jq -r '.run_attempt' <<< "$run")"
           head_sha="$(jq -r '.head_sha' <<< "$run")"
           expected_name="release-approval-source-${SOURCE_RUN_ID}-${attempt}-${head_sha}"

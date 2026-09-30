@@ -1,0 +1,270 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mpeter/fieldkit-cli/blob/main/docs/release-readiness/quality-gate-receipt.schema.json",
+  "title": "fieldkit quality gate receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "status",
+    "complete",
+    "failure_reason",
+    "candidate_scope",
+    "trust",
+    "immutable_release_evidence",
+    "unproven_gates",
+    "generated_at",
+    "plan",
+    "source_before",
+    "source_after",
+    "stages"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"const": "fieldkit-quality-gate-receipt"},
+    "status": {"enum": ["pass", "fail"]},
+    "complete": {"type": "boolean"},
+    "failure_reason": {
+      "oneOf": [
+        {"type": "null"},
+        {"enum": ["source-drift", "stage-failed"]}
+      ]
+    },
+    "candidate_scope": {"enum": ["clean-head", "dirty-local"]},
+    "trust": {"const": "unqualified-controller"},
+    "immutable_release_evidence": {"const": false},
+    "unproven_gates": {
+      "type": "array",
+      "prefixItems": [
+        {"const": "external-controller-qualification"},
+        {"const": "maintained-runtime-qualification"},
+        {"const": "filesystem-isolation"},
+        {"const": "network-isolation"},
+        {"const": "pinned-toolchain-qualification"},
+        {"const": "immutable-same-candidate-release-evidence"}
+      ],
+      "items": false,
+      "minItems": 6,
+      "maxItems": 6
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{1,6})?(?:Z|[+-][0-9]{2}:[0-9]{2})$",
+      "maxLength": 64
+    },
+    "plan": {"$ref": "#/$defs/plan"},
+    "source_before": {"$ref": "#/$defs/source"},
+    "source_after": {"$ref": "#/$defs/source"},
+    "stages": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {"$ref": "#/$defs/stage"}
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "gitObject": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "nullableGitObject": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/gitObject"}
+      ]
+    },
+    "environment": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+      },
+      "additionalProperties": {
+        "type": "string",
+        "maxLength": 256
+      },
+      "maxProperties": 8
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "bytes", "sha256"],
+      "properties": {
+        "status": {"enum": ["complete", "unavailable", "not-run"]},
+        "bytes": {
+          "oneOf": [
+            {"type": "null"},
+            {"type": "integer", "minimum": 0, "maximum": 8388608}
+          ]
+        },
+        "sha256": {
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/sha256"}
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"const": "complete"}}},
+          "then": {
+            "properties": {
+              "bytes": {"type": "integer"},
+              "sha256": {"$ref": "#/$defs/sha256"}
+            }
+          },
+          "else": {
+            "properties": {
+              "bytes": {"type": "null"},
+              "sha256": {"type": "null"}
+            }
+          }
+        }
+      ]
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["argv0", "resolved_name", "sha256"],
+      "properties": {
+        "argv0": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "resolved_name": {"type": "string", "minLength": 1, "maxLength": 255},
+        "sha256": {
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/sha256"}
+          ]
+        }
+      }
+    },
+    "command": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "argv",
+        "environment",
+        "timeout_seconds",
+        "status",
+        "exit_status",
+        "failure_reason",
+        "elapsed_seconds",
+        "stdout",
+        "stderr",
+        "tool"
+      ],
+      "properties": {
+        "argv": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": {"type": "string", "minLength": 1, "maxLength": 1024}
+        },
+        "environment": {"$ref": "#/$defs/environment"},
+        "timeout_seconds": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1800
+        },
+        "status": {"enum": ["pass", "fail", "not-run", "skipped-prose-only"]},
+        "exit_status": {
+          "oneOf": [
+            {"type": "null"},
+            {"type": "integer", "minimum": -255, "maximum": 255}
+          ]
+        },
+        "failure_reason": {
+          "oneOf": [
+            {"type": "null"},
+            {"enum": ["start", "pipes", "timeout", "overflow", "cleanup", "nonzero-exit"]}
+          ]
+        },
+        "elapsed_seconds": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1900
+        },
+        "stdout": {"$ref": "#/$defs/output"},
+        "stderr": {"$ref": "#/$defs/output"},
+        "tool": {
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/tool"}
+          ]
+        }
+      }
+    },
+    "stage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "skip_policy", "status", "elapsed_seconds", "commands"],
+      "properties": {
+        "label": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "skip_policy": {"enum": ["never", "prose-only"]},
+        "status": {"enum": ["pass", "fail", "not-run", "skipped-prose-only"]},
+        "elapsed_seconds": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1900
+        },
+        "commands": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": {"$ref": "#/$defs/command"}
+        }
+      }
+    },
+    "plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tier",
+        "sha256",
+        "runner_sha256",
+        "quality_base",
+        "candidate_head",
+        "workers",
+        "stage_timeout_seconds"
+      ],
+      "properties": {
+        "tier": {"enum": ["pr", "full", "impact"]},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "runner_sha256": {"$ref": "#/$defs/sha256"},
+        "quality_base": {"$ref": "#/$defs/nullableGitObject"},
+        "candidate_head": {"$ref": "#/$defs/nullableGitObject"},
+        "workers": {"type": "integer", "minimum": 1, "maximum": 32},
+        "stage_timeout_seconds": {
+          "type": "number",
+          "enum": [120, 1800]
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["head", "head_tree", "worktree", "status_sha256", "index_sha256", "worktree_sha256", "dirty_entries"],
+      "properties": {
+        "head": {"$ref": "#/$defs/gitObject"},
+        "head_tree": {"$ref": "#/$defs/gitObject"},
+        "worktree": {"enum": ["clean", "dirty"]},
+        "status_sha256": {"$ref": "#/$defs/sha256"},
+        "index_sha256": {"$ref": "#/$defs/sha256"},
+        "worktree_sha256": {"$ref": "#/$defs/sha256"},
+        "dirty_entries": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        }
+      }
+    }
+  }
+}

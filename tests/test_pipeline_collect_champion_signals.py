@@ -1,7 +1,7 @@
-"""Tests for collect_champion_signals in fieldkit.commands.pipeline.collect.
+"""Tests for collect_champion_signals in fieldkit.pipeline.collect.
 
 NOTE: this is a distinct function from collect_champion_signals in
-commands/brief/collect.py (same name, different module — gaze-py's documented
+fieldkit.brief.collect (same name, different module — gaze-py's documented
 same-name blind spot). Do not conflate the two.
 
 Targets: gmail.db-missing early return, _gmail_connect failure, per-pursuit
@@ -16,8 +16,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-import fieldkit.commands.pipeline.collect as collect_mod
-from fieldkit.commands.pipeline.collect import collect_champion_signals
+import fieldkit.pipeline.collect as collect_mod
+from fieldkit.errors import SQLiteSnapshotError
+from fieldkit.pipeline.collect import collect_champion_signals
 
 pytestmark = pytest.mark.unit
 
@@ -65,13 +66,17 @@ def test_no_gmail_db_returns_empty_without_connecting(tmp_path: Path) -> None:
 # ===========================================================================
 
 
-def test_gmail_connect_error_returns_empty_and_skips_loop(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "error",
+    [sqlite3.Error("boom"), SQLiteSnapshotError("active", reason="active")],
+)
+def test_gmail_connect_error_returns_empty_and_skips_loop(tmp_path: Path, error: Exception) -> None:
     db_path = tmp_path / "gmail.db"
     db_path.touch()
 
     with (
         patch.object(collect_mod, "get_gmail_db_path", return_value=db_path),
-        patch.object(collect_mod, "_gmail_connect", side_effect=sqlite3.Error("boom")),
+        patch.object(collect_mod, "_gmail_connect", side_effect=error),
         patch.object(collect_mod, "iterate_pursuits") as mock_iterate,
     ):
         result = collect_champion_signals(tmp_path)

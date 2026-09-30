@@ -1,25 +1,27 @@
-"""Unit tests for lib/skill_template.py.
-
-All tests are pure unit tests — no real filesystem config reads.
-lib.config functions are mocked at the lib.skill_template boundary.
-"""
+"""Skill template tests use temporary configuration or controlled collaborators."""
 
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
+from fieldkit.config import ConfigError
 from fieldkit.skill.template import (
     SkillInstallResult,
     TemplateContext,
     UnresolvedVariable,
-    _load_identity_fields,
     build_template_ctx,
     install_skills,
     render_skill_text,
 )
 
 pytestmark = pytest.mark.unit
+
+
+def _identity_fields_from_context() -> dict[str, str]:
+    context = build_template_ctx()
+    return {key: context.get(key, "") for key in ("territory", "salesforce_user_id")}
+
 
 # ---------------------------------------------------------------------------
 # Type alias smoke test
@@ -129,6 +131,18 @@ def test_build_template_ctx_no_config_returns_empty_dict() -> None:
     assert ctx == {}
 
 
+def test_build_template_ctx_exposes_only_canonical_workspace_variable(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    workspace = tmp_path / "workspace"
+    config_path.write_text(f"fieldkit_home: {workspace}\nname: Jane\n", encoding="utf-8")
+
+    with patch("fieldkit.config._loader.CONFIG_PATH", config_path):
+        ctx = build_template_ctx()
+
+    assert ctx["fieldkit_home"] == str(workspace)
+    assert "data_repo" not in ctx
+
+
 def test_build_template_ctx_config_present_accounts_absent() -> None:
     """Personal fields populated; account fields default to empty strings."""
     config_fields = {
@@ -167,13 +181,8 @@ def test_build_template_ctx_config_present_accounts_absent() -> None:
     assert ctx["accounts.0"] == ""
 
 
-def test_build_template_ctx_never_raises() -> None:
-    """build_template_ctx() must not raise even if helpers raise.
-
-    _load_config_fields is responsible for swallowing its own exceptions
-    and returning an empty dict.  When it returns {}, build_template_ctx
-    short-circuits and returns {} without calling the other helpers.
-    """
+def test_build_template_ctx_short_circuits_absent_personal_configuration() -> None:
+    """An empty personal configuration skips account and identity loading."""
     with (
         patch("fieldkit.skill.template._load_config_fields", return_value={}),
         patch("fieldkit.skill.template._load_account_fields", return_value={}),
@@ -255,7 +264,7 @@ def test_build_template_ctx_identity_fields_empty_when_absent() -> None:
 
 
 # ---------------------------------------------------------------------------
-# _load_identity_fields()
+# _identity_fields_from_context()
 # ---------------------------------------------------------------------------
 
 
@@ -281,7 +290,7 @@ def test_load_identity_fields_returns_both_fields_when_identity_yaml_present(tmp
     )
 
     with patch("fieldkit.config._loader.CONFIG_PATH", config_path):
-        result = _load_identity_fields()
+        result = _identity_fields_from_context()
 
     assert result["territory"] == "US-West"
     assert result["salesforce_user_id"] == "005Pe000001AbcDef"
@@ -291,7 +300,7 @@ def test_load_identity_fields_returns_empty_strings_when_config_absent(tmp_path:
     """Returns defaults when config.yaml does not exist."""
     missing = tmp_path / "no-config.yaml"
     with patch("fieldkit.config._loader.CONFIG_PATH", missing):
-        result = _load_identity_fields()
+        result = _identity_fields_from_context()
 
     assert result == {"territory": "", "salesforce_user_id": ""}
 
@@ -311,7 +320,7 @@ def test_load_identity_fields_returns_empty_strings_when_identity_yaml_absent(tm
     # No identity.yaml created
 
     with patch("fieldkit.config._loader.CONFIG_PATH", config_path):
-        result = _load_identity_fields()
+        result = _identity_fields_from_context()
 
     assert result == {"territory": "", "salesforce_user_id": ""}
 
@@ -336,14 +345,14 @@ def test_load_identity_fields_returns_empty_strings_when_keys_absent_from_identi
     )
 
     with patch("fieldkit.config._loader.CONFIG_PATH", config_path):
-        result = _load_identity_fields()
+        result = _identity_fields_from_context()
 
     assert result["territory"] == ""
     assert result["salesforce_user_id"] == ""
 
 
-def test_load_identity_fields_returns_empty_strings_when_identity_yaml_malformed(tmp_path: Path) -> None:
-    """Returns defaults when identity.yaml contains invalid YAML."""
+def test_load_identity_fields_rejects_malformed_identity_yaml(tmp_path: Path) -> None:
+    """Present invalid identity configuration must not become empty context."""
     config_dir = tmp_path / ".config" / "fieldkit"
     config_dir.mkdir(parents=True)
     config_path = config_dir / "config.yaml"
@@ -360,18 +369,16 @@ def test_load_identity_fields_returns_empty_strings_when_identity_yaml_malformed
         encoding="utf-8",
     )
 
-    with patch("fieldkit.config._loader.CONFIG_PATH", config_path):
-        result = _load_identity_fields()
-
-    assert result == {"territory": "", "salesforce_user_id": ""}
+    with patch("fieldkit.config._loader.CONFIG_PATH", config_path), pytest.raises(ConfigError, match="invalid YAML"):
+        _identity_fields_from_context()
 
 
-def test_load_identity_fields_never_raises(tmp_path: Path) -> None:
-    """_load_identity_fields() must not propagate any exception."""
+def test_load_identity_fields_absent_config_is_optional(tmp_path: Path) -> None:
+    """An absent configuration has empty identity defaults."""
     missing = tmp_path / "no-config.yaml"
     with patch("fieldkit.config._loader.CONFIG_PATH", missing):
         # Should return defaults, not raise
-        result = _load_identity_fields()
+        result = _identity_fields_from_context()
     assert isinstance(result, dict)
 
 
@@ -394,7 +401,7 @@ def test_load_identity_fields_partial_keys_in_identity_yaml(tmp_path: Path) -> N
     )
 
     with patch("fieldkit.config._loader.CONFIG_PATH", config_path):
-        result = _load_identity_fields()
+        result = _identity_fields_from_context()
 
     assert result["territory"] == "EMEA"
     assert result["salesforce_user_id"] == ""
@@ -731,7 +738,7 @@ def test_install_skills_multiple_skills_all_installed(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# historic regression regression tests for _load_identity_fields()
+# historic regression regression tests for _identity_fields_from_context()
 # Flat layout, nested layout, territory fallback, missing file
 # ---------------------------------------------------------------------------
 
@@ -766,7 +773,7 @@ def test_load_identity_fields_flat_layout(tmp_path: Path) -> None:
     config_path = _write_config_load_identity_fields_bug326(tmp_path, fieldkit_home)
 
     with patch("fieldkit.config._loader.CONFIG_PATH", config_path):
-        result = _load_identity_fields()
+        result = _identity_fields_from_context()
 
     assert result["territory"] == "FSI_WEST"
     assert result["salesforce_user_id"] == "005abc"
@@ -788,7 +795,7 @@ def test_load_identity_fields_nested_layout(tmp_path: Path) -> None:
     config_path = _write_config_load_identity_fields_bug326(tmp_path, fieldkit_home)
 
     with patch("fieldkit.config._loader.CONFIG_PATH", config_path):
-        result = _load_identity_fields()
+        result = _identity_fields_from_context()
 
     # Must return the same values as the flat layout — historic regression regression.
     assert result["territory"] == "FSI_WEST"
@@ -819,7 +826,7 @@ def test_load_identity_fields_territory_falls_back_to_accounts_yaml(tmp_path: Pa
     config_path = _write_config_load_identity_fields_bug326(tmp_path, fieldkit_home)
 
     with patch("fieldkit.config._loader.CONFIG_PATH", config_path):
-        result = _load_identity_fields()
+        result = _identity_fields_from_context()
 
     # territory must come from accounts.yaml sf_territory
     assert result["territory"] == "FSI_SOUTH"
@@ -838,7 +845,7 @@ def test_load_identity_fields_returns_empty_on_missing_file(tmp_path: Path) -> N
     config_path = _write_config_load_identity_fields_bug326(tmp_path, fieldkit_home)
 
     with patch("fieldkit.config._loader.CONFIG_PATH", config_path):
-        result = _load_identity_fields()
+        result = _identity_fields_from_context()
 
     # Both fields must default to empty string — no exception raised.
     assert isinstance(result, dict)
@@ -963,10 +970,10 @@ def test_oserror_on_read_increments_errors(tmp_path: Path) -> None:
 
     original_read_text = Path.read_text
 
-    def _failing_read(self: Path, **kwargs: object) -> str:
+    def _failing_read(self: Path, encoding: str | None = None, errors: str | None = None) -> str:
         if self.suffix == ".md" and "my-skill" in str(self) and self.parent == skills_dir / "my-skill":
             raise OSError("read error")
-        return original_read_text(self, **kwargs)
+        return original_read_text(self, encoding=encoding, errors=errors)
 
     with patch.object(Path, "read_text", _failing_read):
         result = install_skills(skills_dir, target_dir, ctx)
@@ -992,10 +999,10 @@ def test_oserror_on_copy_increments_errors(tmp_path: Path) -> None:
 
     original_copy2 = shutil.copy2
 
-    def _failing_copy(src: object, dst: object) -> None:
+    def _failing_copy(src: str | Path, dst: str | Path) -> None:
         if "evals.json" in str(dst):
             raise OSError("copy failed")
-        original_copy2(src, dst)  # type: ignore[arg-type]
+        original_copy2(src, dst)
 
     with patch("fieldkit.skill.template.shutil.copy2", side_effect=_failing_copy):
         result = install_skills(skills_dir, target_dir, ctx)
@@ -1080,7 +1087,7 @@ def test_non_dir_entry_in_skills_dir_skipped(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Additional _load_identity_fields() branch-coverage tests
+# Additional _identity_fields_from_context() branch-coverage tests
 # ---------------------------------------------------------------------------
 
 
@@ -1098,33 +1105,29 @@ def _write_config_load_identity_fields_additional_branches(tmp_path: Path, field
     return config_path
 
 
-def test_config_yaml_malformed_returns_defaults(tmp_path: Path) -> None:
-    """Malformed config.yaml returns default empty dict."""
+def test_config_yaml_malformed_is_rejected(tmp_path: Path) -> None:
+    """Malformed personal configuration raises a sanitized configuration error."""
     config_dir = tmp_path / ".config" / "fieldkit"
     config_dir.mkdir(parents=True)
     config_path = config_dir / "config.yaml"
     config_path.write_text(":\t: bad yaml {{{\n", encoding="utf-8")
 
-    with patch("fieldkit.config._loader.CONFIG_PATH", config_path):
-        result = _load_identity_fields()
-
-    assert result == {"territory": "", "salesforce_user_id": ""}
+    with patch("fieldkit.config._loader.CONFIG_PATH", config_path), pytest.raises(ConfigError, match="invalid YAML"):
+        _identity_fields_from_context()
 
 
-def test_config_yaml_not_a_dict_returns_defaults(tmp_path: Path) -> None:
-    """config.yaml that parses to a non-dict (e.g. a list) returns defaults."""
+def test_config_yaml_not_a_dict_is_rejected(tmp_path: Path) -> None:
+    """A present non-mapping personal configuration is invalid."""
     config_dir = tmp_path / ".config" / "fieldkit"
     config_dir.mkdir(parents=True)
     config_path = config_dir / "config.yaml"
     config_path.write_text("- item1\n- item2\n", encoding="utf-8")
 
-    with patch("fieldkit.config._loader.CONFIG_PATH", config_path):
-        result = _load_identity_fields()
-
-    assert result == {"territory": "", "salesforce_user_id": ""}
+    with patch("fieldkit.config._loader.CONFIG_PATH", config_path), pytest.raises(ConfigError, match="mapping"):
+        _identity_fields_from_context()
 
 
-def test_data_repo_empty_returns_defaults(tmp_path: Path) -> None:
+def test_fieldkit_home_empty_returns_defaults(tmp_path: Path) -> None:
     """config.yaml with empty fieldkit_home returns defaults (no identity.yaml to read)."""
     config_dir = tmp_path / ".config" / "fieldkit"
     config_dir.mkdir(parents=True)
@@ -1133,13 +1136,13 @@ def test_data_repo_empty_returns_defaults(tmp_path: Path) -> None:
     config_path.write_text("fieldkit_home: ''\nname: Alice\n", encoding="utf-8")
 
     with patch("fieldkit.config._loader.CONFIG_PATH", config_path):
-        result = _load_identity_fields()
+        result = _identity_fields_from_context()
 
     assert result == {"territory": "", "salesforce_user_id": ""}
 
 
-def test_identity_yaml_not_a_dict_returns_defaults(tmp_path: Path) -> None:
-    """identity.yaml that parses to a non-dict returns defaults."""
+def test_identity_yaml_not_a_dict_is_rejected(tmp_path: Path) -> None:
+    """A present non-mapping identity configuration is invalid."""
     fieldkit_home = tmp_path / "workspace"
     identity_dir = fieldkit_home / "config"
     identity_dir.mkdir(parents=True)
@@ -1147,10 +1150,8 @@ def test_identity_yaml_not_a_dict_returns_defaults(tmp_path: Path) -> None:
 
     config_path = _write_config_load_identity_fields_additional_branches(tmp_path, fieldkit_home)
 
-    with patch("fieldkit.config._loader.CONFIG_PATH", config_path):
-        result = _load_identity_fields()
-
-    assert result == {"territory": "", "salesforce_user_id": ""}
+    with patch("fieldkit.config._loader.CONFIG_PATH", config_path), pytest.raises(ConfigError, match="mapping"):
+        _identity_fields_from_context()
 
 
 def test_territory_fallback_skips_internal_accounts(tmp_path: Path) -> None:
@@ -1179,7 +1180,7 @@ def test_territory_fallback_skips_internal_accounts(tmp_path: Path) -> None:
     config_path = _write_config_load_identity_fields_additional_branches(tmp_path, fieldkit_home)
 
     with patch("fieldkit.config._loader.CONFIG_PATH", config_path):
-        result = _load_identity_fields()
+        result = _identity_fields_from_context()
 
     # Must skip the internal account and use the first non-internal one
     assert result["territory"] == "FSI_WEST"
@@ -1201,14 +1202,16 @@ def test_territory_fallback_accounts_yaml_absent(tmp_path: Path) -> None:
     config_path = _write_config_load_identity_fields_additional_branches(tmp_path, fieldkit_home)
 
     with patch("fieldkit.config._loader.CONFIG_PATH", config_path):
-        result = _load_identity_fields()
+        result = _identity_fields_from_context()
 
     assert result["territory"] == ""
     assert result["salesforce_user_id"] == "005abc"
 
 
 def test_territory_fallback_accounts_not_a_dict(tmp_path: Path) -> None:
-    """Territory fallback: accounts.yaml 'accounts' value is not a dict → empty territory."""
+    """Invalid accounts configuration cannot become empty territory context."""
+    from fieldkit.config import ConfigError
+
     fieldkit_home = tmp_path / "workspace"
     config_dir = fieldkit_home / "config"
     config_dir.mkdir(parents=True)
@@ -1225,19 +1228,19 @@ def test_territory_fallback_accounts_not_a_dict(tmp_path: Path) -> None:
 
     config_path = _write_config_load_identity_fields_additional_branches(tmp_path, fieldkit_home)
 
-    with patch("fieldkit.config._loader.CONFIG_PATH", config_path):
-        result = _load_identity_fields()
+    with (
+        patch("fieldkit.config._loader.CONFIG_PATH", config_path),
+        pytest.raises(ConfigError, match=r"accounts\.yaml"),
+    ):
+        _identity_fields_from_context()
 
-    assert result["territory"] == ""
 
-
-def test_nested_identity_with_non_dict_nested_value_falls_back_to_flat(tmp_path: Path) -> None:
-    """identity.yaml with 'identity' key that is not a dict uses flat layout."""
+def test_nested_identity_with_non_mapping_value_is_rejected(tmp_path: Path) -> None:
+    """An invalid nested identity cannot silently fall back to flat fields."""
     fieldkit_home = tmp_path / "workspace"
     identity_dir = fieldkit_home / "config"
     identity_dir.mkdir(parents=True)
 
-    # 'identity' key is a string, not a dict — should fall back to flat lookup
     (identity_dir / "identity.yaml").write_text(
         "identity: not-a-dict\nterritory: FLAT_TERRITORY\nsalesforce_user_id: 005flat\n",
         encoding="utf-8",
@@ -1245,9 +1248,11 @@ def test_nested_identity_with_non_dict_nested_value_falls_back_to_flat(tmp_path:
 
     config_path = _write_config_load_identity_fields_additional_branches(tmp_path, fieldkit_home)
 
-    with patch("fieldkit.config._loader.CONFIG_PATH", config_path):
-        result = _load_identity_fields()
-
-    # When identity key is not a dict, falls back to flat layout
-    assert result["territory"] == "FLAT_TERRITORY"
-    assert result["salesforce_user_id"] == "005flat"
+    identity = identity_dir / "identity.yaml"
+    original = identity.read_bytes()
+    with (
+        patch("fieldkit.config._loader.CONFIG_PATH", config_path),
+        pytest.raises(ConfigError, match="identity mapping"),
+    ):
+        _identity_fields_from_context()
+    assert identity.read_bytes() == original

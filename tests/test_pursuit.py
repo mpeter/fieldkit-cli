@@ -4,11 +4,11 @@ from datetime import date, timedelta
 
 import pytest
 
+from fieldkit.config import get_accounts_config
 from fieldkit.pursuit import (
     calculate_days_since,
     extract_champion_name,
     iterate_pursuits,
-    read_accounts_config,
 )
 
 pytestmark = pytest.mark.unit
@@ -112,20 +112,19 @@ def test_extract_champion_name_comma_separated(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# read_accounts_config
+# Canonical account configuration
 # ---------------------------------------------------------------------------
 
 
-def test_read_accounts_config_returns_dict(tmp_path):
+def test_accounts_config_returns_dict(tmp_path):
     config_dir = tmp_path / "config"
     config_dir.mkdir()
-    (config_dir / "accounts.yaml").write_text("accounts:\n  - name: global-pay\n", encoding="utf-8")
-    result = read_accounts_config(tmp_path)
+    (config_dir / "accounts.yaml").write_text("accounts:\n  global-pay: {}\n", encoding="utf-8")
+    result = get_accounts_config(workspace_root=tmp_path, strict=True)
     assert isinstance(result, dict)
     assert "accounts" in result
 
 
-def test_read_accounts_config_missing_file(tmp_path):
-    with pytest.raises(FileNotFoundError) as exc_info:
-        read_accounts_config(tmp_path)
-    assert exc_info.type is FileNotFoundError
+def test_accounts_config_missing_file(tmp_path):
+    result = get_accounts_config(workspace_root=tmp_path, strict=True)
+    assert result == {}

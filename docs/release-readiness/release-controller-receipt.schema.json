@@ -1,0 +1,382 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mpeter/fieldkit-cli/blob/main/docs/release-readiness/release-controller-receipt.schema.json",
+  "title": "fieldkit release controller receipt (structural only)",
+  "description": "An approved-looking unsigned document is not authentication or publication approval. Validation establishes structure only; an external verifier must authenticate the selected C0 closure before candidate execution, compare all selected and observed identities and digests, verify completed S1 and A1, check signer validity and revocation freshness, verify the detached receipt signature, and only then bind the signed tag to the receipt digest. No self digest, signature digest, or final tag identity is embedded, avoiding circular bindings.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "decision",
+    "selection_sha256",
+    "issued_at",
+    "controller",
+    "candidate",
+    "producer",
+    "approval",
+    "evidence",
+    "signer",
+    "revocation",
+    "checks",
+    "toolchain"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "kind": {
+      "type": "string",
+      "const": "fieldkit.release-controller-receipt"
+    },
+    "decision": {
+      "type": "string",
+      "const": "approved"
+    },
+    "selection_sha256": {
+      "$ref": "release-trust-selection.schema.json#/$defs/sha256"
+    },
+    "issued_at": {
+      "$ref": "release-trust-selection.schema.json#/$defs/utc_datetime"
+    },
+    "controller": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "repository_id",
+        "source_commit",
+        "source_tree",
+        "manifest_sha256",
+        "owner_id"
+      ],
+      "properties": {
+        "repository": {
+          "$ref": "release-trust-selection.schema.json#/$defs/repository"
+        },
+        "repository_id": {
+          "$ref": "release-trust-selection.schema.json#/$defs/positive_id"
+        },
+        "source_commit": {
+          "$ref": "release-trust-selection.schema.json#/$defs/git_oid"
+        },
+        "source_tree": {
+          "$ref": "release-trust-selection.schema.json#/$defs/git_oid"
+        },
+        "manifest_sha256": {
+          "$ref": "release-trust-selection.schema.json#/$defs/sha256"
+        },
+        "owner_id": {
+          "$ref": "release-trust-selection.schema.json#/$defs/positive_id"
+        }
+      }
+    },
+    "candidate": {
+      "$ref": "release-trust-selection.schema.json#/$defs/candidate"
+    },
+    "producer": {
+      "$ref": "#/$defs/observed_producer"
+    },
+    "approval": {
+      "$ref": "#/$defs/observed_approval"
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cutover_record_sha256",
+        "ledger_sha256",
+        "artifacts"
+      ],
+      "properties": {
+        "cutover_record_sha256": {
+          "$ref": "release-trust-selection.schema.json#/$defs/sha256"
+        },
+        "ledger_sha256": {
+          "$ref": "release-trust-selection.schema.json#/$defs/sha256"
+        },
+        "artifacts": {
+          "$ref": "release-trust-selection.schema.json#/$defs/artifacts"
+        }
+      }
+    },
+    "signer": {
+      "$ref": "release-trust-selection.schema.json#/$defs/signer"
+    },
+    "revocation": {
+      "$ref": "release-trust-selection.schema.json#/$defs/revocation"
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "C0_closure",
+        "producer",
+        "approval",
+        "expected_identities",
+        "structural_input",
+        "complete_rehearsals",
+        "artifacts"
+      ],
+      "properties": {
+        "C0_closure": {
+          "type": "string",
+          "const": "pass"
+        },
+        "producer": {
+          "type": "string",
+          "const": "pass"
+        },
+        "approval": {
+          "type": "string",
+          "const": "pass"
+        },
+        "expected_identities": {
+          "type": "string",
+          "const": "pass"
+        },
+        "structural_input": {
+          "type": "string",
+          "const": "pass"
+        },
+        "complete_rehearsals": {
+          "type": "string",
+          "const": "pass"
+        },
+        "artifacts": {
+          "type": "string",
+          "const": "pass"
+        }
+      }
+    },
+    "toolchain": {
+      "$ref": "release-trust-selection.schema.json#/$defs/toolchain"
+    }
+  },
+  "$defs": {
+    "observed_producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "repository_id",
+        "owner_id",
+        "workflow_id",
+        "run_id",
+        "run_attempt",
+        "head_repository_id",
+        "workflow_path",
+        "workflow_ref",
+        "workflow_blob_oid",
+        "workflow_blob_sha256",
+        "event",
+        "head_sha",
+        "artifact_id",
+        "artifact_name",
+        "artifact_api_digest",
+        "status",
+        "conclusion",
+        "download_sha256",
+        "approval_manifest_sha256"
+      ],
+      "properties": {
+        "repository": {
+          "$ref": "release-trust-selection.schema.json#/$defs/repository"
+        },
+        "repository_id": {
+          "$ref": "release-trust-selection.schema.json#/$defs/positive_id"
+        },
+        "owner_id": {
+          "$ref": "release-trust-selection.schema.json#/$defs/positive_id"
+        },
+        "workflow_id": {
+          "$ref": "release-trust-selection.schema.json#/$defs/positive_id"
+        },
+        "run_id": {
+          "$ref": "release-trust-selection.schema.json#/$defs/positive_id"
+        },
+        "run_attempt": {
+          "$ref": "release-trust-selection.schema.json#/$defs/positive_id"
+        },
+        "head_repository_id": {
+          "$ref": "release-trust-selection.schema.json#/$defs/positive_id"
+        },
+        "workflow_path": {
+          "$ref": "release-trust-selection.schema.json#/$defs/relative_path"
+        },
+        "workflow_ref": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^[\\x20-\\x7E]+$(?![\\s\\S])"
+        },
+        "workflow_blob_oid": {
+          "$ref": "release-trust-selection.schema.json#/$defs/git_oid"
+        },
+        "workflow_blob_sha256": {
+          "$ref": "release-trust-selection.schema.json#/$defs/sha256"
+        },
+        "event": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[\\x20-\\x7E]+$(?![\\s\\S])"
+        },
+        "head_sha": {
+          "$ref": "release-trust-selection.schema.json#/$defs/git_oid"
+        },
+        "artifact_id": {
+          "$ref": "release-trust-selection.schema.json#/$defs/positive_id"
+        },
+        "artifact_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[\\x20-\\x7E]+$(?![\\s\\S])"
+        },
+        "artifact_api_digest": {
+          "$ref": "release-trust-selection.schema.json#/$defs/api_digest"
+        },
+        "status": {
+          "type": "string",
+          "const": "completed"
+        },
+        "conclusion": {
+          "type": "string",
+          "const": "success"
+        },
+        "download_sha256": {
+          "$ref": "release-trust-selection.schema.json#/$defs/sha256"
+        },
+        "approval_manifest_sha256": {
+          "$ref": "release-trust-selection.schema.json#/$defs/sha256"
+        }
+      }
+    },
+    "observed_approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "repository_id",
+        "owner_id",
+        "workflow_id",
+        "run_id",
+        "run_attempt",
+        "head_repository_id",
+        "workflow_path",
+        "workflow_ref",
+        "workflow_blob_oid",
+        "workflow_blob_sha256",
+        "event",
+        "head_sha",
+        "environment_id",
+        "environment_name",
+        "job_id",
+        "job_name",
+        "artifact_id",
+        "artifact_api_digest",
+        "download_sha256",
+        "matching_manifest_sha256",
+        "status",
+        "conclusion",
+        "observed_reviewer_ids"
+      ],
+      "properties": {
+        "repository": {
+          "$ref": "release-trust-selection.schema.json#/$defs/repository"
+        },
+        "repository_id": {
+          "$ref": "release-trust-selection.schema.json#/$defs/positive_id"
+        },
+        "owner_id": {
+          "$ref": "release-trust-selection.schema.json#/$defs/positive_id"
+        },
+        "workflow_id": {
+          "$ref": "release-trust-selection.schema.json#/$defs/positive_id"
+        },
+        "run_id": {
+          "$ref": "release-trust-selection.schema.json#/$defs/positive_id"
+        },
+        "run_attempt": {
+          "$ref": "release-trust-selection.schema.json#/$defs/positive_id"
+        },
+        "head_repository_id": {
+          "$ref": "release-trust-selection.schema.json#/$defs/positive_id"
+        },
+        "workflow_path": {
+          "$ref": "release-trust-selection.schema.json#/$defs/relative_path"
+        },
+        "workflow_ref": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^[\\x20-\\x7E]+$(?![\\s\\S])"
+        },
+        "workflow_blob_oid": {
+          "$ref": "release-trust-selection.schema.json#/$defs/git_oid"
+        },
+        "workflow_blob_sha256": {
+          "$ref": "release-trust-selection.schema.json#/$defs/sha256"
+        },
+        "event": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[\\x20-\\x7E]+$(?![\\s\\S])"
+        },
+        "head_sha": {
+          "$ref": "release-trust-selection.schema.json#/$defs/git_oid"
+        },
+        "environment_id": {
+          "$ref": "release-trust-selection.schema.json#/$defs/positive_id"
+        },
+        "environment_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[\\x20-\\x7E]+$(?![\\s\\S])"
+        },
+        "job_id": {
+          "$ref": "release-trust-selection.schema.json#/$defs/positive_id"
+        },
+        "job_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[\\x20-\\x7E]+$(?![\\s\\S])"
+        },
+        "artifact_id": {
+          "$ref": "release-trust-selection.schema.json#/$defs/positive_id"
+        },
+        "artifact_api_digest": {
+          "$ref": "release-trust-selection.schema.json#/$defs/api_digest"
+        },
+        "download_sha256": {
+          "$ref": "release-trust-selection.schema.json#/$defs/sha256"
+        },
+        "matching_manifest_sha256": {
+          "$ref": "release-trust-selection.schema.json#/$defs/sha256"
+        },
+        "status": {
+          "type": "string",
+          "const": "completed"
+        },
+        "conclusion": {
+          "type": "string",
+          "const": "success"
+        },
+        "observed_reviewer_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "release-trust-selection.schema.json#/$defs/positive_id"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,14 +1,89 @@
 """Contracts for the exact-candidate public cutover record."""
 
 import json
+import subprocess
+import sys
 from copy import deepcopy
 from pathlib import Path
 
 import pytest
 
-from scripts import cutover_record
+from scripts import _release_bundle_evidence, cutover_record
 
 pytestmark = pytest.mark.unit
+
+
+def test_cutover_document_rejects_symlink_without_following_target(tmp_path: Path) -> None:
+    target = tmp_path / "outside.json"
+    target.write_bytes(b"{}")
+    redirect = tmp_path / "record.json"
+    redirect.symlink_to(target)
+    with pytest.raises(ValueError, match=r"^cutover JSON document is unavailable or exceeds its byte limit$"):
+        cutover_record._load(redirect)
+    assert target.read_bytes() == b"{}"
+
+
+def test_cutover_document_enforces_canonical_reader_byte_limit(tmp_path: Path) -> None:
+    path = tmp_path / "record.json"
+    boundary = b"{}" + b" " * (_release_bundle_evidence._MAX_FILE_BYTES - 2)
+    path.write_bytes(boundary)
+    result = cutover_record._load(path)
+    assert result == {}
+    path.write_bytes(boundary + b" ")
+    with pytest.raises(ValueError, match=r"^cutover JSON document is unavailable or exceeds its byte limit$"):
+        cutover_record._load(path)
+
+
+@pytest.mark.parametrize("case", ["control_key", "long_key", "nested"])
+def test_cutover_cli_json_failure_is_fixed_without_traceback(tmp_path: Path, case: str) -> None:
+    key = "synthetic-private-key\n\x1b[31m" if case == "control_key" else "synthetic-private-key" + "x" * 8192
+    encoded = json.dumps(key)
+    raw = (
+        ("{" + encoded + ":1," + encoded + ":2}").encode()
+        if case != "nested"
+        else ("[" * 5000 + "0" + "]" * 5000).encode()
+    )
+    record = tmp_path / "record.json"
+    record.write_bytes(raw)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "scripts.cutover_record",
+            "--record",
+            str(record),
+            "--candidate-report",
+            str(record),
+            "--controller-root",
+            str(Path(__file__).parents[1]),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert result.stderr == "Cutover record: ERROR: cutover JSON document is invalid JSON\n"
+    assert record.read_bytes() == raw
+
+
+def test_decoded_cutover_record_schema_diagnostic_never_reflects_value() -> None:
+    record = _record()
+    record["schema_version"] = "synthetic-private-value\n\x1b[31m" + "x" * 8192
+    with pytest.raises(ValueError) as caught:
+        cutover_record.validate(record, _candidate(), controller_root=Path(__file__).parents[1])
+    assert str(caught.value) == "cutover record schema violation at properties.schema_version.const: const"
+
+
+def test_decoded_cutover_record_rejects_excessive_nesting() -> None:
+    nested: object = 0
+    for _ in range(65):
+        nested = [nested]
+    record = _record()
+    record["schema_version"] = nested
+    with pytest.raises(ValueError, match=r"^JSON input exceeds nesting limit$"):
+        cutover_record.validate(record, _candidate(), controller_root=Path(__file__).parents[1])
 
 
 def _candidate() -> dict[str, object]:
@@ -67,7 +142,7 @@ def _record() -> dict[str, object]:
 
 
 def test_validates_a_complete_record_bound_to_the_candidate() -> None:
-    cutover_record.validate(_record(), _candidate())
+    cutover_record.validate(_record(), _candidate(), controller_root=Path(__file__).parents[1])
 
 
 def test_rejects_a_record_for_another_exported_tree() -> None:
@@ -77,7 +152,7 @@ def test_rejects_a_record_for_another_exported_tree() -> None:
     candidate["exported_tree"] = "9" * 40
 
     with pytest.raises(ValueError, match="exported tree"):
-        cutover_record.validate(record, _candidate())
+        cutover_record.validate(record, _candidate(), controller_root=Path(__file__).parents[1])
 
 
 def test_rejects_a_record_without_successful_ci_for_the_initial_commit() -> None:
@@ -91,7 +166,7 @@ def test_rejects_a_record_without_successful_ci_for_the_initial_commit() -> None
     run["head_sha"] = "9" * 40
 
     with pytest.raises(ValueError, match="root-commit verification workflow run"):
-        cutover_record.validate(record, _candidate())
+        cutover_record.validate(record, _candidate(), controller_root=Path(__file__).parents[1])
 
 
 def test_resolves_the_recorded_public_identity_from_the_fresh_checkout(

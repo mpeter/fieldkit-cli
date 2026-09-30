@@ -12,7 +12,7 @@ inline these values as literals on a `@retry` decorator.
 Neither the factories nor the constants MAY be re-exported from
 `fieldkit.config.__init__`. `fieldkit.config` is a pure foundation imported on every
 CLI invocation and today pulls neither `httpx` nor `tenacity`; re-exporting would add
-their import cost (measured: 232ms and 51ms cumulative) to every command, including
+their import cost to every command, including
 ones that never open a socket. The module is therefore public (`retry.py`, not
 `_retry.py`) and imported directly by the modules that need it — all of which already
 import an HTTP client, so they pay no new cost.
@@ -49,8 +49,9 @@ call is harmless. It retries the full transient set: connect-phase failures, tim
 and the statuses in `RETRY_TRANSIENT_STATUSES`.
 
 `connect_retry(logger, ...)` MUST be used everywhere else. It retries **only**
-connect-phase failures (`httpx.ConnectError`, `httpx.ConnectTimeout`), where the
-request provably never reached the server.
+connect-phase failures (`httpx.ConnectError`, `httpx.ConnectTimeout`). This narrows
+duplicate-write risk but does not prove exactly-once execution; a transport failure
+alone is not an authoritative observation of the server's state.
 
 The rationale is that retrying is at-least-once: a timeout or lost response after the
 request has been transmitted does not prove the server did not act on it.
@@ -84,7 +85,8 @@ prevent is not a wrong choice but an unrecorded one, which the next author copie
 #### Scenario: Non-idempotent write retries a failure to connect
 - **GIVEN** a `POST` that creates a server-side resource
 - **WHEN** the connection is refused before the request is transmitted
-- **THEN** the call IS retried, because the server provably did not receive it
+- **THEN** the call IS retried under the connect-only policy
+- **AND** the retry is not treated as proof of exactly-once server execution
 
 ### Requirement: Retry observability is not optional
 
@@ -92,9 +94,8 @@ Both factories MUST attach per-attempt logging at `WARNING` before each backoff
 sleep. It MUST NOT be possible to obtain a retry decorator from this module without
 it. Per-attempt logging MUST NOT be an argument a caller can disable.
 
-This is a structural requirement, not a convention: eight of the nine retry sites
-that existed before this change omitted per-attempt logging, so a rule that relies on
-authors remembering has already been shown to fail.
+This is a structural requirement, not an optional convention: callers MUST receive
+per-attempt logging without remembering to enable it.
 
 #### Scenario: Successful retry is observable
 - **GIVEN** a wrapped call whose first attempt fails transiently and whose second succeeds
@@ -121,9 +122,9 @@ correct. Because the re-raised exception's own message therefore carries no atte
 count, the factory MUST additionally attach the count to the exception as a note for
 traceback context.
 
-Conversion sites MAY include the attempt count in the typed error they raise,
-following the precedent at `sf/client.py:363`. That is a convention and MUST NOT be
-the only place the count appears.
+Conversion sites MAY include the attempt count in the typed error they raise.
+That MUST NOT be the only place the count appears; the shared factory remains
+responsible for reporting exhaustion.
 
 #### Scenario: Exhaustion is reported by the factory, not the caller
 - **GIVEN** a wrapped call that fails transiently on every attempt

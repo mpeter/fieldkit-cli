@@ -1,4 +1,4 @@
-"""Unit tests for the pure query functions added to src/fieldkit/commands/gmail/query.py.
+"""Unit tests for canonical Gmail query-domain functions.
 
 Tests query_by_email(), query_blindspots(), and query_dig() using an
 in-memory SQLite database populated from schema.sql fixtures.
@@ -10,7 +10,8 @@ from unittest.mock import patch
 
 import pytest
 
-from fieldkit.commands.gmail.query import query_blindspots, query_by_email, query_dig
+from fieldkit.errors import GmailSyncPartialError, SQLiteSnapshotError
+from fieldkit.gmail.query_domain import date_to_epoch, query_blindspots, query_by_email, query_dig
 
 pytestmark = pytest.mark.unit
 
@@ -167,10 +168,78 @@ def test_query_by_email_returns_date_iso_format(db: sqlite3.Connection) -> None:
     assert last.count("-") == 2
 
 
-def test_query_by_email_partial_email_match(db: sqlite3.Connection) -> None:
-    # LIKE pattern — prefix match
-    count, _last = query_by_email(db, "alice@")
+@pytest.mark.parametrize(
+    "address",
+    ["alice@", "%@acme-com.example.com", "_@acme-com.example.com"],
+)
+def test_query_by_email_requires_an_exact_address(db: sqlite3.Connection, address: str) -> None:
+    count, last = query_by_email(db, address)
+
+    assert (count, last) == (0, None)
+
+
+def test_query_by_email_does_not_match_address_substrings(db: sqlite3.Connection) -> None:
+    db.execute(
+        """
+        INSERT INTO messages(
+            message_id, thread_id, from_addr, to_addr, cc_addr, subject, date_str, date_epoch
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "substring-address",
+            "substring-thread",
+            "malice@acme-com.example.com",
+            "recipient@example.com",
+            "",
+            "Private unrelated topic",
+            "2025-01-01",
+            1_735_689_600,
+        ),
+    )
+    db.commit()
+
+    count, last = query_by_email(db, "alice@acme-com.example.com")
+
     assert count >= 1
+    assert last != "2025-01-01"
+
+
+def test_query_by_email_rejects_malformed_address_headers_without_payload(db: sqlite3.Connection) -> None:
+    marker = "fictional-private-address"
+    db.execute(
+        """
+        INSERT INTO messages(
+            message_id, thread_id, from_addr, to_addr, cc_addr, subject, date_str, date_epoch
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        ("malformed", "malformed-thread", f"Alice <alice@example.com {marker}", "", "", "", "", 1),
+    )
+    db.commit()
+
+    with pytest.raises(SQLiteSnapshotError, match="unverified") as captured:
+        query_by_email(db, "alice@example.com")
+
+    assert marker not in str(captured.value)
+
+
+def test_query_by_email_fails_partial_when_sqlite_work_budget_is_exhausted(
+    db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db.executemany(
+        """
+        INSERT INTO messages(
+            message_id, thread_id, from_addr, to_addr, cc_addr, subject, date_str, date_epoch
+        ) VALUES (?, ?, ?, '', '', '', '', ?)
+        """,
+        ((f"noise-{index}", "t-other-1", "noise@example.net", index) for index in range(200)),
+    )
+    db.commit()
+    monkeypatch.setattr("fieldkit.gmail.query_support.DEFAULT_SQLITE_STEPS_PER_ROW", 1)
+
+    with pytest.raises(GmailSyncPartialError, match="work bound"):
+        query_by_email(db, "alice@acme-com.example.com")
+
+    assert db.execute("SELECT 1").fetchone()[0] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -187,7 +256,7 @@ def _query_blindspots_patch_noise():
     def _fake_is_noise(email: str) -> bool:
         return email.endswith("@" + "internal.example.com")  # pii-guard: ignore
 
-    return patch("fieldkit.commands.gmail.query._is_noise", side_effect=_fake_is_noise)
+    return patch("fieldkit.gmail.query_domain._is_noise", side_effect=_fake_is_noise)
 
 
 def test_query_blindspots_returns_external_contacts(db: sqlite3.Connection) -> None:
@@ -239,7 +308,7 @@ def test_query_blindspots_since_filter(db: sqlite3.Connection) -> None:
     with _query_blindspots_patch_noise():
         # Use a since date that excludes the February thread
         results_all = query_blindspots(db, "acme")
-        results_march = query_blindspots(db, "acme", since="2024-03-01")
+        results_march = query_blindspots(db, "acme", since=date_to_epoch("2024-03-01"))
     # March-only should have fewer or equal results
     assert len(results_march) <= len(results_all)
 
@@ -290,12 +359,12 @@ def test_query_dig_limit_respected(db: sqlite3.Connection) -> None:
 
 def test_query_dig_since_filter_excludes_old_threads(db: sqlite3.Connection) -> None:
     # With a future since date, nothing should match
-    results = query_dig(db, "acme", "training", since="2030-01-01")
+    results = query_dig(db, "acme", "training", since=date_to_epoch("2030-01-01"))
     assert results == []
 
 
 # ---------------------------------------------------------------------------
-# historic regression: _internal_blind_domains includes Salesforce notification domains
+# _internal_blind_domains includes Salesforce notification domains
 # ---------------------------------------------------------------------------
 
 
@@ -306,10 +375,10 @@ def test_internal_blind_domains_salesforce_com_is_blind() -> None:
     """salesforce.com is in the default internal blind domains."""
     from unittest.mock import patch
 
-    from fieldkit.commands.gmail.query import _internal_blind_domains
+    from fieldkit.gmail.query_domain import _internal_blind_domains
 
     # Patch get_internal_domains to return [] — salesforce.com is in AUTOMATION_NOISE_DOMAINS (always filtered)
-    with patch("fieldkit.commands.gmail.query.get_internal_domains", return_value=[]):
+    with patch("fieldkit.gmail.query_domain.get_internal_domains", return_value=[]):
         domains = _internal_blind_domains()
 
     assert "salesforce.com" in domains, "salesforce.com must be in default blind domains (historic regression)"
@@ -319,9 +388,9 @@ def test_internal_blind_domains_sfdctest_com_is_blind() -> None:
     """sfdctest.com (Salesforce sandbox) is in the default internal blind domains."""
     from unittest.mock import patch
 
-    from fieldkit.commands.gmail.query import _internal_blind_domains
+    from fieldkit.gmail.query_domain import _internal_blind_domains
 
-    with patch("fieldkit.commands.gmail.query.get_internal_domains", return_value=[]):
+    with patch("fieldkit.gmail.query_domain.get_internal_domains", return_value=[]):
         domains = _internal_blind_domains()
 
     assert "sfdctest.com" in domains, "sfdctest.com must be in default blind domains (historic regression)"
@@ -331,9 +400,9 @@ def test_internal_blind_domains_force_com_is_blind() -> None:
     """force.com is in the default internal blind domains."""
     from unittest.mock import patch
 
-    from fieldkit.commands.gmail.query import _internal_blind_domains
+    from fieldkit.gmail.query_domain import _internal_blind_domains
 
-    with patch("fieldkit.commands.gmail.query.get_internal_domains", return_value=[]):
+    with patch("fieldkit.gmail.query_domain.get_internal_domains", return_value=[]):
         domains = _internal_blind_domains()
 
     assert "force.com" in domains, "force.com must be in default blind domains (historic regression)"
@@ -343,9 +412,9 @@ def test_internal_blind_domains_exacttarget_com_is_blind() -> None:
     """exacttarget.com (Salesforce Marketing Cloud) is in the default internal blind domains."""
     from unittest.mock import patch
 
-    from fieldkit.commands.gmail.query import _internal_blind_domains
+    from fieldkit.gmail.query_domain import _internal_blind_domains
 
-    with patch("fieldkit.commands.gmail.query.get_internal_domains", return_value=[]):
+    with patch("fieldkit.gmail.query_domain.get_internal_domains", return_value=[]):
         domains = _internal_blind_domains()
 
     assert "exacttarget.com" in domains, "exacttarget.com must be in default blind domains (historic regression)"
@@ -355,7 +424,7 @@ def test_internal_blind_domains_salesforce_email_filtered_from_blindspots(db: sq
     """Emails from salesforce.com are filtered out of blindspot results."""
     from unittest.mock import patch
 
-    from fieldkit.commands.gmail.query import query_blindspots
+    from fieldkit.gmail.query_domain import query_blindspots
 
     # Insert a Salesforce notification message into the acme account threads
     db.execute(
@@ -377,7 +446,7 @@ def test_internal_blind_domains_salesforce_email_filtered_from_blindspots(db: sq
 
     # Use the real _is_noise (which calls _internal_blind_domains) but patch
     # get_internal_domains to return None so the default set (with salesforce.com) applies.
-    with patch("fieldkit.commands.gmail.query.get_internal_domains", return_value=[]):
+    with patch("fieldkit.gmail.query_domain.get_internal_domains", return_value=[]):
         results = query_blindspots(db, "acme")
 
     emails = [r[0] for r in results]

@@ -8,6 +8,8 @@ on:
       - "docs/release-readiness/dependency-security-policy.json"
       - "scripts/check_supply_chain_policy.py"
       - "scripts/_supply_chain_policy.py"
+      - "scripts/runtime_license_inventory.py"
+      - "scripts/spdx-tool-requirements.txt"
       - ".github/workflows/dependency-review.yml"
 
 permissions:
@@ -22,6 +24,20 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
+      - name: Read trusted review tools from the base commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: trusted-tools
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
+        with:
+          version: "0.12.5"
+          enable-cache: false
+      - name: Install hash-locked trusted license review tools
+        run: |
+          uv venv .dependency-review-tools
+          uv pip sync --python .dependency-review-tools/bin/python --require-hashes --only-binary :all: trusted-tools/scripts/spdx-tool-requirements.txt
       - id: review
         continue-on-error: true
         uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294  # v5.0.0
@@ -36,7 +52,7 @@ jobs:
           DEPENDENCY_CHANGES: ${{ steps.review.outputs.dependency-changes }}
           UPSTREAM_OUTCOME: ${{ steps.review.outcome }}
         run: >-
-          python3 scripts/check_supply_chain_policy.py dependency-review
+          .dependency-review-tools/bin/python -I scripts/check_supply_chain_policy.py dependency-review
           --changes-env DEPENDENCY_CHANGES
           --upstream-outcome "$UPSTREAM_OUTCOME"
           --output reports/dependency-review-policy.json

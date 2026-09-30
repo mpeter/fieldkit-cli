@@ -24,7 +24,8 @@ from fieldkit.cli_exit import EXIT_AUTH, EXIT_DATA, EXIT_PARTIAL
 from fieldkit.cli_registry import declare_write
 from fieldkit.commands.sf._util import stdin_is_interactive
 from fieldkit.config import get_sf_rest_base_url, get_sf_session_id
-from fieldkit.sf.client import SFAPIError, SFAuthError, SFDirectClient, SFNotFoundError
+from fieldkit.sf.client import SFDirectClient
+from fieldkit.sf.errors import SFAPIError, SFAuthError, SFNotFoundError
 
 LOG_PREFIX = "[sf-set-field]"
 

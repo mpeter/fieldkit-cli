@@ -64,7 +64,7 @@ def _write(root: Path, relative_path: str, content: str) -> None:
         ),
         (
             audit_check.check_A08_prompt_injection_guards,
-            "src/fieldkit/commands/brief/main.py",
+            "src/fieldkit/brief/pipeline_only.py",
             "PROMPT = 'brief'\n",
             "from fieldkit.llm.sanitize import wrap_user_data\n",
         ),
@@ -85,7 +85,7 @@ def test_audit_check_detects_violation_and_accepts_conforming_fixture(
     if check is audit_check.check_A08_prompt_injection_guards:
         for guarded_path in (
             "src/fieldkit/ingest/pipeline.py",
-            "src/fieldkit/commands/pipeline/render.py",
+            "src/fieldkit/pipeline/render.py",
         ):
             _write(tmp_path, guarded_path, "from fieldkit.llm.sanitize import wrap_user_data\n")
 

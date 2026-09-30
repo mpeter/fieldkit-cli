@@ -11,8 +11,15 @@ fieldkit keeps three persistent kinds of content separate:
 - the workspace you intentionally edit and version; and
 - runtime artifacts such as caches, logs, and integration state.
 
-Commands resolve these roots through configuration rather than assuming a particular username,
-checkout, organization, or workstation layout.
+The workspace is selected by `fieldkit_home` in configuration. Runtime data uses
+`FIELDKIT_DATA_DIR` when set, then the configured `fieldkit_data`, and otherwise the workspace's
+`data` directory. These are separate responsibilities, not necessarily separate directories:
+choose an explicit runtime-data root if your backup or version-control policy needs that separation.
+
+Development tools that need a source checkout use the configured `fieldkit_root`, or recognize
+the `src/fieldkit` source layout with matching project metadata. A wheel installation does not
+provide a source checkout; bundled assets use package resources instead. See the
+[configuration reference](reference/config-file.md) before using checkout-dependent tools.
 
 Agent and health harnesses use a fourth, cache-class location for disposable source worktrees.
 `FIELDKIT_HARNESS_ROOT` overrides that location. Otherwise fieldkit uses
@@ -21,13 +28,26 @@ source repository, so it does not belong in the workspace or runtime-data backup
 
 ## Portable core and optional capabilities
 
-The base package supports local workflows and an offline first-success path. External systems are
+The base package supports local workflows and an offline first-success path: minimal initialization,
+local diagnostics, and packaged skill discovery. Those steps need no service credentials. A workspace
+must be initialized before commands that collect or write workspace content. External systems are
 capabilities you choose. Installing an integration profile adds its SDKs; configuring it enables its
 behavior. An integration that you have not configured is not a broken installation.
 
 When a selected command needs a profile that is not installed, fieldkit exits with a data/config
 error and prints copyable installation guidance. Authentication failures remain distinct so scripts
 can tell user action from invalid input.
+
+## Reports from local work
+
+Pursuits and other workspace files supply local pipeline context. `fieldkit pipeline --no-llm`
+collects pursuit data and saves a dated pipeline review under the workspace's `briefs/` directory.
+`fieldkit brief generate --pipeline-only --no-llm` writes a separate dated morning brief from
+local pursuit, task, and available cached signal data. The default `fieldkit brief generate`
+combines pipeline context with available watcher and calendar sections; configured providers may
+be used on that path. Use `--dry-run` to preview a brief without writing its report file.
+See the [pipeline workflow](guides/pipeline-workflow.md) and
+[morning brief guide](guides/morning-brief.md) for the commands' prerequisites and results.
 
 ## Local-first does not mean offline-only
 

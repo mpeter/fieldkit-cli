@@ -54,6 +54,37 @@ def test_get_pipeline_quota_returns_none_when_period_missing(tmp_path: Path, mon
     assert get_pipeline_quota() is None
 
 
+@pytest.mark.parametrize("target", ["private-target-sentinel", [], {}])
+def test_invalid_quota_target_has_a_fixed_configuration_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: object
+) -> None:
+    cfg = _patch_config_path(tmp_path, monkeypatch)
+    cfg.write_text(yaml.safe_dump({"pipeline": {"quota": {"target": target, "period": "2026-H2"}}}), encoding="utf-8")
+
+    with pytest.raises(ConfigError, match=r"^Pipeline quota target must be an integer\.$") as caught:
+        get_pipeline_quota()
+
+    assert caught.value.__cause__ is None
+
+
+def test_quota_write_failure_does_not_expose_configuration_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _patch_config_path(tmp_path, monkeypatch)
+    cfg.write_text("pipeline: {}\n", encoding="utf-8")
+    original = cfg.read_bytes()
+
+    def fail_write(*_args: object, **_kwargs: object) -> None:
+        raise OSError("private-write-sentinel")
+
+    monkeypatch.setattr("fieldkit.config._quota.atomic_round_trip_yaml_update", fail_write)
+    with pytest.raises(ConfigError, match=r"^Could not update pipeline quota configuration\.$") as caught:
+        write_pipeline_quota(target=5_000_000, period="2026-H2")
+
+    assert caught.value.__cause__ is None
+    assert cfg.read_bytes() == original
+
+
 # ── TestRoundTrip (flattened) ───────────────────────────────────────────────
 
 
@@ -239,7 +270,7 @@ def test_quota_update_refuses_symlink_without_severing_it(tmp_path: Path, monkey
     target.write_text(original, encoding="utf-8")
     cfg.symlink_to(target)
 
-    with pytest.raises(ConfigError, match="Refusing to replace symlinked YAML file"):
+    with pytest.raises(ConfigError, match=r"^Could not update pipeline quota configuration\.$"):
         write_pipeline_quota(target=2_000_000, period="2026-H2")
 
     assert cfg.is_symlink()

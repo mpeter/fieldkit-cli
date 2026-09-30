@@ -13,6 +13,8 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
+from json_policy import reject_duplicate_json_keys
+
 MAX_JUNIT_BYTES = 16 * 1024 * 1024
 MAX_COVERAGE_BYTES = 32 * 1024 * 1024
 MAX_FAILURE_NAMES = 20
@@ -120,9 +122,12 @@ def _failure_names(root: ET.Element) -> list[str]:
 
 
 def _junit_report(args: argparse.Namespace) -> dict[str, object]:
+    selection = _selection_record(args)
     root = ET.fromstring(_read_bounded(args.input, MAX_JUNIT_BYTES))
     suites = _junit_suites(root)
     counts = _junit_counts(suites)
+    if counts["tests"] <= counts["skipped"]:
+        raise ValueError("JUnit evidence must contain at least one executed test")
     status = "fail" if counts["failures"] or counts["errors"] else "pass"
     return {
         "schema_version": SCHEMA_VERSION,
@@ -131,12 +136,74 @@ def _junit_report(args: argparse.Namespace) -> dict[str, object]:
         "source_revision": _validate_revision(args.source_revision),
         "scope": args.scope,
         "command": args.command,
+        "selection": selection,
         "tool": {"name": "pytest", "version": importlib.metadata.version("pytest")},
         "generated_at": _generated_at(),
         "duration_seconds": sum(_float_attribute(suite, "time") for suite in suites),
         "counts": counts,
         "failures": _failure_names(root),
     }
+
+
+def _selection_record(args: argparse.Namespace) -> dict[str, object] | None:
+    """A full-suite label requires a matching record of the actual pytest argv."""
+    if args.selection_report is None:
+        return None
+    record = json.loads(_read_bounded(args.selection_report, 32 * 1024), object_pairs_hook=reject_duplicate_json_keys)
+    if not isinstance(record, dict) or set(record) != {"schema_version", "source_revision", "test_scope", "argv"}:
+        raise ValueError("invalid pytest selection record")
+    if (
+        type(record["schema_version"]) is not int
+        or record["schema_version"] != 1
+        or record["source_revision"] != args.source_revision
+        or record["test_scope"] != args.scope
+    ):
+        raise ValueError("pytest selection does not match evidence revision and scope")
+    command = record["argv"]
+    if not isinstance(command, list) or not command or not all(isinstance(value, str) and value for value in command):
+        raise ValueError("pytest selection argv must be strings")
+    if args.scope == "full-repository":
+        expected = [
+            "-m",
+            "pytest",
+            "tests/",
+            "-q",
+            "-o",
+            "addopts=",
+            "--strict-markers",
+            "--strict-config",
+            "-p",
+            "no:tach",
+            "-n",
+            "4",
+            f"--junitxml={args.input}",
+        ]
+        if len(command) != len(expected) + 1 or command[1:] != expected:
+            raise ValueError("full-suite evidence requires complete unfiltered pytest argv")
+    else:
+        if len(command) != 17:
+            raise ValueError("invalid impact-selected pytest argv")
+        expected = [
+            "-m",
+            "pytest",
+            "tests/",
+            "-q",
+            "-o",
+            "addopts=",
+            "--strict-markers",
+            "--strict-config",
+            "--tach",
+            "--tach-base",
+            _validate_revision(command[11]),
+            "-n",
+            "0",
+            "--tach-head",
+            args.source_revision,
+            f"--junitxml={args.input}",
+        ]
+        if command[1:] != expected:
+            raise ValueError("invalid impact-selected pytest argv")
+    return record
 
 
 def _coverage_report(args: argparse.Namespace) -> dict[str, object]:
@@ -250,12 +317,12 @@ def _required_markdown(report: dict[str, object]) -> str:
     return "\n".join(rows)
 
 
-def _add_common_evidence_arguments(parser: argparse.ArgumentParser, *, scope: str) -> None:
+def _add_common_evidence_arguments(parser: argparse.ArgumentParser, *, scopes: tuple[str, ...]) -> None:
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--step-summary", type=Path)
     parser.add_argument("--source-revision", required=True)
-    parser.add_argument("--scope", choices=(scope,), required=True)
+    parser.add_argument("--scope", choices=scopes, required=True)
     parser.add_argument("--command", required=True)
 
 
@@ -264,10 +331,11 @@ def _parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="kind", required=True)
 
     junit = subparsers.add_parser("junit")
-    _add_common_evidence_arguments(junit, scope="tach-selected")
+    _add_common_evidence_arguments(junit, scopes=("tach-selected", "full-repository"))
+    junit.add_argument("--selection-report", type=Path)
 
     coverage = subparsers.add_parser("coverage")
-    _add_common_evidence_arguments(coverage, scope="full-repository")
+    _add_common_evidence_arguments(coverage, scopes=("full-repository",))
     coverage.add_argument("--minimum-percent", type=float, required=True)
 
     required = subparsers.add_parser("required")
@@ -282,7 +350,10 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Create one evidence report and return its represented result."""
-    args = _parser().parse_args(argv)
+    parser = _parser()
+    args = parser.parse_args(argv)
+    if args.kind == "junit" and args.scope == "full-repository" and args.selection_report is None:
+        parser.error("full-repository JUnit evidence requires --selection-report")
     try:
         if args.kind == "junit":
             report = _junit_report(args)

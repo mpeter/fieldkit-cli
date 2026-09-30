@@ -1,166 +1,141 @@
-# Stakeholder Mapping Skill
+# Stakeholder map
 
-## Gotchas
+Use this workflow to draft an account-wide or pursuit-specific buying-committee
+map from attributable evidence. The output separates observed facts, operator
+judgment, and unknowns; it does not silently update an account or pursuit file.
 
-- **Stale vault signals** — run `/brief` first if data hasn't been refreshed today
-- **Trigger overlap with adjacent skills** — confirm you need this skill and not a closely named one
+## Establish identity and scope
 
-## Constraints
+Require one exact configured account key. For a pursuit-specific map, also
+require the exact pursuit path or identifier. Resolve ambiguous people by exact
+email before joining records, and do not merge people solely because their names
+match.
 
-- **Never write to account or pursuit files without explicit confirmation**
-- **Always surface generated output for review before any external send**
+Read `accounts/<account>/account.md` and the selected pursuit record when they
+exist. Preserve the provenance of any existing role or support assessment;
+missing provenance makes it operator judgment, not verified customer intent.
 
-## Purpose
+## Collect shipped fieldkit evidence
 
-Build a buying-committee map: who they are, what they care about, how they feel
-about us, and where our coverage gaps are. Output is actionable — every entry
-leads to a next step.
+For each known exact email, query the local contact index:
 
-## Data Sources (use all available)
-
-Routes needed: `gws gmail` (Gmail threads), **fieldkit-sales** (Backstory MCP exception), `gws calendar` (meeting attendees), and `tvly` (web research). Account files are read and edited directly on disk.
-
-1. **`account.md`** — read `accounts/<account>/account.md` — existing stakeholder info
-2. **Gmail threads** (`gws gmail`) — search for contacts at the account domain
-3. **Backstory** (fieldkit-sales) — relationship health scores, last contact, engagement depth
-4. **Google Calendar** (`gws calendar`) — past meeting attendees at the account
-5. **Slack** — `slackcli` search for account mentions
-6. **Web search** (`tvly search`) — LinkedIn profiles, org announcements, executive bios
-7. **Salesforce** (via `fieldkit sf opportunity <id>`) — contact roles on the opportunity
-
-Prioritize Backstory MCP + Gmail over Tavily for current status.
-Use the `tvly` CLI to fill in bio/background on new contacts.
-
-### Slack Intelligence
-
-Search Slack for account and stakeholder mentions:
-
-```
-1. slackcli search messages "<stakeholder name>" --limit 20
-   → mentions of specific contacts — informal context, team assessments, relationship signals
-
-2. For any unknown users:
-   slackcli search people "<name or email>"
-   → resolve to name/email for matching to stakeholder records
+```bash
+fieldkit contact find <email> --affiliations --json
 ```
 
-Slack surfaces context that doesn't appear in formal emails: team impressions
-of a stakeholder's stance, informal notes about who's blocking or championing.
+`--affiliations` can return the contact's associations across accounts; it is
+not scoped to this map's account. Review only the associations relevant to the
+confirmed account and omit unrelated customer context from the draft. If that
+cross-account read is not authorized, omit the flag and keep affiliations unknown.
 
----
+For a bounded, dated view of the account's existing Gmail cache:
 
-## Stakeholder Roles to Map
-
-Roles align with Salesforce Contact Roles (which feed Backstory/People.AI data).
-For each stakeholder, assign one or more of these roles:
-
-| Role                    | SF Contact Role    | Definition                                                       |
-| ----------------------- | ------------------ | ---------------------------------------------------------------- |
-| **Economic Buyer (EB)** | Economic Buyer     | Controls the budget. Final yes/no authority.                     |
-| **Technical Buyer**     | Technical Buyer    | Evaluates technical fit. Can veto but not approve alone.         |
-| **Champion**            | Champion           | Advocates for us internally. Has credibility + EB access.        |
-| **Influencer**          | Influencer         | Shapes the decision but doesn't own budget or technical veto.    |
-| **End User**            | End User           | Will use or manage the solution day-to-day.                      |
-| **Adoption Lead**       | Adoption Lead      | Drives internal adoption and change management post-sale.        |
-| **Procurement**         | Procurement        | Handles purchasing, vendor onboarding, PO creation.              |
-| **Legal**               | Legal              | Reviews contracts, terms, security/compliance requirements.      |
-| **Partner Sponsor**     | Partner Sponsor    | Internal sponsor from partner side (IBM, etc.).                  |
-| **Accounts Payable**    | Accounts Payable   | Handles invoicing and payment processing.                        |
-
-One person can hold multiple roles (e.g., Champion + Technical Buyer).
-
-### Supplemental Tags (not SF Contact Roles, but useful for deal strategy)
-
-- **Coach** — Gives us insider info but may not advocate openly.
-- **Blocker** — Actively working against us or the initiative.
-- **Neutral** — Has influence but hasn't engaged.
-
-Use these as supplemental labels in the Support Level column, not as primary roles.
-
----
-
-## For Each Stakeholder, Capture
-
-```
-Name: [Full name]
-Title / Function: [title, department]
-Role in Deal: [EB / Technical Buyer / Champion / etc.]
-Influence Level: [High / Medium / Low]
-Support Level: [Strong Supporter / Supporter / Neutral / Skeptic / Blocker]
-Last Contact: [date and method — email, meeting, call]
-Contact Frequency: [weekly / monthly / sporadic / none]
-Key Priorities: [what they care about — in their language, not ours]
-Key Concerns: [objections or risks they've raised]
-Relationship Owner: [which colleague owns this relationship]
-Coverage Gap: [yes/no — are we underweight here?]
-Next Step: [specific action to advance this relationship]
+```bash
+fieldkit gmail query account <account> --since <YYYY-MM-DD> --limit 10 --json
 ```
 
----
+These are read-only queries of a ready published cache. They do not refresh Gmail, prove complete
+coverage, establish sentiment, or prove that a reply is owed. Record the cache's
+known date range. A missing cache, unknown contact, nonzero exit, partial result,
+or malformed output is `unavailable`, not a negative finding.
 
-## Output Format
+If an exact Salesforce Opportunity ID is already present and current opportunity
+context is needed, inspect the local help first:
 
-Produce two outputs:
-
-### 1. Stakeholder Table (quick reference)
-
-```
-# Stakeholder Map — [Account] — [Opportunity or "Account-Wide"]
-Last Updated: YYYY-MM-DD
-
-| Name | Title | Role | Influence | Support | Last Contact | Owner | Gap? |
-|------|-------|------|-----------|---------|--------------|-------|------|
-| ...  | ...   | ...  | ...       | ...     | ...          | ...   | Y/N  |
+```console
+fieldkit sf opportunity --help
 ```
 
-### 2. Individual Profiles (one per stakeholder)
+After authorizing the credentialed read, use its read-only mode:
 
-```
-## [Name] — [Title]
-
-**Role in Deal:** [role]
-**Influence:** [High/Med/Low]   **Support:** [level]
-
-**Background:** [2–3 sentences — career, tenure, what they're known for]
-
-**What They Care About:** [their top 2–3 priorities in their language]
-
-**Our Position with Them:** [where we stand — honest assessment]
-
-**Risks / Watch-Outs:** [anything that could go wrong]
-
-**Next Step:** [specific action, owned by whom, by when]
+```console
+fieldkit sf opportunity <opportunity_id> --no-write
 ```
 
----
+Its opportunity summary does not promise Contact
+Roles; do not claim a Salesforce stakeholder role unless the returned evidence
+actually contains it.
 
-## Coverage Gap Analysis
+The help invocation is a safe local check. The opportunity read requires a
+configured and authorized Salesforce identity and approval for that exact
+opportunity. A help result does not prove the live read. Record its observation
+time and completeness; failed or incomplete reads remain unavailable.
 
-After mapping all stakeholders, produce a gap summary:
+## Add optional evidence deliberately
 
+Calendar, Slack, public-web, directory, and account-intelligence tools are
+optional operator-provided sources. fieldkit does not install or guarantee any
+of them. Use one only after confirming its installed read-only interface,
+authenticated identity, account scope, date range, pagination bound, and output
+shape.
+
+Attribute every observation to its source and date:
+
+- Calendar organizer or attendee membership shows an invited or scheduled
+  participant, not confirmed attendance. Require separate evidence before
+  claiming attendance; neither membership nor attendance establishes buying
+  authority or support.
+- An email or internal comment may identify a concern, but silence does not prove
+  opposition.
+- An account-intelligence score is a provider suggestion, not a customer fact.
+- Public research may support title and background when linked and dated; it
+  does not establish private priorities or relationship strength.
+- A failed, unavailable, ambiguous, or incomplete read remains explicitly
+  `unavailable` or `pending`. Do not silently switch sources.
+
+## Draft roles and gaps
+
+Use buying-committee roles such as Economic Buyer, Technical Buyer, Champion,
+Influencer, End User, Procurement, or Legal only when evidence or explicit
+operator judgment supports them. Otherwise set the role to `Unknown`. A person
+may hold more than one role.
+
+Capture only what the evidence supports:
+
+- name, title, and function;
+- role and whether it is verified or operator-assessed;
+- influence and support, with source or `Unknown`;
+- last verified contact date and method;
+- stated priorities and concerns, preserving the speaker and date;
+- relationship owner, when explicitly assigned;
+- next step as a proposed action, not a commitment.
+
+Replace sample statuses with observed outcomes. A template row marked `verified`
+is not evidence: missing, failed, partial, or unknown coverage stays unavailable
+or pending. Keep proposed actions separate from observed facts.
+
+```markdown
+# Stakeholder Map — [account] — [opportunity or account-wide]
+Last reviewed: [YYYY-MM-DD]
+
+## Source status
+| Source | As of / scope | Status | Note |
+|---|---|---|---|
+| account record | [date or unknown] | verified | [scope] |
+| Gmail cache | [range] | unavailable | [reason] |
+
+## Stakeholders
+| Name | Title | Role | Basis | Influence | Support | Last contact | Owner | Gap? |
+|---|---|---|---|---|---|---|---|---|
+| [name] | [title] | Unknown | insufficient evidence | Unknown | Unknown | [date] | Unknown | Y |
+
+## Evidence notes
+### [name]
+- Observed: [fact] — Source: [source, date]
+- Operator assessment: [assessment or none]
+- Unknowns: [role, priorities, concerns, or relationship state]
+- Proposed next step: [owner and timing to confirm]
+
+## Coverage gaps
+- Economic Buyer: [name and evidence, or NOT IDENTIFIED]
+- Champion: [name and evidence, or NOT IDENTIFIED]
+- Uncontacted high-influence stakeholders: [verified list or UNKNOWN]
+- Single-threaded risk: [evidence-based assessment or UNKNOWN]
+- Priority actions: [reviewable proposals]
 ```
-## Coverage Gaps
 
-**Economic Buyer:** [name or "NOT IDENTIFIED"] — [last contact or "NO CONTACT"]
-**Champion Status:** [name or "NO CHAMPION"] — [strength assessment]
-**Uncontacted High-Influence Stakeholders:** [list]
-**Single-Threaded Risk:** [yes/no — if yes, who is the single thread and what's the risk]
-
-**Priority Actions to Close Gaps:**
-1. [action]
-2. [action]
-3. [action]
-```
-
----
-
-## After Mapping
-
-1. Update the stakeholder map section by editing the `## Stakeholder Map`
-   body section of `accounts/<account>/account.md` in place (a targeted edit
-   replacing the old section with the updated map). This is an operator-authored
-   body section — `fieldkit sf account` only manages the `sf_*` frontmatter and
-   dashboard region, so the map is preserved across regeneration. Never hand-edit
-   the frontmatter.
-2. For pursuit-specific maps, edit `accounts/<account>/pursuits/<opp>.md` directly.
-3. Flag any EB or Champion gap to the user immediately — these are deal blockers.
+Present the draft for review. Do not write to `account.md`, a pursuit file, or
+an external system. If the operator asks to save an approved map, identify the
+owned body section and exact file first, preserve frontmatter and generated
+regions, obtain confirmation, and verify the resulting diff. An existing section
+or file needs explicit overwrite approval.

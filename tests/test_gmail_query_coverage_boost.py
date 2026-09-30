@@ -19,11 +19,12 @@ from unittest.mock import patch
 import pytest
 from rich.console import Console
 
-from fieldkit.commands.gmail.query import (
+from fieldkit.commands.gmail.query import _format_blindspots_table
+from fieldkit.gmail.exceptions import GmailSchemaError
+from fieldkit.gmail.query_domain import (
     _build_addr_stats,
     _champion_thread_stats,
     _fetch_blindspot_messages,
-    _format_blindspots_table,
     query_blindspots,
     query_dig,
 )
@@ -128,13 +129,13 @@ def test_query_blindspots_returns_external_contacts(monkeypatch: pytest.MonkeyPa
     def _no_internal_domains() -> set[str]:
         return set()
 
-    monkeypatch.setattr("fieldkit.commands.gmail.query._internal_blind_domains", _no_internal_domains)
+    monkeypatch.setattr("fieldkit.gmail.query_domain._internal_blind_domains", _no_internal_domains)
     conn = _make_db()
     _insert_message(
         conn,
         thread_id="t-001",
-        from_addr="external@acme-corp.com",
-        to_addr="me@acme-corp.com",
+        from_addr="external@acme-corp.example.com",
+        to_addr="me@acme-corp.example.com",
         date_epoch=1700000000,
     )
     _insert_thread_account(conn, "t-001", "acme-corp")
@@ -146,7 +147,7 @@ def test_query_blindspots_returns_external_contacts(monkeypatch: pytest.MonkeyPa
 
     assert len(result) == 2
     emails = [r[0] for r in result]
-    assert "external@acme-corp.com" in emails
+    assert "external@acme-corp.example.com" in emails
 
 
 def test_query_blindspots_since_filter_excludes_old_messages() -> None:
@@ -155,7 +156,7 @@ def test_query_blindspots_since_filter_excludes_old_messages() -> None:
     _insert_message(
         conn,
         thread_id="t-old",
-        from_addr="old@acme-corp.com",
+        from_addr="old@acme-corp.example.com",
         date_epoch=1000000,  # very old
     )
     _insert_thread_account(conn, "t-old", "acme-corp")
@@ -178,7 +179,7 @@ def test_query_blindspots_limit_caps_results() -> None:
         _insert_message(
             conn,
             thread_id=f"t-{i}",
-            from_addr=f"contact{i}@acme-corp.com",
+            from_addr=f"contact{i}@acme-corp.example.com",
             date_epoch=1700000000 + i,
         )
         _insert_thread_account(conn, f"t-{i}", "acme-corp")
@@ -229,7 +230,7 @@ def test_query_dig_matching_thread_returned() -> None:
     _insert_message(
         conn,
         thread_id="t-deal",
-        from_addr="sales@acme-corp.com",
+        from_addr="sales@acme-corp.example.com",
         subject="OpenShift deal discussion",
         body_plain="Let's talk about OpenShift pricing.",
         date_epoch=1700000000,
@@ -252,7 +253,7 @@ def test_query_dig_since_filter_applied() -> None:
     _insert_message(
         conn,
         thread_id="t-old-deal",
-        from_addr="sales@acme-corp.com",
+        from_addr="sales@acme-corp.example.com",
         subject="Old OpenShift deal",
         body_plain="Old discussion.",
         date_epoch=1000000,  # very old
@@ -273,7 +274,7 @@ def test_query_dig_result_has_expected_keys() -> None:
     _insert_message(
         conn,
         thread_id="t-check",
-        from_addr="sales@acme-corp.com",
+        from_addr="sales@acme-corp.example.com",
         subject="Deal check",
         body_plain="Check this deal.",
         date_epoch=1700000000,
@@ -302,7 +303,7 @@ def test_query_dig_limit_caps_results() -> None:
         _insert_message(
             conn,
             thread_id=f"t-deal-{i}",
-            from_addr="sales@acme-corp.com",
+            from_addr="sales@acme-corp.example.com",
             subject=f"Deal {i}",
             body_plain="Deal discussion.",
             date_epoch=1700000000 + i,
@@ -336,44 +337,44 @@ def test_build_addr_stats_single_from_addr_counted() -> None:
 
     class FakeRow:
         def __getitem__(self, i: int) -> object:
-            return [("sender@acme-corp.com", "recipient@example.com", 1700000000)][0][i]  # pii-guard: ignore
+            return [("sender@acme-corp.example.com", "recipient@example.com", 1700000000)][0][i]  # pii-guard: ignore
 
     # Use a simple tuple instead
-    rows = [("sender@acme-corp.com", "recipient@example.com", 1700000000)]  # pii-guard: ignore
+    rows = [("sender@acme-corp.example.com", "recipient@example.com", 1700000000)]  # pii-guard: ignore
     result = _build_addr_stats(rows)
 
-    assert "sender@acme-corp.com" in result
-    assert result["sender@acme-corp.com"]["msgs"] >= 1
+    assert "sender@acme-corp.example.com" in result
+    assert result["sender@acme-corp.example.com"]["msgs"] >= 1
 
 
 def test_build_addr_stats_noise_addresses_filtered() -> None:
     """Internal/noise addresses are excluded from stats."""
-    rows = [("noreply@acme-corp.com", "team@acme-corp.com", 1700000000)]
+    rows = [("noreply@acme-corp.example.com", "team@acme-corp.example.com", 1700000000)]
     result = _build_addr_stats(rows)
 
-    # acme-corp.com is internal — should be filtered
-    assert "noreply@acme-corp.com" not in result
+    # acme-corp.example.com is internal — should be filtered
+    assert "noreply@acme-corp.example.com" not in result
 
 
 def test_build_addr_stats_multiple_rows_aggregated() -> None:
     """Multiple rows for same address are aggregated."""
     rows = [
-        ("contact@acme-corp.com", "", 1700000000),
-        ("contact@acme-corp.com", "", 1700001000),
+        ("contact@acme-corp.example.com", "", 1700000000),
+        ("contact@acme-corp.example.com", "", 1700001000),
     ]
     result = _build_addr_stats(rows)
 
-    assert "contact@acme-corp.com" in result
-    assert result["contact@acme-corp.com"]["msgs"] == 2
-    assert result["contact@acme-corp.com"]["last_epoch"] == 1700001000
+    assert "contact@acme-corp.example.com" in result
+    assert result["contact@acme-corp.example.com"]["msgs"] == 2
+    assert result["contact@acme-corp.example.com"]["last_epoch"] == 1700001000
 
 
-def test_build_addr_stats_addr_without_at_sign_excluded() -> None:
-    """Addresses without @ are excluded."""
-    rows = [("not-an-email", "valid@acme-corp.com", 1700000000)]
-    result = _build_addr_stats(rows)
+def test_build_addr_stats_addr_without_at_sign_is_invalid() -> None:
+    """Malformed source addresses fail closed instead of disappearing."""
+    rows = [("not-an-email", "valid@acme-corp.example.com", 1700000000)]
 
-    assert "not-an-email" not in result
+    with pytest.raises(GmailSchemaError, match="invalid sender address data"):
+        _build_addr_stats(rows)
 
 
 # ---------------------------------------------------------------------------
@@ -387,8 +388,8 @@ def test_build_addr_stats_addr_without_at_sign_excluded() -> None:
 def test_fetch_blindspot_messages_no_since_returns_all_messages() -> None:
     """Without since filter, all messages for thread IDs are returned."""
     conn = _make_db()
-    _insert_message(conn, "t-1", "a@acme-corp.com", date_epoch=1000000)
-    _insert_message(conn, "t-2", "b@acme-corp.com", date_epoch=2000000)
+    _insert_message(conn, "t-1", "a@acme-corp.example.com", date_epoch=1000000)
+    _insert_message(conn, "t-2", "b@acme-corp.example.com", date_epoch=2000000)
 
     try:
         rows = _fetch_blindspot_messages(conn, ["t-1", "t-2"], since=None)
@@ -401,8 +402,8 @@ def test_fetch_blindspot_messages_no_since_returns_all_messages() -> None:
 def test_fetch_blindspot_messages_since_filter_excludes_old_messages() -> None:
     """Messages before since epoch are excluded."""
     conn = _make_db()
-    _insert_message(conn, "t-old", "old@acme-corp.com", date_epoch=1000000)
-    _insert_message(conn, "t-new", "new@acme-corp.com", date_epoch=2000000000)
+    _insert_message(conn, "t-old", "old@acme-corp.example.com", date_epoch=1000000)
+    _insert_message(conn, "t-new", "new@acme-corp.example.com", date_epoch=2000000000)
 
     try:
         rows = _fetch_blindspot_messages(conn, ["t-old", "t-new"], since=1500000000)
@@ -411,14 +412,14 @@ def test_fetch_blindspot_messages_since_filter_excludes_old_messages() -> None:
 
     # Only the new message should be returned
     from_addrs = [r[0] for r in rows]
-    assert "new@acme-corp.com" in from_addrs
-    assert "old@acme-corp.com" not in from_addrs
+    assert "new@acme-corp.example.com" in from_addrs
+    assert "old@acme-corp.example.com" not in from_addrs
 
 
 def test_fetch_blindspot_messages_empty_thread_ids_returns_empty() -> None:
     """Empty thread_ids list returns no messages."""
     conn = _make_db()
-    _insert_message(conn, "t-1", "a@acme-corp.com")
+    _insert_message(conn, "t-1", "a@acme-corp.example.com")
 
     try:
         # SQLite IN () with empty list would be a syntax error, but the
@@ -442,13 +443,13 @@ def test_fetch_blindspot_messages_empty_thread_ids_returns_empty() -> None:
 def test_format_blindspots_table_formats_results_without_error(capsys: pytest.CaptureFixture[str]) -> None:
     """_format_blindspots_table prints without raising."""
     results = [
-        {"email": "contact@acme-corp.com", "name": "Alice", "msgs": 5, "days": 10},
+        {"email": "contact@acme-corp.example.com", "name": "Alice", "msgs": 5, "days": 10},
         {"email": "other@globalpay.example.com", "name": "", "msgs": 3, "days": 9999},
     ]
     with patch("fieldkit.commands.gmail.query.console", Console(width=200, force_terminal=False)):
         _format_blindspots_table(results)
     captured = capsys.readouterr()
-    assert "contact@acme-corp.com" in captured.out
+    assert "contact@acme-corp.example.com" in captured.out
     assert "10d ago" in captured.out
     assert "unknown" in captured.out
 
@@ -483,7 +484,7 @@ def test_build_addr_stats_with_since_filter() -> None:
     """since parameter is passed through without error."""
     conn = _make_db()
     try:
-        initiated, total, sent, last = _champion_thread_stats(conn, ["test@acme-corp.com"], since=1700000000)
+        initiated, total, sent, last = _champion_thread_stats(conn, ["test@acme-corp.example.com"], since=1700000000)
     finally:
         conn.close()
 

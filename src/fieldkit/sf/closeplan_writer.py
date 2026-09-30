@@ -15,7 +15,8 @@ from typing import Any, Literal
 
 from fieldkit.config import get_fieldkit_data
 from fieldkit.errors import FieldkitError
-from fieldkit.sf.client import SFConditionalWriteConflict, SFConditionalWriteOutcomeUnknown, SFDirectClient
+from fieldkit.sf.client import SFDirectClient
+from fieldkit.sf.errors import SFConditionalWriteConflict, SFConditionalWriteOutcomeUnknown
 from fieldkit.sf.types import MeddpiccDeal, MeddpiccQuestion, MeddpiccReadResult
 
 _SCORE_FIELD = "TSPC__Score__c"

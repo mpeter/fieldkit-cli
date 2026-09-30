@@ -36,7 +36,7 @@ def _prompt_for_refresh_token() -> str:
         return str(click.prompt("Paste refresh token", hide_input=True, err=True)).strip()
     except (click.Abort, EOFError, KeyboardInterrupt):
         click.echo("ShadowBot authorization cancelled.", err=True)
-        raise SystemExit(0) from None
+        raise SystemExit(EXIT_AUTH) from None
 
 
 def _emit_json_status(refresh_token_file: Path | None) -> None:

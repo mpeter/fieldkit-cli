@@ -98,6 +98,7 @@ def main(argv: list[str]) -> int:
     pursuit = src_root / "fieldkit/pursuit/projects.py"
     pursuit_command = src_root / "fieldkit/commands/pursuit/projects_health.py"
     watch = src_root / "fieldkit/watch/morning_brief_render.py"
+    merged = src_root / "fieldkit/brief/merged.py"
     pursuit_io = src_root / "fieldkit/pursuit/io.py"
     old_render = src_root / "fieldkit/commands/watch/morning_brief_render.py"
     audit_command = src_root / "fieldkit/commands/pursuit/audit.py"
@@ -113,6 +114,7 @@ def main(argv: list[str]) -> int:
         pursuit_io,
         audit_command,
         watch,
+        merged,
         companion_tests,
         classifier_tests,
         quota_tests,
@@ -173,9 +175,8 @@ def main(argv: list[str]) -> int:
     outbox = src_root / "fieldkit/companion/outbox.py"
     if outbox.is_file() and "commands/watch/morning_brief_render.py" in outbox.read_text(encoding="utf-8"):
         errors.append(f"stale companion documentation pointer: {outbox}")
-    generate = src_root / "fieldkit/commands/brief/generate.py"
-    if generate.is_file() and OLD_RENDER_DOC in generate.read_text(encoding="utf-8"):
-        errors.append(f"stale generator documentation pointer: {generate}")
+    if merged.is_file() and OLD_RENDER_DOC in merged.read_text(encoding="utf-8"):
+        errors.append(f"stale generator documentation pointer: {merged}")
     pursuit_agents = src_root / "fieldkit/pursuit/AGENTS.md"
     if pursuit_agents.is_file() and OLD_PARSER_GUIDANCE in pursuit_agents.read_text(encoding="utf-8"):
         errors.append(f"stale pursuit parser guidance: {pursuit_agents}")

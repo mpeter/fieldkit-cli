@@ -8,6 +8,7 @@ Dry-run mode reports what *would* be registered without writing to pipeline.db.
 """
 
 import json
+import sqlite3
 from pathlib import Path
 
 import click
@@ -37,7 +38,7 @@ from fieldkit.cli_registry import declare_write
 )
 @click.option(
     "--limit",
-    type=int,
+    type=click.IntRange(min=1),
     default=None,
     metavar="N",
     help="Maximum number of Gmail messages to scan (most-recent first).",
@@ -103,11 +104,7 @@ def _run_discover(
     # --- pipeline validation ---
     if pipeline_id not in PIPELINE_MAP:
         available = ", ".join(sorted(PIPELINE_MAP))
-        click.echo(
-            f"Error: unknown pipeline '{pipeline_id}'. Available pipelines: {available}",
-            err=True,
-        )
-        return 1
+        raise click.UsageError(f"Unknown pipeline. Available pipelines: {available}")
 
     from fieldkit.ingest.constants import AMBIENT_TRANSCRIPT_PIPELINE
 
@@ -142,8 +139,7 @@ def _discover_gemini_or_reject_latest(
     as_json: bool,
 ) -> int:
     if include_latest:
-        click.echo("Error: --include-latest is only valid for ambient-transcript-ingest.", err=True)
-        return 1
+        raise click.UsageError("--include-latest is only valid for ambient-transcript-ingest")
     return _discover_transcript_ingest(pipeline_id, dry_run, prefix, limit, account=account, as_json=as_json)
 
 
@@ -232,23 +228,19 @@ def _dry_run_transcript_ingest(
     as_json: bool = False,
 ) -> int:
     """Dry-run: scan gmail.db and report what would be registered."""
-    try:
-        from fieldkit.gmail.discover import scan_gemini_candidates
-        from fieldkit.ingest.sources import filter_gemini_candidates_for_account
+    from fieldkit.gmail.discover import scan_gemini_candidates
+    from fieldkit.ingest.sources import filter_gemini_candidates_for_account
 
-        candidates = filter_gemini_candidates_for_account(
-            scan_gemini_candidates(
-                gmail_db_path,
-                limit,
-                max_age_days=None,
-                default_limit=None,
-                require_positive_limit=False,
-            ),
-            account,
-        )
-    except Exception as exc:  # noqa: BLE001 — surface read errors, return 1
-        click.echo(f"Error reading gmail.db: {exc}", err=True)
-        return 1
+    candidates = filter_gemini_candidates_for_account(
+        scan_gemini_candidates(
+            gmail_db_path,
+            limit,
+            max_age_days=None,
+            default_limit=None,
+            require_positive_limit=False,
+        ),
+        account,
+    )
 
     found = [(candidate.source_id, candidate.subject) for candidate in candidates]
 
@@ -290,15 +282,13 @@ def _live_run_transcript_ingest(
     from fieldkit.ingest.db import get_db, init_db
     from fieldkit.ingest.sources import discover_gemini_sources
 
-    try:
-        from fieldkit.commands.ingest.registry import PIPELINES
-        from fieldkit.ingest.db import get_db_path
+    candidates = scan_gemini_candidates(gmail_db_path, limit)
 
-        db_path = get_db_path()
-        conn = get_db(db_path) if db_path.exists() else init_db(db_path, pipelines=PIPELINES)
-    except Exception as exc:  # noqa: BLE001 — surface as user-visible error, return 1
-        click.echo(f"Error opening pipeline.db: {exc}", err=True)
-        return 1
+    from fieldkit.commands.ingest.registry import PIPELINES
+    from fieldkit.ingest.db import get_db_path
+
+    db_path = get_db_path()
+    conn = get_db(db_path) if db_path.exists() else init_db(db_path, pipelines=PIPELINES)
 
     try:
         existing_count: int = conn.execute(
@@ -316,7 +306,6 @@ def _live_run_transcript_ingest(
                 err=True,
             )
 
-        candidates = scan_gemini_candidates(gmail_db_path, limit)
         newly_discovered = discover_gemini_sources(conn, candidates)
 
         total_count: int = conn.execute(
@@ -359,12 +348,10 @@ def _live_run_transcript_ingest(
                 if new_count > 5:
                     click.echo(f"    ... and {new_count - 5} more")
 
-    except FileNotFoundError as exc:
-        click.echo(f"Error: {exc}", err=True)
-        return 1
-    except Exception as exc:  # noqa: BLE001 — surface discovery errors, return 1
-        click.echo(f"Error during discovery: {exc}", err=True)
-        return 1
+    except sqlite3.DatabaseError:
+        from fieldkit.errors import SQLiteSnapshotError
+
+        raise SQLiteSnapshotError("pipeline database is unverified", reason="unverified") from None
     finally:
         conn.close()
 
@@ -384,13 +371,6 @@ def _discover_transcript_ingest(
     from fieldkit.gmail.discover import get_gmail_db_path
 
     gmail_db_path = get_gmail_db_path()
-    if not gmail_db_path.exists():
-        click.echo(
-            f"Error: gmail.db not found at {gmail_db_path}. Run the gmail-cache sync first.",
-            err=True,
-        )
-        return 1
-
     if dry_run:
         return _dry_run_transcript_ingest(pipeline_id, prefix, gmail_db_path, limit, account=account, as_json=as_json)
     return _live_run_transcript_ingest(pipeline_id, gmail_db_path, limit, account=account, as_json=as_json)

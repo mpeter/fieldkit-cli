@@ -10,10 +10,57 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from click.testing import CliRunner
 
 import fieldkit.watch.waiting_on_tracker as tracker
+from fieldkit.watch.status import WatcherOutcome, WatcherRunResult
+
+
+@pytest.mark.parametrize("dry_run,write_result", [(False, "written"), (False, "failed"), (True, "skipped")])
+def test_missing_tasks_carries_execution_facts(
+    dry_run: bool, write_result: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with (
+        patch.object(tracker, "_read_tasks_md", return_value=None),
+        patch.object(tracker, "write_run_status", return_value=write_result),
+    ):
+        result = tracker._run_inner(threshold=7, dry_run=dry_run, as_json=True)
+    assert isinstance(result, WatcherRunResult)
+    assert result.completed is True
+    assert result.status_write == write_result
+    document = json.loads(capsys.readouterr().out)
+    assert document["outcome"] == result.outcome
+    assert document["failures"] == int(write_result == "failed")
+
+
+@pytest.mark.parametrize("state_failed", [False, True])
+def test_completed_scan_status_failure_matches_json(state_failed: bool, capsys: pytest.CaptureFixture[str]) -> None:
+    with (
+        patch.object(tracker, "_read_tasks_md", return_value="## Waiting On\n- Reply (2026-01-01)\n"),
+        patch.object(tracker, "_load_state", return_value={}),
+        patch.object(tracker, "_append_alert"),
+        patch.object(tracker, "_save_state", side_effect=OSError("disk full") if state_failed else None),
+        patch.object(tracker, "write_run_status", return_value="failed") as writer,
+    ):
+        result = tracker._run_inner(threshold=7, dry_run=False, as_json=True)
+    assert result == WatcherRunResult("fatal", True, "failed")
+    document = json.loads(capsys.readouterr().out)
+    assert document["outcome"] == result.outcome
+    assert document["failures"] == 1 + int(state_failed)
+    assert writer.call_args.kwargs["failures"] == int(state_failed)
+
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.mark.parametrize("outcome", ["ok", "fatal"])
+def test_cli_uses_typed_result_exit_code(outcome: WatcherOutcome) -> None:
+    from fieldkit.commands.watch import waiting_on_tracker as command
+
+    run = WatcherRunResult(outcome, True, "written")
+    with patch.object(command, "_run", return_value=run):
+        result = CliRunner().invoke(command.cli, ["--dry-run"])
+    assert result.exit_code == run.exit_code
 
 
 def test_state_write_failure_is_fatal(tmp_path: Path) -> None:
@@ -23,11 +70,12 @@ def test_state_write_failure_is_fatal(tmp_path: Path) -> None:
         patch.object(tracker, "_read_tasks_md", return_value="## Waiting On\n- Reply (2026-01-01)\n"),
         patch.object(tracker, "_state_file", return_value=state_file),
         patch.object(tracker, "_save_state", side_effect=OSError("disk full")),
-        patch.object(tracker, "write_run_status") as write_status,
+        patch.object(tracker, "write_run_status", return_value="written") as write_status,
     ):
         rc = tracker._run_inner(threshold=7, dry_run=False)
 
-    assert rc == 1
+    assert isinstance(rc, WatcherRunResult)
+    assert rc.exit_code == 1
     assert write_status.call_args.kwargs["outcome"] == "fatal"
     assert write_status.call_args.kwargs["failures"] == 1
 
@@ -140,11 +188,10 @@ def _patch_roots(fk_root: Path, data_root: Path):
 # ── TestRun (flattened) ─────────────────────────────────────────────────────
 
 
-def _run_run(fk_root: Path, data_root: Path, **kwargs) -> int:
+def _run_run(fk_root: Path, data_root: Path, **kwargs) -> WatcherRunResult:
     # Must clear @cache on path helpers between tests
     tracker._alerts_file.cache_clear()
     tracker._state_file.cache_clear()
-    tracker.get_watchers_dir.cache_clear()
     with _patch_roots(fk_root, data_root):
         return tracker._run(**{"threshold": 7, "dry_run": False, **kwargs})
 
@@ -153,7 +200,8 @@ def test_run_missing_tasks_md_exits_0(tmp_roots) -> None:
     fk_root, data_root = tmp_roots
     # No TASKS.md created
     rc = _run_run(fk_root, data_root)
-    assert rc == 0
+    assert isinstance(rc, WatcherRunResult)
+    assert rc.exit_code == 0
     alerts_file = data_root / "watchers" / "waiting-on-alerts.md"
     assert not alerts_file.exists()
 
@@ -163,7 +211,8 @@ def test_run_stale_item_emits_alert(tmp_roots) -> None:
     stale = _today_minus(10)
     (data_root / "TASKS.md").write_text(_make_tasks_md([f"Vendor quote ({stale})"]), encoding="utf-8")
     rc = _run_run(fk_root, data_root)
-    assert rc == 0
+    assert isinstance(rc, WatcherRunResult)
+    assert rc.exit_code == 0
     alerts = (data_root / "watchers" / "waiting-on-alerts.md").read_text(encoding="utf-8")
     assert "Vendor quote" in alerts
 
@@ -176,9 +225,10 @@ def test_run_stale_sent_item_emits_alert(tmp_roots) -> None:
 
     rc = _run_run(fk_root, data_root)
 
+    assert isinstance(rc, WatcherRunResult)
+    assert rc.exit_code == 0
     alerts = (data_root / "watchers" / "waiting-on-alerts.md").read_text(encoding="utf-8")
     state = json.loads((data_root / "watchers" / "waiting-on-state.json").read_text(encoding="utf-8"))
-    assert rc == 0
     assert item in alerts
     assert next(iter(state.values()))["item_date"] == stale
 
@@ -188,7 +238,8 @@ def test_run_fresh_item_no_alert(tmp_roots) -> None:
     fresh = _today_minus(2)
     (data_root / "TASKS.md").write_text(_make_tasks_md([f"Recent request ({fresh})"]), encoding="utf-8")
     rc = _run_run(fk_root, data_root)
-    assert rc == 0
+    assert isinstance(rc, WatcherRunResult)
+    assert rc.exit_code == 0
     alerts_file = data_root / "watchers" / "waiting-on-alerts.md"
     # Either file doesn't exist or doesn't mention the item
     if alerts_file.exists():
@@ -199,7 +250,8 @@ def test_run_item_without_date_skipped(tmp_roots) -> None:
     fk_root, data_root = tmp_roots
     (data_root / "TASKS.md").write_text(_make_tasks_md(["No date item"]), encoding="utf-8")
     rc = _run_run(fk_root, data_root)
-    assert rc == 0
+    assert isinstance(rc, WatcherRunResult)
+    assert rc.exit_code == 0
     # No alert emitted since date is absent
     alerts_file = data_root / "watchers" / "waiting-on-alerts.md"
     if alerts_file.exists():
@@ -211,13 +263,15 @@ def test_run_idempotency_no_duplicate_alerts(tmp_roots) -> None:
     stale = _today_minus(10)
     (data_root / "TASKS.md").write_text(_make_tasks_md([f"Waiting on approval ({stale})"]), encoding="utf-8")
     # First run
-    _run_run(fk_root, data_root)
+    first = _run_run(fk_root, data_root)
+    assert first == WatcherRunResult("ok", True, "written")
     alerts_file = data_root / "watchers" / "waiting-on-alerts.md"
     content_after_first = alerts_file.read_text(encoding="utf-8")
     count_first = content_after_first.count("Waiting on approval")
 
     # Second run — should not emit another alert
-    _run_run(fk_root, data_root)
+    second = _run_run(fk_root, data_root)
+    assert second == WatcherRunResult("ok", True, "written")
     content_after_second = alerts_file.read_text(encoding="utf-8")
     count_second = content_after_second.count("Waiting on approval")
 
@@ -229,7 +283,8 @@ def test_run_dry_run_no_file_writes(tmp_roots) -> None:
     stale = _today_minus(10)
     (data_root / "TASKS.md").write_text(_make_tasks_md([f"DryRun item ({stale})"]), encoding="utf-8")
     rc = _run_run(fk_root, data_root, dry_run=True)
-    assert rc == 0
+    assert isinstance(rc, WatcherRunResult)
+    assert rc.exit_code == 0
     alerts_file = data_root / "watchers" / "waiting-on-alerts.md"
     assert not alerts_file.exists()
     state_file = data_root / "watchers" / "waiting-on-state.json"
@@ -250,7 +305,8 @@ def test_run_mixed_ages_only_stale_alerted(tmp_roots) -> None:
         encoding="utf-8",
     )
     rc = _run_run(fk_root, data_root)
-    assert rc == 0
+    assert isinstance(rc, WatcherRunResult)
+    assert rc.exit_code == 0
     alerts = (data_root / "watchers" / "waiting-on-alerts.md").read_text(encoding="utf-8")
     assert "Old item" in alerts
     assert "New item" not in alerts
@@ -261,7 +317,8 @@ def test_run_state_file_written_with_keys(tmp_roots) -> None:
     stale = _today_minus(10)
     item = f"Check status ({stale})"
     (data_root / "TASKS.md").write_text(_make_tasks_md([item]), encoding="utf-8")
-    _run_run(fk_root, data_root)
+    result = _run_run(fk_root, data_root)
+    assert result == WatcherRunResult("ok", True, "written")
     state_file = data_root / "watchers" / "waiting-on-state.json"
     assert state_file.exists()
     state = json.loads(state_file.read_text(encoding="utf-8"))

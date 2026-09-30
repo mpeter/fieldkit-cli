@@ -1,45 +1,40 @@
 ---
 name: create-google-doc-with-layout
-description: Use when creating a Google Doc with headings, lists, tables, and body text through gws.
+description: Create and verify a structured Google Doc through an available gws CLI.
 ---
 
 # Create a Google Doc with layout
 
-Use the Docs API through `gws`. Inspect each method schema before composing the
-request body:
+This workflow requires a separately installed `gws` CLI, an authenticated Google
+account with the necessary scopes, and authorization for the exact document.
+Inspect the installed `docs.documents.get`, `docs.documents.batchUpdate`, and
+`drive.files.export` leaves before composing arguments.
 
-```bash
-gws schema docs.documents.get --resolve-refs
-gws schema docs.documents.batchUpdate --resolve-refs
-```
+Use `gws schema docs.documents.get` and
+`gws schema docs.documents.batchUpdate` only when those schema reads complete
+successfully. Do not add recursive reference expansion. If the CLI cannot return
+a usable schema, leave the edit pending rather than guessing request fields.
 
 ## Safe edit cycle
 
-1. Read the document with `gws docs documents get` and record current indices.
-2. Build a small `batchUpdate` request. Insert heading text separately from body
-   text so paragraph styles do not cascade.
-3. Apply named paragraph styles only to the intended ranges.
+1. Read the exact document and record its current tab identifiers, structure,
+   indices, and relevant text.
+2. Resolve an ambiguous document or tab with the operator.
+3. Build a minimal request. Insert heading text separately from body text so a
+   paragraph style cannot cascade into unrelated content.
 4. Insert a list as one contiguous block, then reset the following paragraph to
-   normal text.
-5. After inserting a table, re-read the document before addressing cell ranges;
-   fill shifting ranges from the end toward the beginning.
-6. Run `gws docs documents batchUpdate` with the reviewed request body.
-7. Read the document again and confirm the requested structure.
-8. Export through Drive and inspect the PDF when visual layout matters.
+   normal text. Include the terminating newline when styling a paragraph.
+5. After inserting a table, read the document again before addressing cells;
+   earlier insertions change later indices.
+6. Show the target and proposed request. Obtain authorization before the update.
+7. Apply the update through the documented `gws docs documents batchUpdate`
+   leaf, preserving the exit status and response.
+8. Read the document again and compare its structure with the approved request.
+9. When visual layout matters, export through the documented Drive file-export
+   leaf and inspect the resulting PDF before declaring success.
 
-```bash
-gws docs documents get --params '{"documentId":"<document-id>"}'
-gws docs documents batchUpdate --params '{"documentId":"<document-id>"}' --json '<requests-json>'
-gws drive files export --params '{"fileId":"<document-id>","mimeType":"application/pdf"}' --output <output.pdf>
-```
-
-## Index and style rules
-
-- Every insertion changes later indices; never reuse stale positions.
-- Include the terminating newline when applying a paragraph style.
-- Do not insert heading and body paragraphs in one operation if they need
-  different named styles.
-- Do not include literal numbering when applying a numbered-list bullet preset.
-- Multi-tab documents require the correct tab identifier in each range.
-- A successful API response is not visual verification; inspect the exported
-  artifact before claiming layout completion.
+Multi-tab documents require the correct tab identifier in every range. Do not
+reuse stale indices, combine differently styled paragraphs into one insertion,
+or include literal numbering when applying a numbered-list preset. An API
+success without structural read-back and required visual inspection is pending,
+not verified.

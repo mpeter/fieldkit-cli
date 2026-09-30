@@ -13,9 +13,11 @@ import click
 
 from fieldkit.cli_exit import EXIT_AUTH, EXIT_DATA, EXIT_PARTIAL
 from fieldkit.config import ConfigError, get_fieldkit_home, get_pipeline_quota, write_pipeline_quota
+from fieldkit.pipeline.main import generate_review
+from fieldkit.quota_period import quota_period_end_date
+from fieldkit.sf.quota import SFQuotaResult
+from fieldkit.util.saved_reports import open_saved_report, read_saved_report
 
-# Accepted period formats: YYYY-H1, YYYY-H2, YYYY-Q1 … YYYY-Q4
-_PERIOD_RE = re.compile(r"\d{4}-[HQ][1-4]")
 _SAFE_ACCOUNT_SLUG_RE = re.compile(r"[A-Za-z0-9_-]+")
 
 # ── Feature introspection metadata (consumed by fieldkit version --features) ──
@@ -36,6 +38,21 @@ def _validate_pipeline_account(account: str | None) -> None:
     if account is not None and _SAFE_ACCOUNT_SLUG_RE.fullmatch(account) is None:
         click.echo(f"Error: unsafe account slug '{account}'.", err=True)
         raise SystemExit(EXIT_DATA)
+
+
+def _run(no_llm: bool, data_root_override: Path | None, account: str | None = None) -> None:
+    """Generate a review and present it at the CLI boundary."""
+    try:
+        data_root = data_root_override or get_fieldkit_home()
+    except ConfigError as exc:
+        click.echo(f"ERROR: {exc}", err=True)
+        raise SystemExit(EXIT_DATA) from None
+
+    result = generate_review(no_llm=no_llm, data_root=data_root, account=account)
+    click.echo(result.text)
+    click.echo(f"\n---\nSaved to: {result.path}", err=True)
+    if result.provider_failure is not None:
+        raise result.provider_failure
 
 
 @click.group(
@@ -65,30 +82,11 @@ def cli(ctx: click.Context, no_llm: bool, data_root_override: Path | None, accou
     Use 'fieldkit pipeline quota' to show the quota gap summary.
 
     \b
-    The --no-llm flag skips LLM synthesis and works when placed anywhere:
+    The --no-llm group flag skips LLM synthesis during report generation:
       fieldkit pipeline --no-llm
       fieldkit pipeline open  (--no-llm not applicable to subcommands)
     """
-    # historic regression: detect --no-llm placed after a subcommand name in sys.argv and
-    # surface a helpful error rather than silently ignoring it.
-    import sys
-
-    argv = sys.argv[1:]
-    subcmds = {"open", "quota"}
-    for i, arg in enumerate(argv):
-        if arg in subcmds and "--no-llm" in argv[i + 1 :]:
-            click.echo(
-                f"Error: --no-llm must come before the subcommand name.\n"
-                f"  Got : fieldkit pipeline {arg} --no-llm\n"
-                f"  Fix : fieldkit pipeline --no-llm {arg}",
-                err=True,
-            )
-            raise SystemExit(EXIT_DATA) from None
-
     if ctx.invoked_subcommand is None:
-        # Lazy import to avoid circular dependency at module level
-        from fieldkit.commands.pipeline.main import _run
-
         _validate_pipeline_account(account)
         _run(no_llm=no_llm, data_root_override=data_root_override, account=account)
     elif account is not None:
@@ -158,17 +156,16 @@ def cmd_quota(
     from datetime import UTC, datetime
 
     from fieldkit.commands._account_guard import validate_account_slug
-    from fieldkit.commands.pipeline.quota import _collect_pursuits_for_quota, get_period_end_date
+    from fieldkit.pipeline.quota import _collect_pursuits_for_quota
     from fieldkit.watch.morning_brief_render import calculate_quota_gap
 
     if set_target is not None:
         if period is None:
             raise click.BadParameter("--period is required when using --set", param_hint="'--period'")
-        if not _PERIOD_RE.fullmatch(period):
-            raise click.BadParameter(
-                f"Expected format like '2026-H2' or '2025-Q3', got {period!r}",
-                param_hint="'--period'",
-            )
+        try:
+            quota_period_end_date(period)
+        except ValueError as exc:
+            raise click.BadParameter(str(exc), param_hint="'--period'") from None
         write_pipeline_quota(target=set_target, period=period)
         click.echo(f"Quota set: target={set_target}, period={period}", err=True)
         return
@@ -182,6 +179,14 @@ def cmd_quota(
         )
         raise SystemExit(EXIT_DATA) from None
 
+    quota_period = str(quota_config.get("period", "") or "")
+    end_date = None
+    if quota_period:
+        try:
+            end_date = quota_period_end_date(quota_period)
+        except ValueError as exc:
+            raise ConfigError(str(exc)) from None
+
     try:
         data_root = data_root_override or get_fieldkit_home()
     except ConfigError as exc:
@@ -193,16 +198,24 @@ def cmd_quota(
 
     # implementation note: --source sf pulls a real, territory-scoped closed-won from Salesforce.
     # Fetch it up front so both the JSON and human paths use the same figure.
-    sf_closed_won: float | None = _fetch_sf_closed_won_or_exit(data_root) if source == "sf" else None
+    sf_result = _fetch_sf_closed_won_or_exit(data_root) if source == "sf" else None
+    sf_closed_won = sf_result.amount if sf_result is not None else None
 
     target = result["target"]
     closed_won = result["closed_won"]
     weighted_val = result["weighted"]
 
+    if sf_result is not None and sf_result.resolved_account_slugs:
+        click.echo(
+            f"  ✓ Resolved sf_territory_id for {len(sf_result.resolved_account_slugs)} configured account(s)",
+            err=True,
+        )
+
     if as_json:
         # cell-28b9dae2e9395288: machine-readable output.
         payload: dict[str, object] = dict(result)
         payload["source"] = source
+        payload["gap"] = None
         if sf_closed_won is not None:
             payload["sf_closed_won"] = sf_closed_won
             payload["gap"] = target - sf_closed_won - weighted_val
@@ -212,16 +225,10 @@ def cmd_quota(
     def _fmt(v: float) -> str:
         return f"${v:,.0f}"
 
-    quota_period = str(quota_config.get("period", "") or "")
     period_label = f" ({quota_period})" if quota_period else ""
-    if quota_period:
-        try:
-            end_date = get_period_end_date(quota_period)
-        except ValueError:
-            pass
-        else:
-            days_remaining = (end_date - datetime.now(tz=UTC).date()).days
-            period_label = f" ({quota_period}, ends {end_date.isoformat()}, {days_remaining} days remaining)"
+    if end_date is not None:
+        days_remaining = (end_date - datetime.now(tz=UTC).date()).days
+        period_label = f" ({quota_period}, ends {end_date.isoformat()}, {days_remaining} days remaining)"
 
     # historic regression: warn about pursuits excluded for missing ACV
     excluded_count = result["excluded_count"]
@@ -254,7 +261,7 @@ def cmd_quota(
         click.echo("  territory-scoped attainment from Salesforce.")
 
 
-def _fetch_sf_closed_won_or_exit(data_root: Path) -> float:
+def _fetch_sf_closed_won_or_exit(data_root: Path) -> SFQuotaResult:
     """Pull live territory-scoped closed-won, mapping failures to CLI exit codes.
 
     implementation note: Wraps :func:`fetch_sf_closed_won` so ``cmd_quota`` stays a thin
@@ -262,8 +269,8 @@ def _fetch_sf_closed_won_or_exit(data_root: Path) -> float:
     require investigation (3), auth requires user action (2), and a transient
     Salesforce API error may clear on retry (1).
     """
-    from fieldkit.commands.pipeline.quota import fetch_sf_closed_won
-    from fieldkit.sf.client import SFAPIError, SFAuthError
+    from fieldkit.sf.errors import SFAPIError, SFAuthError
+    from fieldkit.sf.quota import fetch_sf_closed_won
 
     try:
         return fetch_sf_closed_won(data_root)
@@ -285,6 +292,7 @@ def _emit_open_result(
     *,
     account: str | None,
     as_json: bool,
+    opened: bool,
 ) -> None:
     if as_json:
         click.echo(
@@ -292,7 +300,7 @@ def _emit_open_result(
                 {
                     "path": str(latest),
                     "uri": latest.as_uri(),
-                    "opened": True,
+                    "opened": opened,
                     "review_date": file_date.isoformat(),
                     "age_days": age_days,
                     "stale": age_days > 0,
@@ -302,20 +310,19 @@ def _emit_open_result(
             )
         )
     else:
-        click.echo(f"Opening: {latest}")
+        click.echo(f"{'Opened' if opened else 'Selected'}: {latest}")
 
 
 @cli.command("open")
 @click.option("--json", "as_json", is_flag=True, default=False, help="Emit the selected pipeline review as JSON.")
 @click.option("--account", "-a", default=None, metavar="SLUG", help="Open the newest review for one account.")
-def cmd_open(as_json: bool, account: str | None) -> None:
+@click.option("--no-open", is_flag=True, help="Select the report without launching a viewer.")
+def cmd_open(as_json: bool, account: str | None, no_open: bool) -> None:
     """Open the most recent saved pipeline review in the system default viewer.
 
     Looks for the most recent pipeline-review-*.md file in the briefs/ directory.
     Use 'fieldkit pipeline' to generate a new one.
     """
-    import webbrowser
-
     _validate_pipeline_account(account)
 
     try:
@@ -350,6 +357,11 @@ def cmd_open(as_json: bool, account: str | None) -> None:
         raise SystemExit(EXIT_DATA) from None
 
     file_date, latest = max(reviews, key=lambda item: item[0])
+    try:
+        read_saved_report(latest, Path(data_root))
+    except (ValueError, OSError):
+        click.echo("Saved pipeline review is missing, unsafe, invalid, or empty; generate it again.", err=True)
+        raise SystemExit(EXIT_DATA) from None
 
     # Warn if the most recent review is not from today.
     age_days = (datetime.now(tz=UTC).date() - file_date).days
@@ -361,5 +373,8 @@ def cmd_open(as_json: bool, account: str | None) -> None:
             err=True,
         )
 
-    _emit_open_result(latest, file_date, age_days, account=account, as_json=as_json)
-    webbrowser.open(latest.as_uri())
+    opened = open_saved_report(latest, no_open=no_open)
+    _emit_open_result(latest, file_date, age_days, account=account, as_json=as_json, opened=opened)
+    if not no_open and not opened:
+        click.echo("The system viewer did not accept the report; open it manually.", err=True)
+        raise SystemExit(EXIT_PARTIAL)

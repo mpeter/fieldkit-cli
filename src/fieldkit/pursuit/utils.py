@@ -1,7 +1,7 @@
 """Shared pursuit utility functions used by morning_brief and pipeline_review.
 
 Provides helpers for iterating pursuit files, calculating date deltas,
-extracting champion names, reading account configuration, and normalizing
+extracting champion names and normalizing
 monetary field values.
 """
 
@@ -10,8 +10,6 @@ from collections.abc import Generator
 from datetime import date
 from functools import cache
 from pathlib import Path
-
-import yaml
 
 _CHAMPION_SEP_RE = re.compile(r"[,(;]")
 
@@ -104,19 +102,6 @@ def extract_champion_name(account_dir: Path) -> str:
     return ""
 
 
-@cache
-def read_accounts_config(data_root: Path) -> dict[str, object]:
-    """Read config/accounts.yaml and return the parsed dict.
-
-    Raises FileNotFoundError if the config file is missing.
-    Raises yaml.YAMLError if the file contains invalid YAML.
-    """
-    config_file = data_root / "config" / "accounts.yaml"
-    with config_file.open(encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
-
-
 def clear_pursuit_caches() -> None:
     """Clear cached pursuit values. Call in test fixtures for isolation."""
     extract_champion_name.cache_clear()
-    read_accounts_config.cache_clear()

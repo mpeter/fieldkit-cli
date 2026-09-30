@@ -314,25 +314,27 @@ def test_load_gmail_cache_contacts_db_not_found_returns_empty(tmp_path: Path) ->
 @pytest.mark.unit
 def test_load_gmail_cache_contacts_returns_rows_from_people_table(tmp_path: Path) -> None:
     """Returns list of contact dicts when the people table has rows."""
-    import sqlite3
     from unittest.mock import patch
 
     from fieldkit.contact._enrich_helpers import load_gmail_cache_contacts
+    from fieldkit.gmail.publication import GMAIL_QUERY_READY_KEY, apply_gmail_page, initialize_gmail_publication
+    from fieldkit.sqlite_publication import SQLiteMutationConnection
 
     db_path = tmp_path / "gmail.db"
-    conn = sqlite3.connect(str(db_path))
-    conn.execute(
-        """CREATE TABLE people (
-                email TEXT, display_name TEXT, thread_count INTEGER,
-                last_seen TEXT, account TEXT, is_internal INTEGER
-            )"""
-    )
-    conn.execute(
-        "INSERT INTO people VALUES (?, ?, ?, ?, ?, ?)",
-        ("alice@acme.example.com", "Alice Smith", 5, "2026-06-01", "acme", 0),
-    )
-    conn.commit()
-    conn.close()
+    initialize_gmail_publication(db_path)
+
+    def seed(connection: SQLiteMutationConnection) -> None:
+        connection.execute(
+            "INSERT INTO people (email, display_name, thread_count, last_seen, account, is_internal) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            ("alice@acme.example.com", "Alice Smith", 5, "2026-06-01", "acme", 0),
+        )
+        connection.execute(
+            "INSERT OR REPLACE INTO sync_state(key, value) VALUES (?, 'true')",
+            (GMAIL_QUERY_READY_KEY,),
+        )
+
+    apply_gmail_page(db_path, seed)
 
     with patch("fieldkit.contact._enrich_helpers.get_gmail_db_path", return_value=db_path):
         result = load_gmail_cache_contacts("acme")

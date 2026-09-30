@@ -17,6 +17,51 @@ class FieldkitError(Exception):
     """Base class for all fieldkit domain exceptions."""
 
 
+class EmptyOutputError(FieldkitError):
+    """New output is empty, with the factual result of any attempted cleanup."""
+
+    def __init__(self, *, cleanup_failed: bool = False) -> None:
+        if type(cleanup_failed) is not bool:
+            raise ValueError("cleanup_failed must be a bool")
+        super().__init__("Empty output detected")
+        self.cleanup_failed = cleanup_failed
+
+
+class SalesforceSyncPartialError(FieldkitError):
+    """Local Salesforce sync writes did not all complete with verified results."""
+
+
+class GitHubRequestError(FieldkitError):
+    """A transient GitHub request failed without producing a result."""
+
+    def __init__(self, message: str, *, http_status: int | None = None) -> None:
+        super().__init__(message)
+        self.http_status = http_status
+
+
+class GitHubDataError(FieldkitError):
+    """GitHub or local issue data is invalid and retrying unchanged will not help."""
+
+
+class GitHubCreationUncertainError(GitHubDataError):
+    """An irreversible create may have landed but its identity was not proven."""
+
+
+class GitHubNotFoundError(GitHubDataError):
+    """A specific GitHub resource does not exist or is not visible."""
+
+
+SQLiteSnapshotReason = Literal["active", "journal", "unverified"]
+
+
+class SQLiteSnapshotError(FieldkitError):
+    """A private SQLite snapshot could not be proven safe for reading."""
+
+    def __init__(self, message: str, *, reason: SQLiteSnapshotReason) -> None:
+        super().__init__(message)
+        self.reason = reason
+
+
 class MissingOptionalDependencyError(FieldkitError):
     """Raised before dispatch when a command's declared install profile is incomplete."""
 
@@ -45,6 +90,14 @@ class AuthError(FieldkitError):
 
 class WebDataError(FieldkitError):
     """Raised when a local web or CLI-backed data provider cannot produce its payload."""
+
+
+class RoutingInputError(FieldkitError):
+    """Invalid local routing corpus or fixtures, with a payload-free diagnostic."""
+
+
+class RoutingReadRetryableError(FieldkitError):
+    """Local routing inputs could not be inspected; restored access may permit retry."""
 
 
 class GmailAuthError(AuthError):

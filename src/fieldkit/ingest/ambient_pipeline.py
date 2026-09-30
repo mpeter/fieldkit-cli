@@ -9,10 +9,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
-from fieldkit.errors import LLMError
+from fieldkit.config import ConfigError
+from fieldkit.errors import LLMError, RoutingReadRetryableError
 from fieldkit.ingest.ambient import AmbientSourceError, get_ambient_root, load_ambient_snapshot
 from fieldkit.ingest.constants import AMBIENT_TRANSCRIPT_PIPELINE
-from fieldkit.ingest.pipeline import compute_vault_path, stage1_clean, stage2_extract
+from fieldkit.ingest.paths import compute_vault_path
+from fieldkit.ingest.pipeline import stage1_clean, stage2_extract
 from fieldkit.ingest.router import match_pursuits_for_account, route_by_content
 from fieldkit.ingest.sources import claim_pending_source
 
@@ -197,7 +199,7 @@ def process_ambient_source(
             _set_source_status(conn, source_id, "processed")
             return AmbientOutcome(source_id, "skipped", reason="noise")
 
-        route = route_by_content(snapshot.transcript)
+        route = route_by_content(snapshot.transcript, data_root=fieldkit_home)
         if route.accounts == ["unknown"] or len(route.accounts) != 1:
             _set_source_status(conn, source_id, "pending")
             return AmbientOutcome(source_id, "deferred", reason="account route is not unique")
@@ -206,7 +208,9 @@ def process_ambient_source(
         cleaned = stage1_clean(snapshot.transcript)
         meta = stage2_extract(cleaned)
         meta.accounts = [account]
-        meta.pursuits = match_pursuits_for_account(account, keywords=meta.key_topics + meta.key_decisions)
+        meta.pursuits = match_pursuits_for_account(
+            account, keywords=meta.key_topics + meta.key_decisions, data_root=fieldkit_home
+        )
         meeting_date = snapshot.meeting_date.isoformat()
         note = _render_note(
             source_id=source_id,
@@ -223,7 +227,9 @@ def process_ambient_source(
             pipeline_version=pipeline_version,
             transcript=cleaned.text,
         )
-        path = compute_vault_path(fieldkit_home, account, meeting_date, f"ambient-session-{source_id[-12:]}")
+        path = compute_vault_path(
+            fieldkit_home, account, meeting_date, f"ambient-session-{source_id[-12:]}", source_id=source_id
+        )
         _atomic_write(path, note)
         _insert_artifact(
             conn,
@@ -234,6 +240,12 @@ def process_ambient_source(
         )
         _set_source_status(conn, source_id, "processed")
         return AmbientOutcome(source_id, "processed", content_path=str(path))
+    except ConfigError:
+        _set_source_status(conn, source_id, "failed")
+        raise
+    except RoutingReadRetryableError as exc:
+        _set_source_status(conn, source_id, "pending")
+        return AmbientOutcome(source_id, "deferred", reason=str(exc))
     except LLMError as exc:
         if exc.category == "auth":
             _set_source_status(conn, source_id, "pending")

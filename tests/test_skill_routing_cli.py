@@ -1,22 +1,46 @@
 """CLI tests for ``fieldkit skill eval --routing``."""
 
 import json
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from fieldkit.__main__ import main
 from fieldkit.commands.skill.routing_eval import run_routing_eval
-from fieldkit.errors import LLMError
+from fieldkit.errors import LLMError, RoutingInputError
 from fieldkit.skill.routing import RoutingCase, RoutingResult, SkillCandidate
 
 pytestmark = pytest.mark.unit
 
 
+@pytest.mark.parametrize(
+    "payload", [b"private-byte-sentinel\xff", b"[" * 2000 + b"]" * 2000], ids=["utf8", "deep-json"]
+)
+def test_invalid_fixture_bytes_exit_without_traceback(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], payload: bytes
+) -> None:
+    (tmp_path / "skill-routing-evals.json").write_bytes(payload)
+    with (
+        patch(
+            "fieldkit.commands.skill.routing_eval._load_all_skills",
+            return_value=[{"name": "alpha", "description": "work"}],
+        ),
+        patch("fieldkit.skill.routing.importlib.resources.files", return_value=tmp_path),
+    ):
+        result = main(["skill", "eval", "--routing"])
+    assert result == 3
+    captured = capsys.readouterr()
+    assert "Cannot load routing fixtures" in captured.err
+    assert "Traceback" not in captured.err
+    assert "private-byte-sentinel" not in captured.err
+    assert str(tmp_path) not in captured.err
+
+
 def test_routing_stub_json_uses_complete_loaded_corpus(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    monkeypatch.setenv("NO_LLM", "1")
+    monkeypatch.setenv("FIELDKIT_NO_LLM", "1")
     skills = [
         {"name": "alpha", "description": "Alpha work"},
         {"name": "bravo", "description": "Bravo work"},
@@ -65,10 +89,43 @@ def test_routing_missing_corpus_exits_three_through_dispatcher(capsys: pytest.Ca
     assert "Routing skill corpus is empty" in capsys.readouterr().err
 
 
+def test_routing_invalid_corpus_does_not_echo_metadata(capsys: pytest.CaptureFixture[str]) -> None:
+    skills = [{"name": "private-metadata-sentinel", "description": "work"}] * 2
+    with patch("fieldkit.commands.skill.routing_eval._load_all_skills", return_value=skills):
+        result = main(["skill", "eval", "--routing"])
+    assert result == 3
+    captured = capsys.readouterr()
+    assert "duplicate names" in captured.err
+    assert "private-metadata-sentinel" not in captured.out + captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_routing_provider_auth_still_uses_redacted_auth_exit(capsys: pytest.CaptureFixture[str]) -> None:
+    with (
+        patch(
+            "fieldkit.commands.skill.routing_eval._load_all_skills",
+            return_value=[{"name": "alpha", "description": "work"}],
+        ),
+        patch(
+            "fieldkit.commands.skill.routing_eval.load_routing_cases",
+            return_value=(RoutingCase("one", "work", "alpha"),),
+        ),
+        patch(
+            "fieldkit.commands.skill.routing_eval.judge_routing_case",
+            side_effect=LLMError("private-provider-sentinel", category="auth"),
+        ),
+    ):
+        result = main(["skill", "eval", "--routing"])
+    assert result == 2
+    captured = capsys.readouterr()
+    assert "Model authentication failed" in captured.err
+    assert "private-provider-sentinel" not in captured.out + captured.err
+
+
 def test_load_candidates_rejects_untyped_metadata() -> None:
     with (
         patch("fieldkit.commands.skill.routing_eval._load_all_skills", return_value=[{"name": 4, "description": "x"}]),
-        pytest.raises(LLMError, match="invalid name or description"),
+        pytest.raises(RoutingInputError, match="invalid name or description"),
     ):
         from fieldkit.commands.skill.routing_eval import _load_candidates
 

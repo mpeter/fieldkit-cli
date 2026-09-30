@@ -9,7 +9,6 @@ import json
 import logging
 import random
 import re
-import sqlite3
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -21,7 +20,8 @@ from fieldkit.enrich._io import contacts_memory_dir, enrich_dir
 from fieldkit.enrich.constants import GARBAGE_NAMES as _GARBAGE_NAMES
 from fieldkit.enrich.schema import ContactRecord
 from fieldkit.gmail.discover import get_gmail_db_path
-from fieldkit.gmail.query_domain import connect_read_only, prepare_database, query_by_email
+from fieldkit.gmail.query_domain import connect as connect_gmail_cache
+from fieldkit.gmail.query_domain import query_by_email
 from fieldkit.pursuit.io import extract_frontmatter_text
 
 log = logging.getLogger(__name__)
@@ -281,18 +281,16 @@ def extract_from_sf_frontmatter(account_path: Path) -> list[dict[str, Any]]:
 
 
 def load_gmail_cache_contacts(account_name: str) -> list[dict[str, Any]]:
-    """Load contact data by querying the gmail.db people table directly.
+    """Load contact data from the ready published Gmail people index.
 
-    Expects gmail cache to have been run already (people table populated).
+    A missing cache is an optional absent source. An existing cache that is
+    unpublished, incomplete, or malformed fails closed in the canonical reader.
     """
     db_path = get_gmail_db_path()
     if not db_path.exists():
-        log.warning("Gmail cache DB not found at %s", db_path)
         return []
 
-    try:
-        conn = sqlite3.connect(str(db_path))
-        conn.row_factory = sqlite3.Row
+    with connect_gmail_cache(db_path) as conn:
         rows = conn.execute(
             """
             SELECT email, display_name, thread_count, last_seen
@@ -302,27 +300,18 @@ def load_gmail_cache_contacts(account_name: str) -> list[dict[str, Any]]:
             """,
             (account_name,),
         ).fetchall()
-        conn.close()
-
-        contacts: list[dict[str, Any]] = []
-        for row in rows:
-            contacts.append(
-                {
-                    "full_name": row["display_name"] or "",
-                    "email": row["email"] or "",
-                    "company": account_name.replace("-", " ").title(),
-                    "account": account_name,
-                    "email_frequency": row["thread_count"] or 0,
-                    "last_contact_date": row["last_seen"],
-                    "source": "gmail",
-                }
-            )
-
-        return contacts
-
-    except sqlite3.Error as e:
-        log.warning("Failed to query Gmail contacts for %s: %s", account_name, e)
-        return []
+    return [
+        {
+            "full_name": row["display_name"] or "",
+            "email": row["email"] or "",
+            "company": account_name.replace("-", " ").title(),
+            "account": account_name,
+            "email_frequency": row["thread_count"] or 0,
+            "last_contact_date": row["last_seen"],
+            "source": "gmail",
+        }
+        for row in rows
+    ]
 
 
 def _merge_into_existing(existing: dict[str, Any], contact: dict[str, Any]) -> None:
@@ -492,7 +481,7 @@ def search_web_for_contact(contact: dict[str, Any]) -> dict[str, Any]:
 
 
 def query_gmail_cache(contact: dict[str, Any]) -> dict[str, Any]:
-    """Query Gmail cache for engagement signals via direct function call."""
+    """Add engagement signals from the ready published Gmail cache when present."""
     email = contact.get("email")
     if not email:
         return contact
@@ -501,20 +490,13 @@ def query_gmail_cache(contact: dict[str, Any]) -> dict[str, Any]:
     if not db_path.exists():
         return contact
 
-    try:
-        conn = connect_read_only(db_path)
-        try:
-            thread_count, last_date = query_by_email(conn, email, limit=1)
-        finally:
-            conn.close()
+    with connect_gmail_cache(db_path) as conn:
+        thread_count, last_date = query_by_email(conn, email)
 
-        if thread_count:
-            contact["email_frequency"] = thread_count
-        if last_date:
-            contact["last_contact_date"] = last_date
-
-    except Exception as e:  # noqa: BLE001
-        log.debug("Gmail cache query failed for %s: %s", email, e)
+    if thread_count:
+        contact["email_frequency"] = thread_count
+    if last_date:
+        contact["last_contact_date"] = last_date
 
     return contact
 
@@ -658,24 +640,10 @@ def _record_failed_contact(contact: dict[str, Any], retry_count: int, failed: li
         log.info("Max retries reached for %s - skipping", contact.get("full_name"))
 
 
-def _prepare_gmail_cache(candidates: list[tuple[dict[str, Any], int]]) -> None:
-    """Run optional Gmail migrations once before concurrent cache reads."""
-    if not any(contact.get("email") for contact, _retry_count in candidates):
-        return
-    db_path = get_gmail_db_path()
-    if not db_path.exists():
-        return
-    try:
-        prepare_database(db_path)
-    except Exception as exc:  # noqa: BLE001
-        log.debug("Gmail cache preparation failed; continuing with read-only queries: %s", exc)
-
-
 def enrich_batch(contacts: list[dict[str, Any]], start_idx: int) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Enrich a batch concurrently, then reconcile and persist results in input order."""
     batch = contacts[start_idx : start_idx + BATCH_SIZE]
     candidates = _eligible_contacts(batch, get_user_email())
-    _prepare_gmail_cache(candidates)
     domain_map = build_domain_account_map()
     internal_domains: frozenset[str] = frozenset(d.lower() for d in get_internal_domains())
     records = _enrich_candidates(candidates)

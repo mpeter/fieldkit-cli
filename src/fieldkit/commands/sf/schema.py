@@ -6,7 +6,8 @@ import click
 
 from fieldkit.cli_exit import EXIT_DATA, EXIT_PARTIAL, cli_main
 from fieldkit.config import get_sf_rest_base_url, get_sf_session_id
-from fieldkit.sf.client import SFAPIError, SFAuthError, SFDataAccessError, SFDirectClient, SFNotFoundError
+from fieldkit.sf.client import SFDirectClient
+from fieldkit.sf.errors import SFAPIError, SFAuthError, SFDataAccessError, SFNotFoundError
 from fieldkit.sf.schema import (
     MAX_SAMPLE_RECORDS,
     SchemaReference,

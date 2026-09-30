@@ -12,6 +12,67 @@ from fieldkit.skill.template import install_skill_flat
 pytestmark = pytest.mark.unit
 
 
+@pytest.mark.parametrize(
+    ("destination", "expected"),
+    [
+        ("references/protocol.md", "owner.md#fieldkit-support-references-protocol-md"),
+        ("SKILL.md", "owner.md"),
+        ("SKILL.md#usage", "owner.md#usage"),
+        ("references/protocol.md#security", "owner.md#security"),
+    ],
+)
+def test_flat_install_links_to_sibling_bundled_reference(tmp_path: Path, destination: str, expected: str) -> None:
+    skills = tmp_path / "source"
+    caller = skills / "caller"
+    owner = skills / "owner"
+    caller.mkdir(parents=True)
+    (owner / "references").mkdir(parents=True)
+    (caller / "SKILL.md").write_text(f"# Caller\n\n[Protocol](../owner/{destination})\n", encoding="utf-8")
+    (owner / "SKILL.md").write_text("# Owner\n\n## Usage\n", encoding="utf-8")
+    (owner / "references/protocol.md").write_text("# Protocol\n\n## Security\n\nRead only.\n", encoding="utf-8")
+    target = tmp_path / "rules"
+
+    result = install_skill_flat(caller, target / "caller.md", {}, quiet=True)
+    assert result.errors == 0
+    installed = (target / "caller.md").read_text(encoding="utf-8")
+    assert f"]({expected})" in installed
+    assert not (target / "owner.md").exists()
+
+    owner_result = install_skill_flat(owner, target / "owner.md", {}, quiet=True)
+    assert owner_result.errors == 0
+    assert '<a id="fieldkit-support-references-protocol-md"></a>' in (target / "owner.md").read_text(encoding="utf-8")
+
+
+def test_flat_support_links_back_to_root_document(tmp_path: Path) -> None:
+    skill = tmp_path / "skill"
+    (skill / "references").mkdir(parents=True)
+    (skill / "SKILL.md").write_text("# Skill\n", encoding="utf-8")
+    (skill / "references/back.md").write_text("[Back](../SKILL.md)\n", encoding="utf-8")
+    target = tmp_path / "rules/skill.md"
+
+    result = install_skill_flat(skill, target, {}, quiet=True)
+
+    assert result.errors == 0
+    assert "[Back](#)" in target.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("destination", ["../unknown/protocol.md", "../../outside.md"])
+def test_flat_install_does_not_invent_sibling_targets(tmp_path: Path, destination: str) -> None:
+    caller = tmp_path / "source/caller"
+    caller.mkdir(parents=True)
+    linked_file = (caller / destination).resolve()
+    linked_file.parent.mkdir(parents=True, exist_ok=True)
+    linked_file.write_text("# Not a skill\n", encoding="utf-8")
+    text = f"# Caller\n\n[Reference]({destination})\n"
+    (caller / "SKILL.md").write_text(text, encoding="utf-8")
+    target = tmp_path / "rules/caller.md"
+
+    result = install_skill_flat(caller, target, {}, quiet=True)
+
+    assert result.errors == 0
+    assert target.read_text(encoding="utf-8") == text
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -43,15 +104,16 @@ def test_install_skill_flat_writes_rendered_content(tmp_path: Path) -> None:
     assert target_file.read_text(encoding="utf-8") == "Hello World"
 
 
-def test_install_skill_flat_embeds_local_markdown_support(tmp_path: Path) -> None:
+@pytest.mark.parametrize("fragment", ["", "#prepare"])
+def test_install_skill_flat_embeds_local_markdown_support(tmp_path: Path, fragment: str) -> None:
     """Cursor's one-file target retains local Markdown support instructions."""
     skill_dir = _make_skill_dir(
         tmp_path,
-        "# Brief\n\nRead [the week-start instructions](ops/week-start.md).\n",
+        f"# Brief\n\nRead [the week-start instructions](ops/week-start.md{fragment}).\n",
     )
     support = skill_dir / "ops"
     support.mkdir()
-    (support / "week-start.md").write_text("# Week start\n\nPrepare the week.\n", encoding="utf-8")
+    (support / "week-start.md").write_text("# Week start\n\n## Prepare\n\nPrepare the week.\n", encoding="utf-8")
     target_file = tmp_path / "out" / "brief.md"
 
     result = install_skill_flat(skill_dir, target_file, {})
@@ -59,7 +121,8 @@ def test_install_skill_flat_embeds_local_markdown_support(tmp_path: Path) -> Non
     installed = target_file.read_text(encoding="utf-8")
     assert result.rendered == 1
     assert result.errors == 0
-    assert "](#fieldkit-support-ops-week-start-md)" in installed
+    expected_anchor = fragment or "#fieldkit-support-ops-week-start-md"
+    assert f"]({expected_anchor})" in installed
     assert '<a id="fieldkit-support-ops-week-start-md"></a>' in installed
     assert "Prepare the week." in installed
 

@@ -4,8 +4,8 @@
     {
       "id": "backstory",
       "type": "contains",
-      "pattern": "fieldkit-sales",
-      "message": "Must pull Backstory signals via fieldkit-sales"
+      "pattern": "Backstory",
+      "message": "Backstory must be described without requiring a private gateway"
     },
     {
       "id": "calendar",
@@ -35,10 +35,22 @@
       "message": "Batch mode must match attendee domains to configured accounts"
     },
     {
+      "id": "ambiguous_account_requires_selection",
+      "type": "contains",
+      "pattern": "Never choose\nthe first match by list order",
+      "message": "Batch mode must not assign an ambiguous meeting to the first account"
+    },
+    {
+      "id": "brief_write_requires_confirmation",
+      "type": "contains",
+      "pattern": "Obtain confirmation before writing",
+      "message": "Batch drafts require review and confirmation before a file write"
+    },
+    {
       "id": "qbr-prep_backstory",
       "type": "contains",
-      "pattern": "fieldkit-sales",
-      "message": "Must pull Backstory signals"
+      "pattern": "Backstory",
+      "message": "QBR prep treats Backstory as optional"
     },
     {
       "id": "reads_account",
@@ -49,8 +61,8 @@
     {
       "id": "web_research",
       "type": "contains",
-      "pattern": "tvly search",
-      "message": "Must include web research for company news"
+      "pattern": "Public research",
+      "message": "Public research must remain an optional, attributed source"
     },
     {
       "id": "output_template",
@@ -80,7 +92,7 @@
       "id": "save_path",
       "type": "contains",
       "pattern": "meetings/",
-      "message": "Must save snapshot to accounts/<account>/meetings/"
+      "message": "Document the account meeting-draft destination without writing before confirmation"
     },
     {
       "id": "four_sections",
@@ -109,7 +121,7 @@
       "id": "no_backstory_flag",
       "type": "contains",
       "pattern": "--no-backstory",
-      "message": "Must document --no-backstory offline mode flag"
+      "message": "Document the --no-backstory skill-request option"
     },
     {
       "id": "commands_exist",
@@ -135,39 +147,40 @@
       "id": "backstory_tools",
       "type": "contains_all",
       "patterns": [
-        "find_account",
-        "get_account_status",
-        "get_recent_account_activity"
+        "fieldkit pursuit projects --account <account> --json",
+        "fieldkit pursuit health --account <account> --json",
+        "fieldkit gmail query blindspots <account> --json",
+        "fieldkit gmail backstory-gap --account <account> --json"
       ],
-      "message": "Must document all three Backstory account-level tools"
+      "message": "Account pulse must use shipped, scoped, read-only fieldkit routes"
     },
     {
       "id": "output_format",
       "type": "contains",
-      "pattern": "Needs Action",
+      "pattern": "Needs action",
       "message": "Must include output format with classification buckets"
     },
     {
       "id": "multi_source",
       "type": "contains_all",
       "patterns": [
-        "gws gmail",
-        "fieldkit-sales",
-        "gws calendar"
+        "fieldkit contact find <email> --affiliations --json",
+        "fieldkit gmail query account <account> --since <YYYY-MM-DD> --json",
+        "Source status"
       ],
-      "message": "Must pull from multiple sources: Gmail, Backstory, Calendar"
+      "message": "Stakeholder mapping must use shipped local sources and expose source status"
     },
     {
       "id": "slackcli",
       "type": "contains",
-      "pattern": "slackcli",
-      "message": "Must use slackcli for Slack signals"
+      "pattern": "fieldkit does not install or guarantee any",
+      "message": "Optional stakeholder sources must not assume a private client"
     },
     {
       "id": "writes_account_md",
       "type": "contains",
-      "pattern": "account.md",
-      "message": "Must write/update account.md with stakeholder map"
+      "pattern": "Do not write to `account.md`",
+      "message": "Stakeholder mapping must not silently update account.md"
     },
     {
       "id": "buying_committee",
@@ -192,24 +205,24 @@
       "type": "contains_all",
       "patterns": [
         "Closed",
-        "Wins",
-        "At Risk",
-        "Pipeline Numbers",
-        "This Week"
+        "positive signals",
+        "At risk",
+        "Pipeline numbers",
+        "This week's focus"
       ],
       "message": "Must have all five required output sections"
     },
     {
       "id": "manager_asks",
       "type": "contains",
-      "pattern": "manager ask",
-      "message": "Must auto-suggest manager asks for at-risk deals"
+      "pattern": "Recommend a manager ask only as a proposal",
+      "message": "Manager asks must be evidence-backed proposals"
     },
     {
       "id": "one-on-one_save_path",
       "type": "contains",
-      "pattern": "one-on-ones/",
-      "message": "Must save update to fieldkit-data/archive/one-on-ones/"
+      "pattern": "Do not write to `one-on-ones/`",
+      "message": "The one-on-one workflow must not silently save its draft"
     },
     {
       "id": "slack_flag",
@@ -226,19 +239,19 @@
     {
       "id": "at_risk_criteria",
       "type": "contains",
-      "pattern": "21 days",
-      "message": "Must define at-risk criteria including stall threshold"
+      "pattern": "returned risk level and reasons",
+      "message": "At-risk claims must preserve the health report's actual reasons"
     }
   ],
   "evals": [
     {
       "id": 0,
       "prompt": "meeting prep for my call with <account-slug> tomorrow",
-      "expected_behavior": "Reads calendar, pulls attendee profiles, Backstory signals, account context, produces brief",
+      "expected_behavior": "Uses available authorized meeting and account sources, then produces a source-attributed brief without requiring Backstory",
       "assertions": [
-        "Gets tomorrow's calendar events via gws calendar",
-        "Calls Backstory for <account-slug> account signals",
-        "Runs fieldkit contact find for each external attendee",
+        "Uses an authorized calendar route when configured, or asks for meeting details",
+        "Treats Backstory as optional and labels unavailable intelligence",
+        "Uses fieldkit contact find for known attendee emails when the local index is available",
         "Produces a meeting brief with agenda, questions, and talking points"
       ]
     },
@@ -256,13 +269,14 @@
     {
       "id": 2,
       "prompt": "auto-prep for tomorrow",
-      "expected_behavior": "Scans tomorrow's calendar, identifies external meetings via domain matching, auto-generates prep briefs for each",
+      "expected_behavior": "Uses an authorized calendar route, matches external domains, drafts unambiguous briefs, and asks before saving",
       "assertions": [
-        "Gets tomorrow's calendar events via gws calendar",
+        "Gets tomorrow's calendar events only when the calendar route is configured and authorized",
         "Filters to external meetings only (non-internal-domain attendees)",
         "Matches attendee domains to configured accounts from accounts.yaml",
-        "Generates prep brief for each matched external meeting",
-        "Outputs a summary table of all events with brief status"
+        "Marks multi-account matches ambiguous and asks the operator to select an account",
+        "Presents drafts for review and obtains confirmation before saving",
+        "Outputs a summary of all events with brief status"
       ]
     },
     {
@@ -287,13 +301,13 @@
     },
     {
       "id": 5,
-      "prompt": "/account-snapshot <account-slug>",
+      "prompt": "/account-snapshot acme-corp",
       "assertions": [
-        "Runs fieldkit pursuit projects for <account-slug>",
-        "Runs fieldkit pursuit health for <account-slug>",
-        "Queries gmail for 14-day email signal",
-        "Pulls Backstory signals",
-        "Saves snapshot to accounts/<account-slug>/meetings/ with week number"
+        "Runs fieldkit pursuit projects and pursuit health for acme-corp when that account is configured; otherwise reports the unknown account",
+        "Uses the local Gmail account query for a dated window when the cache is available, and marks missing cache evidence unavailable",
+        "Does not infer inbound or unanswered counts from thread summaries",
+        "Treats Backstory as optional and labels unavailable signals",
+        "Shows the draft for review and asks before saving under the account meetings directory"
       ]
     },
     {
@@ -301,94 +315,99 @@
       "prompt": "/account-snapshot --all",
       "assertions": [
         "Runs snapshot for every configured account",
-        "Saves one file per account",
-        "Prints summary table at end"
+        "Prepares one reviewed draft per configured account without silently overwriting files",
+        "Summarizes accounts with evidence gaps"
       ]
     },
     {
       "id": 7,
-      "prompt": "/account-snapshot <account-slug> --no-backstory",
+      "prompt": "/account-snapshot acme-corp --no-backstory",
       "assertions": [
         "Skips Backstory API calls",
-        "Still produces project, pursuit, and email sections",
-        "Notes Backstory section unavailable"
+        "Uses available local project, pursuit, and Gmail reports for configured acme-corp",
+        "Labels the Backstory signal unavailable without inventing a score"
       ]
     },
     {
       "id": 8,
       "prompt": "account pulse",
-      "expected_behavior": "Runs pulse across all accounts, pulls Backstory account-level signals, classifies each account",
+      "expected_behavior": "Runs shipped read-only reports for configured active accounts and produces a source-attributed pulse with explicit evidence gaps",
       "assertions": [
-        "Runs the full pulse pipeline for every configured active account (not just one)",
-        "Runs 'fieldkit gmail query blindspots' for each account to surface uncontacted contacts",
-        "Assigns each account to Needs Action / Active / Trigger / Quiet bucket",
-        "Runs 'fieldkit gmail query blindspots' for each account",
-        "Produces a structured markdown output with clear account sections"
+        "Processes every configured non-internal account without inventing unknown keys",
+        "Runs fieldkit pursuit projects, pursuit health, Gmail blindspots, and backstory-gap in scoped JSON mode",
+        "Preserves unavailable or failed sources instead of treating them as empty",
+        "Uses Insufficient evidence instead of Quiet when retrieval is incomplete",
+        "Presents a source-attributed draft without writing or sending it"
       ]
     },
     {
       "id": 9,
       "prompt": "pulse on {{primary_account}}",
-      "expected_behavior": "Focuses only on {{primary_account}} account, runs full Backstory and Gmail pipeline for that account",
+      "expected_behavior": "Focuses only on the exact configured account and runs the scoped shipped read-only reports",
       "assertions": [
         "Only processes {{primary_account}}, not {{accounts.1}} or {{accounts.2}}",
-        "Still runs full pipeline (Backstory account-level signals, blindspots, gap) for {{primary_account}} only"
+        "Runs scoped project, health, blindspot, and CRM-gap reports for {{primary_account}}",
+        "Marks missing Gmail cache or optional provider evidence unavailable"
       ]
     },
     {
       "id": 10,
       "prompt": "how are my accounts doing",
-      "expected_behavior": "Triggers account-pulse skill and runs full pulse across all accounts",
+      "expected_behavior": "Routes to account pulse and reports only claims supported by dated local or explicitly authorized optional evidence",
       "assertions": [
         "Recognizes this as an account-pulse trigger and runs it without asking for clarification",
-        "Presents Backstory signals as account-level context \u2014 does not attribute signals to specific opportunities"
+        "Does not require a private account-intelligence, Slack, calendar, or web service",
+        "Attributes claims to a source and date and exposes incomplete coverage"
       ]
     },
     {
       "id": 11,
       "prompt": "pulse on {{primary_account}} \u2014 two key contacts are showing email decay signals",
-      "expected_behavior": "Incorporates contact decay context and surfaces it in the account classification",
+      "expected_behavior": "Treats the supplied decay signal as dated input to verify rather than silently refreshing or overstating it",
       "assertions": [
-        "Surfaces contact decay signals in the {{primary_account}} account section as part of the pulse output",
-        "Classifies {{primary_account}} as Needs Action or Active (not Quiet) when decay signals are present"
+        "Surfaces the contact decay observation for {{primary_account}} with its source and date or marks verification pending",
+        "Does not infer sentiment, reply obligation, or customer priority from the signal alone"
       ]
     },
     {
       "id": 12,
       "prompt": "build a stakeholder map for {{primary_account}}",
-      "expected_behavior": "Reads existing contacts, enriches from Gmail/Backstory/Calendar/Slack, produces buying committee map",
+      "expected_behavior": "Uses shipped local read-only sources, optionally adds authorized evidence, and drafts a source-attributed buying-committee map",
       "assertions": [
         "Reads existing {{primary_account}} account.md stakeholder data",
-        "Pulls contact signals from Gmail, Backstory, Calendar",
-        "Organizes output as a buying committee map with roles",
-        "Updates or proposes updates to account.md"
+        "Uses exact emails with fieldkit contact find and a bounded dated local Gmail account query",
+        "Leaves roles, support, and influence unknown when evidence or explicit operator judgment is absent",
+        "Treats calendar, Slack, web, directory, and account intelligence as optional operator-provided sources",
+        "Presents the draft for review and does not write account.md or a pursuit file"
       ]
     },
     {
       "id": 13,
       "prompt": "/one-on-one",
       "assertions": [
-        "Checks for closed-won deals in last 7 days",
-        "Runs fieldkit pursuit forecast for pipeline numbers",
-        "Identifies at-risk deals with manager asks",
-        "Shows top 3 priorities from TASKS.md",
-        "Saves to archive/one-on-ones/"
+        "Runs fieldkit pursuit forecast, health, and projects in JSON mode",
+        "Uses transition-history dates before claiming a closed-won event occurred in the lookback",
+        "Reports current forecast scenarios without relabeling them quarter-to-date",
+        "Makes manager asks evidence-backed proposals and marks optional TASKS or watcher sources unavailable when absent",
+        "Presents the draft for review without saving or sending it"
       ]
     },
     {
       "id": 14,
       "prompt": "/one-on-one --slack",
       "assertions": [
-        "Produces compact bullet format without headers",
-        "Still covers all key sections"
+        "Treats --slack as a draft-format request rather than a fieldkit CLI flag",
+        "Produces a compact pasteable draft without sending it",
+        "Preserves source gaps instead of presenting uncertain numbers as verified"
       ]
     },
     {
       "id": 15,
       "prompt": "/one-on-one --qbr-mode",
       "assertions": [
-        "Expands lookback to 30 days",
-        "Adds YTD numbers"
+        "Confirms an exact quarterly reporting window",
+        "Does not invent quarter-to-date or year-to-date values that the sources do not provide",
+        "Keeps missing or incomplete evidence explicitly unavailable"
       ]
     }
   ]

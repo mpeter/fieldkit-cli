@@ -3,7 +3,7 @@
 Covers: run_eval_cmd() behavioral sub-path, exit-code logic (D8), --limit,
 --skill, --json output, --calibrate, and _BEHAVIORAL_SKIP filtering.
 
-All tests use NO_LLM=1 (via monkeypatch) or mock judge_skill at the
+All tests use FIELDKIT_NO_LLM=1 (via monkeypatch) or mock judge_skill at the
 import-site binding in eval_runner to avoid any real LLM calls.
 """
 
@@ -79,7 +79,7 @@ def make_judgement(skill_name: str, verdict: str = "covered") -> SkillJudgement:
 
 
 def make_stub_judgement(skill_name: str) -> SkillJudgement:
-    """Build a stub SkillJudgement (NO_LLM=1 mode — no verdicts).
+    """Build a stub SkillJudgement (FIELDKIT_NO_LLM=1 mode — no verdicts).
 
     Args:
         skill_name: Name of the skill.
@@ -101,12 +101,12 @@ def make_stub_judgement(skill_name: str) -> SkillJudgement:
 def test_check_contains_all_behavioral_all_stub_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """--behavioral --all with NO_LLM=1 processes all 3 skills and returns 0.
+    """--behavioral --all with FIELDKIT_NO_LLM=1 processes all 3 skills and returns 0.
 
     Stubs judge_skill via monkeypatch on the env var so the real stub path
     in judge.py fires, then mocks _skills_dir() to return our synthetic dir.
     """
-    monkeypatch.setenv("NO_LLM", "1")
+    monkeypatch.setenv("FIELDKIT_NO_LLM", "1")
     skills_dir = make_skills_dir(tmp_path, ["alpha", "bravo", "charlie"])
 
     with patch("fieldkit.commands.skill.eval_runner._skills_dir", return_value=skills_dir):
@@ -120,7 +120,7 @@ def test_check_contains_all_behavioral_all_processes_all_skills(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """--behavioral --all calls judge_skill for each eligible skill directory."""
-    monkeypatch.setenv("NO_LLM", "1")
+    monkeypatch.setenv("FIELDKIT_NO_LLM", "1")
     skills_dir = make_skills_dir(tmp_path, ["alpha", "bravo", "charlie"])
 
     call_log: list[str] = []
@@ -140,7 +140,7 @@ def test_check_contains_all_behavioral_all_processes_all_skills(
 
 def test_check_contains_all_managing_google_workspace_included(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """managing-google-workspace joins the --behavioral --all corpus (D2 exclusion lifted 2026-07-18)."""
-    monkeypatch.setenv("NO_LLM", "1")
+    monkeypatch.setenv("FIELDKIT_NO_LLM", "1")
     skills_dir = make_skills_dir(
         tmp_path,
         ["alpha", "managing-google-workspace", "bravo"],
@@ -171,7 +171,7 @@ def test_check_contains_all_managing_google_workspace_included(tmp_path: Path, m
 
 def test_resolve_behavioral_skill_dirs_skill_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """--skill forecast processes only forecast, not other skills."""
-    monkeypatch.setenv("NO_LLM", "1")
+    monkeypatch.setenv("FIELDKIT_NO_LLM", "1")
     skills_dir = make_skills_dir(tmp_path, ["forecast", "other"])
 
     call_log: list[str] = []
@@ -194,7 +194,7 @@ def test_resolve_behavioral_skill_dirs_skill_flag_not_found_returns_1(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """--skill nonexistent returns 1 and prints error to stderr."""
-    monkeypatch.setenv("NO_LLM", "1")
+    monkeypatch.setenv("FIELDKIT_NO_LLM", "1")
     skills_dir = make_skills_dir(tmp_path, ["forecast"])
 
     with patch("fieldkit.commands.skill.eval_runner._skills_dir", return_value=skills_dir):
@@ -213,7 +213,7 @@ def test_resolve_behavioral_skill_dirs_skill_flag_not_found_returns_1(
 
 def test_run_behavioral_evals_limit_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """--limit 3 causes at most 3 skills to be judged from a 5-skill corpus."""
-    monkeypatch.setenv("NO_LLM", "1")
+    monkeypatch.setenv("FIELDKIT_NO_LLM", "1")
     skills_dir = make_skills_dir(tmp_path, ["a", "b", "c", "d", "e"])
 
     call_log: list[str] = []
@@ -242,7 +242,7 @@ def test_run_behavioral_evals_limit_flag(tmp_path: Path, monkeypatch: pytest.Mon
 
 def test_exit_codes_exit_code_not_covered(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A not-covered verdict causes run_eval_cmd() to return 1."""
-    monkeypatch.setenv("NO_LLM", "1")
+    monkeypatch.setenv("FIELDKIT_NO_LLM", "1")
     skills_dir = make_skills_dir(tmp_path, ["forecast"])
 
     with (
@@ -263,7 +263,7 @@ def test_exit_codes_exit_code_unclear_with_warning(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """unclear-only verdicts return 0 but emit a warning to stderr."""
-    monkeypatch.setenv("NO_LLM", "1")
+    monkeypatch.setenv("FIELDKIT_NO_LLM", "1")
     skills_dir = make_skills_dir(tmp_path, ["forecast"])
 
     with (
@@ -286,7 +286,7 @@ def test_exit_codes_exit_code_unclear_with_warning(
 
 def test_exit_codes_exit_code_all_covered(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """All covered verdicts return 0."""
-    monkeypatch.setenv("NO_LLM", "1")
+    monkeypatch.setenv("FIELDKIT_NO_LLM", "1")
     skills_dir = make_skills_dir(tmp_path, ["forecast"])
 
     with (
@@ -307,7 +307,7 @@ def test_exit_codes_exit_code_2_auth_failure(tmp_path: Path, monkeypatch: pytest
     We test the exception propagation, not the exit code directly, because
     cli_main() is the sole exit boundary (historic regression rule, D8).
     """
-    monkeypatch.delenv("NO_LLM", raising=False)
+    monkeypatch.delenv("FIELDKIT_NO_LLM", raising=False)
     skills_dir = make_skills_dir(tmp_path, ["forecast"])
 
     with (
@@ -327,7 +327,7 @@ def test_exit_codes_general_judge_failure_is_partial(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """A general judge failure is contained and returns partial exit 1."""
-    monkeypatch.delenv("NO_LLM", raising=False)
+    monkeypatch.delenv("FIELDKIT_NO_LLM", raising=False)
     skills_dir = make_skills_dir(tmp_path, ["forecast"])
     private_detail = "untrusted raw judge response"
 
@@ -542,7 +542,7 @@ def test_print_json_summary_json_output_schema(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """--behavioral --skill forecast --json emits valid JSON with behavioral_results key."""
-    monkeypatch.setenv("NO_LLM", "1")
+    monkeypatch.setenv("FIELDKIT_NO_LLM", "1")
     skills_dir = make_skills_dir(tmp_path, ["forecast"])
 
     with (
@@ -572,8 +572,8 @@ def test_print_json_summary_json_output_stub_flag(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """stub=True is reflected in the JSON output when NO_LLM=1."""
-    monkeypatch.setenv("NO_LLM", "1")
+    """stub=True is reflected in the JSON output when FIELDKIT_NO_LLM=1."""
+    monkeypatch.setenv("FIELDKIT_NO_LLM", "1")
     skills_dir = make_skills_dir(tmp_path, ["forecast"])
 
     with (
@@ -605,7 +605,7 @@ def test_print_json_summary_summary_shows_behavioral_count_stub(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Skills evaluated shows the behavioral count, not 0, on a stub run."""
-    monkeypatch.setenv("NO_LLM", "1")
+    monkeypatch.setenv("FIELDKIT_NO_LLM", "1")
     skills_dir = make_skills_dir(tmp_path, ["a", "b", "c"])
 
     with patch("fieldkit.commands.skill.eval_runner._skills_dir", return_value=skills_dir):
@@ -649,7 +649,7 @@ def test_print_json_summary_summary_json_includes_evaluated_count(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """JSON summary includes evaluated count matching behavioral skill count."""
-    monkeypatch.setenv("NO_LLM", "1")
+    monkeypatch.setenv("FIELDKIT_NO_LLM", "1")
     skills_dir = make_skills_dir(tmp_path, ["a", "b"])
 
     with patch("fieldkit.commands.skill.eval_runner._skills_dir", return_value=skills_dir):
@@ -681,8 +681,8 @@ def _run_calibrate_make_fixture(fixture_id: str, gold_verdict: str = "covered") 
 
 
 def test_run_calibrate_calibrate_stub(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """--calibrate with NO_LLM=1 returns 0 (stub verdicts treated as pass per D8)."""
-    monkeypatch.setenv("NO_LLM", "1")
+    """--calibrate with FIELDKIT_NO_LLM=1 returns 0 (stub verdicts treated as pass per D8)."""
+    monkeypatch.setenv("FIELDKIT_NO_LLM", "1")
     # Provide a real skills_dir so the skills_dir check passes
     skills_dir = make_skills_dir(tmp_path, [])
 
@@ -702,7 +702,7 @@ def test_run_calibrate_calibrate_stub(tmp_path: Path, monkeypatch: pytest.Monkey
 
 def test_run_calibrate_calibrate_partial_match(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """5/6 fixtures matching gold → exit 1 (partial match)."""
-    monkeypatch.delenv("NO_LLM", raising=False)
+    monkeypatch.delenv("FIELDKIT_NO_LLM", raising=False)
     skills_dir = make_skills_dir(tmp_path, [])
 
     fixtures = [_run_calibrate_make_fixture(f"cal-{i}", "covered") for i in range(6)]
@@ -739,7 +739,7 @@ def test_run_calibrate_calibrate_mutual_exclusivity(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """--calibrate --behavioral together return 1 and print an error message."""
-    monkeypatch.setenv("NO_LLM", "1")
+    monkeypatch.setenv("FIELDKIT_NO_LLM", "1")
     skills_dir = make_skills_dir(tmp_path, [])
 
     with patch("fieldkit.commands.skill.eval_runner._skills_dir", return_value=skills_dir):

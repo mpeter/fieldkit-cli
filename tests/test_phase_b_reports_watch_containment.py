@@ -7,12 +7,12 @@ from unittest.mock import patch
 
 import pytest
 
-import fieldkit.commands.brief.collect as brief_collect
-import fieldkit.commands.pipeline.collect as pipeline_collect
+import fieldkit.brief.collect as brief_collect
+import fieldkit.pipeline.collect as pipeline_collect
 import fieldkit.watch._pursuit_stall_render as stall_render
 import fieldkit.watch._pursuit_stall_scan as stall_scan
 import fieldkit.watch.close_date_countdown as countdown
-from fieldkit.commands.pipeline.render import _build_narrative_prompt, render_pipeline_table
+from fieldkit.pipeline.render import _build_narrative_prompt, render_pipeline_table
 
 pytestmark = pytest.mark.unit
 

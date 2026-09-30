@@ -240,6 +240,15 @@ wheels = [
 ]
 
 [[package]]
+name = "boolean-py"
+version = "5.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/c4/cf/85379f13b76f3a69bca86b60237978af17d6aa0bc5998978c3b8cf05abb2/boolean_py-5.0.tar.gz", hash = "sha256:60cbc4bad079753721d32649545505362c754e121570ada4658b852a3a318d95", size = 37047, upload-time = "2025-04-03T10:39:49.734Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e5/ca/78d423b324b8d77900030fa59c4aa9054261ef0925631cd2501dd015b7b7/boolean_py-5.0-py3-none-any.whl", hash = "sha256:ef28a70bd43115208441b53a045d1549e2f0ec6e3d08a9d142cbc41c1938e8d9", size = 26577, upload-time = "2025-04-03T10:39:48.449Z" },
+]
+
+[[package]]
 name = "boto3"
 version = "1.43.93"
 source = { registry = "https://pypi.org/simple" }
@@ -717,12 +726,13 @@ wheels = [
 
 [[package]]
 name = "fieldkit-cli"
-version = "1.0.0"
+version = "1.0.1"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
     { name = "httpx" },
     { name = "jsonschema" },
+    { name = "markdown-it-py" },
     { name = "pydantic" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
@@ -769,6 +779,7 @@ web = [
 [package.dev-dependencies]
 dev = [
     { name = "gaze-py" },
+    { name = "license-expression" },
     { name = "mkdocs" },
     { name = "mutmut" },
     { name = "mypy" },
@@ -779,7 +790,9 @@ dev = [
     { name = "pytest-cov" },
     { name = "pytest-xdist" },
     { name = "ruff" },
+    { name = "skillsaw" },
     { name = "tach" },
+    { name = "types-httplib2" },
 ]
 release-build = [
     { name = "hatchling" },
@@ -806,10 +819,11 @@ requires-dist = [
     { name = "jsonschema", specifier = ">=4.23,<5" },
     { name = "litellm", marker = "extra == 'all'", specifier = ">=1.95,<2" },
     { name = "litellm", marker = "extra == 'llm'", specifier = ">=1.95,<2" },
+    { name = "markdown-it-py", specifier = ">=4.2,<5" },
     { name = "openai", marker = "extra == 'all'", specifier = ">=1.30,<4" },
     { name = "openai", marker = "extra == 'llm'", specifier = ">=1.30,<4" },
     { name = "pydantic", specifier = ">=2.0,<3" },
-    { name = "python-dotenv", specifier = ">=1.0.1" },
+    { name = "python-dotenv", specifier = ">=1.2.3" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "questionary", specifier = ">=2.0" },
     { name = "rich", specifier = ">=13.0.0" },
@@ -825,6 +839,7 @@ provides-extras = ["google", "llm", "web", "chrome-auth", "all"]
 [package.metadata.requires-dev]
 dev = [
     { name = "gaze-py", specifier = ">=0.9.3" },
+    { name = "license-expression", specifier = ">=30.4.4,<31" },
     { name = "mkdocs", specifier = ">=1.6,<2" },
     { name = "mutmut", specifier = ">=3.6.0,<4.0.0" },
     { name = "mypy", specifier = ">=2.3.0" },
@@ -835,7 +850,9 @@ dev = [
     { name = "pytest-cov", specifier = ">=5.0" },
     { name = "pytest-xdist", specifier = ">=3.0" },
     { name = "ruff", specifier = ">=0.15" },
+    { name = "skillsaw", specifier = "==0.16.0" },
     { name = "tach", specifier = ">=0.35" },
+    { name = "types-httplib2", specifier = ">=0.32.0.20260720" },
 ]
 release-build = [{ name = "hatchling", specifier = "==1.26.3" }]
 
@@ -1767,6 +1784,18 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/0c/99/6203ce619dee940d6bfbe099ec3fe4be00a68e9d60f70abf906cf124fe66/librt-0.13.0-cp314-cp314t-win32.whl", hash = "sha256:5fdcf34f86de8fb66d7dc7589f96ba91c4aa46671200d400e6fd6f109a483f18", size = 104357, upload-time = "2026-07-08T12:26:09.828Z" },
     { url = "https://files.pythonhosted.org/packages/52/dd/843b6314087c41657c7036d7914d8f294bdf9b580aa8513ea0588c8e9a3d/librt-0.13.0-cp314-cp314t-win_amd64.whl", hash = "sha256:260c33e92263fa629b4f6d3c51967a1c2158fe6c33237aaa3ebeac586b085259", size = 126998, upload-time = "2026-07-08T12:26:10.975Z" },
     { url = "https://files.pythonhosted.org/packages/5f/5d/3dcec2884ba1b0806d1408612555c38dd5d68e90156b59f75f6e36435c3a/librt-0.13.0-cp314-cp314t-win_arm64.whl", hash = "sha256:2f281549a4c52ac7bb97997f14353f8bd0e53a34ca0dad1c905cfd0b4a58ae99", size = 110771, upload-time = "2026-07-08T12:26:12.303Z" },
+]
+
+[[package]]
+name = "license-expression"
+version = "30.4.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "boolean-py" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/40/71/d89bb0e71b1415453980fd32315f2a037aad9f7f70f695c7cec7035feb13/license_expression-30.4.4.tar.gz", hash = "sha256:73448f0aacd8d0808895bdc4b2c8e01a8d67646e4188f887375398c761f340fd", size = 186402, upload-time = "2025-07-22T11:13:32.17Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/af/40/791891d4c0c4dab4c5e187c17261cedc26285fd41541577f900470a45a4d/license_expression-30.4.4-py3-none-any.whl", hash = "sha256:421788fdcadb41f049d2dc934ce666626265aeccefddd25e162a26f23bcbf8a4", size = 120615, upload-time = "2025-07-22T11:13:31.217Z" },
 ]
 
 [[package]]
@@ -3207,6 +3236,20 @@ wheels = [
 ]
 
 [[package]]
+name = "skillsaw"
+version = "0.16.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "markdown-it-py" },
+    { name = "pyyaml" },
+    { name = "ruamel-yaml" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/8b/d2/fd4531622294787a154afe91400a9d7354c298a9a79b08a4ea50fe1289ad/skillsaw-0.16.0.tar.gz", hash = "sha256:143c8477f35488106799f7d081f7b7ee1bcfe63aa0423b17ca989646d8ac2785", size = 465578, upload-time = "2026-07-05T18:40:05.32Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/dd/9c/c13b0d6cba166380f155b59e56d260c5087609ca26ccc4354c776c49736e/skillsaw-0.16.0-py3-none-any.whl", hash = "sha256:f48df91b64ade101dd62c9e6e5a8a7c88de2aad555d234611c3922d2acdcdcaf", size = 331407, upload-time = "2026-07-05T18:40:03.552Z" },
+]
+
+[[package]]
 name = "smmap"
 version = "5.0.3"
 source = { registry = "https://pypi.org/simple" }
@@ -3459,6 +3502,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/c2/e3/7ca82ee24c82d344584abd5b8637b3bd056f2900226e8d82fc22f1184b92/trove_classifiers-2026.6.1.19.tar.gz", hash = "sha256:c5132b4b61a829d11cfbd2d72e97f20a45ed6edb95e45c5efdeb5e00836b2745", size = 17059, upload-time = "2026-06-01T19:41:34.649Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/7c/a4/81502f486f01db95bc8320646a8a12511f5e556cb63d5e224d91816605c4/trove_classifiers-2026.6.1.19-py3-none-any.whl", hash = "sha256:ab4c4ec93cc4a4e7815fa759906e05e6bb3f2fbd92ea0f897288c6a43efd15b3", size = 14211, upload-time = "2026-06-01T19:41:33.434Z" },
+]
+
+[[package]]
+name = "types-httplib2"
+version = "0.32.0.20260720"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/98/74/d53a569942f365caa033f135012979d82f96c8b02ab8a9c5614617f12f65/types_httplib2-0.32.0.20260720.tar.gz", hash = "sha256:fdf42301174bccd6cede13dcffe130753f5c32c64b0a2b681a011504ffe6d1eb", size = 11746, upload-time = "2026-07-20T05:26:53.42Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/64/aa/9a6c889f79b97017244d9abbe9b886c196716ac6da47f0413e141871bb2b/types_httplib2-0.32.0.20260720-py3-none-any.whl", hash = "sha256:c8e838557fccd39bb08569839c7e625489c5b2db1c89ab54b6a3b808b9e9b392", size = 11466, upload-time = "2026-07-20T05:26:52.603Z" },
 ]
 
 [[package]]

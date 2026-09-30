@@ -8,9 +8,9 @@ no other enforcement:
 1. ``fieldkit/errors.py`` imports nothing from fieldkit or third-party code
    (AGENTS.md: "errors.py has zero imports from fieldkit — any module may
    safely import from it").
-2. ``fieldkit/cli_exit.py`` imports from fieldkit only ``fieldkit.config`` and
-   ``fieldkit.errors`` (AGENTS.md: "No imports from fieldkit.llm, fieldkit.sf,
-   or fieldkit.pursuit in cli_exit.py — do not add them").
+2. ``fieldkit/cli_exit.py`` imports only config, shared errors, and the pure
+   ``fieldkit.sf.errors`` leaf. The SF package initializer remains docstring-only
+   so typed Salesforce diagnostics cannot load optional integration clients.
 3. The domain layer contains no executable ``sys.exit()`` call and no
    ``raise SystemExit`` — the historic regression ratchet. The audit
    (docs/audit/system-audit-2026-07.md §2) verified the domain layer clean;
@@ -145,19 +145,230 @@ def test_exception_module_isolation_errors_module_imports_stdlib_only():
     assert non_stdlib == set(), f"errors.py gained non-stdlib imports: {sorted(non_stdlib)}"
 
 
-def test_exception_module_isolation_cli_exit_fieldkit_imports_restricted():
-    """cli_exit.py may import from fieldkit only config and errors.
-
-    Importing fieldkit.llm / fieldkit.sf / fieldkit.pursuit here would
-    make the exit boundary transitively depend on every heavy domain
-    module — the exact coupling the errors-module extraction removed.
-    """
-    imports = _imported_top_level_modules(_parse(_SRC_ROOT / "cli_exit.py"))
+def _assert_cli_exit_import_isolation(tree: ast.Module) -> None:
+    """Allow exactly the pure Salesforce leaf through its canonical module alias."""
+    imports = _imported_top_level_modules(tree)
     fieldkit_imports = {mod for mod in imports if mod == "fieldkit" or mod.startswith(("fieldkit.", "."))}
-    allowed = {"fieldkit.config", "fieldkit.errors"}
+    allowed = {"fieldkit.config", "fieldkit.errors", "fieldkit.sf.errors"}
     assert fieldkit_imports <= allowed, (
         f"cli_exit.py imports beyond the allowed set {sorted(allowed)}: {sorted(fieldkit_imports - allowed)}"
     )
+    assert not any(
+        isinstance(node, ast.ImportFrom)
+        and (node.level or (node.module or "").startswith("fieldkit"))
+        and any(alias.name == "*" for alias in node.names)
+        for node in ast.walk(tree)
+    ), "cli_exit.py cannot use wildcard fieldkit imports"
+    sf_imports = [
+        node
+        for node in ast.walk(tree)
+        if (isinstance(node, ast.Import) and any(alias.name.startswith("fieldkit.sf") for alias in node.names))
+        or (isinstance(node, ast.ImportFrom) and (node.module or "").startswith("fieldkit.sf"))
+    ]
+    assert len(sf_imports) == 1, "cli_exit.py requires one canonical SF module import"
+    canonical = sf_imports[0]
+    assert isinstance(canonical, ast.Import) and canonical in tree.body, "SF import must be a top-level module import"
+    assert [(alias.name, alias.asname) for alias in canonical.names] == [("fieldkit.sf.errors", "sf_errors")], (
+        "SF import must name precisely the canonical errors leaf"
+    )
+
+
+def test_exception_module_isolation_cli_exit_fieldkit_imports_restricted() -> None:
+    """Typed SF diagnostics may load their pure leaf, never an optional client."""
+    _assert_cli_exit_import_isolation(_parse(_SRC_ROOT / "cli_exit.py"))
+
+
+_FORBIDDEN_CLI_EXIT_ADDITIONS = (
+    "import fieldkit.sf",
+    "from fieldkit.sf import errors as sf_errors",
+    "from fieldkit import sf",
+    "from .sf import errors",
+    "import fieldkit.sf.client",
+    "import fieldkit.sf.errors.extra",
+    "def nested():\n    import fieldkit.sf.client",
+    "if True:\n    import fieldkit.sf._transport",
+)
+
+
+@pytest.mark.parametrize("source", _FORBIDDEN_CLI_EXIT_ADDITIONS)
+def test_cli_exit_import_allowance_rejects_broader_or_noncanonical_imports(source: str) -> None:
+    """Forbidden additions fail the allowlist even with a valid canonical import."""
+    with pytest.raises(AssertionError, match="imports beyond the allowed set"):
+        _assert_cli_exit_import_isolation(ast.parse("import fieldkit.sf.errors as sf_errors\n" + source))
+
+
+@pytest.mark.parametrize(
+    ("source", "message"),
+    (
+        ("", "requires one canonical SF module import"),
+        ("import fieldkit.sf.errors", "name precisely the canonical errors leaf"),
+        ("import fieldkit.sf.errors as renamed", "name precisely the canonical errors leaf"),
+        ("from fieldkit.sf.errors import SFAuthError", "top-level module import"),
+        ("def nested():\n    import fieldkit.sf.errors as sf_errors", "top-level module import"),
+        ("if True:\n    import fieldkit.sf.errors as sf_errors", "top-level module import"),
+        ("from fieldkit.sf.errors import *", "cannot use wildcard fieldkit imports"),
+        (
+            "from fieldkit.config import *\nimport fieldkit.sf.errors as sf_errors",
+            "cannot use wildcard fieldkit imports",
+        ),
+        (
+            "from fieldkit.errors import *\nimport fieldkit.sf.errors as sf_errors",
+            "cannot use wildcard fieldkit imports",
+        ),
+    ),
+)
+def test_cli_exit_import_allowance_rejects_canonical_substitutions(source: str, message: str) -> None:
+    with pytest.raises(AssertionError, match=message):
+        _assert_cli_exit_import_isolation(ast.parse(source))
+
+
+@pytest.mark.parametrize("source", _FORBIDDEN_CLI_EXIT_ADDITIONS)
+def test_cli_exit_negative_control_detects_an_empty_import_scanner(
+    source: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A vacuous scanner must break the forbidden-package regression."""
+    monkeypatch.setattr(sys.modules[__name__], "_imported_top_level_modules", lambda _tree: set())
+    with pytest.raises((AssertionError, pytest.fail.Exception), match=r"Regex pattern did not match|DID NOT RAISE"):
+        test_cli_exit_import_allowance_rejects_broader_or_noncanonical_imports(source)
+
+
+def test_cli_exit_empty_scanner_control_accepts_only_the_canonical_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The scanner mutation alone does not fail the required-alias guard."""
+    monkeypatch.setattr(sys.modules[__name__], "_imported_top_level_modules", lambda _tree: set())
+    result = _assert_cli_exit_import_isolation(ast.parse("import fieldkit.sf.errors as sf_errors"))
+    assert result is None
+
+
+def _is_docstring(node: ast.stmt) -> bool:
+    """Recognize a literal docstring without accepting executable expressions."""
+    return isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)
+
+
+def _assert_sf_errors_leaf_shape(tree: ast.Module) -> None:
+    """Accept only the existing local exception declarations and literal guidance."""
+    assert len(tree.body) == 9 and _is_docstring(tree.body[0]), "SF leaf module shape changed"
+    bases = tree.body[1]
+    assert isinstance(bases, ast.ImportFrom), "SF leaf shared bases import changed"
+    assert bases.module == "fieldkit.errors" and bases.level == 0, "SF leaf cannot import an optional dependency"
+    assert [(alias.name, alias.asname) for alias in bases.names] == [("AuthError", None), ("FieldkitError", None)], (
+        "SF leaf shared bases import changed"
+    )
+    for declaration, (name, base) in zip(
+        tree.body[2:8],
+        (
+            ("SFAuthError", "AuthError"),
+            ("SFNotFoundError", "FieldkitError"),
+            ("SFDataAccessError", "FieldkitError"),
+            ("SFAPIError", "FieldkitError"),
+            ("SFConditionalWriteConflict", "FieldkitError"),
+            ("SFConditionalWriteOutcomeUnknown", "FieldkitError"),
+        ),
+        strict=True,
+    ):
+        assert isinstance(declaration, ast.ClassDef) and declaration.name == name, "SF leaf class identity changed"
+        assert not declaration.decorator_list and not declaration.keywords, "SF leaf class must not execute decorators"
+        assert len(declaration.bases) == 1, "SF leaf exception base changed"
+        superclass = declaration.bases[0]
+        assert isinstance(superclass, ast.Name) and superclass.id == base, "SF leaf exception base changed"
+        assert len(declaration.body) == 1 and _is_docstring(declaration.body[0]), "SF leaf class must be docstring-only"
+    guidance = tree.body[8]
+    assert isinstance(guidance, ast.FunctionDef) and guidance.name == "reauth_hint_message", "SF leaf guidance changed"
+    assert not guidance.decorator_list, "SF leaf guidance must not execute decorators"
+    assert not (
+        guidance.args.posonlyargs
+        or guidance.args.args
+        or guidance.args.kwonlyargs
+        or guidance.args.vararg
+        or guidance.args.kwarg
+        or guidance.args.defaults
+        or guidance.args.kw_defaults
+    ), "SF leaf guidance must not evaluate arguments or defaults"
+    assert isinstance(guidance.returns, ast.Name) and guidance.returns.id == "str", (
+        "SF leaf guidance annotation changed"
+    )
+    assert len(guidance.body) == 2 and _is_docstring(guidance.body[0]), "SF leaf guidance must return a literal"
+    returned = guidance.body[1]
+    assert isinstance(returned, ast.Return) and isinstance(returned.value, ast.Constant), (
+        "SF leaf guidance must return a literal"
+    )
+    assert isinstance(returned.value.value, str), "SF leaf guidance must return a string"
+
+
+def _assert_sf_package_shape(tree: ast.Module) -> None:
+    """The parent initializer may contain only its literal docstring."""
+    assert len(tree.body) == 1 and _is_docstring(tree.body[0]), "SF package initializer must be docstring-only"
+
+
+def test_sf_exception_leaf_and_package_initializer_remain_pure() -> None:
+    """Importing the leaf cannot execute integration code through either source."""
+    _assert_sf_errors_leaf_shape(_parse(_SRC_ROOT / "sf/errors.py"))
+    _assert_sf_package_shape(_parse(_SRC_ROOT / "sf/__init__.py"))
+
+
+@pytest.mark.parametrize(
+    "addition",
+    (
+        "import fieldkit.config",
+        "import fieldkit.sf.client",
+        "import fieldkit.sf._transport",
+        "import fieldkit.sf._responses",
+        "import httpx",
+        "from . import client",
+        "from ..config import ConfigError",
+        "def nested():\n    import fieldkit.config",
+        "if True:\n    import tenacity",
+        "__import__('httpx')",
+        "exec('import httpx')",
+        "eval('__import__(\"httpx\")')",
+        "configure()",
+        "class Added:\n    configure()",
+    ),
+)
+def test_sf_leaf_rejects_added_imports_and_execution(addition: str) -> None:
+    """Extra imports, dynamic imports, and executable additions break the pure leaf."""
+    source = (_SRC_ROOT / "sf/errors.py").read_text(encoding="utf-8")
+    with pytest.raises(AssertionError, match="SF leaf"):
+        _assert_sf_errors_leaf_shape(ast.parse(source + "\n" + addition))
+
+
+@pytest.mark.parametrize(
+    "before,after",
+    (
+        ("class SFAuthError(AuthError):", "@configure()\nclass SFAuthError(AuthError):"),
+        ("class SFAuthError(AuthError):", "class SFAuthError(resolve_base()):"),
+        ("class SFAuthError(AuthError):", "class SFAuthError(AuthError):\n    configure()"),
+        ("def reauth_hint_message()", "@configure()\ndef reauth_hint_message()"),
+        ("def reauth_hint_message()", "def reauth_hint_message(value=configure())"),
+        ("def reauth_hint_message()", "def reauth_hint_message(*, value=configure())"),
+        ('return "run', 'import fieldkit.config\n    return "run'),
+        ('return "run', "return __import__('httpx') or \"run"),
+        ('return "run', "return eval('1') or \"run"),
+    ),
+)
+def test_sf_leaf_rejects_execution_inside_existing_definitions(before: str, after: str) -> None:
+    """Existing class and guidance slots cannot hide calls, imports, or defaults."""
+    source = (_SRC_ROOT / "sf/errors.py").read_text(encoding="utf-8")
+    assert before in source
+    with pytest.raises(AssertionError, match="SF leaf"):
+        _assert_sf_errors_leaf_shape(ast.parse(source.replace(before, after, 1)))
+
+
+@pytest.mark.parametrize(
+    "addition",
+    (
+        "from fieldkit.sf.errors import SFAPIError",
+        "from fieldkit.sf import client",
+        "def __getattr__(name):\n    return __import__('fieldkit.sf.client')",
+        "configure()",
+        "import httpx",
+        "@configure()\nclass Client:\n    pass",
+    ),
+)
+def test_sf_package_initializer_rejects_reexports_and_execution(addition: str) -> None:
+    """Parent execution, lazy exports, and eager clients cannot bypass leaf checks."""
+    source = (_SRC_ROOT / "sf/__init__.py").read_text(encoding="utf-8")
+    with pytest.raises(AssertionError, match="SF package initializer"):
+        _assert_sf_package_shape(ast.parse(source + "\n" + addition))
 
 
 # ── TestDomainLayerExitBan (flattened) ──────────────────────────────────────

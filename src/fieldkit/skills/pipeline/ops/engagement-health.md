@@ -1,59 +1,33 @@
-# Engagement Health
+# Review delivery-project contract dates
 
-Classifies active delivery projects by contract end date proximity.
+Use `fieldkit pursuit projects --json` to classify files under the configured
+`accounts/*/projects/` tree. Add `--account ACCOUNT` only with a confirmed
+literal account directory slug; a wildcard can broaden the scan.
+Template files and hidden account directories are excluded.
 
-## Gotchas
+The command reads `sf_contract_end`, `sf_stage`, and `sf_opportunity` from local
+project frontmatter. It does not query Salesforce or refresh those values.
 
-- **Stale vault signals** — run `/brief` first if data hasn't been refreshed today; this skill reads from cached files
-- **Trigger overlap with adjacent skills** — check that you need this specific skill and not a closely named one (e.g. `pipeline` skill's `ops/pipeline-health.md` vs `ops/forecast.md`)
+## Read the classifications
 
-## Constraints
+- ZOMBIE means the recorded contract end date is past and `sf_stage` is not one
+  of the supported completed values: `Completed`, `Closed`, `completed`, or
+  `closed`.
+- EXPIRING means the recorded end date is today through 30 days away.
+- SOON means it is 31 through 90 days away.
+- ACTIVE means it is more than 90 days away. A past project whose stage is one
+  of the supported completed values is also classified ACTIVE.
+- UNKNOWN means `sf_contract_end` is missing or is not a parseable `YYYY-MM-DD`
+  date.
 
-- **Never write to account files without explicit confirmation**
-- **Do not modify pursuit frontmatter mid-workflow** — only write at designated save steps
-- **Always surface output for review before sending externally**
+Rows are sorted ZOMBIE, EXPIRING, SOON, ACTIVE, then UNKNOWN; within a tier they
+are sorted by days until the recorded end date.
 
-## Quick Reference
+The default report exits 0 for any valid classification. Add `--strict` when
+automation must exit 1 for ZOMBIE or UNKNOWN rows. EXPIRING and SOON alone are
+not strict failures. Exit 3 means the configured workspace, accounts directory,
+or usable project set was unavailable.
 
-```bash
-# All accounts
-fieldkit pursuit projects
-
-# Single account
-fieldkit pursuit projects --account acme-corp
-
-# Treat ZOMBIE or UNKNOWN findings as an exit-1 policy failure
-fieldkit pursuit projects --strict
-```
-
-## Health Tiers
-
-| Tier | Condition |
-|------|-----------|
-| ZOMBIE | Contract end date past, stage not Completed/Closed |
-| EXPIRING | Contract ends within 30 days |
-| SOON | Contract ends within 90 days |
-| ACTIVE | Contract end date > 90 days out |
-| UNKNOWN | No contract end date in frontmatter |
-
-## Exit Codes
-
-- `0` — valid report by default; with `--strict`, no ZOMBIE or UNKNOWN projects
-- `1` — `--strict` found one or more ZOMBIE or UNKNOWN projects
-- `3` — data error
-
-## When to Use
-
-- Before QBRs to understand active delivery portfolio
-- When planning renewals ("what's expiring?")
-- After `fieldkit ingest` run to see updated project state
-- When asked "how are my projects doing?"
-
-## Output
-
-Ranked table: ZOMBIE first (oldest overdue at top), then EXPIRING, SOON, ACTIVE. Shows project name, SF stage, contract end date, and days until end.
-
-## Related Skills
-
-- `pipeline` skill's `ops/pipeline-health.md` — deal risk scan instead of delivery/contract status
-- `contract` skill's `ops/contract-extract.md` — extract contract terms feeding contract end dates
+This command performs no writes. Treat every result as a local-file observation,
+not a live contract or Salesforce assertion. Propose any correction through the
+workflow that owns the project file and require approval before writing it.

@@ -1,7 +1,7 @@
-"""Unit tests for lib/transcript_pipeline.py.
+"""Unit tests for transcript rendering and meeting-note path allocation.
 
 Strategy:
-- stage1_clean / stage2_extract tested under NO_LLM=1 (stub path).
+- stage1_clean / stage2_extract tested under FIELDKIT_NO_LLM=1 (stub path).
 - render_vault_note exercised with inline GeminiDocContent + RouteResult fixtures.
 - compute_vault_path tested for correct path construction and slugification.
 - All tests are fully offline — no network, no real LLM, no real Drive API.
@@ -16,12 +16,12 @@ from unittest.mock import patch
 import pytest
 
 from fieldkit.ingest.docs import GeminiDocContent
+from fieldkit.ingest.paths import _slugify, compute_vault_path
 from fieldkit.ingest.pipeline import (
     _MAX_TRANSCRIPT_CHARS,
+    ConfidenceLevel,
     Stage1Result,
     TranscriptMeta,
-    _slugify,
-    compute_vault_path,
     infer_meeting_date,
     render_vault_note,
     stage1_clean,
@@ -85,17 +85,17 @@ _LONG_TRANSCRIPT = "Alice: Let's talk strategy.\nBob: Agreed on the roadmap.\n" 
 
 
 def test_stage1_clean_no_llm_returns_input_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
-    """With NO_LLM=1, stage1_clean returns the raw transcript unchanged (bypassed=False)."""
-    monkeypatch.setenv("NO_LLM", "1")
+    """With FIELDKIT_NO_LLM=1, stage1_clean returns the raw transcript unchanged (bypassed=False)."""
+    monkeypatch.setenv("FIELDKIT_NO_LLM", "1")
     result = stage1_clean(_LONG_TRANSCRIPT)
     assert isinstance(result, Stage1Result)
     assert result.text == _LONG_TRANSCRIPT
     assert result.bypassed is False  # stub path is NOT a bypass
 
 
-def test_stage1_clean_no_llm_stub_detection(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stub string from synthesize() triggers passthrough, not the stub itself."""
-    monkeypatch.setenv("NO_LLM", "1")
+def test_stage1_clean_no_llm_does_not_embed_provider_stub(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Disabled cleaning preserves input rather than treating a stub as cleaned text."""
+    monkeypatch.setenv("FIELDKIT_NO_LLM", "1")
     result = stage1_clean(_LONG_TRANSCRIPT)
     # Must NOT return the stub string
     assert result.text != _NO_LLM_STUB
@@ -105,7 +105,7 @@ def test_stage1_clean_no_llm_stub_detection(monkeypatch: pytest.MonkeyPatch) -> 
 
 def test_stage1_clean_empty_transcript_passes_through(monkeypatch: pytest.MonkeyPatch) -> None:
     """historic regression: empty transcript returns as-is without calling LLM (bypassed=True)."""
-    monkeypatch.setenv("NO_LLM", "1")
+    monkeypatch.setenv("FIELDKIT_NO_LLM", "1")
     result = stage1_clean("")
     assert isinstance(result, Stage1Result)
     assert result.text == ""  # passed through unchanged, no LLM call
@@ -114,7 +114,7 @@ def test_stage1_clean_empty_transcript_passes_through(monkeypatch: pytest.Monkey
 
 def test_stage1_clean_short_transcript_99_chars_passes_through(monkeypatch: pytest.MonkeyPatch) -> None:
     """historic regression: transcript of 99 chars returns as-is without calling LLM (bypassed=True)."""
-    monkeypatch.setenv("NO_LLM", "1")
+    monkeypatch.setenv("FIELDKIT_NO_LLM", "1")
     short = "a" * 99
     result = stage1_clean(short)
     assert isinstance(result, Stage1Result)
@@ -124,7 +124,7 @@ def test_stage1_clean_short_transcript_99_chars_passes_through(monkeypatch: pyte
 
 def test_stage1_clean_transcript_100_chars_calls_through(monkeypatch: pytest.MonkeyPatch) -> None:
     """historic regression: transcript of exactly 100 chars passes the guard and calls synthesize."""
-    monkeypatch.delenv("NO_LLM", raising=False)
+    monkeypatch.delenv("FIELDKIT_NO_LLM", raising=False)
     monkeypatch.delenv("FIELDKIT_NO_LLM", raising=False)
     fake_output = "Cleaned transcript."
     with patch("fieldkit.ingest.pipeline.synthesize", return_value=fake_output) as mock_synth:
@@ -137,7 +137,7 @@ def test_stage1_clean_transcript_100_chars_calls_through(monkeypatch: pytest.Mon
 
 def test_stage1_clean_real_synthesize_result_returned_as_is(monkeypatch: pytest.MonkeyPatch) -> None:
     """When synthesize returns real (non-stub) text, that text is returned."""
-    monkeypatch.delenv("NO_LLM", raising=False)
+    monkeypatch.delenv("FIELDKIT_NO_LLM", raising=False)
     monkeypatch.delenv("FIELDKIT_NO_LLM", raising=False)
     fake_output = "Alice: Let's discuss Q2 strategy.\nBob: Agreed on the roadmap."
     with patch("fieldkit.ingest.pipeline.synthesize", return_value=fake_output):
@@ -151,7 +151,7 @@ def test_stage1_clean_stage1_clean_truncates_oversized_transcript(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """Transcript exceeding _MAX_TRANSCRIPT_CHARS is truncated and a warning is logged."""
-    monkeypatch.delenv("NO_LLM", raising=False)
+    monkeypatch.delenv("FIELDKIT_NO_LLM", raising=False)
     monkeypatch.delenv("FIELDKIT_NO_LLM", raising=False)
     fake_output = "Cleaned transcript after truncation."
     oversized = "x" * (_MAX_TRANSCRIPT_CHARS + 100)
@@ -176,7 +176,7 @@ def test_stage1_clean_stage1_clean_passthrough_under_transcript_ceiling(
     length: int, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """Transcript just under _MAX_TRANSCRIPT_CHARS is processed without truncation warning."""
-    monkeypatch.delenv("NO_LLM", raising=False)
+    monkeypatch.delenv("FIELDKIT_NO_LLM", raising=False)
     monkeypatch.delenv("FIELDKIT_NO_LLM", raising=False)
     fake_output = "Cleaned transcript without truncation."
     under_ceiling = "x" * length
@@ -203,9 +203,9 @@ def test_stage1_clean_stage1_clean_passthrough_under_transcript_ceiling(
 
 
 def test_stage2_extract_no_llm_returns_stub_meta(monkeypatch: pytest.MonkeyPatch) -> None:
-    """With NO_LLM=1, returns TranscriptMeta with confidence='stub' and empty lists."""
-    monkeypatch.setenv("NO_LLM", "1")
-    meta = stage2_extract("Some cleaned transcript text.")
+    """With FIELDKIT_NO_LLM=1, returns TranscriptMeta with confidence='stub' and empty lists."""
+    monkeypatch.setenv("FIELDKIT_NO_LLM", "1")
+    meta = stage2_extract(Stage1Result("Some cleaned transcript text."))
     assert isinstance(meta, TranscriptMeta)
     assert meta.confidence == "stub"
     assert meta.participants == []
@@ -216,7 +216,7 @@ def test_stage2_extract_no_llm_returns_stub_meta(monkeypatch: pytest.MonkeyPatch
 
 def test_stage2_extract_valid_json_parsed_correctly(monkeypatch: pytest.MonkeyPatch) -> None:
     """Valid JSON response is parsed into TranscriptMeta fields."""
-    monkeypatch.delenv("NO_LLM", raising=False)
+    monkeypatch.delenv("FIELDKIT_NO_LLM", raising=False)
     monkeypatch.delenv("FIELDKIT_NO_LLM", raising=False)  # pii-guard: ignore
     payload = {
         "participants": ["Alice (Globalpay)", "Bob (Example Vendor)"],
@@ -226,7 +226,7 @@ def test_stage2_extract_valid_json_parsed_correctly(monkeypatch: pytest.MonkeyPa
         "confidence": "high",
     }
     with patch("fieldkit.ingest.pipeline.synthesize", return_value=json.dumps(payload)):
-        meta = stage2_extract("cleaned text")  # pii-guard: ignore
+        meta = stage2_extract(Stage1Result("cleaned text"))
 
     assert meta.participants == ["Alice (Globalpay)", "Bob (Example Vendor)"]
     assert meta.action_items == ["Send the deck by Friday", "Schedule follow-up"]
@@ -237,7 +237,7 @@ def test_stage2_extract_valid_json_parsed_correctly(monkeypatch: pytest.MonkeyPa
 
 def test_stage2_extract_json_in_code_fence_parsed(monkeypatch: pytest.MonkeyPatch) -> None:
     """JSON wrapped in ```json ... ``` fences is parsed correctly."""
-    monkeypatch.delenv("NO_LLM", raising=False)
+    monkeypatch.delenv("FIELDKIT_NO_LLM", raising=False)
     monkeypatch.delenv("FIELDKIT_NO_LLM", raising=False)
     payload = {
         "participants": ["Carol"],
@@ -248,7 +248,7 @@ def test_stage2_extract_json_in_code_fence_parsed(monkeypatch: pytest.MonkeyPatc
     }
     wrapped = f"```json\n{json.dumps(payload)}\n```"
     with patch("fieldkit.ingest.pipeline.synthesize", return_value=wrapped):
-        meta = stage2_extract("some text")
+        meta = stage2_extract(Stage1Result("some text"))
 
     assert meta.participants == ["Carol"]
     assert meta.confidence == "medium"
@@ -256,10 +256,10 @@ def test_stage2_extract_json_in_code_fence_parsed(monkeypatch: pytest.MonkeyPatc
 
 def test_stage2_extract_malformed_json_returns_empty_meta_no_exception(monkeypatch: pytest.MonkeyPatch) -> None:
     """Malformed JSON from synthesize logs a warning and returns default TranscriptMeta."""
-    monkeypatch.delenv("NO_LLM", raising=False)
+    monkeypatch.delenv("FIELDKIT_NO_LLM", raising=False)
     monkeypatch.delenv("FIELDKIT_NO_LLM", raising=False)
     with patch("fieldkit.ingest.pipeline.synthesize", return_value="not json at all {{{"):
-        meta = stage2_extract("some text")
+        meta = stage2_extract(Stage1Result("some text"))
 
     # No exception raised
     assert isinstance(meta, TranscriptMeta)
@@ -271,7 +271,7 @@ def test_stage2_extract_malformed_json_returns_empty_meta_no_exception(monkeypat
 
 def test_stage2_extract_unknown_confidence_defaults_to_low(monkeypatch: pytest.MonkeyPatch) -> None:
     """Unrecognised confidence value coerced to 'low'."""
-    monkeypatch.delenv("NO_LLM", raising=False)
+    monkeypatch.delenv("FIELDKIT_NO_LLM", raising=False)
     monkeypatch.delenv("FIELDKIT_NO_LLM", raising=False)
     payload = {
         "participants": [],
@@ -281,7 +281,7 @@ def test_stage2_extract_unknown_confidence_defaults_to_low(monkeypatch: pytest.M
         "confidence": "very-high-definitely",
     }
     with patch("fieldkit.ingest.pipeline.synthesize", return_value=json.dumps(payload)):
-        meta = stage2_extract("some text")
+        meta = stage2_extract(Stage1Result("some text"))
 
     assert meta.confidence == "low"
 
@@ -292,7 +292,7 @@ def test_stage2_extract_bypassed_stage1_runs_extraction_caps_confidence(monkeypa
     Previously stage2_extract() returned empty TranscriptMeta(confidence='low')
     immediately when bypassed=True, silently discarding all content.
     """
-    monkeypatch.delenv("NO_LLM", raising=False)
+    monkeypatch.delenv("FIELDKIT_NO_LLM", raising=False)
     payload = {
         "participants": ["Alice", "Bob"],
         "action_items": ["Send follow-up"],
@@ -332,7 +332,7 @@ def _render_vault_note_render(
     action_items: list[str] | None = None,
     key_decisions: list[str] | None = None,
     key_topics: list[str] | None = None,
-    confidence: str = "high",
+    confidence: ConfidenceLevel = "high",
     pipeline_version: str = "0.1.0",
     doc_url: str | None = None,
     gemini_next_steps: list[str] | None = None,
@@ -489,6 +489,27 @@ def test_render_vault_note_gemini_next_steps_hidden_when_overlap() -> None:
     assert "Gemini Suggested Next Steps" not in output
 
 
+@pytest.mark.parametrize(
+    "value", ["Topic: C:\\notes\\q", "yes", "null", "123", "first\n---\ninjected: true", 'quote " and \\']
+)
+def test_rendered_metadata_round_trips_as_strings(value: str) -> None:
+    import yaml
+
+    from fieldkit.pursuit.io import extract_frontmatter_text
+
+    output = _render_vault_note_render(
+        doc_title=value, participants=[value], action_items=[value], key_decisions=[value], key_topics=[value]
+    )
+    assert output.startswith("---\n")
+    frontmatter = extract_frontmatter_text(output)
+    assert frontmatter is not None
+    parsed = yaml.safe_load(frontmatter)
+    assert parsed["meeting_title"] == value
+    for field in ("participants", "action_items", "key_decisions", "key_topics"):
+        assert parsed[field] == [value]
+    assert "injected" not in parsed
+
+
 def test_render_vault_note_valid_yaml_frontmatter() -> None:
     """Frontmatter is parseable as YAML."""
     import yaml  # type: ignore[import-untyped]
@@ -518,8 +539,19 @@ def test_compute_vault_path_basic_path(tmp_path: Path) -> None:
         account="globalpay",
         meeting_date="2026-06-05",
         meeting_title="Q2 Strategy Call",
+        source_id="source-1",
     )
-    assert result == tmp_path / "accounts" / "globalpay" / "meetings" / "2026-06-05-q2-strategy-call.md"
+    assert result.parent == tmp_path / "accounts" / "globalpay" / "meetings"
+    assert result.name.startswith("2026-06-05-q2-strategy-call-")
+
+
+def test_compute_vault_path_separates_same_title_sources(tmp_path: Path) -> None:
+    first = compute_vault_path(tmp_path, "acme", "2026-09-27", "Meeting", source_id="source-1")
+    second = compute_vault_path(tmp_path, "acme", "2026-09-27", "Meeting", source_id="source-2")
+    assert first != second
+    assert first == compute_vault_path(tmp_path, "acme", "2026-09-27", "Meeting", source_id="source-1")
+    assert len(first.name.encode("utf-8")) <= 200
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_compute_vault_path_slug_strips_special_chars(tmp_path: Path) -> None:  # pii-guard: ignore
@@ -528,6 +560,7 @@ def test_compute_vault_path_slug_strips_special_chars(tmp_path: Path) -> None:  
         account="acme-bank",
         meeting_date="2026-01-15",
         meeting_title="Kick-Off: Phase 2 — Planning!",
+        source_id="source-1",
     )
     filename = result.name
     # Should be slugified: lowercase, hyphens, no colons/dashes/exclamation
@@ -543,8 +576,9 @@ def test_compute_vault_path_slug_spaces_become_hyphens(tmp_path: Path) -> None:
         account="globalpay",
         meeting_date="2026-03-01",
         meeting_title="weekly team sync",
+        source_id="source-1",
     )
-    assert result.name == "2026-03-01-weekly-team-sync.md"
+    assert result.name.startswith("2026-03-01-weekly-team-sync-")
 
 
 def test_compute_vault_path_path_is_under_accounts_meetings(tmp_path: Path) -> None:  # pii-guard: ignore
@@ -553,6 +587,7 @@ def test_compute_vault_path_path_is_under_accounts_meetings(tmp_path: Path) -> N
         account="midwest-ins",
         meeting_date="2026-04-22",
         meeting_title="AAP Workshop",
+        source_id="source-1",
     )  # pii-guard: ignore
     # Path structure: <data_root>/accounts/<account>/meetings/<file>.md
     assert result.parts[-4] == "accounts"
@@ -567,6 +602,7 @@ def test_compute_vault_path_account_preserved_in_path(tmp_path: Path) -> None:
         account="my-account",
         meeting_date="2026-05-10",
         meeting_title="Demo",
+        source_id="source-1",
     )
     assert "my-account" in str(result)
 
@@ -578,6 +614,7 @@ def test_compute_vault_path_unknown_account_allowed(tmp_path: Path) -> None:
         account="unknown",
         meeting_date="2026-07-01",
         meeting_title="Mystery Meeting",
+        source_id="source-1",
     )
     assert "unknown" in str(result)
 
@@ -881,8 +918,10 @@ def test_render_vault_note_warns_only_when_title_truly_has_no_date(
 
     caplog.clear()
     with caplog.at_level(logging.WARNING, logger="fieldkit.ingest.pipeline"):
-        _render_vault_note_render(doc_title="Weekly Standup")
+        undated = _render_vault_note_render(doc_title="private-meeting-sentinel")
 
+    assert "meeting_date:" in undated
+    assert "private-meeting-sentinel" not in caplog.text
     assert [r for r in caplog.records if "could not infer meeting date" in r.getMessage()], (
         "an undatable title must still warn — that is historic regression"
     )

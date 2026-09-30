@@ -1,4 +1,4 @@
-"""Tests for fieldkit.commands.pipeline.collect.collect_all_pursuit_data — branch coverage."""
+"""Tests for fieldkit.pipeline.collect.collect_all_pursuit_data — branch coverage."""
 
 import sqlite3
 from pathlib import Path
@@ -8,7 +8,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from fieldkit.commands.pipeline.collect import (
+from fieldkit.errors import SQLiteSnapshotError
+from fieldkit.pipeline.collect import (
     _extract_account,
     _parse_champion_output,
     _query_champion_signals_inprocess,
@@ -135,7 +136,7 @@ def test_parse_champion_output_only_signal() -> None:
 def test_query_champion_signals_inprocess_empty_output_returns_empty_strings() -> None:
     conn = MagicMock(spec=sqlite3.Connection)
     with patch(
-        "fieldkit.commands.pipeline.collect.query_champion_signals",
+        "fieldkit.pipeline.collect.query_champion_signals",
         return_value="",
     ):
         init, last, signal = _query_champion_signals_inprocess(conn, "Jane Doe")
@@ -145,7 +146,7 @@ def test_query_champion_signals_inprocess_empty_output_returns_empty_strings() -
 def test_query_champion_signals_inprocess_no_last_outbound_returns_empty() -> None:
     conn = MagicMock(spec=sqlite3.Connection)
     with patch(
-        "fieldkit.commands.pipeline.collect.query_champion_signals",
+        "fieldkit.pipeline.collect.query_champion_signals",
         return_value="No people matched 'Jane Doe'",
     ):
         init, last, signal = _query_champion_signals_inprocess(conn, "Jane Doe")
@@ -155,7 +156,7 @@ def test_query_champion_signals_inprocess_no_last_outbound_returns_empty() -> No
 def test_query_champion_signals_inprocess_sqlite_error_returns_empty() -> None:
     conn = MagicMock(spec=sqlite3.Connection)
     with patch(
-        "fieldkit.commands.pipeline.collect.query_champion_signals",
+        "fieldkit.pipeline.collect.query_champion_signals",
         side_effect=sqlite3.Error("db error"),
     ):
         init, last, signal = _query_champion_signals_inprocess(conn, "Jane Doe")
@@ -169,7 +170,7 @@ def test_query_champion_signals_inprocess_valid_output_parsed() -> None:
         "  Last outbound       : 2026-05-01  14d ago\n"
         "  Signal: INITIATOR\n"
     )
-    with patch("fieldkit.commands.pipeline.collect.query_champion_signals", return_value=output):
+    with patch("fieldkit.pipeline.collect.query_champion_signals", return_value=output):
         init, _last, signal = _query_champion_signals_inprocess(conn, "Jane Doe")
     assert "5" in init
     assert signal == "INITIATOR"
@@ -196,11 +197,11 @@ def _collect_all_pursuit_data_run(
         return fm_map[path], "", None
 
     with (
-        patch("fieldkit.commands.pipeline.collect.iterate_pursuits", return_value=iter(paths)),
-        patch("fieldkit.commands.pipeline.collect.load_pursuit", side_effect=fake_load),
-        patch("fieldkit.commands.pipeline.collect.get_gmail_db_path", return_value=tmp_path / "gmail.db"),
-        patch("fieldkit.commands.pipeline.collect.read_accounts_config", return_value=config),
-        patch("fieldkit.commands.pipeline.collect.extract_champion_name", return_value=None),
+        patch("fieldkit.pipeline.collect.iterate_pursuits", return_value=iter(paths)),
+        patch("fieldkit.pipeline.collect.load_pursuit", side_effect=fake_load),
+        patch("fieldkit.pipeline.collect.get_gmail_db_path", return_value=tmp_path / "gmail.db"),
+        patch("fieldkit.pipeline.collect.get_accounts_config", return_value=config),
+        patch("fieldkit.pipeline.collect.extract_champion_name", return_value=None),
     ):
         return collect_all_pursuit_data(tmp_path)
 
@@ -285,21 +286,43 @@ def test_collect_all_pursuit_data_velocity_none_without_history(tmp_path: Path) 
 def test_collect_all_pursuit_data_blindspot_ok_when_active_meets_threshold(tmp_path: Path) -> None:
     path = _make_path(account="acme")
     fm = _fm(stage="discover")
-    accounts_cfg = {"acme": {"blindspot_threshold": 1}}
+    accounts_cfg = {"acme": {"pursuit_coverage_threshold": 1}}
     _, _, blindspot = _collect_all_pursuit_data_run([path], {path: fm}, tmp_path, accounts_cfg=accounts_cfg)
     acme_entry = next(b for b in blindspot if b["account"] == "acme")
     assert acme_entry["status"] == "ok"
 
 
+@pytest.mark.parametrize(
+    ("setting", "expected_threshold", "expected_status"),
+    [
+        ({"pursuit_coverage_threshold": 2}, 2, "blindspot"),
+        ({"blindspot_threshold": 2}, 1, "ok"),
+    ],
+)
+def test_collect_all_pursuit_data_uses_only_pursuit_coverage_threshold(
+    tmp_path: Path,
+    setting: dict[str, int],
+    expected_threshold: int,
+    expected_status: str,
+) -> None:
+    path = _make_path(account="acme")
+    fm = _fm(stage="discover")
+    rows, _, coverage = _collect_all_pursuit_data_run([path], {path: fm}, tmp_path, accounts_cfg={"acme": setting})
+
+    assert len(rows) == 1
+    assert coverage[0]["threshold"] == expected_threshold
+    assert coverage[0]["status"] == expected_status
+
+
 def test_collect_all_pursuit_data_blindspot_flagged_when_no_active(tmp_path: Path) -> None:
-    accounts_cfg = {"acme": {"blindspot_threshold": 1}}
+    accounts_cfg = {"acme": {"pursuit_coverage_threshold": 1}}
     _, _, blindspot = _collect_all_pursuit_data_run([], {}, tmp_path, accounts_cfg=accounts_cfg)
     acme_entry = next(b for b in blindspot if b["account"] == "acme")
     assert acme_entry["status"] == "blindspot"
 
 
 def test_collect_all_pursuit_data_internal_accounts_excluded_from_blindspot(tmp_path: Path) -> None:
-    accounts_cfg = {"internal-team": {"internal": True, "blindspot_threshold": 1}}
+    accounts_cfg = {"internal-team": {"internal": True, "pursuit_coverage_threshold": 1}}
     _, _, blindspot = _collect_all_pursuit_data_run([], {}, tmp_path, accounts_cfg=accounts_cfg)
     names = [b["account"] for b in blindspot]
     assert "internal-team" not in names
@@ -313,10 +336,10 @@ def test_collect_all_pursuit_data_invalid_pursuit_file_skipped(tmp_path: Path) -
         raise ValueError("bad frontmatter")
 
     with (
-        patch("fieldkit.commands.pipeline.collect.iterate_pursuits", return_value=iter([path])),
-        patch("fieldkit.commands.pipeline.collect.load_pursuit", side_effect=bad_load),
-        patch("fieldkit.commands.pipeline.collect.get_gmail_db_path", return_value=tmp_path / "gmail.db"),
-        patch("fieldkit.commands.pipeline.collect.read_accounts_config", return_value={"accounts": {}}),
+        patch("fieldkit.pipeline.collect.iterate_pursuits", return_value=iter([path])),
+        patch("fieldkit.pipeline.collect.load_pursuit", side_effect=bad_load),
+        patch("fieldkit.pipeline.collect.get_gmail_db_path", return_value=tmp_path / "gmail.db"),
+        patch("fieldkit.pipeline.collect.get_accounts_config", return_value={"accounts": {}}),
     ):
         rows, _, _ = collect_all_pursuit_data(tmp_path)
     assert rows == []
@@ -336,19 +359,20 @@ def test_collect_all_pursuit_data_champion_signal_added_when_gmail_exists(tmp_pa
     mock_conn = MagicMock(spec=sqlite3.Connection)
 
     with (
-        patch("fieldkit.commands.pipeline.collect.iterate_pursuits", return_value=iter([path])),
-        patch("fieldkit.commands.pipeline.collect.load_pursuit", side_effect=fake_load),
-        patch("fieldkit.commands.pipeline.collect.get_gmail_db_path", return_value=gmail_db),
-        patch("fieldkit.commands.pipeline.collect._gmail_connect", return_value=mock_conn),
-        patch("fieldkit.commands.pipeline.collect.read_accounts_config", return_value={"accounts": {}}),
-        patch("fieldkit.commands.pipeline.collect.extract_champion_name", return_value="Jane Doe"),
+        patch("fieldkit.pipeline.collect.iterate_pursuits", return_value=iter([path])),
+        patch("fieldkit.pipeline.collect.load_pursuit", side_effect=fake_load),
+        patch("fieldkit.pipeline.collect.get_gmail_db_path", return_value=gmail_db),
+        patch("fieldkit.pipeline.collect._gmail_connect", return_value=mock_conn),
+        patch("fieldkit.pipeline.collect.get_accounts_config", return_value={"accounts": {}}),
+        patch("fieldkit.pipeline.collect.extract_champion_name", return_value="Jane Doe"),
         patch(
-            "fieldkit.commands.pipeline.collect._query_champion_signals_inprocess",
+            "fieldkit.pipeline.collect._query_champion_signals_inprocess",
             return_value=("3 (50%)", "2026-01-15", "INITIATOR"),
         ),
     ):
         _rows, signals, _ = collect_all_pursuit_data(tmp_path)
 
+    assert signals is not None
     assert len(signals) == 1
     assert signals[0]["account"] == "acme"
     assert signals[0]["signal"] == "INITIATOR"
@@ -365,13 +389,13 @@ def test_collect_all_pursuit_data_champion_below_1_no_signal_query(tmp_path: Pat
     mock_conn = MagicMock(spec=sqlite3.Connection)
 
     with (
-        patch("fieldkit.commands.pipeline.collect.iterate_pursuits", return_value=iter([path])),
-        patch("fieldkit.commands.pipeline.collect.load_pursuit", return_value=(fm, "", None)),
-        patch("fieldkit.commands.pipeline.collect.get_gmail_db_path", return_value=gmail_db),
-        patch("fieldkit.commands.pipeline.collect._gmail_connect", return_value=mock_conn),
-        patch("fieldkit.commands.pipeline.collect.read_accounts_config", return_value={"accounts": {}}),
-        patch("fieldkit.commands.pipeline.collect.extract_champion_name", return_value=None),
-        patch("fieldkit.commands.pipeline.collect._query_champion_signals_inprocess") as mock_sig,
+        patch("fieldkit.pipeline.collect.iterate_pursuits", return_value=iter([path])),
+        patch("fieldkit.pipeline.collect.load_pursuit", return_value=(fm, "", None)),
+        patch("fieldkit.pipeline.collect.get_gmail_db_path", return_value=gmail_db),
+        patch("fieldkit.pipeline.collect._gmail_connect", return_value=mock_conn),
+        patch("fieldkit.pipeline.collect.get_accounts_config", return_value={"accounts": {}}),
+        patch("fieldkit.pipeline.collect.extract_champion_name", return_value=None),
+        patch("fieldkit.pipeline.collect._query_champion_signals_inprocess") as mock_sig,
     ):
         _, signals, _ = collect_all_pursuit_data(tmp_path)
 
@@ -379,7 +403,11 @@ def test_collect_all_pursuit_data_champion_below_1_no_signal_query(tmp_path: Pat
     assert signals == []  # gmail.db present but champion_score=0 → no signals
 
 
-def test_collect_all_pursuit_data_gmail_connect_error_continues(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "error",
+    [sqlite3.Error("locked"), SQLiteSnapshotError("active", reason="active")],
+)
+def test_collect_all_pursuit_data_gmail_connect_error_continues(tmp_path: Path, error: Exception) -> None:
     """sqlite3 error on connect still returns results (signals empty)."""
     gmail_db = tmp_path / "gmail.db"
     gmail_db.write_bytes(b"")
@@ -388,11 +416,11 @@ def test_collect_all_pursuit_data_gmail_connect_error_continues(tmp_path: Path) 
     fm = _fm(stage="discover", meddpicc=_meddpicc(champion=2))
 
     with (
-        patch("fieldkit.commands.pipeline.collect.iterate_pursuits", return_value=iter([path])),
-        patch("fieldkit.commands.pipeline.collect.load_pursuit", return_value=(fm, "", None)),
-        patch("fieldkit.commands.pipeline.collect.get_gmail_db_path", return_value=gmail_db),
-        patch("fieldkit.commands.pipeline.collect._gmail_connect", side_effect=sqlite3.Error("locked")),
-        patch("fieldkit.commands.pipeline.collect.read_accounts_config", return_value={"accounts": {}}),
+        patch("fieldkit.pipeline.collect.iterate_pursuits", return_value=iter([path])),
+        patch("fieldkit.pipeline.collect.load_pursuit", return_value=(fm, "", None)),
+        patch("fieldkit.pipeline.collect.get_gmail_db_path", return_value=gmail_db),
+        patch("fieldkit.pipeline.collect._gmail_connect", side_effect=error),
+        patch("fieldkit.pipeline.collect.get_accounts_config", return_value={"accounts": {}}),
     ):
         rows, signals, _ = collect_all_pursuit_data(tmp_path)
 
@@ -413,7 +441,7 @@ def test_collect_all_pursuit_data_active_count_increments_per_account(tmp_path: 
     path1 = _make_path(account="acme", deal="deal-1")
     path2 = _make_path(account="acme", deal="deal-2")
     fm = _fm(stage="discover")
-    accounts_cfg = {"acme": {"blindspot_threshold": 2}}
+    accounts_cfg = {"acme": {"pursuit_coverage_threshold": 2}}
     _rows, _, blindspot = _collect_all_pursuit_data_run(
         [path1, path2], {path1: fm, path2: fm}, tmp_path, accounts_cfg=accounts_cfg
     )

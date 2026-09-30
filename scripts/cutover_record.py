@@ -3,18 +3,19 @@
 from __future__ import annotations
 
 import argparse
-import json
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from jsonschema import Draft202012Validator
 
-if __package__:
-    from scripts.json_policy import reject_duplicate_json_keys
+if TYPE_CHECKING or __package__:
+    from scripts import release_bundle
+    from scripts.json_policy import load_json_bytes, require_bounded_json_depth
 else:
-    from json_policy import reject_duplicate_json_keys
+    import release_bundle
+    from json_policy import load_json_bytes, require_bounded_json_depth
 
 _SCHEMA_PATH = Path("docs/release-readiness/cutover-record.schema.json")
 _PUBLIC_ORIGINS = frozenset(
@@ -52,16 +53,19 @@ def _candidate_artifacts(candidate_report: dict[str, Any]) -> set[tuple[str, str
     }
 
 
-def validate(record: object, candidate_report: object, *, repo_root: Path = Path()) -> None:
+def validate(record: object, candidate_report: object, *, controller_root: Path) -> None:
     """Reject a record that is malformed or not bound to the approved export."""
-    schema = json.loads((repo_root / _SCHEMA_PATH).read_text(encoding="utf-8"))
+    require_bounded_json_depth(record)
+    require_bounded_json_depth(candidate_report)
+    schema = _object(_load(controller_root / _SCHEMA_PATH), "cutover record schema")
     record_object = _object(record, "cutover record")
-    errors = sorted(
-        Draft202012Validator(schema).iter_errors(record_object), key=lambda error: list(error.absolute_path)
-    )
-    if errors:
-        location = ".".join(str(part) for part in errors[0].absolute_path) or "<root>"
-        raise ValueError(f"cutover record schema violation at {location}: {errors[0].message}")
+    try:
+        error = next(Draft202012Validator(schema).iter_errors(record_object), None)
+    except RecursionError:
+        raise ValueError("cutover record schema validation exceeds nesting limit") from None
+    if error is not None:
+        location = ".".join(str(part) for part in error.absolute_schema_path) or "<root>"
+        raise ValueError(f"cutover record schema violation at {location}: {error.validator}")
     report = _object(candidate_report, "candidate report")
     if report.get("status") != "pass":
         raise ValueError("candidate report must pass before cutover evidence is accepted")
@@ -136,9 +140,9 @@ def verify_public_identity(record: object, public_repository: Path) -> None:
             ["gh", "api", f"repos/mpeter/fieldkit-cli/actions/runs/{run['id']}"],
         )
         try:
-            observed = json.loads(raw, object_pairs_hook=reject_duplicate_json_keys)
-        except json.JSONDecodeError as exc:
-            raise ValueError("public workflow proof returned invalid JSON") from exc
+            observed = load_json_bytes(raw.encode("utf-8"))
+        except ValueError:
+            raise ValueError("public workflow proof returned invalid JSON") from None
         if not isinstance(observed, dict) or (
             observed.get("id") != run["id"]
             or observed.get("run_attempt") != run["attempt"]
@@ -154,7 +158,14 @@ def verify_public_identity(record: object, public_repository: Path) -> None:
 
 
 def _load(path: Path) -> object:
-    return json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=reject_duplicate_json_keys)
+    try:
+        raw = release_bundle._safe_bytes(path)
+    except (OSError, ValueError):
+        raise ValueError("cutover JSON document is unavailable or exceeds its byte limit") from None
+    try:
+        return load_json_bytes(raw)
+    except ValueError:
+        raise ValueError("cutover JSON document is invalid JSON") from None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -162,15 +173,15 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--record", type=Path, required=True)
     parser.add_argument("--candidate-report", type=Path, required=True)
-    parser.add_argument("--repo-root", type=Path, default=Path())
+    parser.add_argument("--controller-root", type=Path, required=True)
     parser.add_argument("--public-repository", type=Path)
     args = parser.parse_args(argv)
     try:
         record = _load(args.record)
-        validate(record, _load(args.candidate_report), repo_root=args.repo_root)
+        validate(record, _load(args.candidate_report), controller_root=args.controller_root)
         if args.public_repository is not None:
             verify_public_identity(record, args.public_repository)
-    except (OSError, ValueError, json.JSONDecodeError, subprocess.TimeoutExpired) as error:
+    except (OSError, ValueError, subprocess.TimeoutExpired) as error:
         print(f"Cutover record: ERROR: {error}", file=sys.stderr)
         return 2
     print("Cutover record: PASS")

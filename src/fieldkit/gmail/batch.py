@@ -64,10 +64,13 @@ class BatchAccumulator:
     def record(self, message_id: str, request_id: str, response: Any, exception: Any) -> None:
         del request_id
         if exception is None:
-            if response is None:
+            if not isinstance(response, dict):
                 self.unresolved += 1
             else:
-                self.messages.append(self.message_builder(response, message_id))
+                try:
+                    self.messages.append(self.message_builder(response, message_id))
+                except (AttributeError, KeyError, OSError, OverflowError, TypeError, ValueError):
+                    self.unresolved += 1
             return
         if not isinstance(exception, HttpError):
             self.unresolved += 1

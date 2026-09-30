@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import click
 import pytest
 from click.testing import CliRunner
 
@@ -79,6 +80,22 @@ def test_auth_expired_interactively_recovers_with_refresh_token() -> None:
     assert "DevTools" in result.output
     assert "validated" in result.output.lower()
     inject.assert_called_once_with("refresh-token-value")
+
+
+@pytest.mark.parametrize("error", [click.Abort, EOFError, KeyboardInterrupt])
+def test_auth_cancel_requires_authentication(error: type[BaseException]) -> None:
+    """A cancelled recovery remains unauthenticated and never saves a token."""
+    with (
+        patch("fieldkit.shadowbot.auth.get_token", side_effect=ShadowbotAuthError("session expired")),
+        patch("fieldkit.commands.auth.shadowbot.stdin_is_interactive", return_value=True),
+        patch("fieldkit.commands.auth.shadowbot.click.prompt", side_effect=error),
+        patch("fieldkit.shadowbot.auth.inject_refresh_token") as inject,
+    ):
+        result = CliRunner().invoke(auth_shadowbot_cmd, [], catch_exceptions=False)
+
+    assert result.exit_code == 2
+    assert "cancelled" in result.output
+    inject.assert_not_called()
 
 
 def test_auth_expired_noninteractive_gives_reauthorization_guidance() -> None:

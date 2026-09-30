@@ -8,11 +8,11 @@ payload shapes, so they are asserted across every command rather than one by one
   2. ``--json`` selects a renderer. It never changes an exit code, and the
      default (flag absent) rendering stays prose.
 
-The six ``watch run`` watchers are covered separately at the domain layer,
-because their result is the run-status record they already compute for
-``watcher-run-status.json`` — the same schema, not a new one. historic regression matters
-there: ``partial`` is a successful run with some failures, only ``fatal`` is a
-failed run, and serialization must not blur the two.
+The ``watch run`` watchers expose the run-status record they already compute
+for ``watcher-run-status.json`` — the same schema, not a new one. Structured
+outcomes remain distinct from process status; the Slack adapter maps its typed
+domain result to the canonical success, partial, authentication, and invalid
+exit codes.
 """
 
 import importlib
@@ -25,8 +25,10 @@ import click
 import pytest
 from click.testing import CliRunner
 
+from fieldkit.config import ConfigError
 from fieldkit.watch import backstory_health as backstory_domain
 from fieldkit.watch import slack_threads as slack_domain
+from fieldkit.watch.status import WatcherRunResult
 
 pytestmark = pytest.mark.unit
 
@@ -53,7 +55,6 @@ _BATCH_COMMANDS = [
     pytest.param("fieldkit.commands.ingest.discover", "cli", id="ingest-discover"),
     pytest.param("fieldkit.commands.ingest.route", "cli", id="ingest-route"),
     pytest.param("fieldkit.commands.ingest.status", "cli", id="ingest-status"),
-    pytest.param("fieldkit.commands.init.migrate", "migrate_cmd", id="init-migrate"),
     pytest.param("fieldkit.commands.datasync.cli", "cli", id="sync"),
     pytest.param("fieldkit.commands.watch.cli", "status_cmd", id="watch-status"),
     pytest.param("fieldkit.commands.watch.pursuit_stalls", "ack_cmd", id="watch-pursuit-stalls-ack"),
@@ -84,8 +85,9 @@ def test_command_declares_json_as_an_opt_in_flag(module_path: str, attr: str) ->
     json_params = [p for p in command.params if "--json" in getattr(p, "opts", [])]
     assert len(json_params) == 1, f"{module_path}.{attr} declares {len(json_params)} --json params"
     param = json_params[0]
+    assert isinstance(param, click.Option)
     assert param.name == "as_json"
-    assert param.is_flag  # type: ignore[union-attr]
+    assert param.is_flag
     assert param.default is False
 
 
@@ -109,13 +111,23 @@ def _run_backstory(as_json: bool, *, checked: int = 2, failures: int = 0) -> int
     mod = importlib.import_module("fieldkit.watch.backstory_health")
     with (
         patch.object(mod, "_load_and_filter_accounts", return_value={"acme": {}}),
+        patch.object(mod, "get_mcp_endpoint", return_value="https://gateway.example.com/backstory"),
         patch.object(mod, "_open_mcp_session", return_value=MagicMock()),
         patch.object(mod, "load_state", return_value={}),
         patch.object(mod, "save_state"),
         patch.object(mod, "log_run_summary"),
-        patch.object(mod, "_check_all_accounts", return_value=(checked, 1, failures, {})),
+        patch.object(
+            mod,
+            "_check_all_accounts",
+            return_value=backstory_domain._AccountScanResult(checked + failures, checked, 1, failures, 0, {}),
+        ),
+        patch.object(mod, "write_run_status", return_value="written"),
     ):
-        return int(mod._run_backstory_health(threshold=3, account=None, dry_run=False, as_json=as_json))
+        result = mod._run_backstory_health(threshold=3, account=None, dry_run=False, as_json=as_json)
+        assert isinstance(result, WatcherRunResult)
+        assert result.completed is True
+        assert result.status_write == "written"
+        return result.exit_code
 
 
 def _run_countdown(as_json: bool, *, checked: int = 3, skipped: int = 0) -> int:
@@ -124,17 +136,20 @@ def _run_countdown(as_json: bool, *, checked: int = 3, skipped: int = 0) -> int:
         patch.object(mod, "_validate_accounts_config", return_value=({"acme": {}}, 0)),
         patch.object(mod, "_prune_and_scan_pursuits", return_value=(checked, 1, skipped, 0, {})),
         patch.object(mod, "_save_state"),
+        patch.object(mod, "write_run_status", return_value="written"),
     ):
-        return int(
-            mod._run_countdown(
-                threshold_red=14,
-                threshold_yellow=30,
-                threshold_green=60,
-                account_filter=None,
-                dry_run=False,
-                as_json=as_json,
-            )
+        result = mod._run_countdown(
+            threshold_red=14,
+            threshold_yellow=30,
+            threshold_green=60,
+            account_filter=None,
+            dry_run=False,
+            as_json=as_json,
         )
+        assert isinstance(result, WatcherRunResult)
+        assert result.completed is True
+        assert result.status_write == "written"
+        return result.exit_code
 
 
 def _run_contract_expiry(as_json: bool, *, tmp_path: Path) -> int:
@@ -145,25 +160,42 @@ def _run_contract_expiry(as_json: bool, *, tmp_path: Path) -> int:
         patch.object(mod, "_load_state", return_value={}),
         patch.object(mod, "_save_state"),
     ):
-        return int(mod._run_contract_expiry(account_filter=None, dry_run=False, as_json=as_json))
+        result = mod._run_contract_expiry(account_filter=None, dry_run=False, as_json=as_json)
+        assert isinstance(result, WatcherRunResult)
+        assert result.completed is True
+        assert result.status_write == "written"
+        return result.exit_code
 
 
 def _run_draft_queue(as_json: bool) -> int:
     mod = importlib.import_module("fieldkit.watch.draft_queue")
-    with patch.object(mod, "write_alerts"):
-        return int(mod._run_draft_queue(dry_run=True, as_json=as_json))
+    with (
+        patch.object(mod, "write_alerts"),
+        patch.object(mod, "write_run_status", return_value="skipped") as status_writer,
+    ):
+        result = mod._run_draft_queue(dry_run=True, as_json=as_json)
+        assert result == WatcherRunResult("ok", True, "skipped")
+        assert status_writer.call_args.kwargs["dry_run"] is True
+        return result.exit_code
 
 
 def _run_slack_threads(as_json: bool, *, checked: int = 2, auth_error: bool = False) -> int:
-    mod = importlib.import_module("fieldkit.watch.slack_threads")
     with (
-        patch.object(mod, "load_accounts_config", return_value={"accounts": {"acme": {}}}),
-        patch.object(mod, "load_current_username", return_value="tester"),
-        patch.object(mod, "load_state", return_value={}),
-        patch.object(mod, "_scan_all_accounts", return_value=(checked, 1, auth_error, False)),
-        patch.object(mod, "_persist_and_summarise", return_value=False),
+        patch.object(slack_domain, "get_accounts_config", return_value={"accounts": {"acme": {}}}),
+        patch.object(slack_domain, "load_current_username", return_value="tester"),
+        patch.object(slack_domain, "load_state", return_value={}),
+        patch.object(
+            slack_domain,
+            "_scan_all_accounts",
+            return_value=(checked, 1, "auth" if auth_error else None, 0),
+        ),
+        patch.object(slack_domain, "_persist_and_summarise", return_value=0),
+        patch.object(slack_domain, "write_run_status", return_value="written"),
     ):
-        return int(mod._run_slack_threads(threshold_hours=24, account=None, limit=50, dry_run=False, as_json=as_json))
+        args = ["--json"] if as_json else []
+        result = CliRunner().invoke(importlib.import_module("fieldkit.commands.watch.slack_threads").cli, args)
+        click.echo(result.stdout, nl=False)
+        return result.exit_code
 
 
 def _run_waiting_on(as_json: bool, *, content: str | None = "## Waiting On\n") -> int:
@@ -173,7 +205,11 @@ def _run_waiting_on(as_json: bool, *, content: str | None = "## Waiting On\n") -
         patch.object(mod, "_load_state", return_value={}),
         patch.object(mod, "_save_state"),
     ):
-        return int(mod._run(threshold=7, dry_run=False, as_json=as_json))
+        result = mod._run(threshold=7, dry_run=False, as_json=as_json)
+        assert isinstance(result, WatcherRunResult)
+        assert result.completed is True
+        assert result.status_write == "written"
+        return result.exit_code
 
 
 #: (driver, watcher name) for each watcher whose run emits a run-status document.
@@ -219,70 +255,83 @@ def test_contract_expiry_json_emits_the_run_status_document(tmp_path: Path, caps
     assert payload["outcome"] == "ok"
 
 
-# --- historic regression: partial is not a failure; only fatal is ------------------------
+# --- Slack domain results stay typed; the adapter owns process exit codes ----------------
 
 
-def test_slack_threads_partial_outcome_keeps_exit_zero(capsys: pytest.CaptureFixture[str]) -> None:
-    """An auth error after some accounts were checked is `partial`, and partial
-    is a successful run — the exit code stays 0 and the document says so."""
+def test_slack_threads_partial_auth_outcome_returns_auth_result() -> None:
+    """An auth failure retains AUTH even when some account reads completed."""
     with (
-        patch.object(slack_domain, "load_accounts_config", return_value={"accounts": {"acme": {}}}),
+        patch.object(slack_domain, "get_accounts_config", return_value={"accounts": {"acme": {}}}),
         patch.object(slack_domain, "load_current_username", return_value="tester"),
         patch.object(slack_domain, "load_state", return_value={}),
-        patch.object(slack_domain, "_scan_all_accounts", return_value=(2, 1, True, False)),
-        patch.object(slack_domain, "_persist_and_summarise", return_value=False),
+        patch.object(slack_domain, "_scan_all_accounts", return_value=(2, 1, "auth", 0)),
+        patch.object(slack_domain, "_persist_and_summarise", return_value=0),
+        patch.object(slack_domain, "write_run_status", return_value="written"),
     ):
-        capsys.readouterr()
-        exit_code = slack_domain._run_slack_threads(
-            threshold_hours=24, account=None, limit=50, dry_run=False, as_json=True
+        outcome = slack_domain._run_slack_threads(
+            threshold_hours=24,
+            account=None,
+            limit=50,
+            dry_run=False,
         )
-        stdout = capsys.readouterr().out
 
-    assert exit_code == 0
-    assert '"watcher": "slack-threads"' in stdout
-    payload = json.loads(stdout)
-    assert payload["outcome"] == "partial"
-    assert payload["records_checked"] == 2
+    assert outcome.run.exit_code == 2
+    assert outcome.run.completed is False
+    assert outcome.run.status_write == "written"
+    assert outcome.run.outcome == "partial"
+    assert outcome.records_checked == 2
+    assert outcome.auth_error is True
+
+
+def test_slack_threads_fatal_auth_outcome_returns_auth_result() -> None:
+    """Zero completed reads is a fatal document outcome and an AUTH domain result."""
+    with (
+        patch.object(slack_domain, "get_accounts_config", return_value={"accounts": {"acme": {}}}),
+        patch.object(slack_domain, "load_current_username", return_value="tester"),
+        patch.object(slack_domain, "load_state", return_value={}),
+        patch.object(slack_domain, "_scan_all_accounts", return_value=(0, 1, "auth", 0)),
+        patch.object(slack_domain, "_persist_and_summarise", return_value=0),
+        patch.object(slack_domain, "write_run_status", return_value="written"),
+    ):
+        outcome = slack_domain._run_slack_threads(
+            threshold_hours=24,
+            account=None,
+            limit=50,
+            dry_run=False,
+        )
+
+    assert outcome.run.exit_code == 2
+    assert outcome.run.completed is False
+    assert outcome.run.status_write == "written"
+    assert outcome.run.outcome == "fatal"
+
+
+def test_slack_threads_adapter_maps_auth_result_to_exit_two(capsys: pytest.CaptureFixture[str]) -> None:
+    exit_code = _run_slack_threads(True, checked=1, auth_error=True)
+
+    assert exit_code == 2
+    payload = json.loads(capsys.readouterr().out)
     assert payload["auth_error"] is True
-
-
-def test_slack_threads_fatal_outcome_still_exits_zero(capsys: pytest.CaptureFixture[str]) -> None:
-    """historic regression: zero accounts checked behind an auth error is `fatal`, but the
-    watcher's own exit code is 0 — --json must not start deriving one from the
-    outcome."""
-    with (
-        patch.object(slack_domain, "load_accounts_config", return_value={"accounts": {"acme": {}}}),
-        patch.object(slack_domain, "load_current_username", return_value="tester"),
-        patch.object(slack_domain, "load_state", return_value={}),
-        patch.object(slack_domain, "_scan_all_accounts", return_value=(0, 1, True, False)),
-        patch.object(slack_domain, "_persist_and_summarise", return_value=False),
-    ):
-        capsys.readouterr()
-        exit_code = slack_domain._run_slack_threads(
-            threshold_hours=24, account=None, limit=50, dry_run=False, as_json=True
-        )
-        stdout = capsys.readouterr().out
-
-    assert exit_code == 0
-    assert '"watcher": "slack-threads"' in stdout
-    payload = json.loads(stdout)
-    assert payload["outcome"] == "fatal"
 
 
 def test_backstory_health_partial_outcome_is_reported_verbatim(capsys: pytest.CaptureFixture[str]) -> None:
     with (
         patch.object(backstory_domain, "_load_and_filter_accounts", return_value={"acme": {}}),
+        patch.object(backstory_domain, "get_mcp_endpoint", return_value="https://gateway.example.com/backstory"),
         patch.object(backstory_domain, "_open_mcp_session", return_value=MagicMock()),
         patch.object(backstory_domain, "load_state", return_value={}),
         patch.object(backstory_domain, "save_state"),
         patch.object(backstory_domain, "log_run_summary"),
-        patch.object(backstory_domain, "_check_all_accounts", return_value=(2, 1, 1, {})),
+        patch.object(
+            backstory_domain, "_check_all_accounts", return_value=backstory_domain._AccountScanResult(3, 2, 1, 1, 0, {})
+        ),
+        patch.object(backstory_domain, "write_run_status", return_value="written"),
     ):
         capsys.readouterr()
-        exit_code = backstory_domain._run_backstory_health(threshold=3, account=None, dry_run=False, as_json=True)
+        result = backstory_domain._run_backstory_health(threshold=3, account=None, dry_run=False, as_json=True)
         stdout = capsys.readouterr().out
 
-    assert exit_code == 0
+    assert result == WatcherRunResult("partial", True, "written")
     assert '"watcher": "backstory-health"' in stdout
     payload = json.loads(stdout)
     assert payload["outcome"] == "partial"
@@ -292,42 +341,46 @@ def test_backstory_health_partial_outcome_is_reported_verbatim(capsys: pytest.Ca
 def test_backstory_health_fatal_when_nothing_was_checked(capsys: pytest.CaptureFixture[str]) -> None:
     with (
         patch.object(backstory_domain, "_load_and_filter_accounts", return_value={"acme": {}}),
+        patch.object(backstory_domain, "get_mcp_endpoint", return_value="https://gateway.example.com/backstory"),
         patch.object(backstory_domain, "_open_mcp_session", return_value=MagicMock()),
         patch.object(backstory_domain, "load_state", return_value={}),
         patch.object(backstory_domain, "save_state"),
         patch.object(backstory_domain, "log_run_summary"),
-        patch.object(backstory_domain, "_check_all_accounts", return_value=(0, 1, 0, {})),
+        patch.object(
+            backstory_domain, "_check_all_accounts", return_value=backstory_domain._AccountScanResult(1, 0, 0, 1, 0, {})
+        ),
+        patch.object(backstory_domain, "write_run_status", return_value="written"),
     ):
         capsys.readouterr()
-        exit_code = backstory_domain._run_backstory_health(threshold=3, account=None, dry_run=False, as_json=True)
+        result = backstory_domain._run_backstory_health(threshold=3, account=None, dry_run=False, as_json=True)
         stdout = capsys.readouterr().out
 
-    assert exit_code == 0
+    assert result == WatcherRunResult("fatal", True, "written")
     assert '"watcher": "backstory-health"' in stdout
     payload = json.loads(stdout)
     assert payload["outcome"] == "fatal"
     assert payload["records_checked"] == 0
 
 
-def test_draft_queue_fatal_path_emits_document_and_keeps_exit_one(capsys: pytest.CaptureFixture[str]) -> None:
-    """A watcher that ran and failed is exactly when the caller needs detail."""
+def test_draft_queue_missing_email_is_invalid_data_with_json_requested() -> None:
+    """JSON selection does not turn invalid configuration into a run result."""
     mod = importlib.import_module("fieldkit.watch.draft_queue")
-    with patch.object(mod, "_resolve_user_email", return_value=""):
-        exit_code = mod._run_draft_queue(dry_run=False, as_json=True)
+    with (
+        patch.object(mod, "get_mcp_endpoint", return_value="https://gateway.example.com/drafts"),
+        patch.object(mod, "_resolve_user_email", return_value=""),
+        pytest.raises(ConfigError, match="requires a user email"),
+    ):
+        mod._run_draft_queue(dry_run=False, as_json=True)
 
-    assert exit_code == 1
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["outcome"] == "fatal"
-    assert payload["failures"] == 1
 
-
-def test_draft_queue_fatal_path_exit_code_matches_without_json(capsys: pytest.CaptureFixture[str]) -> None:
+def test_draft_queue_missing_email_is_invalid_data_without_json() -> None:
     mod = importlib.import_module("fieldkit.watch.draft_queue")
-    with patch.object(mod, "_resolve_user_email", return_value=""):
-        exit_code = mod._run_draft_queue(dry_run=False, as_json=False)
-
-    assert exit_code == 1
-    assert capsys.readouterr().out == ""
+    with (
+        patch.object(mod, "get_mcp_endpoint", return_value="https://gateway.example.com/drafts"),
+        patch.object(mod, "_resolve_user_email", return_value=""),
+        pytest.raises(ConfigError, match="requires a user email"),
+    ):
+        mod._run_draft_queue(dry_run=False, as_json=False)
 
 
 def test_waiting_on_missing_tasks_file_still_emits_a_document(capsys: pytest.CaptureFixture[str]) -> None:
@@ -517,20 +570,28 @@ def test_meeting_note_json_names_the_added_tab(tmp_path: Path) -> None:
     assert payload["added"] is True
 
 
-def test_sf_reconcile_json_reports_status_and_preserves_exit_code() -> None:
+def test_sf_reconcile_json_reports_status_and_preserves_exit_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     reconcile = importlib.import_module("fieldkit.commands.sf.reconcile")
-    with patch.object(reconcile, "_run_reconcile", return_value="updated"):
-        ok = CliRunner().invoke(reconcile.cli, ["p.md", "--json"])
-    with patch.object(reconcile, "_run_reconcile", return_value="error"):
-        failed = CliRunner().invoke(reconcile.cli, ["p.md", "--json"])
+    path = tmp_path / "accounts" / "acme-corp" / "pursuits" / "renewal.md"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        "---\nstage: discover\ngate-status: pending\nsf_stage: Propose\n---\n"
+        "\n## Key Fields\n\n| Field | Value |\n| ----- | ----- |\n| Stage | Discover |\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(reconcile, "get_fieldkit_home", lambda: tmp_path)
+    ok = CliRunner().invoke(reconcile.cli, [str(path), "--json"])
+    failed = CliRunner().invoke(reconcile.cli, [str(path.with_name("missing.md")), "--json"])
 
     assert ok.exit_code == 0, ok.output
     ok_payload = json.loads(ok.stdout)
     assert ok_payload["status"] == "updated"
     assert ok_payload["changed"] is True
 
-    # The reconcile ran and failed — the document is emitted alongside exit 1.
-    assert failed.exit_code == 1
+    # Missing or invalid targets share the data-error taxonomy in dry and live modes.
+    assert failed.exit_code == 3
     assert json.loads(failed.stdout)["status"] == "error"
 
 
@@ -588,50 +649,6 @@ def test_sf_set_next_steps_preview_json_does_not_write() -> None:
     payload = json.loads(result.stdout)
     assert payload["outcome"] == "preview"
     assert payload["written"] is False
-
-
-def test_init_migrate_json_reports_already_migrated(tmp_path: Path) -> None:
-    migrate = importlib.import_module("fieldkit.commands.init.migrate")
-    config = tmp_path / "config.yaml"
-    config.write_text("fieldkit_home: /tmp/home\n", encoding="utf-8")
-    with patch("fieldkit.config._loader.CONFIG_PATH", str(config)):
-        result = CliRunner().invoke(migrate.migrate_cmd, ["--json"])
-
-    assert result.exit_code == 0, result.output
-    payload = json.loads(result.stdout)
-    assert payload["outcome"] == "already-migrated"
-    assert payload["migrated"] is False
-    assert payload["backup_path"] is None
-
-
-def test_init_migrate_json_reports_nothing_to_migrate(tmp_path: Path) -> None:
-    """Neither key present — distinct from already-migrated, and previously untested."""
-    migrate = importlib.import_module("fieldkit.commands.init.migrate")
-    config = tmp_path / "config.yaml"
-    config.write_text("sf_org: my-org\n", encoding="utf-8")
-    with patch("fieldkit.config._loader.CONFIG_PATH", str(config)):
-        result = CliRunner().invoke(migrate.migrate_cmd, ["--json"])
-
-    assert result.exit_code == 0, result.output
-    payload = json.loads(result.stdout)
-    assert payload["outcome"] == "nothing-to-migrate"
-    assert payload["migrated"] is False
-    assert payload["backup_path"] is None
-
-
-def test_init_migrate_json_reports_a_completed_rename(tmp_path: Path) -> None:
-    migrate = importlib.import_module("fieldkit.commands.init.migrate")
-    config = tmp_path / "config.yaml"
-    config.write_text("data_repo: /tmp/home\nother: keep\n", encoding="utf-8")
-    with patch("fieldkit.config._loader.CONFIG_PATH", str(config)):
-        result = CliRunner().invoke(migrate.migrate_cmd, ["--json"])
-
-    assert result.exit_code == 0, result.output
-    payload = json.loads(result.stdout)
-    assert payload["outcome"] == "migrated"
-    assert payload["migrated"] is True
-    assert payload["backup_path"] is not None
-    assert "fieldkit_home" in config.read_text(encoding="utf-8")
 
 
 def test_pursuit_archive_json_reports_each_file(tmp_path: Path) -> None:
@@ -722,7 +739,7 @@ def test_ingest_status_json_is_list_shaped() -> None:
 def test_sf_frontmatter_validate_json_carries_the_errors(tmp_path: Path) -> None:
     frontmatter = importlib.import_module("fieldkit.commands.sf.frontmatter")
     target = _pursuit_file(tmp_path)
-    with patch.object(frontmatter, "_validate_frontmatter_content", return_value=["stage: unknown value"]):
+    with patch.object(frontmatter, "validate_pursuit_content", return_value=("stage: unknown value",)):
         result = CliRunner().invoke(frontmatter.cli, ["--validate", "--file", str(target), "--json"])
 
     # The validation ran and denied — exit 1 is unchanged and the errors ship.
@@ -744,8 +761,9 @@ def test_sf_frontmatter_quality_check_json_counts_advisories(tmp_path: Path) -> 
     assert isinstance(payload["advisory_count"], int)
 
 
-def test_pursuit_advance_json_reports_a_pending_native_gate(tmp_path: Path) -> None:
+def test_pursuit_advance_json_reports_a_pending_native_gate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     advance = importlib.import_module("fieldkit.commands.pursuit.advance_cmd")
+    monkeypatch.setattr(advance, "get_accounts_root", lambda: tmp_path / "accounts")
     target = _pursuit_file(tmp_path)
     result = CliRunner().invoke(advance.advance_cmd, [str(target), "--dry-run", "--json"])
 
@@ -758,10 +776,13 @@ def test_pursuit_advance_json_reports_a_pending_native_gate(tmp_path: Path) -> N
     assert payload["from_stage"] == "discover"
 
 
-def test_pursuit_advance_json_carries_reasons_when_policy_is_pending(tmp_path: Path) -> None:
+def test_pursuit_advance_json_carries_reasons_when_policy_is_pending(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A pending gate is exactly when the caller needs the reason list, so the
     document ships alongside the unchanged exit 1."""
     advance = importlib.import_module("fieldkit.commands.pursuit.advance_cmd")
+    monkeypatch.setattr(advance, "get_accounts_root", lambda: tmp_path / "accounts")
     pursuits = tmp_path / "accounts" / "acme-corp" / "pursuits"
     pursuits.mkdir(parents=True)
     target = pursuits / "renewal.md"

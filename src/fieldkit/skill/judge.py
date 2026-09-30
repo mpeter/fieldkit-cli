@@ -9,7 +9,7 @@ Design decisions:
 - D2: One batched judge call per skill; expected_behavior excluded to prevent answer-key bias.
 - D3: Frozen dataclasses end-to-end; no raw dicts cross the module boundary.
 - D4: JSON parse failures retried once with a corrective user message; second failure → LLMError.
-- D5: Stub mode (NO_LLM=1) is a first-class code path; all verdicts become "stub".
+- D5: Stub mode (FIELDKIT_NO_LLM=1) is a first-class code path; all verdicts become "stub".
 """
 
 import dataclasses
@@ -83,7 +83,7 @@ class SkillJudgement:
         skill_name: Name of the skill that was judged.
         cases: Per-case results with per-assertion verdicts.
         model: LiteLLM model string used for this judgement.
-        stub: True when NO_LLM=1 was active; all verdicts are "stub".
+        stub: True when FIELDKIT_NO_LLM=1 was active; all verdicts are "stub".
     """
 
     skill_name: str
@@ -341,7 +341,7 @@ def judge_skill(
     """Grade skill documentation coverage against eval case assertions.
 
     Sends a single batched LLM call with the full SKILL.md body and all cases.
-    On NO_LLM=1, returns a stub judgement immediately without building a prompt
+    On FIELDKIT_NO_LLM=1, returns a stub judgement immediately without building a prompt
     or making any API call (D5).
 
     Args:
@@ -370,7 +370,7 @@ def judge_skill(
             CaseResult(
                 case_id=case["id"],
                 verdicts=[
-                    AssertionVerdict(assertion_idx=idx, verdict="stub", reason="NO_LLM=1 — stub mode active")
+                    AssertionVerdict(assertion_idx=idx, verdict="stub", reason="FIELDKIT_NO_LLM=1 — stub mode active")
                     for idx in range(len(case["assertions"]))
                 ],
             )

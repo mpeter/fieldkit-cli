@@ -35,6 +35,8 @@
     "docs/release-readiness/public-tree-policy.schema.json",
     "docs/release-readiness/release-bundle-provenance.schema.json",
     "docs/release-readiness/release-consumer-evidence.schema.json",
+    "docs/release-readiness/release-controller-receipt.schema.json",
+    "docs/release-readiness/release-trust-selection.schema.json",
     "docs/release-readiness/cutover-record.schema.json",
     "docs/release-readiness/release-approval-input.schema.json",
     "docs/release-readiness/release-evidence-record.schema.json",
@@ -49,7 +51,10 @@
     "pyproject.toml",
     "scripts/**",
     "src/fieldkit/**",
-    "tests/**"
+    "tests/**",
+    "docs/release-readiness/public-history-source.schema.json",
+    "docs/release-readiness/quality-gate-receipt.schema.json",
+    "docs/release-readiness/public-tree-scan-policy.json"
   ],
   "rules": [
     {
@@ -101,6 +106,13 @@
   "allowances": [
     {
       "rule_id": "PUBID001",
+      "path": "docs/adr/0005-verifiable-public-release.md",
+      "pattern": "https://github\\.com/mpeter/fieldkit-cli/blob/main/RELEASING\\.md",
+      "classification": "public_project_identity",
+      "rationale": "The public release architecture decision links to the canonical operator approval procedure."
+    },
+    {
+      "rule_id": "PUBID001",
       "path": ".github/CODEOWNERS",
       "pattern": "@mpeter",
       "classification": "public_project_identity",
@@ -144,9 +156,9 @@
     {
       "rule_id": "PUBID001",
       "path": "docs/dependency-security.md",
-      "pattern": "https://github\\.com/mpeter/fieldkit-cli/blob/main/ROADMAP\\.md",
+      "pattern": "https://github\\.com/mpeter/fieldkit-cli/blob/main/(?:ROADMAP\\.md|CONTRIBUTING\\.md#verify-the-pull-request)",
       "classification": "public_project_identity",
-      "rationale": "Dependency policy links to the canonical public roadmap."
+      "rationale": "Dependency policy links to the canonical public roadmap and contributor verification procedure."
     },
     {
       "rule_id": "PUBID001",
@@ -175,6 +187,20 @@
       "pattern": "https://github\\.com/mpeter/fieldkit-cli/blob/main/docs/release-readiness/release-evidence-record\\.schema\\.json",
       "classification": "public_project_identity",
       "rationale": "The public evidence schema needs its canonical immutable identifier."
+    },
+    {
+      "rule_id": "PUBID001",
+      "path": "docs/release-readiness/release-controller-receipt.schema.json",
+      "pattern": "https://github\\.com/mpeter/fieldkit-cli/blob/main/docs/release-readiness/release-controller-receipt\\.schema\\.json(?=\\\")",
+      "classification": "public_project_identity",
+      "rationale": "The controller receipt schema uses its exact canonical public schema identifier."
+    },
+    {
+      "rule_id": "PUBID001",
+      "path": "docs/release-readiness/release-trust-selection.schema.json",
+      "pattern": "(?:https://github\\.com/mpeter/fieldkit-cli/blob/main/docs/release-readiness/release-trust-selection\\.schema\\.json(?=\\\")|\\\"const\\\": \\\"mpeter/fieldkit-cli\\\")",
+      "classification": "public_project_identity",
+      "rationale": "The trust selection schema uses its exact canonical public schema identifier and repository constant."
     },
     {
       "rule_id": "PUBID001",
@@ -225,9 +251,9 @@
     {
       "rule_id": "PUBID001",
       "path": "docs/release-readiness/release-governance-policy.json",
-      "pattern": "mpeter/fieldkit-cli",
+      "pattern": "(?:mpeter/fieldkit-cli|\\\"approver_login\\\": \\\"mpeter\\\")",
       "classification": "public_project_identity",
-      "rationale": "The public governance policy binds each candidate to the canonical repository identity."
+      "rationale": "The public governance policy binds each candidate and sole approver login to canonical public identities."
     },
     {
       "rule_id": "PUBID001",
@@ -249,13 +275,6 @@
       "pattern": "mpeter/fieldkit-cli",
       "classification": "public_project_identity",
       "rationale": "The rehearsal schema binds published evidence to the intended public repository."
-    },
-    {
-      "rule_id": "PUBID001",
-      "path": "scripts/check_documentation_examples.py",
-      "pattern": "mpeter/fieldkit-cli",
-      "classification": "public_project_identity",
-      "rationale": "The final-rehearsal verifier accepts only the intended public repository and its CI evidence."
     },
     {
       "rule_id": "PUBID001",
@@ -296,18 +315,179 @@
       "rationale": "The rendered-document validator contains the private organization markers it is responsible for detecting."
     },
     {
-      "rule_id": "PUBID001",
-      "path": "tests/test_documentation_examples.py",
-      "pattern": "mpeter/fieldkit-cli",
-      "classification": "release_cutover_policy",
-      "rationale": "The rehearsal-evidence test uses the canonical public repository identity as its schema-valid positive control."
-    },
-    {
       "rule_id": "PUBID002",
       "path": "tests/test_pii_patterns.py",
       "pattern": "/(?:home|Users)/[A-Za-z][A-Za-z0-9_.-]{1,30}/",
       "classification": "release_cutover_policy",
       "rationale": "The test provides a positive control for absolute-home-path detection."
+    },
+    {
+      "rule_id": "PUBID001",
+      "path": "docs/release-readiness/public-history-source.schema.json",
+      "pattern": "(?:^\\ \\ \"\\$id\":\\ \"https:\\/\\/github\\.com\\/mpeter\\/fieldkit\\-cli\\/blob\\/main\\/docs\\/release\\-readiness\\/public\\-history\\-source\\.schema\\.json\",$)",
+      "classification": "public_project_identity",
+      "rationale": "Exact reviewed canonical upstream repository, schema URL, or public maintainer identity used by release controls and their tests."
+    },
+    {
+      "rule_id": "PUBID001",
+      "path": "docs/release-readiness/quality-gate-receipt.schema.json",
+      "pattern": "(?:^\\ \\ \"\\$id\":\\ \"https:\\/\\/github\\.com\\/mpeter\\/fieldkit\\-cli\\/blob\\/main\\/docs\\/release\\-readiness\\/quality\\-gate\\-receipt\\.schema\\.json\",$)",
+      "classification": "public_project_identity",
+      "rationale": "Exact reviewed canonical upstream repository, schema URL, or public maintainer identity used by release controls and their tests."
+    },
+    {
+      "rule_id": "PUBID001",
+      "path": "scripts/check_structured_document_contracts.py",
+      "pattern": "(?:^SCHEMA_BASE\\ =\\ \"https:\\/\\/github\\.com\\/mpeter\\/fieldkit\\-cli\\/blob\\/main\\/docs\\/release\\-readiness\\/\"$)",
+      "classification": "public_project_identity",
+      "rationale": "Exact reviewed canonical upstream repository, schema URL, or public maintainer identity used by release controls and their tests."
+    },
+    {
+      "rule_id": "PUBID002",
+      "path": "scripts/documentation_candidate_execution.py",
+      "pattern": "(?:^\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \"\\/home\\/linuxbrew\\/\\.linuxbrew\",\\ \\ \\#\\ pii\\-guard:\\ ignore\\ \u2014\\ fixed\\ Homebrew\\ runtime\\ mount$|^\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \"\\/home\\/linuxbrew\\/\\.linuxbrew\\/lib\",\\ \\ \\#\\ pii\\-guard:\\ ignore\\ \u2014\\ fixed\\ Homebrew\\ runtime\\ mount$|^\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \"\\/home\\/linuxbrew\\/\\.linuxbrew\\/lib\\/ld\\.so\",\\ \\ \\#\\ pii\\-guard:\\ ignore\\ \u2014\\ fixed\\ Homebrew\\ runtime\\ mount$)",
+      "classification": "integration_specific",
+      "rationale": "Exact fixed Homebrew mount required by the isolated documentation runtime; this is a tool installation path rather than an operator home."
+    },
+    {
+      "rule_id": "PUBID002",
+      "path": "scripts/documentation_command_runner.py",
+      "pattern": "(?:^\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \"\\/home\\/linuxbrew\\/\\.linuxbrew\\/lib\\/ld\\.so\",\\ \\ \\#\\ pii\\-guard:\\ ignore\\ \u2014\\ fixed\\ Homebrew\\ runtime\\ mount$|^\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ Path\\(\"\\/home\\/linuxbrew\\/\\.linuxbrew\\/lib\"\\)\\ \\ \\#\\ pii\\-guard:\\ ignore\\ \u2014\\ fixed\\ Homebrew\\ runtime\\ mount$)",
+      "classification": "integration_specific",
+      "rationale": "Exact fixed Homebrew mount required by the isolated documentation runtime; this is a tool installation path rather than an operator home."
+    },
+    {
+      "rule_id": "PUBID002",
+      "path": "scripts/documentation_dependencies.py",
+      "pattern": "(?:^\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \"\\/home\\/linuxbrew\\/\\.linuxbrew\",\\ \\ \\#\\ pii\\-guard:\\ ignore\\ \u2014\\ fixed\\ Homebrew\\ runtime\\ mount$|^\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \"\\/home\\/linuxbrew\\/\\.linuxbrew\\/lib\",\\ \\ \\#\\ pii\\-guard:\\ ignore\\ \u2014\\ fixed\\ Homebrew\\ runtime\\ mount$|^\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \"\\/home\\/linuxbrew\\/\\.linuxbrew\\/lib\\/ld\\.so\",\\ \\ \\#\\ pii\\-guard:\\ ignore\\ \u2014\\ fixed\\ Homebrew\\ runtime\\ mount$)",
+      "classification": "integration_specific",
+      "rationale": "Exact fixed Homebrew mount required by the isolated documentation runtime; this is a tool installation path rather than an operator home."
+    },
+    {
+      "rule_id": "PUBID001",
+      "path": "scripts/rehearsal_evidence.py",
+      "pattern": "(?:^\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ or\\ raw\\[\"repository\"\\]\\ !=\\ \"mpeter\\/fieldkit\\-cli\"$|^\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ repository=\"mpeter\\/fieldkit\\-cli\",$|^\\ \\ \\ \\ \\ \\ \\ \\ raw\\[\"repository\"\\]\\ !=\\ \"mpeter\\/fieldkit\\-cli\"$|^\\ \\ \\ \\ \\ \\ \\ \\ repository=\"mpeter\\/fieldkit\\-cli\",$)",
+      "classification": "public_project_identity",
+      "rationale": "Exact reviewed canonical upstream repository, schema URL, or public maintainer identity used by release controls and their tests."
+    },
+    {
+      "rule_id": "PUBID001",
+      "path": "scripts/release_controller_bootstrap.py",
+      "pattern": "(?:^_SCHEMA_BASE\\ =\\ \"https:\\/\\/github\\.com\\/mpeter\\/fieldkit\\-cli\\/blob\\/main\\/docs\\/release\\-readiness\\/\"$)",
+      "classification": "public_project_identity",
+      "rationale": "Exact reviewed canonical upstream repository, schema URL, or public maintainer identity used by release controls and their tests."
+    },
+    {
+      "rule_id": "PUBID001",
+      "path": "scripts/release_trust_contracts.py",
+      "pattern": "(?:^SCHEMA_BASE\\ =\\ \"https:\\/\\/github\\.com\\/mpeter\\/fieldkit\\-cli\\/blob\\/main\\/docs\\/release\\-readiness\\/\"$)",
+      "classification": "public_project_identity",
+      "rationale": "Exact reviewed canonical upstream repository, schema URL, or public maintainer identity used by release controls and their tests."
+    },
+    {
+      "rule_id": "PUBID001",
+      "path": "tests/rehearsal_support.py",
+      "pattern": "(?:^\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \"repository\":\\ \"mpeter\\/fieldkit\\-cli\",$)",
+      "classification": "public_project_identity",
+      "rationale": "Exact reviewed canonical upstream repository, schema URL, or public maintainer identity used by release controls and their tests."
+    },
+    {
+      "rule_id": "PUBID001",
+      "path": "tests/release_approval_support.py",
+      "pattern": "(?:^\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \"expected_repository\":\\ \"mpeter\\/fieldkit\\-cli\",$|^\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \"repository\":\\ \"mpeter\\/fieldkit\\-cli\",$|^\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \"required_reviewers\":\\ \\[\"mpeter\"\\],$|^\\ \\ \\ \\ \\ \\ \\ \\ \"cutover\\-approval\":\\ \"https:\\/\\/github\\.com\\/mpeter\\/fieldkit\\-cli\\/actions\\/runs\\/4\",$|^\\ \\ \\ \\ \\ \\ \\ \\ \"documentation\\-rehearsals\":\\ \"https:\\/\\/github\\.com\\/mpeter\\/fieldkit\\-cli\\/actions\\/runs\\/3\",$|^\\ \\ \\ \\ \\ \\ \\ \\ \"frontier\\-final\\-review\":\\ \"https:\\/\\/github\\.com\\/mpeter\\/fieldkit\\-cli\\/pull\\/1\",$|^\\ \\ \\ \\ \\ \\ \\ \\ \"github\\-release\\-environment\":\\ \"https:\\/\\/api\\.github\\.com\\/repos\\/mpeter\\/fieldkit\\-cli\\/environments\\/release\\-approval\",$|^\\ \\ \\ \\ \\ \\ \\ \\ \"public\\-contributor\\-journeys\":\\ \"https:\\/\\/github\\.com\\/mpeter\\/fieldkit\\-cli\\/actions\\/runs\\/3\",$|^\\ \\ \\ \\ \\ \\ \\ \\ \"public\\-user\\-journeys\":\\ \"https:\\/\\/github\\.com\\/mpeter\\/fieldkit\\-cli\\/actions\\/runs\\/3\",$|^\\ \\ \\ \\ \\ \\ \\ \\ \"pypi\\-trusted\\-publisher\":\\ \"https:\\/\\/github\\.com\\/mpeter\\/fieldkit\\-cli\\/actions\\/workflows\\/release\\.yml\",$|^\\ \\ \\ \\ \\ \\ \\ \\ \"repository\":\\ \"mpeter\\/fieldkit\\-cli\",$|^\\ \\ \\ \\ \\ \\ \\ \\ \"repository\\-controls\":\\ \"https:\\/\\/api\\.github\\.com\\/repos\\/mpeter\\/fieldkit\\-cli\",$|^\\ \\ \\ \\ public\\[\"expected_repository\"\\]\\ =\\ \"mpeter\\/fieldkit\\-cli\"$|^\\ \\ \\ \\ public\\[\"export_manifest\"\\]\\[\"expected_repository\"\\]\\ =\\ \"mpeter\\/fieldkit\\-cli\"$|^\\ \\ \\ \\ public\\[\"scan\"\\]\\[\"expected_repository\"\\]\\ =\\ \"mpeter\\/fieldkit\\-cli\"$)",
+      "classification": "public_project_identity",
+      "rationale": "Exact reviewed canonical upstream repository, schema URL, or public maintainer identity used by release controls and their tests."
+    },
+    {
+      "rule_id": "PUBID001",
+      "path": "tests/test_check_public_identity.py",
+      "pattern": "(?:^\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \"operator\":\\ \"mpeter\",$|^\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \"other_owner\":\\ \"mpeter\\-other\\/fieldkit\\-cli\",$|^\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \"other_repository\":\\ \"mpeter\\/fieldkit\\-cli\\-other\",$|^\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ schema_path,\\ schema_path,\\ schema_text\\.replace\\(\"mpeter\\/fieldkit\\-cli\",\\ replacement\\)$)",
+      "classification": "public_project_identity",
+      "rationale": "Exact reviewed canonical upstream repository, schema URL, or public maintainer identity used by release controls and their tests."
+    },
+    {
+      "rule_id": "PUBID008",
+      "path": "tests/test_contributor_patterns_page_contract.py",
+      "pattern": "(?:^\\ \\ \\ \\ assert\\ \"Fieldkit\"\\ not\\ in\\ page$)",
+      "classification": "fictional_fixture",
+      "rationale": "Exact negative-test input or assertion verifies rejection of private paths, organization names, or noncanonical project spelling."
+    },
+    {
+      "rule_id": "PUBID001",
+      "path": "tests/test_first_user_guides_contract.py",
+      "pattern": "(?:^\\ \\ \\ \\ \\ \\ \\ \\ \"If\\ either\\ command\\ fails,\\ keep\\ the\\ exact\\ command,\\ exit\\ code,\\ and\\ sanitized\\ error\\\\ntext,\\ then\\ use\\ \\[Troubleshooting\\]\\(reference\\/troubleshooting\\.md\\)\\ or\\ the\\ route\\ in\\\\n\\[SUPPORT\\.md\\]\\(https:\\/\\/github\\.com\\/mpeter\\/fieldkit\\-cli\\/blob\\/main\\/SUPPORT\\.md\\)\\.\",$|^\\ \\ \\ \\ \\ \\ \\ \\ \"\\[!\\[CI\\]\\(https:\\/\\/github\\.com\\/mpeter\\/fieldkit\\-cli\\/actions\\/workflows\\/ci\\.yml\\/badge\\.svg\\)\\]\\(https:\\/\\/github\\.com\\/mpeter\\/fieldkit\\-cli\\/actions\\/workflows\\/ci\\.yml\\)\\\\n\\[!\\[Artifact\\ compatibility\\]\\(https:\\/\\/github\\.com\\/mpeter\\/fieldkit\\-cli\\/actions\\/workflows\\/compatibility\\.yml\\/badge\\.svg\\)\\]\\(https:\\/\\/github\\.com\\/mpeter\\/fieldkit\\-cli\\/actions\\/workflows\\/compatibility\\.yml\\)\\\\n\\[!\\[License\\]\\(https:\\/\\/img\\.shields\\.io\\/badge\\/license\\-Apache\\-\\-2\\.0\\-blue\\.svg\\)\\]\\(LICENSE\\)\\\\n\\[!\\[Python\\]\\(https:\\/\\/img\\.shields\\.io\\/badge\\/python\\-3\\.11%20%E2%80%93%203\\.14\\-blue\\.svg\\)\\]\\(docs\\/compatibility\\.md\\)\",$|^\\ \\ \\ \\ \\ \\ \\ \\ \"`fieldkit\\ \\-\\-version`\\ reports\\ the\\ installed\\ package\\ version\\.\\ To\\ test\\ a\\ source\\\\ncheckout,\\ use\\ the\\ contributor\\ path\\ in\\\\n\\[CONTRIBUTING\\.md\\]\\(https:\\/\\/github\\.com\\/mpeter\\/fieldkit\\-cli\\/blob\\/main\\/CONTRIBUTING\\.md\\)\\\\nand\\ run\\ `uv\\ run\\ fieldkit`\\ from\\ that\\ checkout\\.\",$)",
+      "classification": "public_project_identity",
+      "rationale": "Exact reviewed canonical upstream repository, schema URL, or public maintainer identity used by release controls and their tests."
+    },
+    {
+      "rule_id": "PUBID001",
+      "path": "tests/test_overview_page_contract.py",
+      "pattern": "(?:^\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ assert\\ target\\.startswith\\(\"https:\\/\\/github\\.com\\/mpeter\\/fieldkit\\-cli\\/\"\\)$)",
+      "classification": "public_project_identity",
+      "rationale": "Exact reviewed canonical upstream repository, schema URL, or public maintainer identity used by release controls and their tests."
+    },
+    {
+      "rule_id": "PUBID003",
+      "path": "tests/test_public_subtleties.py",
+      "pattern": "(?:^\\ \\ \\ \\ \"Red\\ Hat\",$)",
+      "classification": "release_cutover_policy",
+      "rationale": "Exact regression probe verifies that organization-specific identity is absent from the public product surface."
+    },
+    {
+      "rule_id": "PUBID001",
+      "path": "tests/test_rehearsal_evidence.py",
+      "pattern": "(?:^\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \"repository\":\\ \"mpeter\\/fieldkit\\-cli\",$|^\\ \\ \\ \\ \\ \\ \\ \\ \"repository\":\\ \"mpeter\\/fieldkit\\-cli\",$|^\\ \\ \\ \\ \\ \\ \\ \\ repository=\"mpeter\\/fieldkit\\-cli\",$)",
+      "classification": "public_project_identity",
+      "rationale": "Exact reviewed canonical upstream repository, schema URL, or public maintainer identity used by release controls and their tests."
+    },
+    {
+      "rule_id": "PUBID001",
+      "path": "tests/test_release_trust_contracts.py",
+      "pattern": "(?:^\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \"repository\":\\ \"mpeter\\/fieldkit\\-cli\",$)",
+      "classification": "public_project_identity",
+      "rationale": "Exact reviewed canonical upstream repository, schema URL, or public maintainer identity used by release controls and their tests."
+    },
+    {
+      "rule_id": "PUBID003",
+      "path": "tests/test_remaining_public_skill_contracts.py",
+      "pattern": "(?:^\\ \\ \\ \\ assert\\ \"Red\\ Hat\"\\ not\\ in\\ combined$)",
+      "classification": "release_cutover_policy",
+      "rationale": "Exact regression probe verifies that organization-specific identity is absent from the public product surface."
+    },
+    {
+      "rule_id": "PUBID001",
+      "path": "tests/test_reviewed_runtime_license_exceptions.py",
+      "pattern": "(?:^\\ \\ \\ \\ assert\\ reviewed\\.owner\\ ==\\ \"@mpeter\"$)",
+      "classification": "public_project_identity",
+      "rationale": "Exact reviewed canonical upstream repository, schema URL, or public maintainer identity used by release controls and their tests."
+    },
+    {
+      "rule_id": "PUBID002",
+      "path": "tests/test_runtime_license_inventory.py",
+      "pattern": "(?:^\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \"LicenseRef\\-\\/home\\/example\\/private\"\\ \\ \\#\\ pii\\-guard:\\ ignore\\ \u2014\\ synthetic\\ negative\\ fixture\\ for\\ home\\-path\\ rejection$|^\\ \\ \\ \\ \\ \\ \\ \\ \"\\/home\\/example\\/private\",\\ \\ \\#\\ pii\\-guard:\\ ignore\\ \u2014\\ synthetic\\ negative\\ fixture\\ for\\ home\\-path\\ rejection$)",
+      "classification": "fictional_fixture",
+      "rationale": "Exact negative-test input or assertion verifies rejection of private paths, organization names, or noncanonical project spelling."
+    },
+    {
+      "rule_id": "PUBID001",
+      "path": "tests/test_structured_document_contracts.py",
+      "pattern": "(?:^\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \"expected_repository\":\\ \"mpeter\\/fieldkit\\-cli\",$)",
+      "classification": "public_project_identity",
+      "rationale": "Exact reviewed canonical upstream repository, schema URL, or public maintainer identity used by release controls and their tests."
+    },
+    {
+      "rule_id": "PUBID001",
+      "path": "tests/test_troubleshooting_guide_contract.py",
+      "pattern": "(?:^\\ \\ \\ \\ \\ \\ \\ \\ \"Search\\ existing\\ issues,\\ then\\ follow\\ \\[SUPPORT\\.md\\]\\(https:\\/\\/github\\.com\\/mpeter\\/fieldkit\\-cli\\/blob\\/main\\/SUPPORT\\.md\\)\\.\\\\nUse\\ \\[SECURITY\\.md\\]\\(https:\\/\\/github\\.com\\/mpeter\\/fieldkit\\-cli\\/blob\\/main\\/SECURITY\\.md\\)\\ for\\ a\\\\nsuspected\\ vulnerability\\ instead\\ of\\ disclosing\\ details\\ publicly\\.\",$|^\\ \\ \\ \\ \\ \\ \\ \\ \"https:\\/\\/github\\.com\\/mpeter\\/fieldkit\\-cli\\/blob\\/main\\/SECURITY\\.md\",$|^\\ \\ \\ \\ \\ \\ \\ \\ \"https:\\/\\/github\\.com\\/mpeter\\/fieldkit\\-cli\\/blob\\/main\\/SUPPORT\\.md\",$)",
+      "classification": "public_project_identity",
+      "rationale": "Exact reviewed canonical upstream repository, schema URL, or public maintainer identity used by release controls and their tests."
+    },
+    {
+      "rule_id": "PUBID001",
+      "path": "docs/release-readiness/public-tree-scan-policy.json",
+      "pattern": "^\\ \\ \\ \\ \\ \\ \"pattern\":\\ \"\\(\\?:\\^\\\\\\\\\\ \\\\\\\\\\ \\\\\\\\\\ \\\\\\\\\\ \\\\\\\\\\ \\\\\\\\\\ \\\\\\\\\\ \\\\\\\\\\ \\\\\"https:\\\\\\\\\\/\\\\\\\\\\/user@github\\\\\\\\\\.com\\\\\\\\\\/mpeter\\\\\\\\\\/fieldkit\\\\\\\\\\-cli\\\\\\\\\\/actions\\\\\\\\\\/workflows\\\\\\\\\\/release\\\\\\\\\\.yml\\\\\",\\$\\)\",$",
+      "classification": "public_project_identity",
+      "rationale": "Exact canonical upstream repository URL embedded in the malformed-userinfo test classification; this does not exempt other identities in the scan policy."
     }
   ]
 }

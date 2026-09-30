@@ -67,6 +67,22 @@ def test_teardown_called_on_success(tmp_path: Path) -> None:
 
 
 @pytest.mark.unit
+def test_disabled_watcher_logging_performs_no_setup_or_teardown() -> None:
+    """Dry-run callers can reuse the canonical context without filesystem effects."""
+    from fieldkit.watch.logging import watcher_logging
+
+    with (
+        patch("fieldkit.watch.logging.setup_watcher_logging") as setup,
+        patch("fieldkit.watch.logging.teardown_watcher_logging") as teardown,
+        watcher_logging("test-watcher", enabled=False),
+    ):
+        logging.getLogger("fieldkit.watch.test").info("dry run")
+
+    setup.assert_not_called()
+    teardown.assert_not_called()
+
+
+@pytest.mark.unit
 def test_watcher_logging_passes_name_to_setup(tmp_path: Path) -> None:
     """watcher_logging() must pass the watcher name to setup_watcher_logging."""
     from fieldkit.watch.logging import watcher_logging

@@ -23,7 +23,6 @@ from fieldkit.ingest.sources import (
     claim_pending_source,
     discover_gemini_sources,
     get_pending_sources,
-    insert_vault_note_artifact,
     mark_source_status,
 )
 
@@ -289,22 +288,6 @@ def test_mark_source_status_records_status_and_processed_timestamp(tmp_path: Pat
     assert row["processed_at"].endswith("Z")
 
 
-def test_insert_vault_note_artifact_records_pipeline_version(tmp_path: Path) -> None:
-    """A processed source produces one versioned vault-note artifact row."""
-    conn = _make_pipeline_db(tmp_path)
-    _insert_pending(conn, "ARTIFACT_WRITEBACK")
-
-    insert_vault_note_artifact(conn, "ARTIFACT_WRITEBACK", "1.0.0", "/vault/note.md")
-
-    row = conn.execute(
-        "SELECT source_id, pipeline_id, artifact_type, content_path, pipeline_version FROM artifacts"
-    ).fetchone()
-    conn.close()
-
-    assert row is not None
-    assert tuple(row) == ("ARTIFACT_WRITEBACK", "transcript-ingest", "vault_note", "/vault/note.md", "1.0.0")
-
-
 # ── get_pending_sources ─────────────────────────────────────────────────────
 
 
@@ -351,26 +334,28 @@ def test_get_pending_sources_limit(tmp_path: Path) -> None:
     assert len(pending) == 1
 
 
-def test_scan_missing_path_raises_config_error(tmp_path: Path) -> None:
-    """ConfigError is raised from scan_gemini_candidates when gmail.db is absent."""
-    from fieldkit.config import ConfigError
+def test_scan_missing_path_raises_retryable_publication_error(tmp_path: Path) -> None:
+    """A missing managed Gmail generation is retryable and payload-free."""
     from fieldkit.gmail.discover import scan_gemini_candidates
+    from fieldkit.gmail.exceptions import GmailDbNotFoundError
 
     missing_path = tmp_path / "nonexistent.db"
 
-    with pytest.raises(ConfigError, match=r"gmail\.db not found"):
+    with pytest.raises(GmailDbNotFoundError, match="has not been published"):
         scan_gemini_candidates(missing_path, limit=None)
 
 
-def test_scan_missing_path_error_contains_path(tmp_path: Path) -> None:
-    """ConfigError message must include the missing path for diagnostics."""
-    from fieldkit.config import ConfigError
+def test_scan_missing_path_error_does_not_expose_private_path(tmp_path: Path) -> None:
+    """Missing-publication diagnostics do not reveal the configured path."""
     from fieldkit.gmail.discover import scan_gemini_candidates
+    from fieldkit.gmail.exceptions import GmailDbNotFoundError
 
     missing_path = tmp_path / "nonexistent.db"
 
-    with pytest.raises(ConfigError, match=str(missing_path)):
+    with pytest.raises(GmailDbNotFoundError) as caught:
         scan_gemini_candidates(missing_path, limit=None)
+
+    assert str(missing_path) not in str(caught.value)
 
 
 # ── Concurrent claimer test (task 4.2) ──────────────────────────────────────

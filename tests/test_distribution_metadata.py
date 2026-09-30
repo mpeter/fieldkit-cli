@@ -12,7 +12,7 @@ def test_distribution_command_and_import_identities_are_distinct() -> None:
     metadata = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
 
     assert metadata["project"]["name"] == "fieldkit-cli"
-    assert metadata["project"]["version"] == "1.0.0"
+    assert metadata["project"]["version"] == "1.0.1"
     assert metadata["project"]["scripts"] == {"fieldkit": "fieldkit.__main__:main"}
     assert metadata["tool"]["hatch"]["build"]["targets"]["wheel"]["packages"] == ["src/fieldkit"]
 

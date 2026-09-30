@@ -7,8 +7,8 @@ import pytest
 from click.testing import CliRunner
 
 from fieldkit.commands.sf.components import cli
-from fieldkit.sf.client import SFAuthError
 from fieldkit.sf.components import ComponentLine
+from fieldkit.sf.errors import SFAuthError, SFNotFoundError
 
 pytestmark = pytest.mark.unit
 
@@ -92,7 +92,30 @@ def test_components_unresolved_reference_is_data_error(monkeypatch: pytest.Monke
     monkeypatch.setattr("fieldkit.commands.sf.components.resolve_opportunity_reference", lambda *_: None)
     result = CliRunner().invoke(cli, ["12345"])
     assert result.exit_code == 3
-    assert "was not found" in result.output
+    assert "record not found" in result.output
+
+
+@pytest.mark.parametrize("missing", ["absent", "exception"])
+def test_components_missing_reference_has_private_cli_guidance(
+    missing: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from fieldkit.__main__ import main
+
+    _patch_client(monkeypatch, [])
+    resolver = MagicMock(return_value=None)
+    if missing == "exception":
+        resolver.side_effect = SFNotFoundError("private-provider-sentinel")
+    monkeypatch.setattr("fieldkit.commands.sf.components.resolve_opportunity_reference", resolver)
+    monkeypatch.setattr("fieldkit.__main__.load_dotenv_safe", lambda: None)
+    result = main(["sf", "components", "private-reference-sentinel"])
+    assert result == 3
+    output = capsys.readouterr()
+    assert "record not found" in output.err
+    assert "private-" not in output.out + output.err + caplog.text
+    assert "Traceback" not in output.err
 
 
 def test_components_auth_failure_uses_central_exit_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -102,4 +125,5 @@ def test_components_auth_failure_uses_central_exit_mapping(monkeypatch: pytest.M
     )
     result = CliRunner().invoke(cli, [_OPP_ID])
     assert result.exit_code == 2
-    assert "expired" in result.output
+    assert "fieldkit auth sf" in result.output
+    assert "expired" not in result.output

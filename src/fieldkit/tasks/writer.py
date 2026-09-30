@@ -1,127 +1,99 @@
-"""fieldkit.tasks.writer — Append classified action items to TASKS.md.
+"""Atomic meeting task updates with source-position provenance.
 
-Reads the existing TASKS.md, inserts MY_TASK items under ## Active and
-WAITING_ON items under ## Waiting On, then writes the file back.
-
-Format mirrors the existing TASKS.md conventions:
-  Active:     - **[Account/Pursuit]** <task text>
-  Waiting On: - **[Account/Pursuit]** Waiting on <owner> re: <topic> — from meeting <date>
-
-Idempotent: items already present (matched by text substring) are skipped.
-
-Public API
-----------
-append_to_tasks(classified_items, tasks_path, meeting_date, meeting_title)
+A matching ownership marker and decision fingerprint preserves user edits.
+Conflicting or ambiguous provenance is never silently adopted or overwritten.
 """
 
 import re
-from collections.abc import Callable
 from pathlib import Path
 
-from fieldkit.tasks.classifier import ClassifiedItem, ItemClass
+from fieldkit.tasks.classifier import ItemClass
+from fieldkit.tasks.effects import PreparedTaskLine, TaskEffect, prepare_effect, read_task_markers
+from fieldkit.util.atomic import atomic_text_write, exclusive_file_lock, prepare_runtime_lock_path
+from fieldkit.util.owned_markdown import inspect_owned_markdown
+from fieldkit.util.text_snapshot import read_text_snapshot
 
-# Section header patterns
-_ACTIVE_RE = re.compile(r"^## Active\s*$", re.MULTILINE)
-_WAITING_ON_RE = re.compile(r"^## Waiting On\s*$", re.MULTILINE)
+TASK_WRITE_TIMEOUT_SECONDS = 5
+MAX_TASK_BYTES = 4_000_000
 
-# Matches an HTML comment line immediately following a section heading
-_COMMENT_RE = re.compile(r"\n<!--[^\n]*-->\n?")
-
-
-def _format_active(item: ClassifiedItem) -> str:
-    tag = f"**[{item.pursuit_label}]** " if item.pursuit_label else ""
-    return f"- {tag}{item.text}"
+_COMMENT_RE = re.compile(r"<!--[^\n]*-->\n?")
 
 
-def _format_waiting_on(item: ClassifiedItem, meeting_date: str, meeting_title: str) -> str:
-    tag = f"**[{item.pursuit_label}]** " if item.pursuit_label else ""
-    owner_str = f" {item.owner}" if item.owner not in ("Unknown", "Team") else ""
-    # Shorten the raw text into a topic description
-    topic = item.text
-    # Strip owner prefix if present (e.g. "Brooke: confirm budget" → "confirm budget")
-    topic = re.sub(r"^[A-Z][a-z]+(?: [A-Z][a-z]+)*\s*[:\—\-]\s*", "", topic).strip()
-    return f"- {tag}Waiting on{owner_str} re: {topic} — from {meeting_title} ({meeting_date})"
+def _insert_lines(content: str, lines: list[str], *, waiting_on: bool) -> str:
+    """Insert one batch below its unique section heading, creating it if absent."""
+    if not lines:
+        return content
+    label = "Waiting On" if waiting_on else "Active"
+    matches = inspect_owned_markdown(content, section_titles=("Active", "Waiting On")).section_ends[label]
+    block = "\n".join(lines)
+    if not matches:
+        return content + f"\n## {label}\n{block}\n"
+    position = matches[0]
+    comment = _COMMENT_RE.match(content, position)
+    if comment:
+        position = comment.end()
+    return content[:position] + "\n" + block + "\n" + content[position:]
 
 
-def _insert_items(
-    content: str,
-    items: list[ClassifiedItem],
-    header_re: re.Pattern[str],
-    format_fn: Callable[[ClassifiedItem], str],
-    section_label: str,
-) -> tuple[str, int]:
-    """Insert *items* into the named section of *content*.
-
-    Finds the section matched by *header_re*, skips any trailing HTML comment,
-    then inserts formatted lines for items not already present (idempotent by
-    first-60-chars key).
-
-    If the section is absent, appends a new ``## <section_label>`` block for
-    each non-duplicate item individually (standard TASKS.md fallback).
-
-    Returns ``(updated_content, count_added)``.
-    """
-    match = header_re.search(content)
-    if match:
-        insert_pos = match.end()
-        # Skip any comment line immediately after the heading
-        comment_m = _COMMENT_RE.match(content, insert_pos)
-        if comment_m:
-            insert_pos = comment_m.end()
-
-        lines_to_add: list[str] = []
-        for item in items:
-            if item.text[:60] not in content:
-                lines_to_add.append(format_fn(item))
-
-        if lines_to_add:
-            block = "\n" + "\n".join(lines_to_add)
-            content = content[:insert_pos] + block + content[insert_pos:]
-
-        return content, len(lines_to_add)
-
-    # Section absent — append a new heading per item (shouldn't happen with standard TASKS.md)
-    added = 0
-    for item in items:
-        if item.text[:60] not in content:
-            content += f"\n## {section_label}\n{format_fn(item)}\n"
-            added += 1
-    return content, added
+def _pending_lines(content: str, prepared: list[tuple[ItemClass, PreparedTaskLine]]) -> tuple[list[str], list[str]]:
+    """Verify all ownership before any new task is persisted."""
+    markers = read_task_markers(content)
+    unmarked = {re.sub(r"^- \[[ xX]\] ", "- ", line) for line in content.splitlines() if "fieldkit-task:" not in line}
+    active: list[str] = []
+    waiting: list[str] = []
+    for classification, task in prepared:
+        existing = markers.get(task.identity)
+        if existing is not None:
+            expected_section = "Active" if classification == ItemClass.MY_TASK else "Waiting On"
+            if existing.fingerprint != task.fingerprint or existing.section != expected_section:
+                raise ValueError("Task provenance conflicts with saved decision")
+            continue
+        if task.line.split(" <!-- fieldkit-task:", 1)[0] in unmarked:
+            raise ValueError("Unmarked task requires explicit reconciliation")
+        (active if classification == ItemClass.MY_TASK else waiting).append(task.line)
+    return active, waiting
 
 
 def append_to_tasks(
-    classified_items: list[ClassifiedItem],
+    effects: list[TaskEffect],
     tasks_path: Path,
     *,
+    runtime_root: Path,
     meeting_date: str,
     meeting_title: str,
 ) -> tuple[int, int]:
-    """Write MY_TASK and WAITING_ON items into TASKS.md.
+    """Apply already-classified effects and return active/waiting-on counts.
 
-    Returns (my_tasks_added, waiting_on_added) counts.
-    Skips items whose text already appears in the file (idempotent).
+    Callers retain original source positions before filtering task decisions.
+    Keep provenance markers while a source may be retried. Unmarked legacy
+    tasks require operator reconciliation; edited unmarked tasks cannot be
+    reliably recognized as prior effects.
     """
-    my_tasks = [i for i in classified_items if i.cls == ItemClass.MY_TASK]
-    waiting_on = [i for i in classified_items if i.cls == ItemClass.WAITING_ON]
-
-    if not my_tasks and not waiting_on:
+    prepared: list[tuple[ItemClass, PreparedTaskLine]] = []
+    identities: set[str] = set()
+    for effect in effects:
+        task = prepare_effect(effect, meeting_date=meeting_date, meeting_title=meeting_title)
+        if task.identity in identities:
+            raise ValueError("Duplicate task effect identity")
+        identities.add(task.identity)
+        if effect.item.cls != ItemClass.DROP:
+            prepared.append((effect.item.cls, task))
+    if not prepared:
         return 0, 0
-
-    content = tasks_path.read_text(encoding="utf-8") if tasks_path.exists() else ""
-
-    my_added = 0
-    wo_added = 0
-
-    if my_tasks:
-        content, my_added = _insert_items(content, my_tasks, _ACTIVE_RE, _format_active, "Active")
-
-    if waiting_on:
-        # Bind meeting context into the format callable so _insert_items stays generic
-        def _fmt_wo(item: ClassifiedItem) -> str:
-            return _format_waiting_on(item, meeting_date, meeting_title)
-
-        content, wo_added = _insert_items(content, waiting_on, _WAITING_ON_RE, _fmt_wo, "Waiting On")
-
-    if my_added or wo_added:
-        tasks_path.write_text(content, encoding="utf-8")
-    return my_added, wo_added
+    lock_path = prepare_runtime_lock_path(tasks_path, runtime_root, "tasks")
+    with exclusive_file_lock(lock_path, timeout_seconds=TASK_WRITE_TIMEOUT_SECONDS):
+        if tasks_path.is_symlink():
+            raise ValueError("Refusing symlinked tasks file")
+        try:
+            content = read_text_snapshot(tasks_path, max_bytes=MAX_TASK_BYTES).content
+        except FileNotFoundError:
+            content = ""
+        active, waiting = _pending_lines(content, prepared)
+        updated = _insert_lines(content, active, waiting_on=False)
+        updated = _insert_lines(updated, waiting, waiting_on=True)
+        if active or waiting:
+            if len(updated.encode("utf-8")) > MAX_TASK_BYTES:
+                raise ValueError("Task update exceeds byte limit")
+            read_task_markers(updated)
+            atomic_text_write(tasks_path, updated)
+    return len(active), len(waiting)

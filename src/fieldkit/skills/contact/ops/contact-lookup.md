@@ -1,111 +1,82 @@
-# contact-lookup
+# Look up a contact
 
-## Gotchas
+Use this workflow to resolve one email address or display name from fieldkit's
+local Gmail people index. The result describes cached communication and optional
+workspace affiliations; it does not refresh Gmail or contact an external service.
 
-- **Trigger overlap with similar skills** — check skill names carefully; e.g. this skill vs adjacent skills with similar names
-- **Missing context** — this skill relies on vault files being up to date; run `/brief` first if signals are stale
+## Run the local lookup
 
-## Constraints
+Use `fieldkit contact find QUERY --affiliations --json` when pursuit and account
+affiliations are relevant. The configured Gmail database is the default. Use
+`--db PATH` only when the operator intentionally selects a different database
+and its provenance is known.
 
-- **Read the relevant reference files before acting** — don't guess tool parameters
-- **Never modify pursuit frontmatter without explicit instruction**
-- **Always confirm before writing back** to any account file or Salesforce
+The `--affiliations` flag scans the configured account tree; it has no account
+filter. Omit it when cross-account workspace search is outside the authorized
+scope. If it returns affiliations from several accounts, present them separately
+and ask which identity is intended.
 
-## Description
+Treat the JSON `type` as the control field. The supported outcomes are
+`resolved`, `ambiguous`, and `not_found`:
 
-Given an email address or display name, produce a unified contact profile by querying
-the Gmail cache database and scanning pursuit/account markdown files.
+- For `resolved`, show identity, cached communication counts and dates, recent
+  threads, recent meetings, and affiliations that are present in the payload.
+- For `ambiguous`, show the bounded candidates with email, display name, message
+  count, and account when available. Ask the operator to choose an exact email,
+  then rerun; never choose the first or busiest result.
+- For `not_found`, report the miss. If `affiliations` is non-empty, present those
+  workspace matches separately and make clear that the people index did not
+  resolve the identity.
 
-## Trigger Phrases
+Missing fields stay unavailable. The command can return up to eight distinct
+recent thread topics from a bounded cache query and up to ten recent calendar
+entries when those tables exist. It does not promise a 12-month window or a
+complete communication history. A missing people table is a partial result that
+requires the documented Gmail sync workflow before retrying.
 
-Use this skill when the user says any of:
+## Interpret without overclaiming
 
-- `/contact-lookup <email or name>`
-- "look up [name]"
-- "who is [email]"
-- "find contact [name]"
-- "what do we know about [name or email]"
-- "pull up the profile for [contact]"
-- "check [email] in the contact database"
-- "is [name] in any of our pursuits?"
+The `champion_signal` and `decay_signal` fields are initiation and engagement
+heuristics calculated from cached counts and trend data.
+Do not describe either signal as verified influence, a current buying role,
+customer intent, or a ClosePlan qualification result. Explain the observed
+inputs and label any interpretation as inference.
 
-## Execution Steps
+The `is_internal` value depends on configured domain classification, not an
+authoritative employment directory. Affiliation titles, roles, notes, and source
+paths come from workspace Markdown and may be stale. Attribute them to that file
+rather than presenting them as current CRM facts.
 
-1. **Run the CLI** with `--affiliations --json` to get a merged JSON payload:
-   
-   ```bash
-   fieldkit contact find "<query>" --affiliations --json
-   ```
-   
-   Replace `<query>` with the email address or display name provided by the user.
+## Optional context
 
-2. **Search Slack for internal intel about this contact** — Slack is internal
-   only; what you're looking for is what *colleagues* have said about this person:
+Slack is optional and is not queried by `fieldkit contact find`. Use it only when
+the operator requests and authorizes that source and a separately configured
+client can prove the intended workspace and bounded read scope. Follow the
+[Slack search protocol](../../tool-routing/references/slack-search-protocol.md).
+If that reference is absent from a selective installation, report the
+missing prerequisite. If a usable client is absent, mark Slack context
+unavailable.
 
-   ```bash
-   # Check daily cache first (written by /brief's update op)
-   grep -i "<display_name>" <data-repo>/watchers/slack-signals.md
+Keep Slack observations separate from customer statements and local cache
+metrics. Say “No matches in a completed scope” only after a complete bounded
+search; authentication failure, pagination limits, or parse errors are not an
+empty result.
 
-   # Search what colleagues have said about this person by name
-   slackcli search messages "<contact display name>" after:<90-days-ago> --limit 15
+An authorized calendar read can confirm a specific attendee or meeting, but do
+not select an event by title or recency alone. Resolve the exact account, event,
+and person first.
 
-   # Find account-specific channels for delivery/deal context
-   slackcli search channels "<account name>"
-   slackcli conversations read <team-channel-id> --limit 15
-   ```
+## Present the result
 
-   Look for: colleagues mentioning this person's name in project channels (champion
-   behavior, resistance, title changes, departures), critsit channels involving them,
-   or internal notes about their influence. "No results" is also signal — note it.
+Produce a concise card with these sections when supported by the payload:
 
-   See `../references/slack-search-protocol.md`.
+- Identity and cache source;
+- Workspace affiliations with source paths;
+- recent threads and meetings with dates;
+- communication counts and observed coverage;
+- initiation and engagement heuristics; and
+- a “So what” inference that names its supporting observations and uncertainty.
 
-3. **Parse the JSON response** — the `type` field determines the outcome:
-   
-   - `resolved` — full profile available; display the contact card
-   - `ambiguous` — multiple matches; present the candidates table and ask the user to pick one
-   - `not_found` — no contact in database; report the miss and check affiliations separately
-
-3. **Format the contact card** for `resolved` responses using these sections in this order:
-   
-   - **Identity**: display_name, email, domain, account, is_internal
-   - **Pursuit Affiliations**: list from `affiliations[]` showing pursuit_file, title, meddpicc_role, and notes. Lead with this — it answers "who is this person in the context of our business?"
-   - **Recent Threads**: list from `recent_threads[]` with date and subject. Group or summarize if the threads cluster around a project or topic. This is the most useful context — synthesize what the conversation has actually been about.
-   - **Recent Meetings**: list from `recent_meetings[]` with date and event summary
-   - **Communication**: message_count, thread_count, initiated_count, meeting_count, first_seen, last_seen
-   - **Internal Slack Intel**: what colleagues have said about this person — mentions in project channels, delivery threads, or deal discussions; "no mentions" is also reported
-   - **Signals**: champion_signal (INITIATOR/MIXED/REACTIVE), decay_signal (ACTIVE/DECAY/GONE) — include a 1–2 sentence interpretation of what these signals mean for the relationship (e.g., REACTIVE + DECAY means we're doing all the outreach and the relationship is cooling)
-
-4. **Handle `ambiguous`**: present the candidates table (email, display_name, account, message_count),
-   ask the user to pick one, then re-run with the chosen email.
-
-5. **Handle `not_found`**: report "No contact found for: <query>". If affiliations were returned,
-   still display them — the contact may appear in pursuit files without being in the email database.
-
-## Output Format
-
-Present results as a formatted markdown card in chat. Do not write results to disk unless
-the user explicitly requests it (e.g., "add this to the meeting notes").
-
-The card should read like a briefing, not a data dump. After the raw stats, add a
-**"So what"** line: one sentence synthesizing the relationship posture for this contact
-based on the signals, recent threads, and affiliations. Example: "Brooke is a delivery
-recipient on the RHOAI project — she receives status reports, engages occasionally, and
-hasn't initiated contact in months. She's not a champion, but she's visible to us."
-
-## Notes
-
-- The CLI resolves the gmail db path from `~/.config/fieldkit/config.yaml` (`gmail_db` key) automatically. Use `--db <path>` only to override.
-- `--affiliations` scans all `accounts/*/pursuits/*.md` and `accounts/*/account.md` files.
-  It does not require a database connection.
-- `recent_threads` returns up to 8 distinct conversation topics, deduped by subject stem
-  (Re:/Fwd: stripped), OOO messages excluded. This is the most valuable signal for
-  understanding what the relationship has actually been about.
-- **Default lookback window: 12 months.** When synthesizing recent threads, examine dates
-  and include context across the full 12-month window — not just the most recent 90 days.
-  A contact's role and posture often only become clear over a longer arc (e.g., they may
-  have driven procurement activity 6 months ago that is invisible in a 90-day view).
-- Exit code 0 covers resolved, ambiguous, and not_found outcomes.
-  Exit code 1 means an unhandled exception — report the stderr message to the user.
-- For meeting prep, combine this skill output with the attendee's calendar entry for
-  maximum context before a call.
+No contact lookup writes a workspace or external resource. If the operator asks
+to save an update, show the exact destination and text, then use the owning
+workflow for that destination with separate approval.

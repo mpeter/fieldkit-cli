@@ -13,6 +13,8 @@ from unittest.mock import patch
 
 import pytest
 
+from fieldkit.watch.status import WatcherDailySnapshot, WatcherRunResult
+
 # ---------------------------------------------------------------------------
 # implementation note: .template/ exclusion in contract_expiry path-building
 # ---------------------------------------------------------------------------
@@ -48,9 +50,9 @@ def test_contract_expiry_excludes_template_account(tmp_path: Path) -> None:
         patch("fieldkit.watch.contract_expiry._load_state", return_value={}),
         patch("fieldkit.watch.contract_expiry._save_state"),
         patch("fieldkit.watch.contract_expiry.append_alert") as mock_alert,
-        patch("fieldkit.watch.contract_expiry.write_run_status"),
+        patch("fieldkit.watch.contract_expiry.write_run_status", return_value="skipped"),
     ):
-        _run_contract_expiry_inner(
+        result = _run_contract_expiry_inner(
             account_filter=None,
             dry_run=True,
             critical=14,
@@ -58,6 +60,7 @@ def test_contract_expiry_excludes_template_account(tmp_path: Path) -> None:
             notice=60,
         )
 
+    assert result == WatcherRunResult("ok", True, "skipped")
     # No alert must reference the .template account
     for call in mock_alert.call_args_list:
         result_arg = call.args[0] if call.args else {}
@@ -235,6 +238,29 @@ def test_scrub_duplicates_cli_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
 
 @pytest.mark.unit
+def test_scrub_duplicates_rejects_dry_run_without_mutating_alerts(tmp_path: Path) -> None:
+    from unittest.mock import patch
+
+    from click.testing import CliRunner
+
+    import fieldkit.commands.watch.pursuit_stalls as _wps_cmd
+    from fieldkit.commands.watch.pursuit_stalls import cli
+
+    alerts_file = tmp_path / "alerts.md"
+    block = "## 2026-07-05 — acme / deal-123 — stalled in discovery\n\n- **Account:** `acme`\n\n"
+    original = (block + block).encode()
+    alerts_file.write_bytes(original)
+
+    with patch.object(_wps_cmd, "_alerts_file", return_value=alerts_file):
+        result = CliRunner().invoke(cli, ["--dry-run", "--scrub-duplicates"])
+
+    assert result.exit_code == 3
+    assert "cannot be combined" in result.output
+    assert alerts_file.read_bytes() == original
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+@pytest.mark.unit
 def test_scrub_duplicates_positive_control(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Positive control: without --scrub-duplicates, _run_pursuit_stalls IS called."""
     from unittest.mock import patch
@@ -249,7 +275,11 @@ def test_scrub_duplicates_positive_control(tmp_path: Path, monkeypatch: pytest.M
     called: list[bool] = []
 
     with (
-        patch.object(_wps_cmd, "_run_pursuit_stalls", side_effect=lambda *a, **kw: called.append(True) or 0),
+        patch.object(
+            _wps_cmd,
+            "_run_pursuit_stalls",
+            side_effect=lambda *a, **kw: called.append(True) or WatcherRunResult("ok", True, "written"),
+        ),
     ):
         # Monkeypatch config loading to avoid real filesystem reads
         monkeypatch.setattr(
@@ -257,11 +287,12 @@ def test_scrub_duplicates_positive_control(tmp_path: Path, monkeypatch: pytest.M
             lambda: {"accounts": {}},
         )
         monkeypatch.setattr(
-            "fieldkit.watch.pursuit_stalls.was_run_today",
-            lambda *a: False,
+            "fieldkit.watch.pursuit_stalls.get_daily_run_snapshot",
+            lambda *a: WatcherDailySnapshot(False, None),
         )
 
         runner = CliRunner()
-        runner.invoke(cli, [])  # no --scrub-duplicates
+        result = runner.invoke(cli, [])  # no --scrub-duplicates
 
+    assert result.exit_code == 0, result.output
     assert called != [], "Positive control: _run_pursuit_stalls should be called on normal path"

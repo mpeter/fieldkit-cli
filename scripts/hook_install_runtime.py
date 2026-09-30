@@ -11,6 +11,12 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from types import FrameType
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING or __package__:
+    from scripts import process_supervision
+else:
+    import process_supervision
 
 GIT_REPOSITORY_ENVIRONMENT = frozenset(
     {
@@ -106,49 +112,6 @@ def _git_config_environment() -> dict[str, str]:
     return {key: value for key, value in os.environ.items() if key not in GIT_LOCATION_ENVIRONMENT}
 
 
-def _terminate_process_group(
-    process: subprocess.Popen[bytes] | subprocess.Popen[str], *, kill_after_seconds: float
-) -> list[BaseException]:
-    """Terminate and reap a subprocess group despite interruptions during cleanup."""
-    cleanup_errors: list[BaseException] = []
-    try:
-        os.killpg(process.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass
-    except BaseException as exc:  # noqa: BLE001 - cleanup must continue through interruption
-        cleanup_errors.append(exc)
-    try:
-        process.wait(timeout=kill_after_seconds)
-    except subprocess.TimeoutExpired:
-        pass
-    except BaseException as exc:  # noqa: BLE001 - SIGKILL and reap must still run
-        cleanup_errors.append(exc)
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-    except BaseException as exc:  # noqa: BLE001 - the final reap must still run
-        cleanup_errors.append(exc)
-    reap_deadline = time.monotonic() + kill_after_seconds
-    while True:
-        remaining = reap_deadline - time.monotonic()
-        if remaining <= 0:
-            details = "; ".join(_failure_description(exc) for exc in cleanup_errors)
-            suffix = f"; cleanup interruptions: {details}" if details else ""
-            raise InstallError(f"command did not exit after termination{suffix}")
-        try:
-            process.wait(timeout=remaining)
-        except subprocess.TimeoutExpired:
-            details = "; ".join(_failure_description(exc) for exc in cleanup_errors)
-            suffix = f"; cleanup interruptions: {details}" if details else ""
-            raise InstallError(f"command did not exit after termination{suffix}") from None
-        except BaseException as exc:  # noqa: BLE001 - retry reap until the bounded deadline
-            cleanup_errors.append(exc)
-            continue
-        break
-    return cleanup_errors
-
-
 def _run(
     command: Sequence[str],
     *,
@@ -171,8 +134,10 @@ def _run(
                 process = subprocess.Popen(command, cwd=cwd, env=subprocess_environment, start_new_session=True)
     except BaseException as exc:
         if process is not None:
-            for cleanup_error in _terminate_process_group(process, kill_after_seconds=kill_after_seconds):
-                exc.add_note(_failure_description(cleanup_error))
+            for cleanup_error in process_supervision.terminate_process_group(
+                process, kill_after_seconds=kill_after_seconds
+            ):
+                exc.add_note(process_supervision.failure_description(cleanup_error))
         if isinstance(exc, OSError):
             raise InstallError(f"cannot run {command[0]}: {exc}") from exc
         raise
@@ -194,21 +159,21 @@ def _run(
             termination_signals.checkpoint()
     except subprocess.TimeoutExpired:
         try:
-            cleanup_errors = _terminate_process_group(process, kill_after_seconds=kill_after_seconds)
-        except InstallError as exc:
+            cleanup_errors = process_supervision.terminate_process_group(process, kill_after_seconds=kill_after_seconds)
+        except process_supervision.ProcessError as exc:
             raise InstallError(f"command cleanup failed for {' '.join(command)}: {exc}") from exc
         error = InstallError(f"command timed out after {timeout_seconds:g}s: {' '.join(command)}")
         for cleanup_error in cleanup_errors:
-            error.add_note(_failure_description(cleanup_error))
+            error.add_note(process_supervision.failure_description(cleanup_error))
         raise error from None
     except BaseException as exc:
         try:
-            cleanup_errors = _terminate_process_group(process, kill_after_seconds=kill_after_seconds)
-        except InstallError as cleanup_error:
+            cleanup_errors = process_supervision.terminate_process_group(process, kill_after_seconds=kill_after_seconds)
+        except process_supervision.ProcessError as cleanup_error:
             exc.add_note(str(cleanup_error))
         else:
             for recorded_error in cleanup_errors:
-                exc.add_note(_failure_description(recorded_error))
+                exc.add_note(process_supervision.failure_description(recorded_error))
         raise
     if return_code != 0:
         raise InstallError(f"command failed with exit {return_code}: {' '.join(command)}")
@@ -251,8 +216,10 @@ def _git_output(
                 )
     except BaseException as exc:
         if process is not None:
-            for cleanup_error in _terminate_process_group(process, kill_after_seconds=kill_after_seconds):
-                exc.add_note(_failure_description(cleanup_error))
+            for cleanup_error in process_supervision.terminate_process_group(
+                process, kill_after_seconds=kill_after_seconds
+            ):
+                exc.add_note(process_supervision.failure_description(cleanup_error))
         if isinstance(exc, OSError):
             raise InstallError(f"cannot query Git: {exc}") from exc
         raise
@@ -274,21 +241,21 @@ def _git_output(
             termination_signals.checkpoint()
     except subprocess.TimeoutExpired:
         try:
-            cleanup_errors = _terminate_process_group(process, kill_after_seconds=kill_after_seconds)
-        except InstallError as exc:
+            cleanup_errors = process_supervision.terminate_process_group(process, kill_after_seconds=kill_after_seconds)
+        except process_supervision.ProcessError as exc:
             raise InstallError(f"Git query cleanup failed for {' '.join(command)}: {exc}") from exc
         error = InstallError(f"Git query timed out after {timeout_seconds:g}s: {' '.join(command)}")
         for cleanup_error in cleanup_errors:
-            error.add_note(_failure_description(cleanup_error))
+            error.add_note(process_supervision.failure_description(cleanup_error))
         raise error from None
     except BaseException as exc:
         try:
-            cleanup_errors = _terminate_process_group(process, kill_after_seconds=kill_after_seconds)
-        except InstallError as cleanup_error:
+            cleanup_errors = process_supervision.terminate_process_group(process, kill_after_seconds=kill_after_seconds)
+        except process_supervision.ProcessError as cleanup_error:
             exc.add_note(str(cleanup_error))
         else:
             for recorded_error in cleanup_errors:
-                exc.add_note(_failure_description(recorded_error))
+                exc.add_note(process_supervision.failure_description(recorded_error))
         raise
     return process.returncode, stdout.strip(), stderr.strip()
 
@@ -352,20 +319,3 @@ def _termination_signals_as_interrupts() -> Iterator[TerminationSignals]:
             termination_signals.checkpoint()
         else:
             termination_signals.attach_to(escaping)
-
-
-def _failure_description(exc: BaseException) -> str:
-    """Describe an exception, including diagnostic notes and its chained cause."""
-    seen: set[int] = set()
-    parts: list[str] = []
-    current: BaseException | None = exc
-    while current is not None and id(current) not in seen:
-        seen.add(id(current))
-        detail = str(current)
-        description = f"{type(current).__name__}: {detail}" if detail else type(current).__name__
-        notes = getattr(current, "__notes__", ())
-        if notes:
-            description += f" (notes: {'; '.join(notes)})"
-        parts.append(description)
-        current = current.__cause__
-    return " caused by ".join(parts)

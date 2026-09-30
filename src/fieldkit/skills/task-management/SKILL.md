@@ -1,160 +1,105 @@
 ---
 name: task-management
 description: >
-  You're mid-session and need to add, update, or review pursuit action items and daily
-  commitments tracked in TASKS.md. Manages pursuit actions, documented native
-  qualification evidence needs, waiting-on items, and daily commitments from a
-  single task file.
-  Trigger with "task management", "update my tasks", "what are my open tasks",
-  "add a task", "TASKS.md", "task list", "manage action items", "pursuit tasks",
-  "what do I need to do today", "show my tasks".
+  Review and maintain the local TASKS.md file in the configured fieldkit
+  workspace. Use for today's commitments, active work, waiting-on items,
+  queued task review, and explicitly approved task edits.
 metadata:
   category: ops
 ---
 
-# Task Management
+# Task management
 
-Tasks are tracked in `TASKS.md` in the project root.
+Use this workflow to review or propose changes to the operator's local task
+list. It does not refresh source systems, send messages, update pursuits, or
+write Google Tasks by itself.
 
-## Gotchas
+## Locate and validate the task file
 
-- **Stale vault signals** — run `/brief` first if data hasn't been refreshed today
-- **Trigger overlap with adjacent skills** — confirm you need this skill and not a closely named one
+`TASKS.md` belongs at the configured fieldkit workspace root. It belongs in
+that workspace, not the fieldkit source checkout or runtime-data directory.
+Resolve the configured fieldkit workspace root before reading or proposing a
+write. If the workspace cannot be resolved unambiguously, stop and ask which
+workspace is intended.
 
-## Constraints
+Treat a missing file as a setup choice, not permission to create one. Propose a
+new UTF-8 file with the following elements in order: `# Tasks`, the exact
+`<!-- task-sync:start -->` marker, `## Today`, `## Active`, `## Done`, the exact
+`<!-- task-sync:end -->` marker, `## Waiting On`, and the local queued section. Show the
+complete proposed file and obtain confirmation before creating it.
 
-- **Never write to account or pursuit files without explicit confirmation**
-- **Always surface generated output for review before any external send**
+In TASKS.md, the local queued section is named `## Backlog`.
 
-## File Location
+The two task-sync markers must each occur exactly once and in that order. When
+Google Tasks reconciliation is in use, `Today`, `Active`, and `Done` are the
+managed region. Waiting-on and queued items remain local. Do not add, remove, or
+rewrite `<!-- gtask:<id> -->` or `<!-- fieldkit-task:... -->` identity comments.
+If markers or identity comments are missing, duplicated, malformed, or
+ambiguous, stop and ask for reconciliation instead of guessing.
 
-Always use `TASKS.md` in the project root. If it doesn't exist, create it from the template below.
+## Read and summarize
 
-## Format & Template
+For a review request, read the file without changing it. Present `Today`, then
+`Active`, `Waiting On`, and queued items. Use only explicit dates to identify
+overdue work. Unknown owners and due dates remain unknown. A subject line or
+summary is not proof of a commitment; inspect the authorized underlying source
+before attributing one.
 
-```markdown
-# Tasks
+Keep source freshness visible. Cached Gmail results are not a live mailbox,
+workspace pursuit fields are not a fresh Salesforce read, and optional
+integration data may be absent. Missing data is unavailable, not evidence that
+no work exists.
 
-## Today
+## Propose a task change
 
-<!-- Reset each morning. Move done items to Done Today. Roll unfinished back to Active. -->
+Convert the request into one concrete action. Preserve the operator's wording
+unless the documented task format requires normalization. Do not invent an
+account, owner, deadline, or customer commitment. Account-scoped items use the
+known account slug in a visible
+`**[account-slug]**` prefix. Use an ISO date (`YYYY-MM-DD`) when a due or
+follow-up date is known.
 
-## Active
+Use these local forms:
 
-## Waiting On
+- open work: `- [ ] **[account-slug]** Concrete next action — due YYYY-MM-DD`
+- waiting: `- **[account-slug]** Waiting on Person re: topic — sent YYYY-MM-DD, follow up by YYYY-MM-DD`
+- completed: retain the original line and identity comment, change the checkbox
+  to `[x]`, and add the observed completion date only when it is known
 
-<!-- Format: - **[Account / Pursuit]** Waiting on [person] re: [topic] — sent [date], follow up by [date] -->
+For a new item, propose `Today` only when the operator explicitly commits to it
+today; otherwise propose `Active` or the local queued section. If task sync is enabled, an
+anchorless item in `Today` or `Active` is a pending proposal for remote creation
+on the next separately approved task-sync run. A checked anchored item is only
+a staged completion until that run confirms it remotely.
 
-## Someday
+Show the exact proposed diff, including any preserved identity comments. Do not
+write until the operator approves that diff. Approval to edit `TASKS.md` does
+not authorize a Google Tasks write, a pursuit edit, a Salesforce write, or an
+external message. After a local write, read the file back and report only the
+change that is present.
 
-## Done Today
+## Source-supported follow-ups
 
-## Done
-```
+Meeting notes, cached email, pursuit records, and Salesforce reports can suggest
+candidate tasks only after the relevant dated evidence has been inspected. Do
+not infer qualification gaps, customer intent, or unanswered commitments from
+a score, a missing field, a thread subject, or a summary alone. For meeting
+action items with stable provenance, `fieldkit ingest promote` is the shipped
+interactive local-write path; it still requires the operator to classify each
+item and does not sync Google Tasks.
 
-Task format:
+Morning and end-of-day reviews are ordinary read/propose cycles. Do not reset
+sections, prune old work, write lessons, or move items merely because the clock
+or calendar changed. Present the proposed changes and use the same approval and
+read-back requirements.
 
-- `- [ ] **Task title** — [Account] context, for [person], due [date]`
-- Sub-bullets for additional details
-- Completed: `- [x] ~~Task~~ (date)`
+## Completion and sync boundaries
 
-Waiting On format:
+Marking a task done records only task state. It does not prove that a message
+was sent, a customer agreed, qualification changed, or another system was
+updated. If a task yielded evidence for another workflow, offer that separate
+workflow and obtain its own approval.
 
-- `- **[acme-corp / Platform Modernization]** Waiting on <contact-name> re: SOW redlines — sent 2026-04-28, follow up by 2026-05-07`
-
-## Task Sources
-
-Tasks come from five places — never generic trackers like Jira or Linear:
-
-1. **Pursuit files** (`accounts/*/pursuits/*.md`) — documented qualification
-   evidence needs, champion follow-ups, and proposal deadlines; local legacy
-   scores are not current
-2. **Backstory (People.ai)** — risks flagged, next steps surfaced, stalled engagement
-3. **Gmail cache** (`fieldkit gmail query`) — commitments made in email threads, unanswered asks
-4. **Salesforce** — stage changes, close date shifts, new opportunities assigned
-5. **Meetings and conversations** — action items from calls, QBRs, internal syncs
-
-## Protocols
-
-### Morning Reset (run when user says "start my day" / "morning reset")
-
-1. Read TASKS.md
-2. Move any unfinished Today items back to Active
-3. Clear Done Today (move notable items to Done)
-4. Surface any Waiting On items with overdue follow-up dates — flag by account
-5. Ask: "What are you driving today?" — add 1-3 items to Today
-6. If pursuit notes or a current `/grill` review names an urgent native evidence
-   need, surface it as a candidate Today item; do not derive gaps from historical
-   local scores
-
-### EOD Close (run when user says "wrap up" / "end of day")
-
-1. Read TASKS.md
-2. Mark any completed Today items as done (`[x]`, move to Done Today)
-3. Roll unfinished Today items back to Active
-4. Ask about any new Waiting On items from today's meetings or emails
-5. Append a dated entry to `memory/system/lessons-learned.md` if anything notable happened (win, loss, new stakeholder insight, deal signal)
-6. Output a one-paragraph summary of what moved
-
-## How to Interact
-
-**When user asks "what's on my plate" / "my tasks":**
-
-- Read TASKS.md
-- Summarize Today first, then Active — grouped by account
-- Highlight anything in Waiting On with a follow-up date that has passed
-- If any pursuit has a close date within 14 days, flag it
-
-**When user says "add a task" / "remind me to":**
-
-- Add to Active (or Today if user says "for today")
-- Format: `- [ ] **Task** — [Account] context, due [date]`
-- Always include the account name (and its slug) when the task relates to a specific account or pursuit
-
-**When user says "done with X" / "finished X":**
-
-- Mark `[x]` with strikethrough and date
-- Move to Done Today (or Done if end-of-day close)
-- If the task gathered qualification evidence (for example, "confirm economic buyer"), stage it for `/grill`; do not write a local score
-
-**When user asks "what am I waiting on":**
-
-- Read the Waiting On section
-- Flag anything past its follow-up date
-- Group by account
-
-**When user moves something to Waiting On:**
-
-- Always capture: account/pursuit, who, topic, date sent, follow-up-by date
-- Match the person against `accounts/*/account.md` stakeholder maps when possible
-
-## Conventions
-
-- **Bold** the task title for scannability
-- Include "[Account]" prefix when the task relates to a specific account
-- Include "for [person]" when it's a commitment to someone
-- Include "due [date]" for deadlines
-- Include "since [date]" for waiting items
-- Keep Done for ~1 week, then clear old items
-- Today resets daily — it's a commitment list, not a backlog
-
-## Extracting Tasks from Meetings
-
-When summarizing meetings or conversations, offer to add extracted tasks:
-
-- Commitments the user made ("I'll send that over")
-- Action items assigned to them
-- MEDDPICC actions surfaced ("we need to confirm the decision process")
-- Follow-ups with specific people at the account
-
-Ask before adding — don't auto-add without confirmation.
-
-## Extracting Tasks from Pursuit Files
-
-When reading pursuit files, surface only documented qualification actions as
-candidate tasks. Do not infer current gaps from `meddpicc` or `legacy_meddpicc`:
-
-- Missing economic buyer → "Schedule intro to EB at [Account]"
-- No champion identified → "Identify and develop champion for [Pursuit]"
-- Stale next steps → "Update next steps on [Pursuit] — last updated [date]"
-- Close date within 30 days with incomplete paper process → "Confirm paper process for [Pursuit]"
+Use the [task-sync workflow](../task-sync/SKILL.md) only when the operator asks
+to reconcile with Google Tasks. That workflow has separate prerequisites,
+previews, approvals, and remote read-back requirements.

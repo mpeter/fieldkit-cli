@@ -150,6 +150,7 @@ def test_prompt_item_quit_propagation_abort_causes_promote_file_to_return_true(
         "meeting_date: '2026-05-01'\n"
         "account: acme\n"
         "pursuits: []\n"
+        "source_id: source-1\n"
         "action_items:\n"
         "  - Send the proposal\n"
         "---\n"
@@ -234,6 +235,7 @@ def _promote_file_completion_semantics_make_meeting(tmp_path: pytest.TempPathFac
         "meeting_date: '2026-06-02'\n"
         "account: acme\n"
         "pursuits: []\n"
+        "source_id: source-1\n"
         "action_items:\n"
         "  - Send the follow-up email\n"
         "---\n"
@@ -257,7 +259,7 @@ def test_promote_file_completion_semantics_promote_file_returns_false_on_normal_
     # _prompt_item returns "m" — user claims the task
     monkeypatch.setattr(promote_mod, "_prompt_item", lambda *args, **kwargs: "m")
     # _write_active is a no-op so we don't need a real TASKS.md structure
-    monkeypatch.setattr(promote_mod, "_write_active", lambda *args, **kwargs: None)
+    monkeypatch.setattr(promote_mod, "_write_active", lambda *args, **kwargs: True)
 
     result = _promote_file(
         meeting,  # type: ignore[arg-type]

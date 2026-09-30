@@ -5,13 +5,16 @@ against the authoritative registries so a new watcher or CLI group cannot be
 added without the companion tables being updated deliberately.
 """
 
+import click
 import pytest
 
 from fieldkit.__main__ import _COMMANDS
+from fieldkit.cli_registry import walk_cli
 from fieldkit.companion.mapping import (
+    ACT_PREVIEW_DENIED_OPTIONS,
     ALERT_SKILL_MAP,
     DRY_RUN_CAPABLE,
-    READ_ONLY_COMMANDS,
+    READ_ONLY_POLICIES,
     WATCHER_SEVERITY_MAP,
     suggested_skill_for,
 )
@@ -38,17 +41,17 @@ def test_watcher_severity_values_are_valid() -> None:
 
 def test_read_only_commands_reference_registered_groups() -> None:
     # Contract: every read-only entry names a group that exists in the dispatcher.
-    result = {group for group, _sub in READ_ONLY_COMMANDS if group not in _COMMANDS}
+    result = {path[0] for path in READ_ONLY_POLICIES if path[0] not in _COMMANDS}
     assert result == set(), (
-        f"READ_ONLY_COMMANDS names unregistered CLI groups: {sorted(result)}. "
+        f"READ_ONLY_POLICIES names unregistered CLI groups: {sorted(result)}. "
         "A renamed or removed group must be reflected here or the gate silently allows nothing."
     )
 
 
 def test_read_only_commands_exclude_known_write_groups() -> None:
-    # Groups whose subcommands mutate external state must never appear with
-    # a None sub (which would bless the entire group as read-only).
-    result = {group for group, sub in READ_ONLY_COMMANDS if sub is None and group != "version"}
+    # Only the genuine leaf command `version` is one token. Groups with write
+    # subcommands must never be blessed by a group-prefix policy.
+    result = {path for path in READ_ONLY_POLICIES if len(path) == 1 and path != ("version",)}
     assert result == set(), f"bare-group read-only entries beyond 'version': {sorted(result)}"
 
 
@@ -57,17 +60,48 @@ def test_dry_run_capable_names_registered_groups() -> None:
     result = {entry.split()[0] for entry in DRY_RUN_CAPABLE if entry.split()[0] not in _COMMANDS}
     assert result == set(), (
         f"DRY_RUN_CAPABLE names unregistered CLI groups: {sorted(result)}. "
-        "A renamed or removed group must be reflected here or validate_allowlist silently "
+        "A renamed or removed group must be reflected here or act policy compilation silently "
         "rejects every entry naming it."
     )
 
 
-def test_dry_run_capable_entries_are_two_tokens() -> None:
-    # Contract: every entry is exactly "group subcommand" — validate_allowlist's
-    # own token-count check means a single-token or three-token entry here can
-    # never match a real allowlist entry, so it would be silent dead weight.
-    result = [entry for entry in DRY_RUN_CAPABLE if len(entry.split()) != 2]
+def test_dry_run_capable_entries_have_full_command_paths() -> None:
+    result = [entry for entry in DRY_RUN_CAPABLE if len(entry.split()) < 2]
     assert result == []
+
+
+@pytest.mark.parametrize("entry", sorted(DRY_RUN_CAPABLE))
+def test_dry_run_capable_entries_have_actual_preview_options(entry: str) -> None:
+    nodes = walk_cli()
+    assert nodes
+    leaves = {
+        node.full_name: node.command
+        for node in nodes
+        if node.is_leaf or (isinstance(node.command, click.Group) and node.command.invoke_without_command)
+    }
+    assert entry in leaves
+    assert any(
+        isinstance(parameter, click.Option) and "--dry-run" in parameter.opts for parameter in leaves[entry].params
+    )
+
+
+def test_act_preview_denied_options_name_real_reviewed_options() -> None:
+    leaves = {
+        node.full_name: node.command
+        for node in walk_cli()
+        if node.is_leaf or (isinstance(node.command, click.Group) and node.command.invoke_without_command)
+    }
+
+    assert set(ACT_PREVIEW_DENIED_OPTIONS) <= DRY_RUN_CAPABLE
+    for entry, denied in ACT_PREVIEW_DENIED_OPTIONS.items():
+        actual = {
+            option
+            for parameter in leaves[entry].params
+            if isinstance(parameter, click.Option)
+            for option in parameter.opts
+        }
+        assert denied
+        assert denied <= actual
 
 
 def test_dry_run_capable_excludes_unregistered_watch_subcommands() -> None:
@@ -88,7 +122,7 @@ def test_dry_run_capable_includes_registered_dry_run_commands() -> None:
 
 def test_gtask_mutations_are_previewable_but_not_read_only() -> None:
     assert {"gtask create", "gtask complete"} <= DRY_RUN_CAPABLE
-    assert not any(group == "gtask" for group, _subcommand in READ_ONLY_COMMANDS)
+    assert not any(path[0] == "gtask" for path in READ_ONLY_POLICIES)
 
 
 def test_alert_skill_map_values_are_nonempty_slugs() -> None:

@@ -1,195 +1,81 @@
-"""Migration verification tests for S04: lib.io.load_pursuit() integration.
+"""Integration contracts for canonical Salesforce pursuit parsing and publication."""
 
-Confirms that the three internal sf_pipeline readers (_extract_opp_id,
-reconcile.cli, and _quality_check_pursuit) call lib.io.load_pursuit()
-as their primary frontmatter read path after the S04 migration.
-"""
-
-import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from click.testing import CliRunner
 
+import fieldkit.commands.pursuit.audit as audit_mod
+import fieldkit.commands.sf.frontmatter as frontmatter_mod
+import fieldkit.commands.sf.reconcile as reconcile_mod
+import fieldkit.sf.sync as sync_mod
+from fieldkit.errors import FieldkitError
+from fieldkit.pursuit.io import read_pursuit_text_snapshot
+
 pytestmark = pytest.mark.integration
 
-# Ensure project root on path so imports resolve
-ROOT = Path(__file__).parent.parent
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
 
-# Import the modules under test
-import fieldkit.commands.pursuit.audit as audit_mod  # noqa: E402
-import fieldkit.commands.sf.frontmatter as frontmatter_mod  # noqa: E402
-import fieldkit.commands.sf.reconcile as reconcile_mod  # noqa: E402
-import fieldkit.commands.sf.sync as sync_mod  # noqa: E402
-
-
-def _make_pursuit_with_stage(tmp_path: Path, extra_fm: str = "") -> Path:
-    """Create a minimal valid pursuit file that load_pursuit() can parse."""
-    content = f"---\nstage: discover\n{extra_fm}---\n# Test Pursuit\n\nBody content here.\n"
-    p = tmp_path / "pursuit.md"
-    p.write_text(content, encoding="utf-8")
-    return p
-
-
-# ── TestExtractOppIdUsesLibIo (flattened) ───────────────────────────────────
-
-
-def test_extract_opp_id_uses_lib_io_extract_opp_id_uses_lib_io(tmp_path):
-    """load_pursuit is called and the opp ID is returned from its result."""
-    valid_id = "006Dn000001AbCdEFG"  # 18 alphanumeric chars (valid SF ID format)
-    pursuit = _make_pursuit_with_stage(tmp_path, extra_fm=f"sf_opportunity_id: {valid_id}\n")
-
-    # Patch load_pursuit where it was imported into sync
-    with patch("fieldkit.commands.sf.sync.load_pursuit") as mock_load:
-        mock_model = MagicMock()
-        mock_model.sf_opportunity_id = valid_id
-        mock_load.return_value = (mock_model, "# Body\n", 1234567890.0)
-
-        result = sync_mod._extract_opp_id(pursuit)
-
-    mock_load.assert_called_once_with(pursuit)
-    assert result == valid_id
-
-
-def test_extract_opp_id_uses_lib_io_extract_opp_id_returns_none_when_empty(tmp_path):
-    """load_pursuit is still called even when sf_opportunity_id is empty."""
-    pursuit = _make_pursuit_with_stage(tmp_path)
-
-    with patch("fieldkit.commands.sf.sync.load_pursuit") as mock_load:
-        mock_model = MagicMock()
-        mock_model.sf_opportunity_id = None
-        mock_load.return_value = (mock_model, "# Body\n", 1234567890.0)
-
-        result = sync_mod._extract_opp_id(pursuit)
-
-    mock_load.assert_called_once()
-    assert result is None
-
-
-def test_extract_opp_id_uses_lib_io_extract_opp_id_real_file_roundtrip(tmp_path):
-    """End-to-end: real load_pursuit reads sf_opportunity_id from a valid file."""
-    valid_id = "006Dn000001RealABC"  # 18 alphanumeric chars
-    pursuit = _make_pursuit_with_stage(tmp_path, extra_fm=f'sf_opportunity_id: "{valid_id}"\n')
-    result = sync_mod._extract_opp_id(pursuit)
-    assert result == valid_id
-
-
-def test_extract_opp_id_uses_lib_io_extract_opp_id_needs_lookup_returns_none(tmp_path, caplog):
-    """historic regression: 'NEEDS-LOOKUP' is not in PLACEHOLDER_VALUES but fails OPP_ID_RE.
-
-    The model path must validate raw_val against OPP_ID_RE and return None
-    (with a WARNING) for any string that is not a 15- or 18-char alphanumeric
-    Salesforce ID — including informal placeholder strings like 'NEEDS-LOOKUP'.
-    """
-    import logging
-
-    with patch("fieldkit.commands.sf.sync.load_pursuit") as mock_load:
-        mock_model = MagicMock()
-        mock_model.sf_opportunity_id = "NEEDS-LOOKUP"
-        mock_load.return_value = (mock_model, "# Body\n", 1234567890.0)
-
-        with caplog.at_level(logging.WARNING, logger="fieldkit.commands.sf.sync"):
-            result = sync_mod._extract_opp_id(tmp_path / "pursuit.md")
-
-    assert result is None, f"Expected None for 'NEEDS-LOOKUP', got {result!r}"
-    assert any("looks invalid" in r.message and "NEEDS-LOOKUP" in r.message for r in caplog.records), (
-        f"Expected WARNING about invalid ID, got: {[r.message for r in caplog.records]}"
+def _make_pursuit_with_stage(workspace: Path, extra_fm: str = "") -> Path:
+    path = workspace / "accounts" / "acme-corp" / "pursuits" / "expansion.md"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        f"---\nstage: discover\ngate-status: pending\n{extra_fm}---\n"
+        "\n## Key Fields\n\n| Field | Value |\n| ----- | ----- |\n| Stage | Discover |\n",
+        encoding="utf-8",
     )
+    return path
 
 
-def test_extract_opp_id_uses_lib_io_extract_opp_id_valid_18char_id_returned(tmp_path):
-    """historic regression regression guard: a valid 18-char SF ID passes OPP_ID_RE and is returned."""
-    valid_id = "006Dn000001AbCdEF0"  # exactly 18 alphanumeric chars
-    with patch("fieldkit.commands.sf.sync.load_pursuit") as mock_load:
-        mock_model = MagicMock()
-        mock_model.sf_opportunity_id = valid_id
-        mock_load.return_value = (mock_model, "# Body\n", 1234567890.0)
-
-        result = sync_mod._extract_opp_id(tmp_path / "pursuit.md")
-
-    assert result == valid_id, f"Expected valid ID to be returned unchanged, got {result!r}"
+@pytest.mark.parametrize("identity", ["006000000000AAA", "006000000000AAAabc"])
+def test_identity_reads_one_bounded_snapshot(tmp_path: Path, identity: str) -> None:
+    path = _make_pursuit_with_stage(tmp_path, f"sf_opportunity_id: {identity}\n")
+    with patch("fieldkit.sf.sync.read_pursuit_text_snapshot", wraps=read_pursuit_text_snapshot) as read:
+        result = sync_mod.read_local_pursuit(path, workspace=tmp_path)
+    assert result.opportunity_id == identity
+    read.assert_called_once_with(path)
 
 
-# ── TestReconcileMainReadsViaLibIo (flattened) ──────────────────────────────
+def test_missing_identity_is_untracked_not_an_error(tmp_path: Path) -> None:
+    path = _make_pursuit_with_stage(tmp_path)
+    assert sync_mod.read_local_pursuit(path, workspace=tmp_path).opportunity_id is None
 
 
-def test_reconcile_main_reads_via_lib_io_reconcile_main_reads_via_lib_io(tmp_path):
-    """load_pursuit is called when reconcile.cli processes a pursuit file."""
-    # Use pursuit_full.md fixture which has sf_stage, sf_close_date, sf_arr
-    import shutil
-
-    fixture = ROOT / "tests" / "fixtures" / "pursuit_full.md"
-    pursuit = tmp_path / "pursuit_full.md"
-    shutil.copy(fixture, pursuit)
-
-    with patch("fieldkit.commands.sf.reconcile.load_pursuit") as mock_load:
-        mock_model = MagicMock()
-        mock_model.sf_stage = "Propose"
-        mock_model.sf_close_date = "2026-06-30"
-        mock_model.sf_arr = "100000"
-        mock_load.return_value = (mock_model, "", 1234567890.0)
-
-        CliRunner().invoke(reconcile_mod.cli, [str(pursuit)])
-
-    mock_load.assert_called_once_with(str(pursuit))
-    assert mock_load.call_count == 1
+def test_quoted_identity_real_file_roundtrip(tmp_path: Path) -> None:
+    identity = "006000000000AAA"
+    path = _make_pursuit_with_stage(tmp_path, f'sf_opportunity_id: "{identity}"\n')
+    assert sync_mod.read_local_pursuit(path, workspace=tmp_path).opportunity_id == identity
 
 
-def test_reconcile_main_reads_via_lib_io_reconcile_main_real_file_no_crash(tmp_path):
-    """End-to-end: reconcile.cli runs without error on a valid pursuit file."""
-    import shutil
+def test_placeholder_is_not_complete_untracked_evidence(tmp_path: Path) -> None:
+    path = _make_pursuit_with_stage(tmp_path, "sf_opportunity_id: NEEDS-LOOKUP\n")
+    with pytest.raises(FieldkitError, match="identity is invalid"):
+        sync_mod.read_local_pursuit(path, workspace=tmp_path)
 
-    fixture = ROOT / "tests" / "fixtures" / "pursuit_full.md"
-    pursuit = tmp_path / "pursuit_full.md"
-    shutil.copy(fixture, pursuit)
 
-    result = CliRunner().invoke(reconcile_mod.cli, [str(pursuit)])
-    assert result.exit_code in (0, None)
+def test_reconcile_preview_reads_canonical_snapshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = _make_pursuit_with_stage(tmp_path, "sf_stage: Propose\n")
+    monkeypatch.setattr(reconcile_mod, "get_fieldkit_home", lambda: tmp_path)
+    with patch("fieldkit.sf.frontmatter.read_pursuit_text_snapshot", wraps=read_pursuit_text_snapshot) as read:
+        result = CliRunner().invoke(reconcile_mod.cli, [str(path), "--dry-run"])
+    assert result.exit_code == 0, result.output
+    read.assert_called_once_with(path)
+    assert "| Stage | Discover |" in path.read_text(encoding="utf-8")
+
+
+def test_reconcile_real_file_roundtrip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = _make_pursuit_with_stage(tmp_path, "sf_stage: Propose\n")
+    monkeypatch.setattr(reconcile_mod, "get_fieldkit_home", lambda: tmp_path)
+    result = CliRunner().invoke(reconcile_mod.cli, [str(path)])
+    assert result.exit_code == 0, result.output
+    assert "| Stage | Propose |" in path.read_text(encoding="utf-8")
 
 
 # ── TestQualityCheckBackstoryScanViaLibIo (flattened) ───────────────────────
 
 
-def test_quality_check_backstory_scan_via_lib_io_quality_check_uses_lib_io(tmp_path):
-    """load_pursuit is called during _quality_check_pursuit()."""
-    pursuit = _make_pursuit_with_stage(tmp_path)
-
-    with patch("fieldkit.commands.sf.frontmatter.load_pursuit") as mock_load:
-        mock_model = MagicMock()
-        mock_model.model_dump.return_value = {}
-        mock_load.return_value = (mock_model, "", 1234567890.0)
-
-        frontmatter_mod._quality_check_pursuit(str(pursuit))
-
-    mock_load.assert_called_once_with(str(pursuit))
-    assert mock_load.call_count == 1
-
-
-def test_quality_check_backstory_scan_via_lib_io_backstory_in_frontmatter_flagged_via_lib_io(tmp_path, capsys):
-    """Backstory prohibition scan fires when load_pursuit returns flagged data."""
-    pursuit = _make_pursuit_with_stage(tmp_path, extra_fm='champion_name: "[Backstory] Jane Smith"\n')
-
-    with patch("fieldkit.commands.sf.frontmatter.load_pursuit") as mock_load:
-        mock_model = MagicMock()
-        # Simulate model_dump returning a dict with a backstory string
-        mock_model.model_dump.return_value = {"champion_name": "[Backstory] Jane Smith"}
-        mock_load.return_value = (mock_model, "", 1234567890.0)
-
-        frontmatter_mod._quality_check_pursuit(str(pursuit))
-
-    err = capsys.readouterr().err
-    assert "Backstory-derived data found" in err
-
-
 def test_quality_check_backstory_scan_via_lib_io_quality_check_real_file_with_backstory(tmp_path, capsys):
-    """End-to-end: _quality_check_pursuit warns on [Backstory] in sf_next_steps.
-
-    Uses sf_next_steps (a known schema field in PursuitFrontmatter) so that
-    load_pursuit() succeeds and model_dump() includes the flagged string.
-    """
+    """End-to-end: the quality check warns on nested frontmatter evidence."""
     content = (
         '---\nstage: discover\nsf_next_steps: "[Backstory] schedule follow-up via People.AI signal"\n---\n# Test\n'
     )

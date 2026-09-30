@@ -2,79 +2,120 @@
   "skill_name": "sf-sync",
   "static_checks": [
     {
-      "id": "commands_exist",
-      "type": "commands_exist",
-      "commands": [
-        "fieldkit sf listview",
-        "fieldkit sf opportunity",
-        "fieldkit sf account",
-        "fieldkit auth sf"
-      ]
-    },
-    {
-      "id": "no_ingest",
-      "type": "not_contains",
-      "pattern": "sf ingest",
-      "message": "sf ingest was removed — must not reference it"
-    },
-    {
-      "id": "auth_documented",
+      "id": "session_check",
       "type": "contains",
-      "pattern": "auth sf",
-      "message": "Must document auth sf as the auth method"
+      "pattern": "fieldkit sf session-check --json",
+      "message": "Must validate the live Salesforce session before use"
     },
     {
-      "id": "three_modes",
+      "id": "read_only_previews",
       "type": "contains_all",
       "patterns": [
-        "listview",
-        "opportunity",
-        "account"
+        "fieldkit sf opportunity OPPORTUNITY_ID --json",
+        "fieldkit sf account ACCOUNT --json",
+        "fieldkit sf account ACCOUNT --no-write",
+        "fieldkit sf listview ACCOUNT --dry-run --json"
       ],
-      "message": "Must define all three modes"
+      "message": "Must distinguish read-only previews from writes"
     },
     {
-      "id": "error_handling",
+      "id": "listview_preview_boundary",
+      "type": "contains_all",
+      "patterns": [
+        "--json alone changes only the summary format and still writes",
+        "--dry-run flag is what suppresses those workspace writes"
+      ],
+      "message": "Must distinguish listview JSON formatting from its real dry run"
+    },
+    {
+      "id": "bulk_scope",
+      "type": "contains_all",
+      "patterns": [
+        "fieldkit sf listview ACCOUNT",
+        "fieldkit sf listview --all",
+        "so do not omit it"
+      ],
+      "message": "Must make bulk write scope explicit"
+    },
+    {
+      "id": "account_boundary",
       "type": "contains",
-      "pattern": "Auth failure",
-      "message": "Must document auth failure handling"
+      "pattern": "it does not refresh that account's pursuit files",
+      "message": "Must describe account mode truthfully"
+    },
+    {
+      "id": "no_removed_command",
+      "type": "not_contains",
+      "pattern": "fieldkit sf sync",
+      "message": "Must not invent an sf sync subcommand"
     }
   ],
   "evals": [
     {
       "id": 0,
-      "prompt": "sync salesforce for {{primary_account}}",
-      "expected_behavior": "Runs listview or account mode for {{primary_account}} — does not use opportunity mode without an opp ID",
+      "prompt": "Show me live Salesforce data for Acme Corp without changing local files.",
+      "expected_behavior": "Verifies authentication and uses the account read-only payload",
       "assertions": [
-        "Defaults to listview or account mode (not opportunity mode) when an account name is given",
-        "Runs fieldkit sf listview or fieldkit sf account with the named account as the argument"
+        "Runs fieldkit sf session-check --json first",
+        "Uses fieldkit sf account acme-corp --json or --no-write",
+        "Uses account --json for the requested dashboard read rather than broadening to listview",
+        "Does not claim that the read refreshed pursuit files"
       ]
     },
     {
       "id": 1,
-      "prompt": "sync opportunity {{example_sf_id}}",
-      "expected_behavior": "Recognizes the 15- or 18-char alphanumeric ID as a Salesforce opportunity ID, runs opportunity mode",
+      "prompt": "Refresh pursuit accounts/acme-corp/pursuits/northwind-renewal.md from opportunity 006000000000000AAA.",
+      "expected_behavior": "Previews the exact opportunity and destination, then waits for write approval",
       "assertions": [
-        "Invokes fieldkit sf opportunity {{example_sf_id}}",
-        "Does not run listview mode for an opportunity ID"
+        "Verifies the Salesforce session",
+        "Uses fieldkit sf opportunity 006000000000000AAA --json for the read-only preview",
+        "Shows the mapped fields and exact pursuit path before asking for approval",
+        "Runs fieldkit sf opportunity 006000000000000AAA accounts/acme-corp/pursuits/northwind-renewal.md only after approval"
       ]
     },
     {
       "id": 2,
-      "prompt": "sf-sync but the session is expired",
-      "expected_behavior": "Stops on session expiry and tells user exactly how to get sid from browser and run auth sf",
+      "prompt": "The Salesforce session check says active is false. Continue the refresh anyway.",
+      "expected_behavior": "Stops before Salesforce access and routes credential handling to the operator",
       "assertions": [
-        "Instructs user to run 'fieldkit auth sf'",
-        "Tells user where to get the sid (browser cookies at the Salesforce domain)"
+        "Does not run a Salesforce read or write",
+        "Directs the operator to run fieldkit auth sf interactively",
+        "Never asks for the sid in chat or places it in command arguments",
+        "Requires a passing rerun of fieldkit sf session-check --json"
       ]
     },
     {
       "id": 3,
-      "prompt": "sync {{primary_account}} {{primary_pursuit}} — the sf_opportunity_id field is null in the pursuit frontmatter",
-      "expected_behavior": "Surfaces the missing sf_opportunity_id as a blocker and instructs user to set it manually before running opportunity sync",
+      "prompt": "Bulk refresh Salesforce pursuits for Acme Corp.",
+      "expected_behavior": "Previews the account-scoped matches, then runs the write only after approval",
       "assertions": [
-        "Logs {{primary_pursuit}} as SKIP (no sf_opportunity_id) rather than failing",
-        "Reports the skip in the sync summary so the user knows the pursuit was not synced"
+        "Uses fieldkit sf listview acme-corp --dry-run --json for the mutation-free preview",
+        "Explains that --json without --dry-run still writes",
+        "Requests approval for the Acme Corp pursuit cache and frontmatter writes",
+        "Uses fieldkit sf listview acme-corp --json only after approval",
+        "Treats exit 1 as partial and reports untracked opportunities separately"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Run sf-sync everywhere.",
+      "expected_behavior": "Refuses an ambiguous all-account write and asks for explicit scope",
+      "assertions": [
+        "Does not run listview with an omitted target",
+        "Explains that omitted target and --all both select all configured non-internal accounts",
+        "Requests explicit approval for the named accounts and local write scope",
+        "Does not infer approval from the phrase everywhere"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Update the Acme Corp account dashboard only.",
+      "expected_behavior": "Previews and writes only account.md after explicit approval",
+      "assertions": [
+        "Uses fieldkit sf account acme-corp --json for the preview",
+        "Identifies accounts/acme-corp/account.md as the only local destination",
+        "Uses fieldkit sf account acme-corp only after approval",
+        "Does not claim the command refreshes pursuit files"
       ]
     }
   ]

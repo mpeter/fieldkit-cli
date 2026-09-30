@@ -13,8 +13,8 @@ Usage:
     uv run python scripts/build_changelog.py --dry-run  # print result, change nothing
 
 Exit 0: assembled, or nothing to do.
-Exit 1: CHANGELOG.md missing the ``## [Unreleased]`` anchor, or fragment cleanup
-        failed partway (surviving fragments are named on stderr).
+Exit 1: missing ``## [Unreleased]`` anchor, reserved fragment boundaries,
+        duplicate fragment bodies, or partial cleanup (survivors named on stderr).
 """
 
 import argparse
@@ -23,7 +23,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from _changelog_common import FRAGMENTS_DIRNAME, META_FRAGMENTS
+from _changelog_common import FRAGMENTS_DIRNAME, META_FRAGMENTS, fragment_boundary_problem
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CHANGELOG_PATH = REPO_ROOT / "CHANGELOG.md"
@@ -44,23 +44,16 @@ def _collect_fragments() -> list[Path]:
     )
 
 
-def _heading_of(fragment_text: str) -> str | None:
-    """Return the fragment's first ``###`` heading line, or None if it has none."""
-    for line in fragment_text.splitlines():
-        if line.startswith("### "):
-            return line.strip()
-    return None
-
-
 def _assemble(changelog: str, fragments: list[Path]) -> str:
     """Return *changelog* with *fragments* inserted under the Unreleased heading.
 
-    Fragments whose ``###`` heading already appears in *changelog* are skipped.
-    Without that guard, re-running after an interrupted cleanup (CHANGELOG.md
-    written, fragments only partly deleted) folds the survivors in a second time.
+    Exact entries already assembled under Unreleased are skipped on retries
+    after interrupted cleanup. A shared heading or a previous release entry
+    does not establish that a fragment was consumed.
 
     Raises:
-        ValueError: when the Unreleased heading is absent.
+        ValueError: when Unreleased is absent, fragment boundaries are reserved,
+            or multiple fragments contain identical text.
     """
     lines = changelog.split("\n")
     try:
@@ -73,12 +66,25 @@ def _assemble(changelog: str, fragments: list[Path]) -> str:
     if fragments and tail.startswith(EMPTY_UNRELEASED_PLACEHOLDER):
         tail = tail.removeprefix(EMPTY_UNRELEASED_PLACEHOLDER).lstrip()
 
+    unreleased_lines: list[str] = []
+    for line in tail.splitlines():
+        if line.startswith("## "):
+            break
+        unreleased_lines.append(line)
+    unreleased = "\n".join(unreleased_lines) + "\n"
+    existing_entries = {block.strip() for block in unreleased.split(SEPARATOR)}
+
     blocks: list[str] = []
+    seen_fragments: set[str] = set()
     for path in fragments:
         text = path.read_text(encoding="utf-8").strip()
-        heading = _heading_of(text)
-        if heading is not None and heading in changelog:
-            print(f"Skipping {path.name}: {heading!r} already in CHANGELOG.md")
+        if problem := fragment_boundary_problem(text):
+            raise ValueError(f"{path.name}: {problem}")
+        if text in seen_fragments:
+            raise ValueError(f"{path.name}: duplicate fragment content")
+        seen_fragments.add(text)
+        if text in existing_entries:
+            print(f"Skipping {path.name}: identical entry already under Unreleased")
             continue
         blocks.append(text)
 
@@ -115,7 +121,8 @@ def main(argv: list[str] | None = None) -> int:
 
     Returns:
         0 when assembled or when there was nothing to do.
-        1 when CHANGELOG.md lacks the Unreleased heading, or cleanup left files behind.
+        1 when Unreleased is missing, fragments have reserved boundaries or
+        duplicate bodies, or cleanup left files behind.
     """
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(

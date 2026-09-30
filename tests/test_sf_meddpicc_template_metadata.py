@@ -15,7 +15,7 @@ from test_sf_meddpicc import (
 )
 
 from fieldkit.commands.sf.meddpicc import cli, fetch_meddpicc_scorecard
-from fieldkit.sf.client import SFAPIError, SFAuthError
+from fieldkit.sf.errors import SFAPIError, SFAuthError
 from fieldkit.sf.types import MeddpiccReadResult, UIAPIRecordCollection
 
 pytestmark = pytest.mark.unit

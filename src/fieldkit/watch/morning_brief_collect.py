@@ -22,7 +22,7 @@ from pydantic import ValidationError
 from fieldkit.config import get_account_names, get_accounts_config, get_fieldkit_home, get_user_email_from_env
 from fieldkit.pursuit.io import load_pursuit, parse_frontmatter
 from fieldkit.pursuit.stages import CLOSED_STAGES as _CLOSED_STAGE_NAMES
-from fieldkit.watch.morning_brief_mcp import MCPSession
+from fieldkit.watch.mcp import MCPSession
 
 log = logging.getLogger(__name__)
 
@@ -102,7 +102,17 @@ def extract_today_alerts(alert_file: Path, today: date, lookback_days: int = 1) 
 # Calendar helpers
 # ---------------------------------------------------------------------------
 
-_CALENDAR_NO_EVENTS_RE = re.compile(r"^\s*No events found in calendar\b", re.IGNORECASE)
+_CALENDAR_NO_EVENTS_RE = re.compile(
+    r"\s*No events found in calendar '[^'\r\n]{1,128}' for "
+    r"[^\s@\r\n]{1,128}@[A-Za-z0-9.-]{1,253} for the specified time range\.\s*",
+    re.IGNORECASE,
+)
+_CALENDAR_SUCCESS_RE = re.compile(
+    r"Successfully retrieved (?P<count>[1-9][0-9]*) events? from calendar "
+    r"[^\s:\r\n]{1,128}(?: for [^\s@\r\n]{1,128}@[A-Za-z0-9.-]{1,253})?:",
+    re.IGNORECASE,
+)
+_CALENDAR_TEXT_MAX_EVENTS = 50
 
 
 def _email_domain(email: str) -> str:
@@ -129,32 +139,36 @@ def resolve_user_email(config: dict[str, Any]) -> str:
     return get_user_email_from_env() or ""
 
 
-def _calendar_items(value: Any) -> list[Any]:
-    """Extract a list of events from an MCP JSON value, or return no events."""
+def _calendar_items(value: Any) -> list[dict[str, Any]]:
+    """Extract one unambiguous event list from a validated MCP JSON value."""
     if isinstance(value, list):
-        return list(value)
-    if not isinstance(value, dict):
-        return []
-    items = value.get("items") or value.get("events") or []
-    return list(items) if isinstance(items, list) else []
+        items = value
+    elif isinstance(value, dict):
+        keys = [key for key in ("items", "events") if key in value]
+        if len(keys) != 1 or set(value) != {keys[0]} or not isinstance(value[keys[0]], list):
+            raise RuntimeError("Calendar provider returned an invalid calendar response")
+        items = value[keys[0]]
+    else:
+        raise RuntimeError("Calendar provider returned an invalid calendar response")
+    if not all(isinstance(item, dict) for item in items):
+        raise RuntimeError("Calendar provider returned an invalid calendar response")
+    return items
 
 
 def _parse_calendar_text_or_raise(result: str) -> list[dict[str, Any]]:
     """Return a recognised plain-text calendar payload or fail visibly."""
-    if _CALENDAR_NO_EVENTS_RE.match(result):
+    if _CALENDAR_NO_EVENTS_RE.fullmatch(result):
         log.info("[Calendar] explicit empty-calendar response")
         return []
     text_events = _parse_calendar_text(result)
     if text_events:
         log.info("[Calendar] plain-text format parsed: %d event(s) found (no attendee data)", len(text_events))
         return text_events
-    log.warning("[Calendar] non-JSON response — first 300 chars: %s", result.strip()[:300])
-    raise RuntimeError(
-        "[Calendar] returned a non-JSON text response — check logs for the raw format to implement a parser"
-    )
+    log.warning("[Calendar] provider returned an unsupported text response (%d characters)", len(result))
+    raise RuntimeError("[Calendar] returned a non-JSON text response")
 
 
-def _parse_calendar_result(result: Any) -> list[Any]:
+def _parse_calendar_result(result: Any) -> list[dict[str, Any]]:
     """Normalise the MCP calendar tool result into a flat list of event dicts."""
     if not isinstance(result, str):
         return _calendar_items(result)
@@ -163,6 +177,8 @@ def _parse_calendar_result(result: Any) -> list[Any]:
     except json.JSONDecodeError:
         # historic regression: try the known text formats before giving up.
         return _parse_calendar_text_or_raise(result)
+    except (RecursionError, ValueError):
+        raise RuntimeError("Calendar provider returned an invalid calendar response") from None
 
 
 def _parse_calendar_text(text: str) -> list[dict[str, Any]]:
@@ -180,27 +196,38 @@ def _parse_calendar_text(text: str) -> list[dict[str, Any]]:
 
     Returns an empty list when the text does not match the expected format.
     """
+    lines = text.strip().splitlines()
+    if not lines:
+        return []
+    heading = _CALENDAR_SUCCESS_RE.fullmatch(lines[0].strip())
+    if heading is None:
+        return []
+    expected = int(heading.group("count"))
+    event_lines = lines[1:]
+    if expected > _CALENDAR_TEXT_MAX_EVENTS or len(event_lines) != expected:
+        return []
+
     events: list[dict[str, Any]] = []
-    # Match lines of the form: - "Title" (Starts: YYYY-MM-DD..., Ends: YYYY-MM-DD...)
-    for line in text.splitlines():
-        m = _EVENT_LINE_RE.search(line)
-        if m:
-            start_str = m.group("start").strip()
-            end_str = m.group("end").strip()
-            # historic regression fix: use dateTime key for time-bearing strings so the
-            # all-day filter in fetch_external_meetings works correctly.
-            # All-day events use "date" (no T); timed events use "dateTime".
-            start_obj: dict[str, str] = {"dateTime": start_str} if "T" in start_str else {"date": start_str}
-            end_obj: dict[str, str] = {"dateTime": end_str} if "T" in end_str else {"date": end_str}
-            events.append(
-                {
-                    "summary": m.group("title").strip(),
-                    "start": start_obj,
-                    "end": end_obj,
-                    "attendees": [],
-                    "_source": "text-format",
-                }
-            )
+    for line in event_lines:
+        match = _EVENT_LINE_RE.fullmatch(line.strip())
+        if match is None:
+            return []
+        start_str = match.group("start").strip()
+        end_str = match.group("end").strip()
+        # historic regression fix: use dateTime key for time-bearing strings so the
+        # all-day filter in fetch_external_meetings works correctly.
+        # All-day events use "date" (no T); timed events use "dateTime".
+        start_obj: dict[str, str] = {"dateTime": start_str} if "T" in start_str else {"date": start_str}
+        end_obj: dict[str, str] = {"dateTime": end_str} if "T" in end_str else {"date": end_str}
+        events.append(
+            {
+                "summary": match.group("title").strip(),
+                "start": start_obj,
+                "end": end_obj,
+                "attendees": [],
+                "_source": "text-format",
+            }
+        )
     return events
 
 
@@ -342,7 +369,7 @@ def get_latest_pursuit_files(n: int = 5) -> list[Path]:
                     stage = str(fm.get("stage", "")).lower()
                     close_date_str = str(fm.get("sf_close_date") or "")
             except Exception:  # noqa: BLE001
-                log.warning("Skipping unparseable pursuit %s", f, exc_info=True)
+                log.warning("Skipping unparseable pursuit %s", f.name)
                 stage = ""
                 close_date_str = ""
             if stage in _CLOSED_STAGE_NAMES:
@@ -379,7 +406,7 @@ def extract_pursuit_summary(pursuit_file: Path) -> dict[str, str] | None:
     try:
         model, _body, _mtime = load_pursuit(pursuit_file)
     except (ValueError, yaml.YAMLError, ValidationError):
-        log.warning("Skipping unparseable pursuit %s", pursuit_file, exc_info=True)
+        log.warning("Skipping unparseable pursuit %s", pursuit_file.name)
         return None
 
     account = pursuit_file.parent.parent.name
@@ -650,17 +677,17 @@ def _add_account_signal_keywords(
 ) -> None:
     """Add one eligible account's repeated keywords to the shared index."""
     if slug in internal_slugs:
-        log.debug("Cross-account scan: skipping internal account %s", slug)
+        log.debug("Cross-account scan: skipping an internal account")
         return
     intel_path = data_root / "accounts" / slug / "gmail-intel.md"
-    log.debug("Cross-account scan: checking %s", intel_path)
+    log.debug("Cross-account scan: checking %s", intel_path.name)
     if not intel_path.exists():
-        log.debug("Cross-account scan: %s not found, skipping", intel_path)
+        log.debug("Cross-account scan: %s not found, skipping", intel_path.name)
         return
     try:
         text = intel_path.read_text(encoding="utf-8")
-    except OSError as exc:
-        log.debug("Cross-account scan: could not read %s: %s", intel_path, exc)
+    except OSError:
+        log.debug("Cross-account scan: could not read %s", intel_path.name)
         return
     for word in _eligible_signal_keywords(text, slug):
         keyword_to_accounts.setdefault(word, set()).add(slug)

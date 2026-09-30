@@ -58,7 +58,7 @@ Human dry-run output SHALL identify force selection. Every JSON result document 
 
 ### Requirement: Successful degradation remains observable
 
-`fieldkit ingest run` SHALL classify a successfully written artifact as degraded when either transcript LLM stage uses its exception fallback or the final extracted confidence is `low`. A deliberate `NO_LLM` result with confidence `stub` SHALL NOT be classified as degraded unless a stage fallback occurred.
+`fieldkit ingest run` SHALL classify a successfully written artifact as degraded when either transcript LLM stage uses its exception fallback or the final extracted confidence is `low`. A deliberate `FIELDKIT_NO_LLM` result with confidence `stub` SHALL NOT be classified as degraded unless a stage fallback occurred.
 
 #### Scenario: Stage fallback is degraded success
 

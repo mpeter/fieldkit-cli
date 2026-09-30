@@ -1,11 +1,9 @@
 """Standalone regression tests for hooks (S07 and later).
 
 Covers:
-1. validate_pursuit_frontmatter: parents[1] regression (schema path resolves correctly).
-2. outbound_gate: try/except around json.load (invalid stdin → exit 0, not crash).
+2. outbound_gate: malformed input blocks without exposing the event contents.
 3. outbound_gate: calendar invite guard (manage_event action x attendees x send_updates).
 4. outbound_gate: Salesforce write guard (--confirm set-next-steps / set-field).
-5. pursuit_frontmatter_guard: extract_frontmatter and main() logic.
 
 All tests import the hook modules directly and use monkeypatching / io.StringIO
 to avoid subprocess calls or filesystem access to vault data.
@@ -29,96 +27,7 @@ HOOKS_DIR = ROOT / "hooks"
 if str(HOOKS_DIR) not in sys.path:
     sys.path.insert(0, str(HOOKS_DIR))
 
-import hooks.validate_pursuit_frontmatter as vpf  # noqa: E402
-from hooks import outbound_gate, pursuit_frontmatter_guard  # noqa: E402
-
-# ===========================================================================
-# 1. validate_pursuit_frontmatter — parents[1] regression
-# ===========================================================================
-
-
-# ── TestValidatePursuitFrontmatterParentsFix (flattened) ────────────────────
-
-
-def test_validate_pursuit_frontmatter_schema_path_exists() -> None:
-    """_schema_path() must resolve to a file that actually exists on disk."""
-    # This is the canonical regression test: if parents index was wrong,
-    # the schema would not be found and this assertion fails.
-    schema = vpf._schema_path()
-    assert schema.exists(), f"Schema not found at {schema!r}. parents[1] regression may have been reintroduced."
-
-
-def test_validate_pursuit_frontmatter_schema_path_points_into_config() -> None:
-    """_schema_path() must live inside the repo's _data/ directory."""
-    schema = vpf._schema_path()
-    assert schema.name == "pursuit-frontmatter.schema.json"
-    assert schema.parent.name == "_data"
-
-
-def test_validate_pursuit_frontmatter_repo_root_is_cwd_ancestor() -> None:
-    """_repo_root() must be an ancestor of the current working directory."""
-    repo_root = vpf._repo_root()
-    # Both should share a common ancestor path — repo_root must be a
-    # parent of the hooks/ file itself.
-    assert repo_root == ROOT, (
-        f"_repo_root() returned {repo_root!r}; expected {ROOT!r}. parents[1] fix may have regressed."
-    )
-
-
-def test_validate_pursuit_frontmatter_schema_is_valid_json() -> None:
-    """The schema file must be valid JSON (sanity check after path fix)."""
-    schema_text = vpf._schema_path().read_text(encoding="utf-8")
-    parsed = json.loads(schema_text)
-    assert isinstance(parsed, dict)
-    assert "$schema" in parsed or "type" in parsed
-
-
-def test_validate_pursuit_frontmatter_validate_file_on_valid_pursuit(tmp_path: Path) -> None:
-    """validate_file() returns no errors for a minimal valid pursuit fixture."""
-    schema = json.loads(vpf._schema_path().read_text(encoding="utf-8"))
-
-    valid_md = tmp_path / "test-pursuit.md"
-    # Use schema-compliant values: hyphenated meddpicc keys, valid gate-status enum.
-    valid_md.write_text(
-        "---\n"
-        "stage: discover\n"
-        "gate-status: pending\n"
-        "meddpicc:\n"
-        "  metrics: 0\n"
-        "  economic-buyer: 0\n"
-        "  decision-criteria: 0\n"
-        "  decision-process: 0\n"
-        "  identify-pain: 0\n"
-        "  paper-process: 0\n"
-        "  champion: 0\n"
-        "  competition: 0\n"
-        "---\n\n"
-        "# Pursuit Notes\n",
-        encoding="utf-8",
-    )
-
-    errors = vpf.validate_file(valid_md, schema)
-    assert errors == [], f"Unexpected errors on valid pursuit: {errors}"
-
-
-def test_validate_pursuit_frontmatter_validate_file_missing_required_fields(tmp_path: Path) -> None:
-    """validate_file() returns errors when required frontmatter fields are absent."""
-    schema = json.loads(vpf._schema_path().read_text(encoding="utf-8"))
-
-    invalid_md = tmp_path / "bad-pursuit.md"
-    invalid_md.write_text(
-        "---\nsome_field: value\n---\n\n# Notes\n",
-        encoding="utf-8",
-    )
-
-    errors = vpf.validate_file(invalid_md, schema)
-    assert len(errors) > 0, "Expected validation errors for missing required fields"
-    # At least one error should mention a required field
-    combined = " ".join(errors)
-    assert any(field in combined for field in ("stage", "gate-status", "meddpicc")), (
-        f"Expected required-field errors, got: {errors}"
-    )
-
+from hooks import outbound_gate  # noqa: E402
 
 # ===========================================================================
 # 2. outbound_gate — try/except around json.load
@@ -134,24 +43,33 @@ def _run_outbound(stdin_content: str) -> int:
 # ── TestOutboundGateJsonCrashFix (flattened) ────────────────────────────────
 
 
-def test_outbound_gate_invalid_json_returns_0() -> None:
-    """Completely invalid JSON must not crash — returns 0 (allow)."""
-    assert _run_outbound("invalid json {{{") == 0
+@pytest.mark.parametrize(
+    "event",
+    [
+        "invalid json {{{",
+        "",
+        '{"tool_name": "Read"',
+        "[1, 2, 3]",
+        "null",
+        "{}",
+        '{"tool_name": null, "tool_input": {}}',
+        '{"tool_name": 7, "tool_input": {}}',
+        '{"tool_name": "", "tool_input": {}}',
+        '{"tool_name": "Read"}',
+        '{"tool_name": "Read", "tool_input": []}',
+        '{"tool_name": "Bash", "tool_input": {}}',
+        '{"tool_name": "Bash", "tool_input": {"command": null}}',
+        '{"tool_name": "Bash", "tool_input": {"command": 7}}',
+    ],
+)
+def test_outbound_gate_malformed_event_blocks(event: str, capsys: pytest.CaptureFixture[str]) -> None:
+    """Uninspectable events block with a fixed diagnostic, never their contents."""
+    result = _run_outbound(event)
 
-
-def test_outbound_gate_empty_stdin_returns_0() -> None:
-    """Empty stdin is also not valid JSON — must return 0."""
-    assert _run_outbound("") == 0
-
-
-def test_outbound_gate_partial_json_returns_0() -> None:
-    """Truncated JSON object must return 0 (allow)."""
-    assert _run_outbound('{"tool_name": "Read"') == 0
-
-
-def test_outbound_gate_json_array_instead_of_object_returns_0() -> None:
-    """JSON array (not object) at top level — returns 0."""
-    assert _run_outbound("[1, 2, 3]") == 0
+    assert result == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "BLOCKED: Invalid outbound hook event; tool execution cannot be evaluated.\n"
 
 
 def test_outbound_gate_gmail_send_blocked() -> None:
@@ -244,7 +162,7 @@ def test_outbound_gate_bash_unsafe_publication_command_blocks_category_only(
     assert result == 2
     assert captured.err == "BLOCKED: GitHub publication blocked: category=personal_email source=body\n"
     assert command not in captured.err
-    assert "person@acme-corp.com" not in captured.err
+    assert "person@acme-corp.example.com" not in captured.err
 
 
 @pytest.mark.parametrize(
@@ -286,10 +204,10 @@ _ATTENDEES = ["person@example.com"]
 def _cal_payload(
     tool: str,
     action: str,
-    attendees: list | None = None,
+    attendees: list[str] | None = None,
     send_updates: str | None = None,
 ) -> str:
-    tool_input: dict = {"action": action}
+    tool_input: dict[str, object] = {"action": action}
     if attendees is not None:
         tool_input["attendees"] = attendees
     if send_updates is not None:
@@ -375,132 +293,14 @@ def test_outbound_gate_bash_sf_no_confirm_allowed() -> None:
     assert _run_outbound(payload) == 0
 
 
-# ===========================================================================
-# 5. pursuit_frontmatter_guard — extract_frontmatter and main()
-# ===========================================================================
-
-
-def _run_pfg(payload: dict) -> int:
-    """Run pursuit_frontmatter_guard.main() with synthetic stdin."""
-    with patch("sys.stdin", io.StringIO(json.dumps(payload))):
-        return int(pursuit_frontmatter_guard.main())
-
-
-# ── extract_frontmatter (pure function) ─────────────────────────────────────
-
-
-def test_extract_frontmatter_valid_block() -> None:
-    content = "---\nsf_foo: bar\n---\n# body"
-    assert pursuit_frontmatter_guard.extract_frontmatter(content) == "sf_foo: bar"
-
-
-def test_extract_frontmatter_no_delimiters_returns_empty() -> None:
-    assert pursuit_frontmatter_guard.extract_frontmatter("# just a heading\nno front") == ""
-
-
-def test_extract_frontmatter_only_one_delimiter_returns_content_after_it() -> None:
-    # With only one --- the function enters frontmatter mode and collects until EOF.
-    # The hook's main() then runs the sf- key check on that content — which is the
-    # safe/conservative behaviour (better to check than to silently skip).
-    result = pursuit_frontmatter_guard.extract_frontmatter("---\nkey: val\n")
-    assert result == "key: val"
-
-
-# ── main() ───────────────────────────────────────────────────────────────────
-
-_PURSUIT_PATH = "accounts/acme-corp/pursuits/q3-expansion.md"
-_NON_PURSUIT_PATH = "accounts/acme-corp/notes.md"
-
-_WRITE_HYPHENATED = {
-    "tool_name": "Write",
-    "tool_input": {
-        "file_path": _PURSUIT_PATH,
-        "content": "---\nsf-account-name: Acme\n---\n# body",
-    },
-}
-
-
-def test_pfg_non_pursuit_path_allowed() -> None:
-    payload = {
-        "tool_name": "Write",
-        "tool_input": {
-            "file_path": _NON_PURSUIT_PATH,
-            "content": "---\nsf-foo: bar\n---\n",
-        },
-    }
-    assert _run_pfg(payload) == 0
-
-
-def test_pfg_non_write_tool_allowed() -> None:
-    payload = {"tool_name": "Read", "tool_input": {"file_path": _PURSUIT_PATH}}
-    assert _run_pfg(payload) == 0
-
-
-def test_pfg_invalid_json_allowed() -> None:
-    with patch("sys.stdin", io.StringIO("not json")):
-        assert pursuit_frontmatter_guard.main() == 0
-
-
-def test_pfg_write_hyphenated_sf_key_blocked(capsys: pytest.CaptureFixture[str]) -> None:
-    """Write with sf- hyphenated key in frontmatter → blocked, stderr shows correction."""
-    assert _run_pfg(_WRITE_HYPHENATED) == 2
-    err = capsys.readouterr().err
-    assert "BLOCKED" in err
-    assert "sf-account-name" in err
-    assert "sf_account_name" in err
-
-
-def test_pfg_edit_hyphenated_sf_key_blocked() -> None:
-    payload = {
-        "tool_name": "Edit",
-        "tool_input": {
-            "file_path": _PURSUIT_PATH,
-            "new_string": "---\nsf-stage: discover\n---\n",
-        },
-    }
-    assert _run_pfg(payload) == 2
-
-
-def test_pfg_multiedit_hyphenated_sf_key_blocked() -> None:
-    payload = {
-        "tool_name": "MultiEdit",
-        "tool_input": {
-            "file_path": _PURSUIT_PATH,
-            "edits": [{"new_string": "---\nsf-owner: Matt\n---\n"}],
-        },
-    }
-    assert _run_pfg(payload) == 2
-
-
-def test_pfg_write_underscored_sf_key_allowed() -> None:
-    """Correctly underscored sf_ keys must not be blocked."""
-    payload = {
-        "tool_name": "Write",
-        "tool_input": {
-            "file_path": _PURSUIT_PATH,
-            "content": "---\nsf_account_name: Acme\nstage: discover\n---\n# body",
-        },
-    }
-    assert _run_pfg(payload) == 0
-
-
-# ===========================================================================
-# 6. Subprocess-level regression: the REAL entry point .claude/settings.json
-#    invokes ("python3 hooks/<name>.py" as a direct script run, not a module
-#    import). Every test above imports the hook module directly, which puts
-#    the repo root on sys.path via pytest's own conftest machinery -- it
-#    cannot detect a `hooks._common` import that only breaks under direct
-#    script execution (sys.path[0] becomes hooks/ itself, not its parent).
-#    docs/hooks-and-skills.md documents `python3 hooks/outbound_gate.py` as
-#    the literal command each PreToolUse hook is registered with.
-# ===========================================================================
+# Direct-script import contract for the remaining optional adapters.
+# No repository-owned Claude settings bind these scripts automatically.
 
 import subprocess  # noqa: E402
 
 
 def _run_hook_subprocess(hook_relpath: str, payload: dict) -> subprocess.CompletedProcess:  # type: ignore[type-arg]
-    """Invoke a hook exactly as .claude/settings.json does: `python3 hooks/<name>.py`
-    with the repo root as cwd, feeding the payload as stdin JSON."""
+    """Invoke an optional adapter directly with a synthetic stdin event."""
     return subprocess.run(
         [sys.executable, hook_relpath],
         input=json.dumps(payload),
@@ -514,18 +314,13 @@ def _run_hook_subprocess(hook_relpath: str, payload: dict) -> subprocess.Complet
 
 @pytest.mark.parametrize(
     "hook_relpath",
-    ["hooks/outbound_gate.py", "hooks/pursuit_frontmatter_guard.py", "hooks/tool_scope_guard.py"],
+    ["hooks/outbound_gate.py", "hooks/tool_scope_guard.py"],
 )
 def test_hook_runs_as_real_script_entry_point(hook_relpath: str) -> None:
-    """Regression guard: each PreToolUse hook must be importable/runnable via the
-    exact `python3 hooks/<name>.py` invocation .claude/settings.json uses -- not
-    just via `from hooks import <name>` (which pytest's own sys.path setup masks).
-    A hooks/_common cross-module import that only resolves under module-import
-    semantics would crash here with ModuleNotFoundError."""
+    """Optional adapters must work as scripts, not only imported modules."""
     result = _run_hook_subprocess(hook_relpath, {"tool_name": "Read", "tool_input": {}})
     assert result.returncode in (0, 2), (
-        f"{hook_relpath} crashed when invoked the way .claude/settings.json actually "
-        f"invokes it (exit {result.returncode}):\n{result.stderr}"
+        f"{hook_relpath} crashed as a direct script (exit {result.returncode}):\n{result.stderr}"
     )
     assert "ModuleNotFoundError" not in result.stderr
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """check_flag_contract.py — Enforce the D3 flag contract across all leaf commands.
 
-D3 rules (from openspec/changes/cli-ux-redesign/design.md):
+The contract enforced here uses declarations from `fieldkit.cli_registry`:
   1. External writes (Salesforce, GitHub, Google) require --confirm.
   2. Workspace writes (fieldkit_home / fieldkit_data) offer --dry-run.
   3. Every leaf command should expose --json for machine-readable output.

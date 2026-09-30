@@ -2,16 +2,32 @@
 
 import click
 
-from fieldkit.commands._lazy import make_lazy_group
+from fieldkit.commands._lazy import LazyCommand, make_lazy_group
+from fieldkit.config.optional_dependencies import GOOGLE_IMPORT_ROOTS
 
-_COMMANDS: dict[str, str] = {
-    "link": "fieldkit.commands.meeting.link_cmd",
-    "list": "fieldkit.commands.meeting.list_cmd",
-    "note": "fieldkit.commands.meeting.note_cmd",
-    "open": "fieldkit.commands.meeting.open_cmd",
+_COMMANDS: dict[str, LazyCommand] = {
+    "link": LazyCommand(
+        "fieldkit.commands.meeting.link_cmd",
+        profile="google",
+        import_roots=GOOGLE_IMPORT_ROOTS,
+        description="Create and link a Google pursuit workbook",
+    ),
+    "list": LazyCommand("fieldkit.commands.meeting.list_cmd", description="List locally recorded workbook links"),
+    "note": LazyCommand(
+        "fieldkit.commands.meeting.note_cmd",
+        profile="google",
+        import_roots=GOOGLE_IMPORT_ROOTS,
+        description="Add a note to a Google pursuit workbook",
+    ),
+    "open": LazyCommand(
+        "fieldkit.commands.meeting.open_cmd",
+        profile="google",
+        import_roots=GOOGLE_IMPORT_ROOTS,
+        description="Open a linked Google pursuit workbook",
+    ),
 }
 
-_LazyGroup = make_lazy_group(_COMMANDS)
+_LazyGroup = make_lazy_group(_COMMANDS, command_prefix="meeting")
 
 
 @click.group(

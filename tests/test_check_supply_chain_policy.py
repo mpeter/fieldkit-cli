@@ -1,16 +1,33 @@
 """Failure-capable contracts for dependency and scanner policy."""
 
+import hashlib
 import json
 import shutil
 from datetime import date
+from importlib.metadata import PathDistribution
 from pathlib import Path
 
-import _supply_chain_policy as checker
-import check_supply_chain_policy as cli_checker
 import pytest
+
+from scripts import _supply_chain_policy as checker
+from scripts import check_supply_chain_policy as cli_checker
+from scripts import runtime_license_inventory as inventory
 
 pytestmark = pytest.mark.unit
 
+_MARKER_ENVIRONMENT = {
+    "implementation_name": "cpython",
+    "implementation_version": "3.11.8",
+    "os_name": "posix",
+    "platform_machine": "x86_64",
+    "platform_python_implementation": "CPython",
+    "platform_release": "6.0.0",
+    "platform_system": "Linux",
+    "platform_version": "Example kernel",
+    "python_full_version": "3.11.8",
+    "python_version": "3.11",
+    "sys_platform": "linux",
+}
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _GOVERNED_ACTION_CASES = (
     (
@@ -289,6 +306,9 @@ def test_locked_graph_license_evidence_records_every_observed_package(tmp_path: 
         revision="d" * 40,
         export_policy_sha256="e" * 64,
         sbom_sha256="f" * 64,
+        observations_sha256="a" * 64,
+        platform_requirements_sha256="b" * 64,
+        marker_environment=_MARKER_ENVIRONMENT,
         expected_package_urls=("pkg:pypi/example-base@2.0.0", "pkg:pypi/example-native@1.2.3"),
         today=date(2026, 9, 11),
     )
@@ -313,6 +333,9 @@ def test_locked_graph_license_evidence_rejects_unknown_metadata_without_exact_ex
         revision="d" * 40,
         export_policy_sha256="e" * 64,
         sbom_sha256="f" * 64,
+        observations_sha256="a" * 64,
+        platform_requirements_sha256="b" * 64,
+        marker_environment=_MARKER_ENVIRONMENT,
         expected_package_urls=("pkg:pypi/unclassified@4.5.6",),
         today=date(2026, 9, 11),
     )
@@ -337,13 +360,16 @@ def test_locked_graph_license_evidence_rejects_duplicate_observed_package(tmp_pa
             revision="d" * 40,
             export_policy_sha256="e" * 64,
             sbom_sha256="f" * 64,
+            observations_sha256="a" * 64,
+            platform_requirements_sha256="b" * 64,
+            marker_environment=_MARKER_ENVIRONMENT,
             expected_package_urls=("pkg:pypi/example-base@2.0.0",),
             today=date(2026, 9, 11),
         )
 
 
 def test_locked_graph_license_evidence_rejects_inventory_outside_locked_requirements(tmp_path: Path) -> None:
-    """Platform-specific lock members may be absent, but installed packages must be locked."""
+    """The installed target inventory must have neither missing nor unexpected packages."""
     policy = checker.load_policy(_policy(tmp_path), today=date(2026, 9, 11))
 
     evidence = checker.build_license_evidence(
@@ -353,12 +379,60 @@ def test_locked_graph_license_evidence_rejects_inventory_outside_locked_requirem
         revision="d" * 40,
         export_policy_sha256="e" * 64,
         sbom_sha256="f" * 64,
+        observations_sha256="a" * 64,
+        platform_requirements_sha256="b" * 64,
+        marker_environment=_MARKER_ENVIRONMENT,
         expected_package_urls=("pkg:pypi/not-installed@1.0.0",),
         today=date(2026, 9, 11),
     )
 
     assert evidence.status == "fail"
-    assert {finding.criterion_id for finding in evidence.findings} == {"DEP305"}
+    assert {finding.criterion_id for finding in evidence.findings} == {"DEP304", "DEP305"}
+
+
+@pytest.mark.parametrize("observed_names", [[], ["example-base"]])
+def test_license_evidence_rejects_missing_target_packages(tmp_path: Path, observed_names: list[str]) -> None:
+    """A partial or empty installed inventory cannot prove the expected target graph."""
+    policy = checker.load_policy(_policy(tmp_path), today=date(2026, 9, 11))
+    evidence = checker.build_license_evidence(
+        [{"name": name, "version": "2.0.0", "license_expression": "MIT"} for name in observed_names],
+        policy,
+        scope="runtime-all-extras",
+        revision="d" * 40,
+        export_policy_sha256="e" * 64,
+        sbom_sha256="f" * 64,
+        observations_sha256="a" * 64,
+        platform_requirements_sha256="b" * 64,
+        marker_environment=_MARKER_ENVIRONMENT,
+        expected_package_urls=("pkg:pypi/example-base@2.0.0", "pkg:pypi/example-extra@2.0.0"),
+        today=date(2026, 9, 11),
+    )
+
+    assert evidence.status == "fail"
+    assert {finding.subject for finding in evidence.findings} == {
+        f"pkg:pypi/{name}@2.0.0" for name in {"example-base", "example-extra"} - set(observed_names)
+    }
+    assert {finding.criterion_id for finding in evidence.findings} == {"DEP304"}
+
+
+def test_license_evidence_rejects_empty_expected_target(tmp_path: Path) -> None:
+    """An empty graph is invalid candidate evidence even when no packages are observed."""
+    policy = checker.load_policy(_policy(tmp_path), today=date(2026, 9, 11))
+
+    with pytest.raises(ValueError, match="target package inventory must not be empty"):
+        checker.build_license_evidence(
+            [],
+            policy,
+            scope="runtime-all-extras",
+            revision="d" * 40,
+            export_policy_sha256="e" * 64,
+            sbom_sha256="f" * 64,
+            observations_sha256="a" * 64,
+            platform_requirements_sha256="b" * 64,
+            marker_environment=_MARKER_ENVIRONMENT,
+            expected_package_urls=(),
+            today=date(2026, 9, 11),
+        )
 
 
 def test_non_allowlisted_license_fails_even_if_upstream_output_is_clean(tmp_path: Path) -> None:
@@ -513,29 +587,25 @@ def test_license_evidence_cli_persists_resolved_distribution_metadata(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The candidate environment itself supplies the license observations to the policy model."""
+    from packaging import markers
 
-    class Headers(dict[str, str]):
-        @property
-        def json(self) -> dict[str, str]:
-            return {key.casefold().replace("-", "_"): value for key, value in self.items()}
+    environment = markers.default_environment()
+    environment["sys_platform"] = "linux"
+    monkeypatch.setattr(inventory, "marker_environment", lambda: _MARKER_ENVIRONMENT)
 
-    class Distribution:
-        def __init__(self, location: Path) -> None:
-            self.version = "2.0.0"
-            self.metadata = Headers({"Name": "example-base", "License-Expression": "MIT"})
-
-            self._location = location
-
-        def locate_file(self, path: str) -> Path:
-            assert path == ""
-            return self._location
-
-    distribution = Distribution(tmp_path / "site-packages")
-    duplicate_path_alias = Distribution(tmp_path / "lib64" / ".." / "site-packages")
-    monkeypatch.setattr(cli_checker.metadata, "distributions", lambda: [distribution, duplicate_path_alias])
+    distribution = _distribution_metadata(tmp_path, "License-Expression: MIT\n")
+    monkeypatch.setattr(
+        "scripts.runtime_license_inventory.metadata.distributions", lambda: [distribution, distribution]
+    )
+    observations_path = tmp_path / inventory.OBSERVATIONS_NAME
+    observations = inventory.observation_bytes()
+    observations_path.write_bytes(observations)
     evidence_path = tmp_path / "licenses.json"
     sbom_path = tmp_path / "locked-graph.cdx.json"
-    sbom_path.write_text(json.dumps({"components": [{"purl": "pkg:pypi/example-base@2.0.0"}]}), encoding="utf-8")
+    sbom_path.write_text(
+        json.dumps({"components": [{"purl": "pkg:pypi/example-base@2.0.0"}, {"purl": "pkg:pypi/colorama@0.4.6"}]}),
+        encoding="utf-8",
+    )
     requirements_path = tmp_path / "locked.requirements.txt"
     requirements_path.write_text("example-base==2.0.0\ncolorama==0.4.6 ; sys_platform == 'win32'\n", encoding="utf-8")
 
@@ -556,6 +626,10 @@ def test_license_evidence_cli_persists_resolved_distribution_metadata(
             str(sbom_path),
             "--platform-requirements",
             str(requirements_path),
+            "--observations",
+            str(observations_path),
+            "--observations-sha256",
+            hashlib.sha256(observations).hexdigest(),
         ]
     )
 
@@ -565,55 +639,140 @@ def test_license_evidence_cli_persists_resolved_distribution_metadata(
     assert evidence["packages"] == [{"license_expression": "MIT", "package_url": "pkg:pypi/example-base@2.0.0"}]
 
 
-def test_license_expression_uses_unambiguous_legacy_metadata() -> None:
+@pytest.mark.parametrize(
+    "sbom_urls",
+    [
+        [],
+        ["pkg:pypi/example-base@2.0.0"],
+        ["pkg:pypi/example-base@2.0.0", "pkg:pypi/colorama@0.4.6", "pkg:pypi/unlocked@1.0.0"],
+        ["pkg:pypi/example-base@9.0.0", "pkg:pypi/colorama@0.4.6"],
+        ["pkg:pypi/example-base@2.0.0", "pkg:pypi/colorama@0.4.6", "pkg:pypi/colorama@0.4.6"],
+        ["pkg:pypi/example-base@2.0.0", "not-a-package-url"],
+    ],
+    ids=["empty", "missing", "extra", "wrong-version", "duplicate", "malformed"],
+)
+def test_license_evidence_cli_rejects_unbound_sbom(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sbom_urls: list[str]
+) -> None:
+    """A digest alone cannot bind a different cross-platform inventory to target licenses."""
+    observations_path = tmp_path / inventory.OBSERVATIONS_NAME
+    observations = json.dumps(
+        {
+            "schema_version": 1,
+            "packages": [{"name": "example-base", "version": "2.0.0", "license_expression": "MIT"}],
+            "marker_environment": _MARKER_ENVIRONMENT,
+        }
+    ).encode("utf-8")
+    observations_path.write_bytes(observations)
+    sbom_path = tmp_path / "graph.json"
+    sbom_path.write_text(json.dumps({"components": [{"purl": url} for url in sbom_urls]}), encoding="utf-8")
+    requirements_path = tmp_path / "requirements.txt"
+    requirements_path.write_text("example-base==2.0.0\ncolorama==0.4.6 ; sys_platform == 'win32'\n", encoding="utf-8")
+    output_path = tmp_path / "evidence.json"
+
+    exit_code = cli_checker.main(
+        [
+            "license-evidence",
+            "--policy",
+            str(_policy(tmp_path)),
+            "--output",
+            str(output_path),
+            "--scope",
+            "runtime-all-extras",
+            "--revision",
+            "d" * 40,
+            "--export-policy-sha256",
+            "e" * 64,
+            "--sbom",
+            str(sbom_path),
+            "--platform-requirements",
+            str(requirements_path),
+            "--observations",
+            str(observations_path),
+            "--observations-sha256",
+            __import__("hashlib").sha256(observations).hexdigest(),
+        ]
+    )
+
+    assert exit_code == 2
+    assert json.loads(output_path.read_text(encoding="utf-8"))["status"] == "error"
+
+
+@pytest.mark.parametrize("sys_platform", ["linux", "win32"])
+def test_platform_requirements_project_markers_for_target_interpreter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sys_platform: str
+) -> None:
+    """Marker-selected versions form the target inventory, not the cross-platform union."""
+    from packaging import markers
+
+    environment = markers.default_environment()
+    environment["sys_platform"] = sys_platform
+    environment["python_version"] = "3.11"
+    environment = {**_MARKER_ENVIRONMENT, **environment}
+    requirements_path = tmp_path / "requirements.txt"
+    requirements_path.write_text(
+        "example-base==2.0.0\n"
+        "colorama==0.4.6 ; sys_platform == 'win32'\n"
+        "example-python==1.0.0 ; python_version < '3.12'\n"
+        "example-python==2.0.0 ; python_version >= '3.12'\n",
+        encoding="utf-8",
+    )
+
+    package_urls = cli_checker._requirements_package_urls(
+        requirements_path.read_text(encoding="utf-8"), target_environment=environment
+    )
+
+    assert package_urls == tuple(
+        sorted(
+            [
+                "pkg:pypi/example-base@2.0.0",
+                "pkg:pypi/example-python@1.0.0",
+                *(["pkg:pypi/colorama@0.4.6"] if sys_platform == "win32" else []),
+            ]
+        )
+    )
+
+
+def _distribution_metadata(tmp_path: Path, headers: str) -> PathDistribution:
+    directory = tmp_path / "example_base-2.0.0.dist-info"
+    directory.mkdir(exist_ok=True)
+    (directory / "METADATA").write_text(
+        "Metadata-Version: 2.4\nName: example-base\nVersion: 2.0.0\n" + headers + "\n", encoding="utf-8"
+    )
+    return PathDistribution(directory)
+
+
+def test_license_expression_uses_unambiguous_legacy_metadata(tmp_path: Path) -> None:
     """Legacy License fields and one mapped classifier normalize to SPDX."""
 
-    class Metadata(dict[str, str]):
-        @property
-        def json(self) -> dict[str, str]:
-            return {key.casefold().replace("-", "_"): value for key, value in self.items()}
-
-        def get_all(self, key: str) -> list[str]:
-            return ["License :: OSI Approved :: Apache Software License"] if key == "Classifier" else []
-
-    class Distribution:
-        metadata = Metadata({"License": "MIT"})
-
-    assert cli_checker._license_expression(Distribution()) == "MIT"
-    Distribution.metadata = Metadata()
-    assert cli_checker._license_expression(Distribution()) == "Apache-2.0"
+    distribution = _distribution_metadata(
+        tmp_path, "License: MIT\nClassifier: License :: OSI Approved :: Apache Software License\n"
+    )
+    assert inventory._license_expression(distribution) == "MIT"
+    distribution = _distribution_metadata(tmp_path, "Classifier: License :: OSI Approved :: Apache Software License\n")
+    assert inventory._license_expression(distribution) == "Apache-2.0"
 
 
 def test_license_expression_reads_only_declared_license_files(tmp_path: Path) -> None:
-    """PEP 639 files preserve every recognized license notice they declare."""
+    """License-file fragments cannot establish a complete SPDX expression."""
 
-    class Metadata(dict[str, str]):
-        @property
-        def json(self) -> dict[str, str]:
-            return {key.casefold().replace("-", "_"): value for key, value in self.items()}
-
-        def get_all(self, key: str) -> list[str]:
-            return [self[key]] if key == "License-File" and key in self else []
-
-    class Distribution:
-        metadata = Metadata({"License-File": "LICENSE"})
-        files = ("example_base-2.0.0.dist-info/LICENSE", "example_base-2.0.0.dist-info/NOT_A_LICENSE")
-
-        def locate_file(self, file: str) -> Path:
-            return tmp_path / file.rsplit("/", maxsplit=1)[-1]
-
-    (tmp_path / "LICENSE").write_text(
+    distribution = _distribution_metadata(tmp_path, "License-File: LICENSE\n")
+    directory = tmp_path / "example_base-2.0.0.dist-info"
+    (directory / "RECORD").write_text(
+        "example_base-2.0.0.dist-info/LICENSE,,\nexample_base-2.0.0.dist-info/NOT_A_LICENSE,,\n", encoding="utf-8"
+    )
+    (directory / "LICENSE").write_text(
         "Licensed under the Apache License, Version 2.0\n"
         "Redistribution and use in source and binary forms\n"
         "Neither the name of the example project nor its contributors\n",
         encoding="utf-8",
     )
-    (tmp_path / "NOT_A_LICENSE").write_text(
+    (directory / "NOT_A_LICENSE").write_text(
         "Permission is hereby granted, free of charge, to any person obtaining a copy\n",
         encoding="utf-8",
     )
 
-    assert cli_checker._license_expression(Distribution()) == "Apache-2.0 AND BSD-3-Clause"
+    assert inventory._license_expression(distribution) == "UNKNOWN"
 
 
 @pytest.mark.parametrize(
@@ -623,33 +782,84 @@ def test_license_expression_reads_only_declared_license_files(tmp_path: Path) ->
         ("BSD 3-Clause OR Apache-2.0", "BSD-3-Clause OR Apache-2.0"),
         ("MIT OR Apache-2.0", "MIT OR Apache-2.0"),
         ("MPL-2.0 AND MIT", "MPL-2.0 AND MIT"),
+        ("ISC", "ISC"),
         (
             "MIT License\n\nPermission is hereby granted, free of charge, to any person obtaining a copy",
-            "MIT",
+            "UNKNOWN",
         ),
     ],
 )
-def test_license_expression_normalizes_recognized_legacy_expressions(license_field: str, expected: str) -> None:
+def test_license_expression_normalizes_recognized_legacy_expressions(
+    tmp_path: Path, license_field: str, expected: str
+) -> None:
     """Recognized legacy metadata remains evidence; arbitrary prose does not."""
 
-    class Metadata(dict[str, str]):
-        @property
-        def json(self) -> dict[str, str]:
-            return {key.casefold().replace("-", "_"): value for key, value in self.items()}
-
-    class Distribution:
-        metadata = Metadata({"License": license_field})
-
-    assert cli_checker._license_expression(Distribution()) == expected
+    folded_license = license_field.replace("\n", "\n ")
+    distribution = _distribution_metadata(tmp_path, f"License: {folded_license}\n")
+    assert inventory._license_expression(distribution) == expected
 
 
-def test_platform_requirements_rejects_non_exact_or_duplicated_packages(tmp_path: Path) -> None:
-    """The environment comparison accepts only uv-style exact pins."""
+@pytest.mark.parametrize(
+    ("requirements", "error"),
+    [
+        ("example-base>=2.0.0\n", "exactly one version"),
+        ("example-base==2.0.0\nExample_Base==2.0.0\n", "duplicate or ambiguous"),
+        ("example-base==2.0.0\nexample-base==3.0.0\n", "duplicate or ambiguous"),
+        ("example-base==v2.0.0\n", "canonical package versions"),
+        ("example-base[test]==2.0.0\n", "exactly one version"),
+        ("example-base==2.0.0 ; extra == 'test'\n", "resolve extras and dependency groups"),
+        ("example-base==2.0.0 ; sys_platform = 'linux'\n", "Expected marker operator"),
+        ("example-base==2.0.0 ; unsupported_variable == 'linux'\n", "Expected a marker variable"),
+    ],
+)
+def test_platform_requirements_rejects_non_exact_or_duplicated_packages(
+    tmp_path: Path, requirements: str, error: str
+) -> None:
+    """Unsupported marker scope and ambiguous pins cannot silently remove target members."""
     requirements_path = tmp_path / "locked.requirements.txt"
-    requirements_path.write_text("example-base>=2.0.0\n", encoding="utf-8")
+    requirements_path.write_text(requirements, encoding="utf-8")
 
-    with pytest.raises(ValueError, match="exactly one version"):
-        cli_checker._locked_requirements_package_urls(requirements_path)
+    with pytest.raises(ValueError, match=error):
+        cli_checker._requirements_package_urls(
+            requirements_path.read_text(encoding="utf-8"), target_environment=_MARKER_ENVIRONMENT
+        )
+
+
+def test_platform_requirements_union_keeps_versions_for_other_targets(tmp_path: Path) -> None:
+    """The SBOM binds the full union even when each target installs only one pinned version."""
+    requirements_path = tmp_path / "requirements.txt"
+    requirements_path.write_text(
+        "example-base==1.0.0 ; python_version < '3.12'\nexample-base==2.0.0 ; python_version >= '3.12'\n",
+        encoding="utf-8",
+    )
+
+    package_urls = cli_checker._requirements_package_urls(
+        requirements_path.read_text(encoding="utf-8"), target_environment=None
+    )
+
+    assert package_urls == ("pkg:pypi/example-base@1.0.0", "pkg:pypi/example-base@2.0.0")
+
+
+def test_target_projection_does_not_inherit_the_qa_interpreter(monkeypatch: pytest.MonkeyPatch) -> None:
+    """QA's newer Python and Windows platform must not select runtime dependency versions."""
+    from packaging import markers
+
+    qa_environment = {
+        **_MARKER_ENVIRONMENT,
+        "python_version": "3.13",
+        "python_full_version": "3.13.0",
+        "sys_platform": "win32",
+    }
+    monkeypatch.setattr(markers, "default_environment", lambda: qa_environment)
+
+    package_urls = cli_checker._requirements_package_urls(
+        "example==1.0.0 ; python_version < '3.12'\n"
+        "example==2.0.0 ; python_version >= '3.12'\n"
+        "colorama==0.4.6 ; sys_platform == 'win32'\n",
+        target_environment=_MARKER_ENVIRONMENT,
+    )
+
+    assert package_urls == ("pkg:pypi/example@1.0.0",)
 
 
 def test_dependency_review_cli_emits_bounded_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

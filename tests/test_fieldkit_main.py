@@ -9,7 +9,9 @@ Tests cover:
 - main(None) falls back to sys.argv[1:]
 """
 
+import subprocess
 import sys
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import click
@@ -19,6 +21,75 @@ from click.testing import CliRunner
 from fieldkit.__main__ import cli, main
 
 pytestmark = pytest.mark.unit
+_INTERRUPT_TEST_TIMEOUT_SECONDS = 10
+
+
+@pytest.mark.parametrize(
+    ("kind", "code", "expected"),
+    [
+        ("click", 7, 3),
+        ("click", None, 3),
+        ("click", False, 3),
+        ("click", True, 3),
+        ("system", 7, 3),
+        ("system", None, 0),
+        ("system", False, 3),
+        ("system", True, 3),
+        ("system", "private-exit-marker", 3),
+    ],
+)
+def test_dispatcher_explicit_exit_codes(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], kind: str, code: object, expected: int
+) -> None:
+    if kind == "click":
+        error: BaseException = click.exceptions.Exit()
+        monkeypatch.setattr(error, "exit_code", code)
+    else:
+        error = SystemExit(code)
+    with patch("fieldkit.__main__.cli.main", side_effect=error):
+        result = main([])
+
+    assert result == expected
+    assert "private-exit-marker" not in capsys.readouterr().err
+
+
+def test_dispatcher_click_error_is_clean_data_failure(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def invalid_input() -> None:
+        raise click.ClickException("Cannot find the requested pursuit")
+
+    monkeypatch.setattr("fieldkit.commands.pursuit.audit_cmd.get_fieldkit_home", invalid_input)
+    result = main(["pursuit", "audit"])
+    assert result == 3
+    assert capsys.readouterr().err == "Error: Cannot find the requested pursuit\n"
+
+
+@pytest.mark.parametrize("error", [EOFError(), click.Abort()])
+def test_dispatcher_non_signal_abort_exits_1(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], error: Exception
+) -> None:
+    def abort() -> None:
+        raise error
+
+    monkeypatch.setattr("fieldkit.commands.pursuit.audit_cmd.get_fieldkit_home", abort)
+    result = main(["pursuit", "audit"])
+    assert result == 1
+    error_output = capsys.readouterr().err
+    assert "Aborted." in error_output
+    assert "Traceback" not in error_output
+
+
+def test_dispatcher_startup_interruption_exits_130(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def interrupt() -> None:
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr("fieldkit.__main__.load_dotenv_safe", interrupt)
+    result = main(["--help"])
+    assert result == 130
+    assert "Traceback" not in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------------------
@@ -160,7 +231,11 @@ def test_dispatch_dispatch_propagates_doctor_auth_exit(monkeypatch: pytest.Monke
 
     monkeypatch.setattr(
         "fieldkit.commands.doctor.cli._run_all",
-        lambda: [DoctorResult(service="Salesforce", healthy=False, configured=True, message="session expired")],
+        lambda: [
+            DoctorResult(
+                service="Salesforce", healthy=False, configured=True, message="session expired", failure_kind="auth"
+            )
+        ],
     )
     monkeypatch.setattr("fieldkit.commands.doctor.cli._render_all", lambda _results, _states: None)
     rc = main(["doctor"])
@@ -300,25 +375,45 @@ def test_dispatcher_exception_routing_runtime_error_returns_exit_data(monkeypatc
     assert rc == 3, f"RuntimeError should return EXIT_DATA (3), got {rc}"
 
 
-def test_dispatcher_exception_routing_keyboard_interrupt_not_mapped_to_structured_code(
+def test_dispatcher_keyboard_interrupt_exits_130_without_traceback(
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """KeyboardInterrupt is BaseException, not Exception — the backstop does not catch it.
-
-    Note: when raised inside cli.main(standalone_mode=False), Click converts
-    KeyboardInterrupt to click.exceptions.Abort (a RuntimeError subclass) before
-    it propagates. The backstop catches Abort as a generic Exception → EXIT_DATA (3).
-    This is Click's internal behaviour; the backstop clause itself is correctly
-    scoped to Exception only and would not catch a raw KeyboardInterrupt.
-
-    In real terminal usage, SIGINT raises KeyboardInterrupt in the Python runtime
-    outside Click's catch, so the process exits 130 as expected.
-    """
+    """Click-wrapped interruption preserves the documented shell exit status."""
 
     def raise_keyboard_interrupt() -> None:
         raise KeyboardInterrupt()
 
     monkeypatch.setattr("fieldkit.commands.pursuit.audit_cmd.get_fieldkit_home", raise_keyboard_interrupt)
-    # Click wraps KeyboardInterrupt in Abort (RuntimeError subclass) → backstop → EXIT_DATA
     rc = main(["pursuit", "audit"])
-    assert rc == 3, f"Click-wrapped KeyboardInterrupt should fall to EXIT_DATA (3), got {rc}"
+    assert rc == 130
+    assert "Traceback" not in capsys.readouterr().err
+
+
+@pytest.mark.integration
+def test_dispatcher_real_sigint_exits_130(tmp_path: Path) -> None:
+    """A real SIGINT delivered during Click dispatch stays outside application errors."""
+    script = """
+import os
+import signal
+from unittest.mock import patch
+from fieldkit.__main__ import main
+
+def interrupt():
+    os.kill(os.getpid(), signal.SIGINT)
+
+with patch("fieldkit.commands.pursuit.audit_cmd.get_fieldkit_home", side_effect=interrupt):
+    raise SystemExit(main(["pursuit", "audit"]))
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=tmp_path,
+        env={"HOME": str(tmp_path), "XDG_CONFIG_HOME": str(tmp_path / "config"), "FIELDKIT_NO_LLM": "1"},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=_INTERRUPT_TEST_TIMEOUT_SECONDS,
+    )
+    assert result.returncode == 130
+    assert "Aborted." in result.stderr
+    assert "Traceback" not in result.stderr

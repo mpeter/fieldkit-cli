@@ -1,44 +1,48 @@
 # Routing failure scenarios
 
-## CLI is absent
+## The executable or tool is absent
 
-Stop and name the missing executable. Do not silently change data sources. For a
-Google Workspace operation, `gws` is the required route; an MCP group is not a
-fallback.
+Stop and name the missing capability. Explain whether it is optional or required
+for the requested operation. Do not invent an endpoint, silently choose a
+different data source, or claim that a substitute proves the same fact.
 
-## CLI authentication fails
+## Authentication or identity is unavailable
 
-Run the CLI's status/help command, report the failing service, and give the
-specific re-authentication step. Authentication failure does not grant authority
-to perform a write through another transport.
+Use the tool's credential-safe status interface. Report the account or workspace
+only when the status output establishes it. Do not print, export, or decrypt a
+token as routine diagnosis. Missing authentication leaves the operation pending
+and does not authorize another transport.
 
-## Google Workspace write fails
+## Google Workspace discovery fails
 
-Keep the exact API error and exit code. Do not claim partial success without a
-read-back. If the API reports a validation error, inspect the exact method schema
-with `gws schema <service.resource.method> --resolve-refs` before retrying.
+Preserve the command's exit status and safe error text. Retry only a documented,
+read-only discovery operation. Use `gws schema SERVICE.RESOURCE.METHOD` without
+`--resolve-refs`; some CLI versions can abort while recursively resolving schema
+references. A nonzero exit, crash, malformed response, or incomplete request
+shape means the operation remains pending. Never guess a write payload.
 
-## Browser profile is ambiguous
+## A read or search is incomplete
 
-Run `chrome-use browsers`, select the authorized profile explicitly, and keep all
-subsequent commands pinned to it.
+Record the requested scope, returned scope, pagination state, limits, and error.
+Do not translate a partial page, repeated cursor, rate limit, parse failure, or
+timeout into “no results.” Preserve prior usable state when refresh fails.
 
-## MCP gateway exception group is unavailable
+## The account or resource is ambiguous
 
-Confirm that the request matches the `fieldkit-sales` or `fieldkit-dataverse`
-`MCP-NECESSITY` boundary. Then check `systemctl --user status mcpjungle` and
-`mcpjungle list groups`. If the required group remains unavailable, stop and report
-it. Do not substitute a different service and call the result equivalent.
+Show the bounded candidates and ask the operator to select the exact identity.
+Names, titles, recent timestamps, and list order are not unique identifiers.
+Do not proceed with a write until the account and resource are resolved.
 
-## Direct global MCP is unavailable
+## A write result is uncertain
 
-Confirm that the request matches the `gh_grep`, `brave_search`, or `context7`
-`MCP-NECESSITY` boundary, then inspect whether the client loaded that exact server.
-Do not look for it in mcpjungle. If the server is absent or its call fails, stop and
-report the exact unavailable route; do not silently select another data source.
+Do not retry blindly. First read the resource's current state because the first
+request may have succeeded or another writer may have changed it. Report the
+approved value, observed value, and remaining uncertainty. Success requires a
+matching read-back or the workflow's stronger artifact verification.
 
-## Retired vault graph request
+## A named integration is unknown
 
-State that backlink, outlink, orphan, and connection-path graph operations have
-no maintained backend. Offer native exact search or `qmd` retrieval only when it
-answers the user's underlying question; do not recreate the removed vault group.
+Check fieldkit's current command registry and the environment's documented tool
+inventory. If neither exposes the named capability, report it as unavailable.
+Do not revive a historical service, private maintainer route, or removed graph
+backend from a stale instruction.

@@ -37,9 +37,9 @@ below are available.
 For the one-time clean-history public cutover, choose an output directory that
 does not exist. This candidate check refuses to replace previous evidence and
 binds its result to the current `HEAD`; its versioned export policy deliberately
-names the planned initial `v1.0.0` tag. Later releases use the same sealed
-workflow and authoritative project version, but do not repeat the clean-history
-export procedure.
+names the planned initial `v1.0.0` tag. Successor releases are not supported by
+this candidate. Do not reuse this workflow for one until successor bundle and
+evidence support is implemented.
 
 ```console
 PUBLIC_CANDIDATE_REVISION="$(git rev-parse HEAD)" \
@@ -47,12 +47,16 @@ PUBLIC_CANDIDATE_OUTPUT=build/public-candidate \
 make release-check
 ```
 
-The command builds the retained wheel and source distribution once, validates
-the clean public export, creates the closed bundle and its checksums, records a
-runtime SBOM and dependency receipt, and writes a JSON report beside the output
+The command builds a wheel and source distribution, checks a second build for
+byte-for-byte reproducibility, and selects one artifact pair for the retained
+release bundle. Both build directories remain in the candidate output. It validates the
+clean public export, creates the closed bundle and its checksums, records a
+runtime SBOM and dependency receipt, and writes `report.json` inside the output
 directory. A nonzero result is expected until every manual gate has
 same-candidate evidence: package-name reservation, repository controls,
-TestPyPI rehearsal, public contributor and user journeys, and cutover approval.
+TestPyPI rehearsal, public contributor and user journeys, documentation rehearsals,
+the final frontier review, and cutover approval. The GitHub release environment
+and PyPI Trusted Publisher controls also require retained evidence.
 
 Validate the policy interpretation of that same report:
 
@@ -62,8 +66,8 @@ uv run python scripts/check_release_governance.py \
 ```
 
 Exit 0 means the policy evidence is complete. Exit 1 means one or more
-operator-owned controls are pending. Exit 2 or 3 means the candidate or policy
-record is invalid. No exit status publishes anything.
+operator-owned controls are pending. Exit 3 means the candidate or policy record is invalid.
+Exit 2 is a command-line usage error. No exit status publishes anything.
 
 ## Verify the workflow before review
 
@@ -73,7 +77,15 @@ Validate the checked-in workflow contract locally before requesting review:
 make release-workflow-policy-check
 ```
 
-The workflow has three deliberately separate paths:
+The checked-in workflow currently fails this check with `RWA009`, `RWA010`,
+and `RWF028`. Its approval-input verifier calls use obsolete arguments, and
+the protected approval environment is entered before independent controller
+verification. Keep the workflow non-passing until the controller boundary and
+approval ordering are implemented and reviewed. Correcting command arguments
+alone does not establish release authority.
+
+The workflow defines three separate paths. This table describes their intended
+results, not evidence that a publication route is ready:
 
 | Mode | Trigger | Result | Required approval |
 | --- | --- | --- | --- |
@@ -81,8 +93,18 @@ The workflow has three deliberately separate paths:
 | TestPyPI | Protected default branch dispatch | Attests and publishes the retained candidate to TestPyPI | TestPyPI and operator approval |
 | Production | Verified signed `v<project-version>` tag | Attests, publishes, verifies consumers, then creates the GitHub release | Final operator approval |
 
-The authority jobs consume the retained bundle; they do not rebuild the package,
-check out source, use a package-index token, or overwrite an existing version.
+Structural approval input validation does not grant release authority. The
+approval input command remains non-passing after structural success until the
+independent controller and release authority are authenticated. The checked-in
+workflow cannot currently clear that barrier. Completing the controller trust
+boundary, verifying the approved signer and exact candidate, and obtaining the
+operator's approval are prerequisites to production publication; a valid
+signature or environment configuration alone does not establish them.
+
+On a production tag, the build and validation jobs check out the tagged source
+to run their validation scripts, but do not rebuild the approved package. The
+attestation and publisher jobs do not check out source; they consume the
+retained bundle without a package-index token or overwriting an existing version.
 Configure the protected `release-approval` environment before a production tag,
 and separate protected publisher environments and OIDC Trusted Publishers before
 a TestPyPI or production run. A production tag must carry the protected
@@ -119,11 +141,16 @@ never retries by uploading again. A timeout is pending, a wrong digest is
 failed, and either state remains non-passing with retained evidence.
 
 Manual documentation and community rehearsals require a separate clean checkout
-of the public commit. The verifier rejects local changes, untracked files, a
-checkout at another revision, a non-public repository API response, or a review
-receipt that does not identify the exact successful Cutover verification run.
-Credentialed examples remain non-passing until their same-candidate transcripts
-and assertions are recorded against that checkout.
+of the public commit. Those observations must independently establish unchanged
+tracked and untracked state, the exact public commit, public repository identity,
+and the exact successful Cutover verification run. The current rehearsal validator
+checks retained same-candidate inputs only as structural diagnostics; it does not
+authenticate these public observations or approve a runtime backend or behavioral
+verifier. Manual documentation and community criteria remain pending.
+Credentialed examples remain non-passing until their registered behavioral
+verifiers prove the required observations against that same candidate and exact
+artifacts. Retained transcripts, hashes, and structural assertions are not
+authenticated execution or behavioral proof; they cannot clear a manual example.
 
 ## Recovery and evidence
 
@@ -138,5 +165,7 @@ Do not delete a public release or rewrite its evidence as a substitute for a
 recovery record.
 
 The checked-in [release-governance policy](docs/release-readiness/release-governance-policy.json)
-is the machine-readable source of truth for candidate identity, roles, and
-external-control evidence.
+defines the versioned structural contract for candidate identity, roles, and
+external-control evidence. It governs release approval only when independently
+selected and authenticated as part of the controller's policy inputs; a
+candidate's copy cannot establish its own authority.

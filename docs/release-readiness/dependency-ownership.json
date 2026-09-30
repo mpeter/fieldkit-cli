@@ -9,6 +9,7 @@
         "click",
         "httpx",
         "jsonschema",
+        "markdown-it-py",
         "pydantic",
         "python-dotenv",
         "pyyaml",
@@ -22,6 +23,7 @@
         "dotenv",
         "httpx",
         "jsonschema",
+        "markdown_it",
         "pydantic",
         "questionary",
         "rich",
@@ -52,7 +54,6 @@
         "openai"
       ],
       "import_roots": [
-        "agentplatform",
         "litellm",
         "openai",
         "vertexai"
@@ -101,6 +102,11 @@
     }
   },
   "command_groups": {
+    "autonomy": {
+      "entry_profile": "base",
+      "optional_profiles": [],
+      "boundary_note": "Status reads local health, driver, admission and spend evidence without optional integration SDKs."
+    },
     "auth": {
       "entry_profile": "base",
       "optional_profiles": [
@@ -140,12 +146,22 @@
       ],
       "boundary_note": "General diagnostics must report absent disabled integrations without importing their SDKs."
     },
+    "driver": {
+      "entry_profile": "base",
+      "optional_profiles": [],
+      "boundary_note": "Local scheduling and status use base dependencies; configured external worker CLIs are separate runtime prerequisites."
+    },
     "gmail": {
       "entry_profile": "base",
       "optional_profiles": [
         "google"
       ],
       "boundary_note": "Local cache query and analysis remain base; sync and OAuth paths require Google."
+    },
+    "health": {
+      "entry_profile": "base",
+      "optional_profiles": [],
+      "boundary_note": "Health sensing and status use base dependencies; repository checks and GitHub filing require their configured external tools."
     },
     "golive": {
       "entry_profile": "base",
@@ -176,8 +192,8 @@
       "optional_profiles": []
     },
     "meeting": {
-      "entry_profile": "google",
-      "optional_profiles": []
+      "entry_profile": "base",
+      "optional_profiles": ["google"]
     },
     "pipeline": {
       "entry_profile": "base",

@@ -5,12 +5,12 @@ the failing path that blocks a PR, and fragment assembly into CHANGELOG.md.
 """
 
 import importlib.util
-import re
 import types
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from semantic_python_changes import is_prose_path
 
 # ---------------------------------------------------------------------------
 # Load the scripts as modules (they live in scripts/, not a package).
@@ -33,7 +33,7 @@ _PRIVATE_TRACKER_ID = "bug" + "-890"
 
 
 # ---------------------------------------------------------------------------
-# _is_doc_only — must agree with the `changes` job globs in ci.yml
+# Prose exemptions share the CI classification policy.
 # ---------------------------------------------------------------------------
 
 
@@ -43,17 +43,13 @@ _PRIVATE_TRACKER_ID = "bug" + "-890"
     [
         "docs/ops-runbook.md",
         "docs/subtleties/sf.md",
-        "openspec/changes/foo/tasks.md",
-        ".opencode/skills/proctor/SKILL.md",
-        ".specify/memory.md",
-        "AGENTS.md",
         "CHANGELOG.md",
         "changelog.d/fix-bare-pytest-raises.md",
     ],
 )
 def test_is_doc_only_accepts_doc_paths(path: str) -> None:
-    """Doc paths and any .md file are exempt from the fragment requirement."""
-    result = _check._is_doc_only(path)
+    """Reader documentation is exempt from the fragment requirement."""
+    result = _check.is_prose_path(path)
     assert result is True
 
 
@@ -66,11 +62,16 @@ def test_is_doc_only_accepts_doc_paths(path: str) -> None:
         "Makefile",
         "pyproject.toml",
         ".github/workflows/ci.yml",
+        "openspec/changes/foo/tasks.md",
+        ".opencode/skills/proctor/SKILL.md",
+        ".specify/memory.md",
+        "AGENTS.md",
+        "src/fieldkit/skills/brief/SKILL.md",
     ],
 )
 def test_is_doc_only_rejects_code_paths(path: str) -> None:
     """Code, build, and CI files require a fragment."""
-    result = _check._is_doc_only(path)
+    result = _check.is_prose_path(path)
     assert result is False
 
 
@@ -176,20 +177,23 @@ def test_main_waives_on_skip_changelog(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.unit
-def test_main_passes_when_only_docs_changed(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A doc-only change needs no fragment."""
+@pytest.mark.parametrize(
+    ("path", "expected"), [("README.md", 0), ("AGENTS.md", 1), ("src/fieldkit/skills/brief/SKILL.md", 1)]
+)
+def test_main_prose_exemption(monkeypatch: pytest.MonkeyPatch, path: str, expected: int) -> None:
+    """Only reader prose, not executable instructions, qualifies for the automatic waiver."""
     monkeypatch.delenv("SKIP_CHANGELOG", raising=False)
 
     def fake_git(*args: str) -> str:
         if args[0] == "merge-base":
             return "abc123"
         if args[0] == "diff":
-            return "docs/ops-runbook.md\nAGENTS.md"
+            return f"docs/ops-runbook.md\n{path}"
         return ""
 
     with patch.object(_check, "_git", side_effect=fake_git):
         exit_code = _check.main()
-    assert exit_code == 0
+    assert exit_code == expected
 
 
 @pytest.mark.unit
@@ -373,8 +377,8 @@ def test_collect_fragments_excludes_readme(tmp_path: Path, monkeypatch: pytest.M
 
 
 @pytest.mark.unit
-def test_assemble_skips_heading_already_in_changelog(tmp_path: Path) -> None:
-    """A fragment whose heading is already present is not folded in twice.
+def test_assemble_skips_identical_unreleased_entry(tmp_path: Path) -> None:
+    """An identical unreleased entry is not folded in twice.
 
     Guards the interrupted-cleanup path: CHANGELOG.md written, fragments only
     partly deleted, operator re-runs `make changelog`.
@@ -386,6 +390,88 @@ def test_assemble_skips_heading_already_in_changelog(tmp_path: Path) -> None:
     assembled = _build._assemble(changelog, [fragment])
 
     assert assembled.count("### Fix missing configuration — already landed") == 1
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("section", ["", "## [0.9.0]\n\n"])
+@pytest.mark.parametrize("old_body", ["Older change.", "New change. Extra detail."])
+def test_assemble_preserves_same_heading_with_different_content(tmp_path: Path, section: str, old_body: str) -> None:
+    """Repeated headings and content prefixes do not identify consumed fragments."""
+    fragment = tmp_path / "fix-security.md"
+    fragment.write_text("### Security\n\nNew change.\n", encoding="utf-8")
+    changelog = f"# Changelog\n\n## [Unreleased]\n\n{section}### Security\n\n{old_body}\n"
+
+    assembled = _build._assemble(changelog, [fragment])
+
+    assert "### Security\n\nNew change.\n" in assembled
+    assert assembled.count("### Security") == 2
+    assert old_body in assembled
+
+
+@pytest.mark.unit
+def test_assemble_does_not_deduplicate_against_released_content(tmp_path: Path) -> None:
+    """An older release is not evidence that the current fragment was consumed."""
+    fragment = tmp_path / "fix-security.md"
+    fragment.write_text("### Security\n\nRepeated fix.\n", encoding="utf-8")
+    changelog = "# Changelog\n\n## [Unreleased]\n\n## [0.9.0]\n\n### Security\n\nRepeated fix.\n"
+
+    assembled = _build._assemble(changelog, [fragment])
+
+    assert assembled.count("Repeated fix.") == 2
+
+
+@pytest.mark.unit
+def test_assemble_retry_with_release_history_preserves_entry_count(tmp_path: Path) -> None:
+    """The separator before release history does not hide a consumed entry."""
+    fragment = tmp_path / "fix-security.md"
+    fragment.write_text("### Security\n\nNew fix.\n", encoding="utf-8")
+    changelog = "# Changelog\n\n## [Unreleased]\n\n## [0.9.0]\n\nOlder release.\n"
+
+    assembled = _build._assemble(changelog, [fragment])
+    assert assembled.count("New fix.") == 1
+    retried = _build._assemble(assembled, [fragment])
+
+    assert retried == assembled
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "body",
+    [
+        "Text.\n\n---\n\nMore text.",
+        "```markdown\n\n---\n\n```",
+        "## Details\n\nText.",
+        "## [0.9.0]\n\nText.",
+        " ## Details",
+        "   ## Details",
+        "##\tDetails",
+        "##",
+    ],
+)
+def test_fragment_boundaries_are_rejected_by_gate_and_assembler(tmp_path: Path, body: str) -> None:
+    """Reserved assembly boundaries are rejected consistently, even in examples."""
+    content = f"### Fix release notes\n\n{body}\n"
+    fragment = tmp_path / "fix-release-notes.md"
+    fragment.write_text(content, encoding="utf-8")
+
+    problem = _check._fragment_problem("changelog.d/fix-release-notes.md", content)
+
+    assert problem is not None
+    assert "reserved" in problem
+    with pytest.raises(ValueError, match="reserved"):
+        _build._assemble("# Changelog\n\n## [Unreleased]\n", [fragment])
+
+
+@pytest.mark.unit
+def test_assemble_rejects_duplicate_fragment_bodies(tmp_path: Path) -> None:
+    """Identical fragment files cannot be ambiguously consumed on retry."""
+    first = tmp_path / "first.md"
+    second = tmp_path / "second.md"
+    first.write_text("### Fix release notes\n\nA change.\n", encoding="utf-8")
+    second.write_text(first.read_text(encoding="utf-8"), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="duplicate fragment content"):
+        _build._assemble("# Changelog\n\n## [Unreleased]\n", [first, second])
 
 
 # ---------------------------------------------------------------------------
@@ -417,6 +503,23 @@ def test_main_dry_run_mutates_nothing(tmp_path: Path, monkeypatch: pytest.Monkey
     assert exit_code == 0
     assert changelog.read_text(encoding="utf-8") == before
     assert fragment.exists()
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("body", ["## Details\n\nText.", "Text.\n\n---\n\nMore text."])
+def test_main_rejects_boundaries_without_mutation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: str) -> None:
+    """Validation completes before writing the changelog or deleting fragments."""
+    changelog, fragments_dir = _stage_changelog(tmp_path, monkeypatch)
+    fragment = fragments_dir / "fix-release-notes.md"
+    content = f"### Fix release notes\n\n{body}\n"
+    fragment.write_text(content, encoding="utf-8")
+    before = changelog.read_text(encoding="utf-8")
+
+    exit_code = _build.main([])
+
+    assert exit_code == 1
+    assert changelog.read_text(encoding="utf-8") == before
+    assert fragment.read_text(encoding="utf-8") == content
 
 
 @pytest.mark.unit
@@ -480,17 +583,6 @@ def test_main_rerun_after_partial_cleanup_does_not_duplicate(tmp_path: Path, mon
 
 
 @pytest.mark.unit
-def test_doc_patterns_match_ci_workflow() -> None:
-    """_DOC_PATTERNS must equal the `case` globs in the ci.yml `changes` job.
-
-    Broadening one without the other silently disables the gate: the widened list
-    reclassifies code files as doc-only, so the check prints OK and exits 0 while
-    letting a fragment-less change merge.
-    """
-    ci_yml = (Path(__file__).parent.parent / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    match = re.search(r"^\s*(\S+)\)\s*;;\s*$", ci_yml, re.MULTILINE)
-    assert match is not None, "could not locate the doc-only `case` arm in ci.yml"
-
-    ci_patterns = tuple(match.group(1).split("|"))
-
-    assert ci_patterns == _check._DOC_PATTERNS
+def test_changelog_uses_canonical_prose_policy() -> None:
+    """Fragment exemptions cannot silently acquire a separate Markdown allowlist."""
+    assert _check.is_prose_path is is_prose_path

@@ -12,8 +12,35 @@ from fieldkit.driver.github import MAX_ATTEMPTS
 from fieldkit.util.atomic import locked_json_update
 
 RetryPhase = Literal["running", "retryable", "succeeded", "exhausted"]
+FailureCode = Literal[
+    "agent-failed",
+    "authentication-failed",
+    "rate-limited",
+    "setup-failed",
+    "verification-failed",
+    "worktree-failed",
+]
 _PHASES: frozenset[str] = frozenset({"running", "retryable", "succeeded", "exhausted"})
-_VERSION = 1
+_FAILURE_CODES: frozenset[str] = frozenset(
+    {
+        "agent-failed",
+        "authentication-failed",
+        "rate-limited",
+        "setup-failed",
+        "verification-failed",
+        "worktree-failed",
+    }
+)
+_VERSION = 2
+
+
+@dataclass(frozen=True)
+class RetryReceipt:
+    """Bounded local failure context safe to include as non-authoritative prompt data."""
+
+    failure_code: FailureCode
+    attempt: int
+    source_revision: str
 
 
 @dataclass(frozen=True)
@@ -26,6 +53,7 @@ class RetryDecision:
     started_attempts: int
     attempt: int | None
     detail: str
+    receipt: RetryReceipt | None = None
 
 
 @dataclass(frozen=True)
@@ -37,6 +65,8 @@ class RetryStatus:
     started_attempts: int
     initial_github_attempt: int
     outcome: str
+    failure_code: str
+    source_revision: str
     updated_at: str
 
 
@@ -106,6 +136,14 @@ def _validate_entry(entry: object) -> dict[str, Any]:
             raise ValueError(f"retry entry has invalid {key}")
     if not isinstance(entry.get("resets"), list):
         raise ValueError("retry entry has invalid resets")
+    source_revision = entry.get("source_revision")
+    failure_code = entry.get("failure_code")
+    if not isinstance(source_revision, str) or (
+        source_revision and (len(source_revision) != 40 or any(c not in "0123456789abcdef" for c in source_revision))
+    ):
+        raise ValueError("retry entry has invalid source_revision")
+    if not isinstance(failure_code, str) or (failure_code and failure_code not in _FAILURE_CODES):
+        raise ValueError("retry entry has invalid failure_code")
     return entry
 
 
@@ -135,6 +173,8 @@ def _new_entry(seed: int, now: str) -> dict[str, Any]:
         "created_at": now,
         "updated_at": now,
         "outcome": "",
+        "source_revision": "",
+        "failure_code": "",
         "resets": [],
     }
 
@@ -187,10 +227,15 @@ def reserve_attempt(
     issue_number: int,
     labels: list[str],
     *,
+    source_revision: str | None = None,
     data_root: Path | None = None,
 ) -> RetryDecision:
     """Atomically reserve the next local attempt before driver work starts."""
     issue_key = _issue_key(repo, issue_number)
+    if source_revision is not None and (
+        len(source_revision) != 40 or any(character not in "0123456789abcdef" for character in source_revision)
+    ):
+        return RetryDecision(False, issue_key, None, 0, None, "source revision is invalid")
     try:
         with locked_json_update(_state_path(data_root)) as data:
             ledger = _new_ledger(data)
@@ -210,11 +255,33 @@ def reserve_attempt(
                 return decision
             if decision.attempt is None:
                 raise ValueError("retry decision missing attempt")
+            receipt: RetryReceipt | None = None
+            if (
+                entry["phase"] == "retryable"
+                and source_revision is not None
+                and entry["source_revision"] == source_revision
+                and entry["failure_code"] in _FAILURE_CODES
+            ):
+                receipt = RetryReceipt(
+                    entry["failure_code"],
+                    entry["started_attempts"],
+                    source_revision,
+                )
             entry["started_attempts"] = decision.attempt
             entry["phase"] = "running"
             entry["outcome"] = ""
+            entry["source_revision"] = source_revision or ""
+            entry["failure_code"] = ""
             entry["updated_at"] = now
-            return RetryDecision(True, issue_key, "running", decision.attempt, decision.attempt, "attempt reserved")
+            return RetryDecision(
+                True,
+                issue_key,
+                "running",
+                decision.attempt,
+                decision.attempt,
+                "attempt reserved",
+                receipt,
+            )
     except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
         return RetryDecision(False, issue_key, None, 0, None, f"could not persist retry reservation: {exc}")
 
@@ -225,10 +292,15 @@ def complete_attempt(
     *,
     succeeded: bool,
     outcome: str,
+    failure_code: FailureCode | None = None,
     data_root: Path | None = None,
 ) -> RetryDecision:
     """Persist the local terminal or retryable result before GitHub projection."""
     issue_key = _issue_key(repo, issue_number)
+    if succeeded and failure_code is not None:
+        return RetryDecision(False, issue_key, None, 0, None, "successful attempt cannot have a failure code")
+    if not succeeded and failure_code is None:
+        return RetryDecision(False, issue_key, None, 0, None, "failed attempt requires a failure code")
     try:
         with locked_json_update(_state_path(data_root)) as data:
             entries = _validate_ledger(data)
@@ -243,6 +315,7 @@ def complete_attempt(
                 phase = "exhausted"
             entry["phase"] = phase
             entry["outcome"] = outcome
+            entry["failure_code"] = failure_code or ""
             entry["updated_at"] = _timestamp()
             return RetryDecision(
                 True, issue_key, phase, entry["started_attempts"], entry["started_attempts"], "attempt finalized"
@@ -265,6 +338,8 @@ def retry_status(*, data_root: Path | None = None) -> tuple[RetryStatus, ...]:
                 started_attempts=entry["started_attempts"],
                 initial_github_attempt=entry["initial_github_attempt"],
                 outcome=entry["outcome"],
+                failure_code=entry["failure_code"],
+                source_revision=entry["source_revision"],
                 updated_at=entry["updated_at"],
             )
             for key, raw_entry in sorted(entries.items())
@@ -300,6 +375,8 @@ def reset_retry(
             entry["started_attempts"] = 0
             entry["phase"] = "retryable"
             entry["outcome"] = "reset"
+            entry["source_revision"] = ""
+            entry["failure_code"] = ""
             entry["updated_at"] = now
             return ResetResult(True, issue_key, "retry state reset")
     except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:

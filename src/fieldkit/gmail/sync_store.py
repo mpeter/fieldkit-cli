@@ -9,23 +9,26 @@ import sqlite3
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from functools import partial
-from typing import Any
+from typing import Any, cast
 
 from fieldkit.errors import GmailSyncPartialError
 from fieldkit.gmail.batch import BatchAccumulator, BatchFetchResult, SyncSummary, warn_if_batch_incomplete
 from fieldkit.gmail.retry import _api_call_with_retry
+from fieldkit.sqlite_publication import SQLiteMutationConnection
 
 BATCH_SIZE = 100
 
 log = logging.getLogger("gmail-sync")
+_MAX_MIME_DEPTH = 32
+_MAX_MIME_PARTS = 10_000
 
 
-def sync_get(conn: sqlite3.Connection, key: str) -> str | None:
+def sync_get(conn: sqlite3.Connection | SQLiteMutationConnection, key: str) -> str | None:
     row = conn.execute("SELECT value FROM sync_state WHERE key=?", (key,)).fetchone()
     return row[0] if row else None
 
 
-def sync_set(conn: sqlite3.Connection, key: str, value: str | None) -> None:
+def sync_set(conn: sqlite3.Connection | SQLiteMutationConnection, key: str, value: str | None) -> None:
     conn.execute("INSERT OR REPLACE INTO sync_state(key, value) VALUES (?, ?)", (key, value))
 
 
@@ -98,19 +101,62 @@ def _extract_parts(payload: dict[str, Any]) -> tuple[str, str, list[dict[str, An
     return plain, html, attachments
 
 
+def _validate_payload(payload: object, *, depth: int, remaining: list[int]) -> dict[str, Any]:
+    if not isinstance(payload, dict) or depth > _MAX_MIME_DEPTH or remaining[0] <= 0:
+        raise ValueError("invalid Gmail message payload")
+    remaining[0] -= 1
+    for key in ("mimeType", "filename", "partId"):
+        if key in payload and not isinstance(payload[key], str):
+            raise ValueError("invalid Gmail message payload")
+    headers = payload.get("headers", [])
+    if not isinstance(headers, list):
+        raise ValueError("invalid Gmail message payload")
+    for header in headers:
+        if (
+            not isinstance(header, dict)
+            or not isinstance(header.get("name"), str)
+            or not isinstance(header.get("value"), str)
+        ):
+            raise ValueError("invalid Gmail message payload")
+    body = payload.get("body", {})
+    if not isinstance(body, dict):
+        raise ValueError("invalid Gmail message payload")
+    for key in ("data", "attachmentId"):
+        if key in body and not isinstance(body[key], str):
+            raise ValueError("invalid Gmail message payload")
+    if "size" in body and (not isinstance(body["size"], int) or isinstance(body["size"], bool) or body["size"] < 0):
+        raise ValueError("invalid Gmail message payload")
+    parts = payload.get("parts", [])
+    if not isinstance(parts, list) or len(parts) > remaining[0]:
+        raise ValueError("invalid Gmail message payload")
+    for part in parts:
+        _validate_payload(part, depth=depth + 1, remaining=remaining)
+    return payload
+
+
 def _make_message_dict(raw: dict[str, Any], msg_id: str) -> dict[str, Any]:
     """Convert a raw Gmail API message response into the structured dict used by insert_batch."""
-    headers = {h["name"].lower(): h["value"] for h in raw.get("payload", {}).get("headers", [])}
+    if raw.get("id") != msg_id or not isinstance(raw.get("threadId"), str) or not raw["threadId"]:
+        raise ValueError("invalid Gmail message response")
+    payload = _validate_payload(raw.get("payload"), depth=0, remaining=[_MAX_MIME_PARTS])
+    labels = raw.get("labelIds", [])
+    if not isinstance(labels, list) or any(not isinstance(label, str) for label in labels):
+        raise ValueError("invalid Gmail message response")
+    snippet = raw.get("snippet", "")
+    size_estimate = raw.get("sizeEstimate", 0)
+    if not isinstance(snippet, str) or (
+        not isinstance(size_estimate, int) or isinstance(size_estimate, bool) or size_estimate < 0
+    ):
+        raise ValueError("invalid Gmail message response")
+    headers = {h["name"].lower(): h["value"] for h in payload.get("headers", [])}
 
     date_str = headers.get("date", "")
     date_epoch: int | None = None
-    with contextlib.suppress(ValueError, TypeError):
+    with contextlib.suppress(OSError, OverflowError, TypeError, ValueError):
         dt = parsedate_to_datetime(date_str)
         date_epoch = int(dt.timestamp())
 
-    payload = raw.get("payload", {})
     body_plain, body_html, attach_list = _extract_parts(payload)
-    labels = raw.get("labelIds", [])
 
     attachments = []
     for a in attach_list:
@@ -127,7 +173,7 @@ def _make_message_dict(raw: dict[str, Any], msg_id: str) -> dict[str, Any]:
 
     return {
         "message_id": msg_id,
-        "thread_id": raw.get("threadId", ""),
+        "thread_id": raw["threadId"],
         "from_addr": headers.get("from", ""),
         "to_addr": headers.get("to", ""),
         "cc_addr": headers.get("cc", ""),
@@ -137,8 +183,8 @@ def _make_message_dict(raw: dict[str, Any], msg_id: str) -> dict[str, Any]:
         "labels": json.dumps(labels),
         "body_plain": body_plain,
         "body_html": body_html,
-        "size_bytes": raw.get("sizeEstimate", 0),
-        "snippet": html.unescape(raw.get("snippet", "")),
+        "size_bytes": size_estimate,
+        "snippet": html.unescape(snippet),
         "attachments": attachments,
     }
 
@@ -171,8 +217,8 @@ def fetch_messages_batch(service: Any, msg_ids: list[str]) -> BatchFetchResult:
 # ---------------------------------------------------------------------------
 
 
-def insert_batch(conn: sqlite3.Connection, messages: list[dict[str, Any]]) -> None:
-    """Upsert threads + messages + attachments in a single transaction."""
+def insert_batch(conn: sqlite3.Connection | SQLiteMutationConnection, messages: list[dict[str, Any]]) -> None:
+    """Upsert threads, messages, and attachments in the caller's transaction."""
     # Collect thread stubs: use first message per thread for subject
     threads_seen: dict[str, dict[str, Any]] = {}
     for m in messages:
@@ -185,57 +231,56 @@ def insert_batch(conn: sqlite3.Connection, messages: list[dict[str, Any]]) -> No
                 "updated_at": datetime.now(UTC).isoformat(),
             }
 
-    with conn:
-        conn.executemany(
-            """
-            INSERT OR REPLACE INTO threads(thread_id, subject, snippet, updated_at)
-            VALUES (:thread_id, :subject, :snippet, :updated_at)
+    conn.executemany(
+        """
+        INSERT OR REPLACE INTO threads(thread_id, subject, snippet, updated_at)
+        VALUES (:thread_id, :subject, :snippet, :updated_at)
+        """,
+        list(threads_seen.values()),
+    )
+
+    conn.executemany(
+        """
+        INSERT OR REPLACE INTO messages(
+            message_id, thread_id, from_addr, to_addr, cc_addr,
+            subject, date_str, date_epoch, labels,
+            body_plain, body_html, size_bytes, snippet, synced_at
+        ) VALUES (
+            :message_id, :thread_id, :from_addr, :to_addr, :cc_addr,
+            :subject, :date_str, :date_epoch, :labels,
+            :body_plain, :body_html, :size_bytes, :snippet,
+            datetime('now')
+        )
+        """,
+        [{k: v for k, v in m.items() if k != "attachments"} for m in messages],
+    )
+
+    # Recompute message_count for affected threads from actual message rows.
+    thread_ids = list(threads_seen)
+    if thread_ids:
+        conn.execute(
+            f"""
+            UPDATE threads
+            SET message_count = (
+                SELECT COUNT(*) FROM messages WHERE messages.thread_id = threads.thread_id
+            )
+            WHERE thread_id IN ({",".join("?" * len(thread_ids))})
             """,
-            list(threads_seen.values()),
+            thread_ids,
         )
 
+    attachments = [a for m in messages for a in m.get("attachments", [])]
+    if attachments:
         conn.executemany(
             """
-            INSERT OR REPLACE INTO messages(
-                message_id, thread_id, from_addr, to_addr, cc_addr,
-                subject, date_str, date_epoch, labels,
-                body_plain, body_html, size_bytes, snippet, synced_at
+            INSERT OR REPLACE INTO attachments(
+                attachment_id, message_id, filename, mime_type, size_bytes, part_id
             ) VALUES (
-                :message_id, :thread_id, :from_addr, :to_addr, :cc_addr,
-                :subject, :date_str, :date_epoch, :labels,
-                :body_plain, :body_html, :size_bytes, :snippet,
-                datetime('now')
+                :attachment_id, :message_id, :filename, :mime_type, :size_bytes, :part_id
             )
             """,
-            [{k: v for k, v in m.items() if k != "attachments"} for m in messages],
+            attachments,
         )
-
-        # Recompute message_count for affected threads from actual message rows.
-        thread_ids = list(threads_seen)
-        if thread_ids:
-            conn.execute(
-                f"""
-                UPDATE threads
-                SET message_count = (
-                    SELECT COUNT(*) FROM messages WHERE messages.thread_id = threads.thread_id
-                )
-                WHERE thread_id IN ({",".join("?" * len(thread_ids))})
-                """,
-                thread_ids,
-            )
-
-        attachments = [a for m in messages for a in m.get("attachments", [])]
-        if attachments:
-            conn.executemany(
-                """
-                INSERT OR REPLACE INTO attachments(
-                    attachment_id, message_id, filename, mime_type, size_bytes, part_id
-                ) VALUES (
-                    :attachment_id, :message_id, :filename, :mime_type, :size_bytes, :part_id
-                )
-                """,
-                attachments,
-            )
 
 
 def _add_message_list_filters(kwargs: dict[str, Any], page_token: str | None, query: str | None) -> None:
@@ -264,6 +309,14 @@ def list_messages(
         lambda: service.users().messages().list(**kwargs).execute(),
         context="messages.list",
     )
+    if not isinstance(result, dict):
+        raise GmailSyncPartialError("Gmail message listing returned invalid data")
     msgs = result.get("messages", [])
     next_token = result.get("nextPageToken")
-    return msgs, next_token
+    if (
+        not isinstance(msgs, list)
+        or any(not isinstance(message, dict) or not isinstance(message.get("id"), str) for message in msgs)
+        or (next_token is not None and not isinstance(next_token, str))
+    ):
+        raise GmailSyncPartialError("Gmail message listing returned invalid data")
+    return cast(list[dict[str, Any]], msgs), next_token

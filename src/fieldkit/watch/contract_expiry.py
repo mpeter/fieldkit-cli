@@ -33,7 +33,7 @@ from fieldkit.pursuit.utils import iterate_pursuits
 from fieldkit.watch.dedup import alert_block_exists
 from fieldkit.watch.logging import watcher_logging
 from fieldkit.watch.state import merge_state
-from fieldkit.watch.status import WatcherOutcome, write_run_status
+from fieldkit.watch.status import WatcherRunResult, classify_watcher_outcome, write_run_status
 
 
 @cache
@@ -462,9 +462,9 @@ def _run_contract_expiry(
     warning: int = 30,
     notice: int = 60,
     as_json: bool = False,
-) -> int:
-    """Core logic; returns POSIX exit code."""
-    with watcher_logging("contract-expiry"):
+) -> WatcherRunResult:
+    """Run the watcher and return this invocation's execution facts."""
+    with watcher_logging("contract-expiry", enabled=not dry_run):
         return _run_contract_expiry_inner(
             account_filter=account_filter,
             dry_run=dry_run,
@@ -475,13 +475,6 @@ def _run_contract_expiry(
         )
 
 
-def _watcher_outcome(checked: int, failures: int) -> WatcherOutcome:
-    """Classify incomplete scans without hiding input failures."""
-    if failures == 0:
-        return "ok"
-    return "fatal" if checked == 0 else "partial"
-
-
 def _run_contract_expiry_inner(
     *,
     account_filter: str | None,
@@ -490,8 +483,8 @@ def _run_contract_expiry_inner(
     warning: int = 30,
     notice: int = 60,
     as_json: bool = False,
-) -> int:
-    """Inner logic (separated for testability); returns POSIX exit code.
+) -> WatcherRunResult:
+    """Inner logic (separated for testability); returns execution facts.
 
     ``as_json`` emits the run-status document on stdout in place of the
     ``[DRY-RUN]`` summary line; the exit code is unaffected.
@@ -511,7 +504,7 @@ def _run_contract_expiry_inner(
     accounts_dir = get_fieldkit_home() / "accounts"
     if not accounts_dir.is_dir():
         log.error("Accounts directory not found: %s", accounts_dir)
-        return 1
+        return WatcherRunResult("fatal", False, None)
 
     pursuit_paths = [
         path
@@ -568,16 +561,21 @@ def _run_contract_expiry_inner(
         dry_run,
     )
 
-    outcome = "fatal" if state_write_failed else _watcher_outcome(checked, skipped)
-    write_run_status(
+    outcome = "fatal" if state_write_failed else classify_watcher_outcome(checked=checked, failures=skipped)
+    failures = skipped + int(state_write_failed)
+    status_result = write_run_status(
         watcher="contract-expiry",
         outcome=outcome,
         records_checked=checked,
         alerts_generated=alerted,
-        failures=skipped,
+        failures=failures,
         elapsed_seconds=elapsed,
         dry_run=dry_run,
     )
+    if status_result == "failed":
+        failures += 1
+        outcome = "fatal"
+    result = WatcherRunResult(outcome, True, status_result)
     if as_json:
         # The run happened — emit the outcome even when it is fatal, which is
         # exactly when a caller needs the detail. historic regression: `outcome` is reported
@@ -586,10 +584,10 @@ def _run_contract_expiry_inner(
             json.dumps(
                 {
                     "watcher": "contract-expiry",
-                    "outcome": outcome,
+                    "outcome": result.outcome,
                     "records_checked": checked,
                     "alerts_generated": alerted,
-                    "failures": skipped,
+                    "failures": failures,
                     "suppressed": suppressed,
                     "elapsed_seconds": round(elapsed, 1),
                     "dry_run": dry_run,
@@ -598,11 +596,11 @@ def _run_contract_expiry_inner(
                 default=str,
             )
         )
-        return 1 if outcome != "ok" else 0
+        return result
     # historic regression: print dry-run summary to stdout so --dry-run is useful as a preview.
     if dry_run:
         print(f"[DRY-RUN] contract-expiry: {checked} pursuit(s) scanned, {alerted} alert(s) would fire")
-    return 1 if outcome != "ok" else 0
+    return result
 
 
 __all__ = [

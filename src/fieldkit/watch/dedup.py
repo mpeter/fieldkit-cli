@@ -84,8 +84,7 @@ def scrub_duplicate_alerts(alerts_path: Path) -> int:
 
     new_content = "".join(output_lines)
     if new_content != content:
-        # Use string concatenation, not with_suffix(), to avoid ValueError on Python 3.12+
-        # where with_suffix(".md.tmp") raises because ".md.tmp" contains an embedded dot.
+        # Append the temporary marker without replacing the existing filename suffix.
         tmp = alerts_path.parent / (alerts_path.name + ".tmp")
         tmp.write_text(new_content, encoding="utf-8")
         tmp.replace(alerts_path)

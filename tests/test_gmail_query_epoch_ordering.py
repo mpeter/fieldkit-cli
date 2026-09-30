@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from fieldkit.commands.gmail.query import _normalize_date, query_dig
+from fieldkit.gmail.query_domain import _normalize_date, query_dig
 
 pytestmark = pytest.mark.unit
 
