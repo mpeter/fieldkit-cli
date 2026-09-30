@@ -231,7 +231,7 @@ def do_write_opp(opp_id: str, pursuit_file: str, json_string: str) -> None:
     # a reconcile failure never kills the outer listview account loop.
     try:
         _reconcile_with_path(str(pf))
-    except (SystemExit, FileNotFoundError, Exception):  # noqa: BLE001
+    except (SystemExit, FileNotFoundError, Exception):
         logging.warning("Reconcile failed for %s", pf, exc_info=True)
 
     # Post-write validation: warn if the file still fails model validation after write.

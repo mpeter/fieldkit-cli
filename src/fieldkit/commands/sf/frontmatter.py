@@ -869,14 +869,14 @@ def _load_fm_data(pursuit_path: str, fm_lines: list[str]) -> dict[str, Any]:
     try:
         model, _, _ = load_pursuit(pursuit_path)
         return model.model_dump(mode="json")
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.debug("load_pursuit failed for %s, trying YAML fallback", pursuit_path, exc_info=True)
     import yaml as _yaml
 
     try:
         fm_text = "\n".join(fm_lines)
         return _yaml.safe_load(fm_text) or {}
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.debug("YAML fallback also failed for %s — leaving fm_data empty", pursuit_path, exc_info=True)
     return {}
 

@@ -110,7 +110,7 @@ from docx.enum.section import WD_ORIENT
 
 doc = Document()
 section = doc.sections[0]
-section.page_width = Emu(12240 * 914)   # US Letter
+section.page_width = Emu(12240 * 914)  # US Letter
 section.page_height = Emu(15840 * 914)
 section.top_margin = Inches(1)
 section.bottom_margin = Inches(1)

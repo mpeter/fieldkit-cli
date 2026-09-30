@@ -68,7 +68,7 @@ def _skills_dir() -> Path:
                     candidate = root / subpath
                     if candidate.is_dir():
                         return candidate
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.debug("skill._runner: failed to resolve skills dir from config fieldkit_root", exc_info=True)
             pass  # Fall through to package-relative path
 

@@ -126,7 +126,7 @@ def _collect_alert_source(
         msg = f"[{label}] unavailable: file not found"
         log.warning(msg)
         return msg
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         # Use a generic user-facing message to avoid leaking internal paths,
         # hostnames, or API error bodies into the brief markdown. Full exception
         # detail is preserved in the log for operator diagnosis.
@@ -147,7 +147,7 @@ def _collect_calendar_meetings(
         meetings = fetch_external_meetings(calendar_session, target_date, internal_domains, user_email)
         log.info("External meetings: %d fetched", len(meetings))
         return meetings
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         # historic regression: escalate to WARNING and include a sanitised error summary in the
         # returned string so the AE sees what kind of failure occurred.
         # We use the exception type name + a short fixed-vocabulary suffix rather than

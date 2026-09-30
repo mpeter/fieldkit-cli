@@ -239,7 +239,7 @@ def _write_row(
                 ),
             )
             conn.commit()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("llm_log: failed to write row: %s", exc, exc_info=True)
 
 
@@ -306,7 +306,7 @@ def _success_callback(kwargs: dict[str, Any], response_obj: Any, start_time: Any
             error=None,
             prompt_hash=_hash_prompt(kwargs),
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("llm_log: success_callback error: %s", exc, exc_info=True)
 
 
@@ -344,7 +344,7 @@ def _failure_callback(
             error=error_str,
             prompt_hash=_hash_prompt(kwargs),
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("llm_log: failure_callback error: %s", exc, exc_info=True)
 
 
@@ -385,6 +385,6 @@ def _ensure_initialized() -> None:
                     litellm.success_callback.append(_success_callback)
                 if _failure_callback not in litellm.failure_callback:
                     litellm.failure_callback.append(_failure_callback)
-            except Exception as _exc:  # noqa: BLE001
+            except Exception as _exc:
                 logger.warning("llm_log: failed to register litellm callbacks: %s", _exc, exc_info=True)
         _init_state[0] = True

@@ -341,7 +341,7 @@ def get_latest_pursuit_files(n: int = 5) -> list[Path]:
                     fm, _ = parsed
                     stage = str(fm.get("stage", "")).lower()
                     close_date_str = str(fm.get("sf_close_date") or "")
-            except Exception:  # noqa: BLE001
+            except Exception:
                 log.warning("Skipping unparseable pursuit %s", f, exc_info=True)
                 stage = ""
                 close_date_str = ""

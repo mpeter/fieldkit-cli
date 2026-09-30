@@ -490,7 +490,7 @@ def _check_all_accounts(
                 default_threshold=threshold,
                 dry_run=dry_run,
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.warning("Unexpected error checking %r: %s", account_key, exc, exc_info=True)
             api_failures += 1
             continue

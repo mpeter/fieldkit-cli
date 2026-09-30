@@ -124,7 +124,7 @@ class MCPSession:
                     "params": {},
                 }
                 self._post(payload, session_id=self._session_id)
-            except Exception:  # noqa: BLE001  # MCP notifications/initialized is best-effort on teardown
+            except Exception:  # MCP notifications/initialized is best-effort on teardown
                 log.debug("MCP notifications/initialized on close failed — ignored", exc_info=True)
             self._session_id = None
         self._http.close()
