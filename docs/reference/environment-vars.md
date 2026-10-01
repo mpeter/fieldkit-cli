@@ -57,9 +57,7 @@ and offline checks.
 | Variable | Purpose |
 | --- | --- |
 | `XDG_CONFIG_HOME` | Absolute base directory for fieldkit configuration and Salesforce cookie files; useful for isolated trials and CI |
-| `XDG_CACHE_HOME` | Absolute cache base; the harness scratch root defaults to its `fieldkit/` child |
 | `FIELDKIT_DATA_DIR` | Absolute runtime-data root override |
-| `FIELDKIT_HARNESS_ROOT` | Absolute scratch root for disposable harness worktrees; overrides `XDG_CACHE_HOME` |
 | `FIELDKIT_LLM_LOG` | Absolute LLM-call database path within an allowed fieldkit root |
 | `FIELDKIT_SKILLS_DIR` | Packaged-skill directory override for development and tests |
 | `FIELDKIT_SF_PIPELINE_ROOT` | Salesforce pipeline root override |
@@ -68,10 +66,6 @@ and offline checks.
 Overrides that define roots must be absolute. `FIELDKIT_DATA_DIR` may select any
 absolute runtime-data root. `FIELDKIT_LLM_LOG` remains restricted to its
 documented allowed roots.
-
-If neither `FIELDKIT_HARNESS_ROOT` nor an absolute `XDG_CACHE_HOME` is set,
-fieldkit uses `~/.cache/fieldkit` for disposable harness worktrees. This cache is
-separate from the application, workspace, and runtime-data roots.
 
 ## One command or one shell
 

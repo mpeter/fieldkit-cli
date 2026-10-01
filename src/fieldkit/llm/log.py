@@ -111,9 +111,6 @@ def _approved_log_roots() -> set[Path]:
 def get_db_path() -> Path:
     """Return the LLM log DB path, resolving overrides at call time.
 
-    This public resolver is shared with :mod:`fieldkit.driver.spend` so the
-    ``FIELDKIT_LLM_LOG`` rule has one home (implementation change).
-
     Explicit overrides must resolve beneath a P36-approved fieldkit storage
     root. The unset default follows the authoritative runtime-data root.
 

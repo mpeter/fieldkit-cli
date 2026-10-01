@@ -10,24 +10,6 @@ def llm_disabled() -> bool:
     return bool(os.environ.get("FIELDKIT_NO_LLM") or os.environ.get("NO_LLM"))
 
 
-def get_driver_max_concurrent() -> int:
-    """Return the configured driver concurrency cap, clamped to one through four."""
-    try:
-        data = _loader._load_raw_config()
-    except _loader.ConfigError:
-        return 1
-    if data is None:
-        return 1
-    driver = data.get("driver")
-    if not isinstance(driver, dict):
-        return 1
-    try:
-        value = int(driver.get("max_concurrent", 1))
-    except (TypeError, ValueError):
-        return 1
-    return max(1, min(4, value))
-
-
 def get_vertex_location() -> str | None:
     """Return the configured Vertex region when readable and nonempty."""
     try:

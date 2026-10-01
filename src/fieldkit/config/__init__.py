@@ -34,13 +34,11 @@ from fieldkit.config._paths import get_configured_fieldkit_data as get_configure
 from fieldkit.config._paths import get_fieldkit_data as get_fieldkit_data
 from fieldkit.config._paths import get_fieldkit_home as get_fieldkit_home
 from fieldkit.config._paths import get_fieldkit_root as get_fieldkit_root
-from fieldkit.config._paths import get_harness_scratch_root as get_harness_scratch_root
 from fieldkit.config._paths import get_watchers_dir as get_watchers_dir
 from fieldkit.config._quota import get_pipeline_quota as get_pipeline_quota
 from fieldkit.config._quota import write_pipeline_quota as write_pipeline_quota
 from fieldkit.config._settings import get_companion_act_allowlist as get_companion_act_allowlist
 from fieldkit.config._settings import get_companion_tier as get_companion_tier
-from fieldkit.config._settings import get_driver_max_concurrent as get_driver_max_concurrent
 from fieldkit.config._settings import get_email_domain as get_email_domain
 from fieldkit.config._settings import get_github_repo as get_github_repo
 from fieldkit.config._settings import get_llm_model as get_llm_model
@@ -64,12 +62,9 @@ from fieldkit.config._timeouts import TIMEOUT_GH_CLI as TIMEOUT_GH_CLI
 from fieldkit.config._timeouts import TIMEOUT_GWS_CLI as TIMEOUT_GWS_CLI
 from fieldkit.config._timeouts import TIMEOUT_HEALTH_CHECK as TIMEOUT_HEALTH_CHECK
 from fieldkit.config._timeouts import TIMEOUT_HEALTH_GATE as TIMEOUT_HEALTH_GATE
-from fieldkit.config._timeouts import TIMEOUT_HEALTH_GIT as TIMEOUT_HEALTH_GIT
 from fieldkit.config._timeouts import TIMEOUT_INTERACTIVE_AUTH as TIMEOUT_INTERACTIVE_AUTH
 from fieldkit.config._timeouts import TIMEOUT_MCP_TOOL as TIMEOUT_MCP_TOOL
 from fieldkit.config._timeouts import TIMEOUT_OIDC_HTTP as TIMEOUT_OIDC_HTTP
-from fieldkit.config._timeouts import TIMEOUT_PROCESS_KILL_GRACE as TIMEOUT_PROCESS_KILL_GRACE
-from fieldkit.config._timeouts import TIMEOUT_RATE_LIMIT_POLL as TIMEOUT_RATE_LIMIT_POLL
 from fieldkit.config._timeouts import TIMEOUT_REPAIR as TIMEOUT_REPAIR
 from fieldkit.config._timeouts import TIMEOUT_SF_SESSION_CHECK as TIMEOUT_SF_SESSION_CHECK
 from fieldkit.config._timeouts import TIMEOUT_SHADOWBOT_QUERY as TIMEOUT_SHADOWBOT_QUERY
@@ -86,12 +81,9 @@ __all__ = [
     "TIMEOUT_GWS_CLI",
     "TIMEOUT_HEALTH_CHECK",
     "TIMEOUT_HEALTH_GATE",
-    "TIMEOUT_HEALTH_GIT",
     "TIMEOUT_INTERACTIVE_AUTH",
     "TIMEOUT_MCP_TOOL",
     "TIMEOUT_OIDC_HTTP",
-    "TIMEOUT_PROCESS_KILL_GRACE",
-    "TIMEOUT_RATE_LIMIT_POLL",
     "TIMEOUT_REPAIR",
     "TIMEOUT_SF_SESSION_CHECK",
     "TIMEOUT_SHADOWBOT_QUERY",
@@ -107,7 +99,6 @@ __all__ = [
     "get_companion_tier",
     "get_config_path",
     "get_cookie_file",
-    "get_driver_max_concurrent",
     "get_email_domain",
     "get_fieldkit_data",
     "get_fieldkit_home",
@@ -115,7 +106,6 @@ __all__ = [
     "get_github_repo",
     "get_google_token_path",
     "get_gsg_id",
-    "get_harness_scratch_root",
     "get_integration_configuration_state",
     "get_internal_domains",
     "get_llm_model",

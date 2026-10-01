@@ -6,9 +6,8 @@ multi-tenant database. Your operating-system account is the application boundary
 ## What stays local
 
 The workspace, generated Markdown, configuration, caches, logs, and runtime databases are stored in
-the configured workspace, data, and user-configuration roots. Disposable harness worktrees use
-`FIELDKIT_HARNESS_ROOT`, `$XDG_CACHE_HOME/fieldkit`, or `~/.cache/fieldkit`. None of these locations
-is part of the Python package or source repository.
+the configured workspace, data, and user-configuration roots. None of these locations is part of the
+Python package or source repository.
 
 Treat these files as sensitive. Depending on the integrations you enable, they may contain customer
 names, opportunity data, email content, meeting notes, prompts, and model responses. Do not commit

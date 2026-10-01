@@ -46,7 +46,6 @@ import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -125,12 +124,6 @@ def _payload(result: Result, command: str) -> dict[str, Any]:
     assert result.exit_code == 0, f"{command}: exit {result.exit_code}\n{result.output}"
     parsed: dict[str, Any] = json.loads(result.stdout)
     return parsed
-
-
-def _write_run_status(data_root: Path, subdir: str, filename: str, runs: list[dict[str, Any]]) -> None:
-    log_dir = data_root / "logs" / subdir
-    log_dir.mkdir(parents=True, exist_ok=True)
-    (log_dir / filename).write_text(json.dumps({"runs": runs}), encoding="utf-8")
 
 
 def _query_db() -> sqlite3.Connection:
@@ -230,38 +223,6 @@ def _issue_list_empty(tmp_path: Path) -> dict[str, Any]:
     ):
         result = CliRunner().invoke(issue_cli.cli, ["list", "--json"])
     return _payload(result, "issue list (empty)")
-
-
-def _driver_list(tmp_path: Path) -> dict[str, Any]:
-    driver_cli = importlib.import_module("fieldkit.commands.driver.cli")
-    issues = [SimpleNamespace(number=7, title="implementation change example", attempt_count=2)]
-    with (
-        patch.object(driver_cli, "get_github_repo", return_value="owner/repo"),
-        patch.object(driver_cli, "list_ready_issues", return_value=issues),
-    ):
-        result = CliRunner().invoke(driver_cli.cli, ["list", "--json"])
-    return _payload(result, "driver list")
-
-
-def _driver_status(tmp_path: Path) -> dict[str, Any]:
-    _write_run_status(
-        tmp_path,
-        "driver",
-        "driver-run-status.json",
-        [{"outcome": "ok", "issue_number": 1, "ts": "2026-01-01T00:00:00"}],
-    )
-    driver_cli = importlib.import_module("fieldkit.commands.driver.cli")
-    with patch("fieldkit.commands.driver._status.get_fieldkit_data", return_value=tmp_path):
-        result = CliRunner().invoke(driver_cli.cli, ["status", "--json"])
-    return _payload(result, "driver status")
-
-
-def _health_status(tmp_path: Path) -> dict[str, Any]:
-    _write_run_status(tmp_path, "health", "health-run-status.json", [{"outcome": "ok", "checks_run": 4}])
-    health_cli = importlib.import_module("fieldkit.commands.health.cli")
-    with patch.object(health_cli, "get_fieldkit_data", return_value=tmp_path):
-        result = CliRunner().invoke(health_cli.cli, ["status", "--json"])
-    return _payload(result, "health status")
 
 
 def _watch_status(tmp_path: Path) -> dict[str, Any]:
@@ -396,9 +357,6 @@ def _sync(tmp_path: Path) -> dict[str, Any]:
 _LIST_CASES: list[tuple[str, Callable[[Path], dict[str, Any]]]] = [
     ("issue list", _issue_list),
     ("issue list (empty)", _issue_list_empty),
-    ("driver list", _driver_list),
-    ("driver status", _driver_status),
-    ("health status", _health_status),
     ("watch status", _watch_status),
     ("meeting list", _meeting_list),
     ("ingest status", _ingest_status),

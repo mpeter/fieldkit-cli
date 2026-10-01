@@ -5,7 +5,7 @@ Define the current behavioral contract for issue-module-domain-set, including re
 ## Requirements
 ### Requirement: current fieldkit domains are valid issue modules
 
-The issue CLI MUST accept `companion`, `config`, `contact`, `driver`, `health`, `meeting`, and `web`
+The issue CLI MUST accept `companion`, `config`, `contact`, `meeting`, and `web`
 as module values in addition to every previously supported module.
 
 #### Scenario: create an issue for a current domain

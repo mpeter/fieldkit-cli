@@ -109,7 +109,7 @@ class WriteDeclaration:
     inference and the check would read the same bit.
 
     `confirm_exempt`, when set, records *why* an external-write command does
-    not prompt (typically: it is invoked unattended by the driver loop, so an
+    not prompt (typically: a script or scheduled job invokes it unattended, so an
     interactive confirmation would deadlock it). The exemption is reported by
     `scripts/check_flag_contract.py` rather than silently skipped — an
     exemption you can grep for is the difference between a considered decision
@@ -129,7 +129,7 @@ def declare_write(write_class: WriteClass, *, confirm_exempt: str | None = None)
     Apply *above* the Click command decorator, so it receives the built
     `click.Command` rather than the undecorated function::
 
-        @declare_write("external", confirm_exempt="driver loop invokes this unattended")
+        @declare_write("external", confirm_exempt="a scheduled job invokes this unattended")
         @cli.command("create")
         @click.option("--title", required=True)
         def create_cmd(title: str) -> None:

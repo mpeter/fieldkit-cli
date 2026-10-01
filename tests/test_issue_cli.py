@@ -136,7 +136,7 @@ def test_create_unknown_module_exits_1() -> None:
     assert result.exit_code == 1
 
 
-@pytest.mark.parametrize("module", ["companion", "config", "contact", "driver", "health", "meeting", "web"])
+@pytest.mark.parametrize("module", ["companion", "config", "contact", "meeting", "web"])
 def test_create_accepts_current_domain_modules(module: str) -> None:
     runner = _runner()
     store = _mock_store()

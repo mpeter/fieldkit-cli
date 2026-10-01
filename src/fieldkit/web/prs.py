@@ -1,10 +1,8 @@
 """fieldkit.web.prs — PR queue data over the gh CLI.
 
-The operator's daily valve is merge-or-bounce on the driver-generated PR
-queue. This module lists open PRs with their CI rollup and performs the
-two write actions (merge, comment) via ``gh`` — the same binary the
-driver domain already depends on, invoked with an explicit ``-R`` repo
-slug so the server's CWD is irrelevant.
+Lists open PRs for the configured repository with their CI rollup and
+performs the two write actions (merge, comment) via ``gh``, invoked with an
+explicit ``-R`` repo slug so the server's CWD is irrelevant.
 """
 
 import json
