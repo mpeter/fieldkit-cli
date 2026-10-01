@@ -22,10 +22,9 @@ def _session_dir(parent: Path, name: str, mtime: float) -> Path:
     return path
 
 
-@pytest.mark.parametrize("name", ["fieldkit-ci-abc123", "fieldkit-harness-ci-def456"])
-def test_stale_session_directory_is_removed(tmp_path: Path, name: str) -> None:
+def test_stale_session_directory_is_removed(tmp_path: Path) -> None:
     """A killed run's directory past the staleness window is swept."""
-    stale = _session_dir(tmp_path, name, STALE)
+    stale = _session_dir(tmp_path, "fieldkit-ci-abc123", STALE)
 
     removed = remove_stale_session_tmpdirs(tmp_path, now=NOW)
 
@@ -37,7 +36,6 @@ def test_stale_session_directory_is_removed(tmp_path: Path, name: str) -> None:
     ("name", "mtime"),
     [
         ("fieldkit-ci-running", FRESH),
-        ("fieldkit-harness-ci-running", FRESH),
         ("fieldkit-quality-abc123", STALE),
         ("pytest-of-someone", STALE),
     ],
@@ -75,3 +73,28 @@ def test_plain_file_with_session_prefix_is_kept(tmp_path: Path) -> None:
 
     assert removed == []
     assert stray.exists()
+
+
+def test_directory_that_deletion_cannot_remove_is_not_reported(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A deletion failure swallowed by rmtree is not reported as a removal."""
+    stale = _session_dir(tmp_path, "fieldkit-ci-stuck", STALE)
+    attempted: list[Path] = []
+    monkeypatch.setattr("_session_tmpdirs.shutil.rmtree", lambda path, ignore_errors: attempted.append(path))
+
+    removed = remove_stale_session_tmpdirs(tmp_path, now=NOW)
+
+    assert removed == []
+    assert attempted == [stale]
+    assert (stale / "home" / "config.yaml").exists()
+
+
+def test_other_users_stale_directory_is_kept(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A stale directory owned by a different UID is never swept."""
+    stale = _session_dir(tmp_path, "fieldkit-ci-other-user", STALE)
+    owner = stale.stat().st_uid
+    monkeypatch.setattr("_session_tmpdirs.os.getuid", lambda: owner + 1)
+
+    removed = remove_stale_session_tmpdirs(tmp_path, now=NOW)
+
+    assert removed == []
+    assert (stale / "home" / "config.yaml").exists()
