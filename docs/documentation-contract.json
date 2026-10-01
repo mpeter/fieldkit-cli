@@ -1252,7 +1252,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Review dependency trust and update requirements.",
-      "source_fingerprint": "sha256:c0bf910cb3001eef3e8b21093ec55b0d00f0cc0380d05cd25c319a7f7493b90c",
+      "source_fingerprint": "sha256:03c55987bbf7c0dc11049ab11879162de1d4b69f47736910a4e76b973f8556eb",
       "sources": [
         "docs/release-readiness/dependency-security-policy.json",
         "pyproject.toml",
