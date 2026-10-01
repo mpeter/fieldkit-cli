@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from _session_tmpdirs import remove_stale_session_tmpdirs
 
 import fieldkit.commands.watch.backstory_health as _w_backstory
 import fieldkit.commands.watch.close_date_countdown as _w_close_date_cmd
@@ -77,6 +78,10 @@ def pytest_configure(config: pytest.Config) -> None:
     """
     global _CI_CONFIG_TMPDIR  # noqa: PLW0603
     global _PRIOR_HOME, _PRIOR_FIELDKIT_DATA_DIR, _PRIOR_CONFIG_PATH  # noqa: PLW0603
+    # A killed run never reaches pytest_unconfigure, so its directory below
+    # would otherwise accumulate in the system temp directory.
+    if not hasattr(config, "workerinput"):
+        remove_stale_session_tmpdirs(Path(tempfile.gettempdir()))
     _PRIOR_HOME = os.environ.get("HOME")
     _PRIOR_FIELDKIT_DATA_DIR = os.environ.get("FIELDKIT_DATA_DIR")
     _PRIOR_CONFIG_PATH = _config_loader.CONFIG_PATH
