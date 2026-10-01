@@ -420,93 +420,11 @@ def test_install_permission_error_returns_0_and_warns(capsys: pytest.CaptureFixt
 
 
 # ---------------------------------------------------------------------------
-# G: .opencode/ agents or commands touched → sync .claude/
-# ---------------------------------------------------------------------------
-
-
-def test_opencode_agents_touched_runs_sync_script(tmp_path: Path) -> None:
-    """Committing a file under .opencode/agents/ must trigger sync_claude_dir.py."""
-    sync_script = tmp_path / "scripts" / "sync_claude_dir.py"
-    sync_script.parent.mkdir()
-    sync_script.write_text("# stub")
-
-    with (
-        patch("subprocess.run", return_value=_proc(stdout=".opencode/agents/cobalt-crush-dev.md\n")),
-        patch("shutil.which", side_effect=lambda b: "/usr/bin/python3" if b == "python3" else None),
-        patch.object(pc, "__file__", str(tmp_path / "hooks" / "post_commit.py")),
-    ):
-        # Should not raise; sync is best-effort
-        result = pc.main()
-
-    assert result == 0
-
-
-def test_opencode_commands_touched_runs_sync_script(tmp_path: Path) -> None:
-    """Committing a file under .opencode/commands/ must trigger sync_claude_dir.py."""
-    sync_script = tmp_path / "scripts" / "sync_claude_dir.py"
-    sync_script.parent.mkdir()
-    sync_script.write_text("# stub")
-
-    with (
-        patch("subprocess.run", return_value=_proc(stdout=".opencode/commands/workflow-seed.md\n")),
-        patch("shutil.which", side_effect=lambda b: "/usr/bin/python3" if b == "python3" else None),
-        patch.object(pc, "__file__", str(tmp_path / "hooks" / "post_commit.py")),
-    ):
-        result = pc.main()
-
-    assert result == 0
-
-
-def test_opencode_sync_permission_error_returns_0_and_warns(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """An OS launch error from the sync script must not block the commit."""
-    sync_script = tmp_path / "scripts" / "sync_claude_dir.py"
-    sync_script.parent.mkdir()
-    sync_script.write_text("# stub")
-    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'fixture'\n")
-
-    def side_effect(cmd: list[str], **_: object) -> CompletedProcess[str]:
-        if "diff-tree" in cmd:
-            return _proc(stdout=".opencode/agents/cobalt-crush-dev.md\n")
-        raise PermissionError("python cannot execute")
-
-    with (
-        patch("subprocess.run", side_effect=side_effect),
-        patch("shutil.which", side_effect=lambda b: "/usr/bin/python3" if b == "python3" else "/usr/bin/git"),
-        patch.object(pc, "_git_context", return_value=(tmp_path, "0123456789ab")),
-    ):
-        result = pc.main()
-    assert result == 0
-    assert ".claude/ sync failed" in capsys.readouterr().err
-
-
-def test_src_touched_but_not_opencode_skips_sync() -> None:
-    """A src/fieldkit/ change with no .opencode/ change must not run the sync."""
-    call_args_list: list[tuple[object, ...]] = []
-
-    def _fake_run(cmd: object, **kwargs: object) -> CompletedProcess[str]:
-        call_args_list.append((cmd,))
-        return _proc(stdout="src/fieldkit/config/_loader.py\n")
-
-    with (
-        patch("subprocess.run", side_effect=_fake_run),
-        patch(
-            "shutil.which", side_effect=lambda b: "/usr/bin/uv" if b == "uv" else "/usr/bin/git" if b == "git" else None
-        ),
-    ):
-        pc.main()
-
-    # sync_claude_dir.py should NOT be in any call's command
-    all_cmds = [str(c) for (c,) in call_args_list]
-    assert not any("sync_claude_dir" in c for c in all_cmds)
-
-
-# ---------------------------------------------------------------------------
 # H: repo_root must resolve through the .git/hooks symlink
 #
 # `make hooks` installs .git/hooks/post-commit as a symlink to hooks/post_commit.py,
 # so __file__ is the symlink path. Without .resolve(), repo_root became <repo>/.git:
-# `uv tool install` ran against .git ("not a Python project") and the sync script
-# lookup missed, silently skipping the .claude/ prune.
+# `uv tool install` ran against .git ("not a Python project").
 # ---------------------------------------------------------------------------
 
 
@@ -520,7 +438,6 @@ def _linked_worktree_hook(tmp_path: Path) -> tuple[Path, Path]:
     (linked / "pyproject.toml").write_text("[project]\nname = 'fixture'\n")
     real = primary / "hooks" / "post_commit.py"
     real.write_text("# real hook body")
-    (linked / "scripts" / "sync_claude_dir.py").write_text("# stub")
     link = primary / ".git" / "hooks" / "post-commit"
     link.symlink_to(real)
     return linked, link
@@ -546,45 +463,3 @@ def test_linked_worktree_root_drives_uv_install(tmp_path: Path) -> None:
     install_cwds = [cwd for cmd, cwd in calls if "tool" in str(cmd) and "install" in str(cmd)]
     assert install_cwds == [linked]
     assert link.resolve().is_relative_to(tmp_path / "primary")
-
-
-def test_linked_worktree_root_drives_agent_surface_sync(tmp_path: Path) -> None:
-    """The .claude/ sync script and cwd come from Git's invoking worktree."""
-    linked, link = _linked_worktree_hook(tmp_path)
-    calls: list[tuple[object, object]] = []
-
-    def _fake_run(cmd: object, **kwargs: object) -> CompletedProcess[str]:
-        calls.append((cmd, kwargs.get("cwd")))
-        return _proc(stdout=".opencode/agents/some-agent.md\n")
-
-    with (
-        patch("subprocess.run", side_effect=_fake_run),
-        patch("shutil.which", side_effect=lambda b: f"/usr/bin/{b}"),
-        patch.object(pc, "_git_context", return_value=(linked, "abcdef012345")),
-        patch.object(pc, "__file__", str(link)),
-    ):
-        assert pc.main() == 0
-
-    sync_calls = [(cmd, cwd) for cmd, cwd in calls if "sync_claude_dir" in str(cmd)]
-    assert sync_calls, f"sync_claude_dir.py was never invoked; calls={calls}"
-    assert "--prune" in str(sync_calls[0][0])
-    assert str(linked / "scripts" / "sync_claude_dir.py") in str(sync_calls[0][0])
-    assert sync_calls[0][1] == linked
-
-
-def test_missing_sync_script_warns_instead_of_skipping_silently(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """An unfindable sync script must warn — silent skips let .claude/ drift unnoticed."""
-    linked, link = _linked_worktree_hook(tmp_path)
-    (linked / "scripts" / "sync_claude_dir.py").unlink()
-
-    with (
-        patch("subprocess.run", return_value=_proc(stdout=".opencode/commands/some-cmd.md\n")),
-        patch("shutil.which", side_effect=lambda b: f"/usr/bin/{b}"),
-        patch.object(pc, "_git_context", return_value=(linked, "abcdef012345")),
-        patch.object(pc, "__file__", str(link)),
-    ):
-        assert pc.main() == 0
-
-    assert "cannot sync .claude/" in capsys.readouterr().err
