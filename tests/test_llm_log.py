@@ -29,7 +29,6 @@ from fieldkit.llm.log import (
     _init_state,
     _success_callback,
     _write_row,
-    get_db_path,
     init_db,
     set_skill_context,
 )
@@ -117,12 +116,14 @@ def _approved_test_data_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setenv("FIELDKIT_DATA_DIR", str(tmp_path))
 
 
-def test_get_db_path_returns_existing_default_when_override_is_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_get_db_path_returns_existing_default_when_override_is_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.delenv("FIELDKIT_LLM_LOG", raising=False)
 
-    resolved_path = get_db_path()
+    resolved_path = llm_log.get_db_path()
 
-    assert resolved_path == llm_log.get_fieldkit_data() / "llm-calls.db"
+    assert resolved_path == tmp_path / "llm-calls.db"
 
 
 def test_get_db_path_accepts_override_under_data_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
