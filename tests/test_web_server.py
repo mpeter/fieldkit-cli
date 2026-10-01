@@ -342,8 +342,6 @@ def test_operations_prioritizes_auth_failure_and_exposes_pending_proposals(sourc
     def cli(args: list[str]) -> Any:
         if args == ["watch", "status", "--json"]:
             return {"items": [{"watcher": "slack-threads", "outcome": "ok", "last_run": "2026-08-01T10:00:00Z"}]}
-        if args == ["driver", "status", "--json"]:
-            return {"items": [{"outcome": "skipped", "ts": "2026-08-16T10:00:00Z", "error": "cap reached"}]}
         raise WebDataError(f"unexpected CLI call: {args}")
 
     source.cli_json = cli
@@ -369,8 +367,6 @@ def test_operations_treats_completed_partial_watcher_run_as_healthy(source: Data
     def cli(args: list[str]) -> Any:
         if args == ["watch", "status", "--json"]:
             return {"items": [{"watcher": "morning-brief", "outcome": "partial", "last_run": "2026-08-16T07:00:00Z"}]}
-        if args == ["driver", "status", "--json"]:
-            return {"items": []}
         raise WebDataError(f"unexpected CLI call: {args}")
 
     source.cli_json = cli
@@ -379,6 +375,37 @@ def test_operations_treats_completed_partial_watcher_run_as_healthy(source: Data
 
     assert stages["watchers"]["status"] == "ok"
     assert stages["watchers"]["detail"] == "Watcher data is current."
+
+
+@pytest.mark.parametrize(
+    ("watch_status", "expected_detail", "expected_action"),
+    [
+        (
+            {"items": [{"watcher": "slack-threads", "outcome": "error", "last_run": "2026-08-16T07:00:00Z"}]},
+            "1 watcher run(s) need investigation.",
+            "Inspect fieldkit watch logs, then run fieldkit watch run --all.",
+        ),
+        (WebDataError("watch status timed out"), "watch status timed out", "Run fieldkit watch status."),
+    ],
+    ids=["failed-run", "status-unavailable"],
+)
+def test_watcher_operation_reports_failures_as_errors(
+    source: DataSource, watch_status: Any, expected_detail: str, expected_action: str
+) -> None:
+    source.now = lambda: datetime(2026, 8, 16, 8, tzinfo=UTC)
+
+    def cli(args: list[str]) -> Any:
+        if isinstance(watch_status, WebDataError):
+            raise watch_status
+        return watch_status
+
+    source.cli_json = cli
+
+    stage = source._watcher_operation()
+
+    assert stage.status == "error"
+    assert stage.detail == expected_detail
+    assert stage.action == expected_action
 
 
 def test_operations_treats_an_unexpected_doctor_payload_as_an_error(source: DataSource) -> None:
@@ -390,88 +417,22 @@ def test_operations_treats_an_unexpected_doctor_payload_as_an_error(source: Data
     assert "Unexpected doctor payload" in stages["doctor"]["detail"]
 
 
-def test_operations_surfaces_denied_developer_admission(source: DataSource) -> None:
-    source.data_dir = source.briefs_dir.parent / "data"
-    ledger = source.data_dir / "driver" / "developer-admission.json"
-    ledger.parent.mkdir(parents=True, mode=0o700)
-    ledger.write_text(
-        '{"decisions":[{"allowed":false,"job":"driver","reason_code":"spend-cap-reached",'
-        '"detail":"daily cap reached","ts":"2026-08-16T10:00:00Z"}]}',
-        encoding="utf-8",
-    )
-    source.cli_json = lambda args: {"items": []}
+def test_operations_reports_only_the_attention_chain_stages(source: DataSource) -> None:
+    """Regression: the dashboard must not query the removed developer automation."""
+    calls: list[list[str]] = []
 
-    stages = {stage["name"]: stage for stage in source.operations()["stages"]}
+    def cli(args: list[str]) -> Any:
+        calls.append(args)
+        if args == ["watch", "status", "--json"]:
+            return {"items": []}
+        raise WebDataError(f"unexpected CLI call: {args}")
 
-    assert stages["developer"]["status"] == "error"
-    assert stages["developer"]["detail"] == "Developer admission denied: spend-cap-reached — daily cap reached"
+    source.cli_json = cli
 
+    result = source.operations()
 
-def test_operations_uses_the_latest_admission_decision(source: DataSource) -> None:
-    source.data_dir = source.briefs_dir.parent / "data"
-    ledger = source.data_dir / "driver" / "developer-admission.json"
-    ledger.parent.mkdir(parents=True, mode=0o700)
-    ledger.write_text(
-        '{"decisions":[{"allowed":false,"job":"driver","reason_code":"spend-cap-reached",'
-        '"detail":"daily cap reached","ts":"2026-08-16T10:00:00Z"},'
-        '{"allowed":true,"job":"driver","reason_code":"released","detail":"lease released",'
-        '"ts":"2026-08-16T10:01:00Z"}]}',
-        encoding="utf-8",
-    )
-    source.cli_json = lambda args: {"items": []}
-
-    stages = {stage["name"]: stage for stage in source.operations()["stages"]}
-
-    assert stages["developer"]["status"] == "missing"
-
-
-def test_operations_treats_lease_contention_as_information(source: DataSource) -> None:
-    source.data_dir = source.briefs_dir.parent / "data"
-    ledger = source.data_dir / "driver" / "developer-admission.json"
-    ledger.parent.mkdir(parents=True, mode=0o700)
-    ledger.write_text(
-        '{"decisions":[{"allowed":false,"job":"proctor","reason_code":"lease-held",'
-        '"detail":"developer lease is held by driver","ts":"2026-08-16T10:00:00Z"}]}',
-        encoding="utf-8",
-    )
-    source.cli_json = lambda args: {"items": []}
-
-    stages = {stage["name"]: stage for stage in source.operations()["stages"]}
-
-    assert stages["developer"]["status"] == "ok"
-
-
-def test_operations_treats_daily_run_limit_as_information(source: DataSource) -> None:
-    source.data_dir = source.briefs_dir.parent / "data"
-    ledger = source.data_dir / "driver" / "developer-admission.json"
-    ledger.parent.mkdir(parents=True, mode=0o700)
-    ledger.write_text(
-        '{"decisions":[{"allowed":false,"job":"driver","reason_code":"daily-run-limit-reached",'
-        '"detail":"daily developer run limit 1 has been reached","ts":"2026-08-16T10:00:00Z"}]}',
-        encoding="utf-8",
-    )
-
-    stages = {stage["name"]: stage for stage in source.operations()["stages"]}
-
-    assert stages["developer"]["status"] == "ok"
-    assert stages["developer"]["action"] == ""
-
-
-def test_operations_uses_released_admission_as_the_latest_developer_freshness(source: DataSource) -> None:
-    source.data_dir = source.briefs_dir.parent / "data"
-    ledger = source.data_dir / "driver" / "developer-admission.json"
-    ledger.parent.mkdir(parents=True, mode=0o700)
-    ledger.write_text(
-        '{"decisions":[{"allowed":true,"job":"driver","reason_code":"released",'
-        '"detail":"developer lease released","ts":"2026-08-16T10:00:00Z"}]}',
-        encoding="utf-8",
-    )
-    source.cli_json = lambda args: {"items": [{"outcome": "skipped", "ts": "2026-08-13T21:06:55Z"}]}
-
-    stages = {stage["name"]: stage for stage in source.operations()["stages"]}
-
-    assert stages["developer"]["updated_at"] == "2026-08-16T10:00:00Z"
-    assert stages["developer"]["detail"] == "Latest developer admission: released. Latest driver outcome: skipped."
+    assert [stage["name"] for stage in result["stages"]] == ["doctor", "watchers", "brief", "companion"]
+    assert all(call[0] != "driver" for call in calls)
 
 
 def test_operations_route_returns_dashboard_contract(client: TestClient) -> None:

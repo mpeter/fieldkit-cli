@@ -16,7 +16,7 @@ opens or creates a file.
 - **GIVEN** `FIELDKIT_LLM_LOG` names an absolute path beneath `get_fieldkit_data()`
 - **WHEN** the shared resolver runs
 - **THEN** it returns the resolved absolute path
-- **AND** both LLM writes and driver spend readers use that path
+- **AND** LLM writes and readers use that path
 
 #### Scenario: Override escapes approved roots
 
@@ -56,64 +56,15 @@ absent. An explicit override SHALL remain exact and SHALL NOT use fallback.
 - **WHEN** a read-only consumer resolves history
 - **THEN** it reads the legacy database without moving or deleting it
 
-### Requirement: Driver LLM logs are isolated and durable per run
+### Requirement: A redirected child process keeps the configured data root approved
 
-Each real driver execution SHALL reserve a unique database path below
-`get_fieldkit_data()/driver/llm-runs/`, provide it to the child as
-`FIELDKIT_LLM_LOG`, and provide the same path directly to the parent spend
-summary reader. The path SHALL remain outside the disposable worktree.
-
-#### Scenario: Parent reports from the child's durable database
-
-- **GIVEN** a driver child writes tagged LLM calls during an execution
-- **WHEN** the child returns and the parent builds its spend summary
-- **THEN** both processes use the same per-run database
-- **AND** the database survives worktree removal
-
-#### Scenario: Concurrent runs do not share audit databases
-
-- **GIVEN** the driver executes two issues concurrently
-- **WHEN** their child environments are built
-- **THEN** each receives a distinct durable database path
+A child process that redirects `FIELDKIT_DATA_DIR` SHALL still accept a
+`FIELDKIT_LLM_LOG` path beneath the configured parent data root.
 
 #### Scenario: Isolated child accepts the parent data root
 
 - **GIVEN** configured `fieldkit_data` is outside `fieldkit_home`
-- **AND** a driver child redirects `FIELDKIT_DATA_DIR` into its worktree
-- **WHEN** the child validates its parent-generated `FIELDKIT_LLM_LOG`
+- **AND** a child process redirects `FIELDKIT_DATA_DIR` to another directory
+- **WHEN** the child validates a `FIELDKIT_LLM_LOG` path beneath the parent data root
 - **THEN** the configured parent data root remains an approved root
-- **AND** the durable per-run path is accepted
-
-### Requirement: Daily driver spend includes all retained run databases
-
-The daily spend reader SHALL sum today's `driver-issue-*` rows across each
-distinct ordinary, applicable legacy, and durable per-run database. If any
-existing candidate cannot be queried reliably, the result SHALL be unknown so
-the spend guard fails closed.
-
-#### Scenario: Spend is distributed across run databases
-
-- **GIVEN** today's tagged rows exist in multiple durable run databases
-- **WHEN** the daily cap is evaluated
-- **THEN** every distinct database contributes exactly once to the total
-
-#### Scenario: One retained database is malformed
-
-- **GIVEN** at least one existing candidate database cannot be queried
-- **WHEN** the daily cap is evaluated
-- **THEN** the total is unknown
-- **AND** the configured cap denies the next run
-
-#### Scenario: Retained databases cannot be enumerated
-
-- **GIVEN** the durable run directory cannot be scanned
-- **WHEN** the daily cap is evaluated
-- **THEN** the total is unknown
-- **AND** the configured cap denies the next run
-
-#### Scenario: Multiple issues are otherwise runnable below the cap
-
-- **GIVEN** a spend cap is configured and current spend remains below it
-- **AND** multiple disjoint issues could run concurrently
-- **WHEN** the driver selects work from that single spend measurement
-- **THEN** it admits at most one issue
+- **AND** the path is accepted

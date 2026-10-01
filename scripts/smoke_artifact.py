@@ -293,7 +293,7 @@ assert all(root.joinpath(path).is_file() for path in required)
             except (json.JSONDecodeError, KeyError, TypeError):
                 criteria[-1] = SmokeCriterion("SMOKE109", "fail", "command registry did not emit its JSON contract")
             else:
-                required_names = {"auth google", "meeting link", "driver run", "web serve"}
+                required_names = {"auth google", "meeting link", "web serve"}
                 if not required_names <= registry_names:
                     criteria[-1] = SmokeCriterion("SMOKE109", "fail", "optional commands missing from base registry")
         features = _run([str(fieldkit), "version", "--features", "--json"], cwd=run_dir, env=env)
@@ -340,14 +340,14 @@ for roots in profiles.values():
                     ("SMOKE203", ["gmail", "sync", "--help"]),
                     ("SMOKE204", ["meeting", "--help"]),
                 ),
-                "llm": (("SMOKE205", ["driver", "--help"]),),
+                "llm": (("SMOKE205", ["companion", "--help"]),),
                 "web": (("SMOKE206", ["web", "--help"]),),
                 "chrome-auth": (),
                 "all": (
                     ("SMOKE202", ["auth", "google", "--help"]),
                     ("SMOKE203", ["gmail", "sync", "--help"]),
                     ("SMOKE204", ["meeting", "--help"]),
-                    ("SMOKE205", ["driver", "--help"]),
+                    ("SMOKE205", ["companion", "--help"]),
                     ("SMOKE206", ["web", "--help"]),
                 ),
             }

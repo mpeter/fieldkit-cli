@@ -33,7 +33,6 @@ currently being implemented.
 | In progress | Make fatal close-date watcher outcomes reach scheduler-facing nonzero exits. |
 | In progress | Keep every watcher state update atomic and fail closed on persistence errors. |
 | In progress | Complete a shared signal and freshness model for briefs, pipeline views, and watcher findings without duplicating report pipelines. |
-| In progress | Provide a read-only autonomy status view that joins health, driver, admission, and spend evidence without starting autonomous work. |
 
 ## Architecture, quality, and contributor experience
 
@@ -46,7 +45,6 @@ currently being implemented.
 | In progress | Reduce bounded pull-request validation latency without weakening complete post-merge or scheduled enforcement. |
 | In progress | Align the command and skill taxonomy around one vocabulary; remove unreachable or duplicate skill paths. |
 | Pending | Consolidate remaining local workflow tools only where they add a capability with no existing CLI home. |
-| In progress | Finish the observable admission, health, recovery, and control-plane boundaries for autonomous workflows. |
 | Pending | Add calibration input to the review journal so future review routing is measured rather than assumed. |
 
 ## Compatibility candidates

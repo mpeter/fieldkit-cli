@@ -463,20 +463,6 @@ def _wizard_write_config(
     click.echo(f"    ✓ {cfg.CONFIG_PATH}")
 
 
-def _render_github_guidance() -> None:
-    """Render the issue-board next step from the persisted GitHub configuration."""
-    try:
-        raw_config = yaml.safe_load(cfg.CONFIG_PATH.read_text(encoding="utf-8")) or {}
-    except (OSError, yaml.YAMLError):
-        logger.debug("setup: failed to inspect GitHub configuration for next-step guidance", exc_info=True)
-        raw_config = {}
-    github_repo = str(raw_config.get("github_repo") or "").strip() if isinstance(raw_config, dict) else ""
-    if github_repo:
-        click.echo("    • Run 'fieldkit issue board' to see the open issue queue")
-    else:
-        click.echo("    • Add github_repo to config.yaml before using 'fieldkit issue' commands")
-
-
 def _install_skills_after_setup() -> None:
     """Attempt the interactive post-setup skill installation with a bounded wait."""
     import subprocess as _sp
@@ -522,7 +508,6 @@ def _wizard_post_setup(
     click.echo(
         f"    • fieldkit_root written to {cfg.CONFIG_PATH} — installed binary resolves skills/ and issues/ from the dev repo"
     )
-    _render_github_guidance()
     click.echo()
     (_install_skills_after_setup if install_skills else _defer_skill_install_after_setup)()
     if not oauth_id:
