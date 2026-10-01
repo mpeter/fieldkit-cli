@@ -133,6 +133,7 @@ class IntegrityContext:
 
     @classmethod
     def from_root(cls, root: Path, *, skill_roots: frozenset[str] = SKILL_ROOTS) -> "IntegrityContext":
+        """Build the context from the conventional repository layout under ``root``."""
         return cls(
             repo_root=root,
             project_skills_dir=root / ".opencode" / "skills",
@@ -159,17 +160,21 @@ class Violation:
 
     @property
     def severity(self) -> str:
+        """Return the severity registered for this violation code."""
         return VIOLATION_META[self.code][0]
 
     @property
     def fixable(self) -> bool:
+        """Return whether the validator can repair this violation automatically."""
         return VIOLATION_META[self.code][1]
 
     @property
     def suggestion(self) -> str:
+        """Return the remediation hint registered for this violation code."""
         return VIOLATION_SUGGESTIONS[self.code]
 
     def to_dict(self) -> dict[str, object]:
+        """Return the JSON-report form, including the derived severity and suggestion."""
         return {
             "code": self.code,
             "severity": self.severity,
