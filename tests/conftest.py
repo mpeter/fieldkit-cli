@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from _session_tmpdirs import remove_stale_session_tmpdirs
 
 import fieldkit.commands.watch.backstory_health as _w_backstory
 import fieldkit.commands.watch.close_date_countdown as _w_close_date_cmd
@@ -79,6 +80,10 @@ def pytest_configure(config: pytest.Config) -> None:
     """
     global _CI_CONFIG_TMPDIR, _HARNESS_TMPDIR, _PRIOR_HARNESS_ROOT  # noqa: PLW0603
     global _PRIOR_HOME, _PRIOR_FIELDKIT_DATA_DIR, _PRIOR_CONFIG_PATH  # noqa: PLW0603
+    # A killed run never reaches pytest_unconfigure, so its directories below
+    # would otherwise accumulate in the system temp directory.
+    if not hasattr(config, "workerinput"):
+        remove_stale_session_tmpdirs(Path(tempfile.gettempdir()))
     # historic regression: driver/health worktree roots resolve from FIELDKIT_HARNESS_ROOT
     # (default ~/.cache/fieldkit). Pin it to a session tmp dir UNCONDITIONALLY —
     # even when the operator (or a parent driver run) already exported one — so
