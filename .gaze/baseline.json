@@ -13127,17 +13127,6 @@
    "crap": 1.0,
    "gaze_crap": null,
    "target": {
-    "function": "get_legacy_db_path",
-    "location": "llm/log.py:135",
-    "package": "llm/log.py",
-    "receiver": null,
-    "signature": "def get_legacy_db_path() -> Path"
-   }
-  },
-  {
-   "crap": 1.0,
-   "gaze_crap": null,
-   "target": {
     "function": "set_skill_context",
     "location": "llm/log.py:152",
     "package": "llm/log.py",

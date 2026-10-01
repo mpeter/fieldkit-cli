@@ -129,11 +129,6 @@ def get_read_db_path() -> Path:
     return path
 
 
-def get_legacy_db_path() -> Path:
-    """Return the pre-implementation change database path for aggregate history reads."""
-    return _LEGACY_DB
-
-
 # ---------------------------------------------------------------------------
 # Context variables — callers set these before each LLM call
 # ---------------------------------------------------------------------------
