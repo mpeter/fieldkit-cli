@@ -1,7 +1,7 @@
 # Governance gate files — route review to the current operator.
 #
 # These paths are the enforcement layer for architectural invariants,
-# CI quality gates, module boundaries, and agent behavior. A driver PR
+# CI quality gates, module boundaries, and agent behavior. A PR
 # that bumps a ratchet ceiling or loosens a hook must be reviewed by
 # the operator before merge.
 

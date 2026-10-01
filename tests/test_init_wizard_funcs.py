@@ -286,22 +286,7 @@ def test_wizard_post_setup_emits_summary(capsys: pytest.CaptureFixture[str], mon
 
     captured = capsys.readouterr()
     assert captured.out.strip(), "stdout must be non-empty after _wizard_post_setup"
-    assert "Add github_repo" in captured.out
     assert "Setup complete" in captured.out, "Must print setup-complete message"
-
-
-def test_wizard_post_setup_only_advertises_issue_board_when_repo_is_configured(
-    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text("github_repo: example/fieldkit-project\n", encoding="utf-8")
-    monkeypatch.setattr(fieldkit_config, "CONFIG_PATH", config_path)
-    mock_result = MagicMock(returncode=0, stdout="", stderr="")
-
-    with patch("fieldkit.commands.init.wizard.subprocess.run", return_value=mock_result):
-        _wizard_post_setup(oauth_id="", gcp_project="")
-
-    assert "Run 'fieldkit issue board'" in capsys.readouterr().out
 
 
 # ---------------------------------------------------------------------------

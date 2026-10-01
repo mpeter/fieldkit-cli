@@ -54,7 +54,6 @@ fieldkit init --minimal ./fieldkit-workspace
 | `llm_model` | AI-assisted workflows | Supported LiteLLM model identifier |
 | `vertex_location` | Vertex AI workflows | Provider region |
 | `mcp_gateway_url` | MCP-backed workflows | Base URL of a gateway you operate or are authorized to use |
-| `github_repo` | GitHub-backed issue and web PR commands | Public or private GitHub repository in `owner/repo` form |
 | `companion.tier` | Companion workflows | `read` (default), `propose`, or `act`; invalid values fail closed to `read` |
 | `companion.act_allowlist` | Companion workflows at `act` tier | Exact argument vectors the companion may execute; empty by default |
 

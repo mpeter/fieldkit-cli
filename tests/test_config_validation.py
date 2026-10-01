@@ -41,15 +41,6 @@ def test_wrong_type_fieldkit_home_raises_config_error(tmp_path: Path, monkeypatc
         get_fieldkit_home()
 
 
-def test_wrong_type_github_repo_raises_config_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """github_repo: [list] (wrong type) must raise ConfigError."""
-    cfg = _write_config(tmp_path, {"fieldkit_home": "/tmp/ws", "github_repo": ["a", "b"]})
-    monkeypatch.setattr(_loader_mod, "CONFIG_PATH", cfg)
-
-    with pytest.raises(ConfigError, match=r"github_repo"):
-        _load_raw_config()
-
-
 # ---------------------------------------------------------------------------
 # Unknown key → no error (extra="ignore")
 # ---------------------------------------------------------------------------

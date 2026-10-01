@@ -405,75 +405,6 @@ async function loadOperations() {
 	}
 }
 
-/* ---------- PR queue ---------- */
-const CI_ICON = { passing: "✅", failing: "❌", pending: "🟡", none: "⚪" };
-async function loadPRs() {
-	const el = document.getElementById("prs-list");
-	try {
-		const { prs, writes_enabled } = await api("/api/prs");
-		if (!prs.length) {
-			el.innerHTML = '<div class="empty">No open PRs. Queue is clear.</div>';
-			return;
-		}
-		el.innerHTML = prs
-			.map(
-				(p) => `
-      <div class="card pr-row" data-pr="${p.number}">
-        <div class="deal">
-          <a href="${esc(p.url)}" target="_blank" rel="noopener">#${p.number}</a>
-          ${esc(p.title)} ${p.is_draft ? '<span class="meta">(draft)</span>' : ""}
-        </div>
-        <div class="meta">${CI_ICON[p.ci.state] || "⚪"} CI ${esc(p.ci.state)} (${p.ci.passed}✓ ${p.ci.failed}✗ ${p.ci.pending}…) · ${esc(p.author)} · ${esc(p.branch)}</div>
-        <div class="pr-actions">
-          ${
-						writes_enabled
-							? `
-            <button class="pr-merge" ${p.ci.state !== "passing" || p.is_draft ? "disabled" : ""}>Merge</button>
-            <button class="pr-bounce">Bounce…</button>`
-							: '<span class="meta">writes disabled (serve with a token)</span>'
-					}
-        </div>
-      </div>`,
-			)
-			.join("");
-		el.querySelectorAll(".pr-merge").forEach((btn) =>
-			btn.addEventListener("click", async () => {
-				const n = btn.closest(".pr-row").dataset.pr;
-				if (!confirm("Squash-merge PR #" + n + "?")) return;
-				btn.disabled = true;
-				btn.textContent = "Merging…";
-				try {
-					await api("/api/prs/" + n + "/merge", { method: "POST" });
-					loadPRs();
-				} catch (e) {
-					alert(e.message);
-					btn.disabled = false;
-					btn.textContent = "Merge";
-				}
-			}),
-		);
-		el.querySelectorAll(".pr-bounce").forEach((btn) =>
-			btn.addEventListener("click", async () => {
-				const n = btn.closest(".pr-row").dataset.pr;
-				const body = prompt("Comment to post on PR #" + n + ":");
-				if (!body) return;
-				try {
-					await api("/api/prs/" + n + "/comment", {
-						method: "POST",
-						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify({ body }),
-					});
-					alert("Comment posted.");
-				} catch (e) {
-					alert(e.message);
-				}
-			}),
-		);
-	} catch (e) {
-		el.innerHTML = '<div class="empty">' + esc(e.message) + "</div>";
-	}
-}
-
 /* ---------- chat ---------- */
 const chatHistory = [];
 const MAX_CHAT_HISTORY_TURN_CHARS = 2000;
@@ -569,5 +500,4 @@ loadCompanion().then(() => Promise.all([loadOperations(), loadFeed(), loadOutbox
 loadBrief();
 loadPipeline();
 loadAlerts();
-loadPRs();
 connectEvents();

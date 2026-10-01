@@ -80,14 +80,11 @@ fieldkit separates three persistent roots and one disposable cache root:
   including pursuits, account notes, and tasks.
 - **Runtime data (`fieldkit_data`):** caches, tokens, logs, generated output, and
   watcher state managed by fieldkit.
-- **Harness scratch:** disposable source worktrees under
-  `FIELDKIT_HARNESS_ROOT`, `$XDG_CACHE_HOME/fieldkit`, or
-  `~/.cache/fieldkit`.
 
 Reinstalling the application does not delete your workspace. Back up the
 workspace and any runtime state you need independently. Never commit credentials,
-customer data, mail content, generated diagnostics, or harness scratch content
-to the fieldkit source repository.
+customer data, mail content, or generated diagnostics to the fieldkit source
+repository.
 
 ## Degraded operation
 
