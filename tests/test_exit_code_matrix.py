@@ -289,20 +289,6 @@ def test_no_config_exits_data_pursuit_forecast_no_config_is_exit_3(tmp_path: Pat
     assert rc == 3, f"Expected EXIT_DATA (3) for 'pursuit forecast' with no config, got {rc}."
 
 
-# ── issue group ───────────────────────────────────────────────────────────────
-
-
-@pytest.mark.slow
-def test_no_config_exits_data_issue_list_no_config_is_exit_3(tmp_path: Path) -> None:
-    """fieldkit issue list with no config → EXIT_DATA (3).
-
-    historic regression: issue/cli.py hand-rolls sys.exit() calls for config errors.
-    After migration: re-raise lets the backstop route ConfigError → EXIT_DATA (3).
-    """
-    rc = _run(["issue", "list"], tmp_home=tmp_path)
-    assert rc == 3, f"Expected EXIT_DATA (3) for 'issue list' with no config, got {rc}."
-
-
 # ── meeting group ─────────────────────────────────────────────────────────────
 
 

@@ -103,7 +103,9 @@ _JSON_EXEMPT: dict[str, str] = {
 # 102-command floor included six maintainer-only commands deliberately removed
 # from the public dispatcher before the compatibility contract froze. The
 # per-command gate below still makes a missing --json flag blocking.
-_JSON_COVERAGE_FLOOR = 96
+# 96 -> 84 when the `issue` group left the public CLI with the rest of the
+# developer automation; coverage stayed at 100% of the eligible commands.
+_JSON_COVERAGE_FLOOR = 84
 
 # Commands that sweep every account today and offer no way to narrow that — the
 # `--account SLUG` debt from D3.2. Derived by tracing what each command iterates

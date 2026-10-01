@@ -92,22 +92,6 @@ def get_user_name() -> str:
     return str((raw or {}).get("name", "")).strip()
 
 
-def get_github_repo() -> str:
-    """Return the required configured GitHub repository slug."""
-    data = _loader._load_raw_config()
-    if data is None:
-        raise _loader.ConfigError(f"Config file not found or unreadable: {_loader.CONFIG_PATH}")
-    if "github_repo" not in data:
-        raise _loader.ConfigError(
-            f"Config file {_loader.CONFIG_PATH} is missing required key 'github_repo'."
-            " Add: github_repo: owner/repo  (e.g. owner/fieldkit-project)"
-        )
-    value = str(data["github_repo"]).strip()
-    if not value:
-        raise _loader.ConfigError("Config key 'github_repo' must not be empty or whitespace")
-    return value
-
-
 def get_companion_tier() -> str:
     """Return the companion permission tier, failing closed to ``read``."""
     try:

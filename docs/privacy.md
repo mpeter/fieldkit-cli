@@ -23,7 +23,6 @@ Only commands using a configured external integration send requests beyond the w
 | Google | Gmail, Drive, Docs, or other enabled Google APIs |
 | LLM | The configured supported model provider |
 | MCP-backed tools | The endpoint and downstream tools you configure |
-| GitHub-backed issue commands | The GitHub repository configured for fieldkit issues; issue titles, bodies, labels, and status changes |
 | Organization-provided services | The service endpoint configured by your operator; for example, a ShadowBot prompt, thread identifier, and returned response |
 
 The base installation and minimal first-success workflow require none of these integrations after

@@ -28,8 +28,8 @@ The distinction is not pedantry. Inference cannot detect the failure it most
 needs to: a command that writes externally *without* exposing `--confirm`
 infers as "read-only", so a check of the form "external writes must have
 `--confirm`" reduces to `X and not X` and cannot fail for any flag
-combination. The `issue` subcommands — which POST to the GitHub REST API
-(`commands/issue/gh_store.py`) — were the live instance of exactly that.
+combination. Commands that POST to an external API without offering
+`--confirm` were the live instance of exactly that.
 `scripts/check_flag_contract.py` therefore gates on declarations only, and
 reports inferred entries separately as unverified.
 

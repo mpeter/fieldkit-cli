@@ -52,8 +52,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 from click.testing import CliRunner, Result
 
-from fieldkit.commands.issue.gh_store import GHIssue
-
 pytestmark = pytest.mark.unit
 
 
@@ -179,50 +177,6 @@ def _pursuit_file(tmp_path: Path, *, stage: str = "closed-won", account: str = "
         encoding="utf-8",
     )
     return path
-
-
-# ---------------------------------------------------------------------------
-# The registry — one entry per list-shaped command
-# ---------------------------------------------------------------------------
-
-
-def _issue_list(tmp_path: Path) -> dict[str, Any]:
-    # `created` is a real datetime, not a pre-formatted string: this is the one
-    # registered payload that carries a live datetime through json.dumps, so it
-    # is what holds the ISO-8601 rule honest.
-    issue = GHIssue(
-        id="historic regression",
-        type="bug",
-        title="something broken",
-        status="open",
-        severity="high",
-        module="sf",
-        gh_number=42,
-        body="Body text.",
-        source="test-agent",
-        created=datetime(2026, 1, 15, 9, 30, 0, tzinfo=UTC),
-    )
-    store = MagicMock()
-    store.list_issues.side_effect = lambda status, **kw: [issue] if status == "open" else []
-    issue_cli = importlib.import_module("fieldkit.commands.issue.cli")
-    with (
-        patch.object(issue_cli, "_store", return_value=store),
-        patch.object(issue_cli, "get_github_repo", return_value="owner/test-repo"),
-    ):
-        result = CliRunner().invoke(issue_cli.cli, ["list", "--json"])
-    return _payload(result, "issue list")
-
-
-def _issue_list_empty(tmp_path: Path) -> dict[str, Any]:
-    store = MagicMock()
-    store.list_issues.return_value = []
-    issue_cli = importlib.import_module("fieldkit.commands.issue.cli")
-    with (
-        patch.object(issue_cli, "_store", return_value=store),
-        patch.object(issue_cli, "get_github_repo", return_value="owner/test-repo"),
-    ):
-        result = CliRunner().invoke(issue_cli.cli, ["list", "--json"])
-    return _payload(result, "issue list (empty)")
 
 
 def _watch_status(tmp_path: Path) -> dict[str, Any]:
@@ -355,8 +309,6 @@ def _sync(tmp_path: Path) -> dict[str, Any]:
 
 #: Every command that emits a list-shaped ``--json`` document. Add new ones here.
 _LIST_CASES: list[tuple[str, Callable[[Path], dict[str, Any]]]] = [
-    ("issue list", _issue_list),
-    ("issue list (empty)", _issue_list_empty),
     ("watch status", _watch_status),
     ("meeting list", _meeting_list),
     ("ingest status", _ingest_status),
