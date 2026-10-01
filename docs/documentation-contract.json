@@ -4,7 +4,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Provide reviewable pull-request evidence.",
-      "source_fingerprint": "sha256:dcdd4fb6ecd21f44c8855bfb620cc6f0535acab0a13333d8ad7d35c9a70bfed6",
+      "source_fingerprint": "sha256:918dafd8c9f670c78f35f94c4e53bff7f9d46364fe5df14196f9bbe4893f8c51",
       "sources": [
         "CONTRIBUTING.md",
         ".github/workflows/ci.yml"
@@ -67,7 +67,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Understand current project authority.",
-      "source_fingerprint": "sha256:bd2e4e012b6c04d72b0330e6c38a3d43a38c0df824c23dc6f7006b8e5731a245",
+      "source_fingerprint": "sha256:41585f0e09a8152963a91b407f88fda198b871c88971b6b4b942b18174679bcc",
       "sources": [
         ".github/CODEOWNERS",
         ".github/repository-settings.json"
@@ -168,7 +168,7 @@
       "content_type": "roadmap",
       "fenced_blocks": [],
       "reader_action": "Review planned work.",
-      "source_fingerprint": "sha256:f6baffd56a967b67d74bc10a6528c6d097f6df6e4e9939d602005366cd1fe093",
+      "source_fingerprint": "sha256:d964f563871d45f0e17ce4bf3835142f8af70acd35a1ffd27d6f4ad5433ec91c",
       "sources": [
         ".github/repository-settings.json",
         "pyproject.toml",
@@ -211,7 +211,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Report a vulnerability without public disclosure.",
-      "source_fingerprint": "sha256:49cd42a0609f67a3af799e6de89233b75382e69de87c836abdb6f1f5f97b059b",
+      "source_fingerprint": "sha256:a9d1fec419b6707cdddb333a79306d5bc848c6f1feee7bd097cd3b0b342e7c66",
       "sources": [
         ".github/repository-settings.json",
         ".github/ISSUE_TEMPLATE/config.yml"
