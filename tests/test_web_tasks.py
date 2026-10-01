@@ -345,4 +345,4 @@ def test_static_shell_contains_gated_tasks_surface() -> None:
     assert "esc(task.due.slice(0, 10))" in javascript
     assert "esc(task.account)" in javascript
     assert "esc(task.completed.slice(0, 10))" in javascript
-    assert 'const CACHE = "fieldkit-v3";' in service_worker
+    assert 'const CACHE = "fieldkit-v4";' in service_worker

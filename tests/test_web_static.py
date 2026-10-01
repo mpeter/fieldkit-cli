@@ -31,9 +31,9 @@ def test_write_controls_require_companion_status() -> None:
     assert "body.error || body.message" in script
 
 
-def test_service_worker_cache_is_v3() -> None:
+def test_service_worker_cache_is_v4() -> None:
     script = (_STATIC / "sw.js").read_text(encoding="utf-8")
-    assert 'const CACHE = "fieldkit-v3"' in script
+    assert 'const CACHE = "fieldkit-v4"' in script
 
 
 def test_chat_history_payload_bounds_each_turn_before_submission() -> None:
