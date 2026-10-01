@@ -29,7 +29,7 @@
         }
       ],
       "reader_action": "Apply repository engineering constraints.",
-      "source_fingerprint": "sha256:95273e927f2d3b45d1177d748c5846377e6013c164cde4b4d62c7357b1dc7fd3",
+      "source_fingerprint": "sha256:e4c6ed6295333ead86c94c0937e3d4b5f4389e1bf5d7ed8f48c411ada581bcd0",
       "sources": [
         "Makefile",
         "pyproject.toml",
@@ -55,11 +55,10 @@
         }
       ],
       "reader_action": "Prepare and submit a contribution.",
-      "source_fingerprint": "sha256:ed18335ce71a0ffa8d08f627496e61d7c09c3c3a42646fe912d2d7d5f823f91f",
+      "source_fingerprint": "sha256:b4e13948691d3a5213f4c941be3e3dc9917b109323abcc6a210f33a39728a397",
       "sources": [
         "Makefile",
         "pyproject.toml",
-        "scripts/sync_claude_dir.py",
         ".github/workflows/ci.yml"
       ]
     },
@@ -146,7 +145,7 @@
         }
       ],
       "reader_action": "Prepare, assess, and recover an operator-approved release candidate.",
-      "source_fingerprint": "sha256:7e156eedb3b2bc068b3cec295dccf1fc042cbc5f3cd198ea7040e64071ec345c",
+      "source_fingerprint": "sha256:5cd38e25d33bcf2df380877dcea72d50ff7de84f09ce3ddfdfa049b5dbbebd06",
       "sources": [
         "Makefile",
         ".github/workflows/release.yml",
@@ -287,7 +286,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Choose the canonical safe write mechanism for persistent state.",
-      "source_fingerprint": "sha256:16cfe857d19f63b792ebab0c8de077a7e6929e60705d3a2112ae0bebdc19bcc6",
+      "source_fingerprint": "sha256:3eb61537f1c540e54a68d4da8b2292e244938fe8bb7432bb4752ee77f20dac77",
       "sources": [
         "src/fieldkit/**/*.py"
       ]
@@ -1224,7 +1223,7 @@
         }
       ],
       "reader_action": "Look up command syntax and options.",
-      "source_fingerprint": "sha256:c9a579d85a811ed902dc6c4a61ed14062b334f52be1a30f83d2f9dff83161ea0",
+      "source_fingerprint": "sha256:ab9750842997945eae146ac7ea4025b92e078d98028cfbe1a9acb48c6932a25a",
       "sources": [
         "src/fieldkit/commands/**/*.py",
         "src/fieldkit/__main__.py"
@@ -1307,7 +1306,7 @@
         }
       ],
       "reader_action": "Inspect the generated module dependency graph.",
-      "source_fingerprint": "sha256:54c9f264a6bbf015b6699b13b04cc643bb7bdb6a94db8a16e23da10fbfeb47d2",
+      "source_fingerprint": "sha256:7710c38e8a6c6131262ac1678d578db75b9bc9782557b76e63ce8102eee184ce",
       "sources": [
         "tach.toml",
         "src/fieldkit/**/*.py",
@@ -1967,7 +1966,7 @@
       "content_type": "concept",
       "fenced_blocks": [],
       "reader_action": "Understand local storage and external data flows.",
-      "source_fingerprint": "sha256:16cfe857d19f63b792ebab0c8de077a7e6929e60705d3a2112ae0bebdc19bcc6",
+      "source_fingerprint": "sha256:3eb61537f1c540e54a68d4da8b2292e244938fe8bb7432bb4752ee77f20dac77",
       "sources": [
         "src/fieldkit/**/*.py"
       ],
@@ -2123,7 +2122,7 @@
         }
       ],
       "reader_action": "Interpret process exit status.",
-      "source_fingerprint": "sha256:b9e4e8cd543f40696939dd393e62f44d3dc8351e6e2da15cf7584abf8b757dc4",
+      "source_fingerprint": "sha256:708fdd5fdbf7c52881ce119aa001892d3a80b6c4a40a56966edd3a7b2fe361a0",
       "sources": [
         "src/fieldkit/cli_exit.py",
         "src/fieldkit/__main__.py",
@@ -2241,7 +2240,7 @@
         }
       ],
       "reader_action": "Choose a supported fieldkit workflow.",
-      "source_fingerprint": "sha256:44119a1a85046f3d7c7b40f839adcaa2aeee0dfa9b97f0dcc5a49f4cd93572f8",
+      "source_fingerprint": "sha256:2a561a60eef64e7fc5b9a1fad9769411acf640297839cc27be7e0208ab6c99f7",
       "sources": [
         "src/fieldkit/__main__.py",
         "src/fieldkit/commands/**/*.py",

@@ -28,12 +28,12 @@ from fieldkit.config import get_github_repo
 from fieldkit.util.jsonio import json_default
 
 # Every mutating `issue` subcommand POSTs/PATCHes the GitHub REST API via
-# GHIssueStore, so each is an external write. None of them take --confirm: the
-# driver loop and the `raise-issue` skill invoke them unattended, where an
-# interactive prompt would hang the run rather than protect anything. That
+# GHIssueStore, so each is an external write. None of them take --confirm:
+# scripts and agents invoke them unattended, where an interactive prompt
+# would hang the run rather than protect anything. That
 # trade-off is recorded per-command as an explicit exemption instead of being
 # hidden behind a "read-only" classification inferred from the absent flag.
-_UNATTENDED = "invoked unattended by the driver loop and raise-issue skill; a prompt would deadlock the run"
+_UNATTENDED = "invoked unattended by scripts and agents; a prompt would deadlock the run"
 
 
 def _store() -> GHIssueStore:

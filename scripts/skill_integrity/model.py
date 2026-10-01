@@ -64,8 +64,6 @@ SKILL_ROOTS: frozenset[str] = frozenset(
         "start",  # session bootstrap
         "tool-routing",  # agent routing infrastructure (absorbs managing-google-workspace, D1 Wave 4 PR3)
         "memory-management",  # session memory
-        # proctor: unshipped 2026-07-25 — dev-only review pipeline, lives in
-        # .opencode/skills/proctor/ (OpenCode-only), never installed to the workspace.
         "handoffs",  # session handoff (write)
         "pickup",  # session handoff (resume)
         # --- kept by operator ruling (D1 Wave 5), no longer archive candidates ---

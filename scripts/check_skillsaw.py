@@ -22,29 +22,9 @@ import subprocess
 import sys
 
 # Density ceiling: weighted violations per 10k tokens.
-# 2026-07-08: 2.6 after autofix of 58 unlinked-ref violations.
-# 2026-07-11: 2.53 after baselineing .claude/ agent-frontmatter + context-budget
-#             violations. .claude/ is kept as a Claude Code runtime fallback per
-#             succession plan 1.4; its violations are structural, not regressions.
 # To tighten after improvement: lower this value and commit.
 # To accept a regression: raise this value with a comment explaining why.
-# 2026-07-20: raised 2.6 → 3.1 after the proctor skill was added (severity labels in
-#             its reference files trigger content-critical-position warnings).
-# 2026-07-25: density 2.52 after re-baselining 4 synced .claude/ mirrors (gaze-reporter,
-#             gaze-test-generator, journeyman, true-up) whose fingerprints changed when
-#             drift was corrected. Violations are structural, not regressions.
-# 2026-07-25: lowered 3.1 → 2.6 (ratchet). The 3.1 raise paid for proctor being present
-#             twice — src/fieldkit/skills/proctor/ shipped alongside the .opencode/ copy.
-#             The duplicate is gone; the surviving copy is still linted via the
-#             .claude/skills symlink. Measured 2.52, so this restores the pre-proctor
-#             ceiling with ~0.08 headroom rather than inventing a new number.
-# 2026-07-28: raised 2.6 → 2.7 after re-baselining 3 pre-existing context-budget
-#             overages (address-feedback.md, true-up.md, agent-brief.md/
-#             check-skill-integrity.md) uncovered by fixing .opencode/.claude mirror
-#             drift during the review-council/review-pr reference cleanup (sweep 16).
-#             These command files were already near or over the token budget before
-#             this PR touched them; the overage is pre-existing, not a new regression.
-#             Measured 2.63.
+# Earlier adjustments and their reasons are in this file's git history.
 _DENSITY_CEILING = 2.7
 
 # Letter grade floor. Grades: A, B, C, D, F (A is best).
