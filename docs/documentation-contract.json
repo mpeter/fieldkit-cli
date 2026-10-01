@@ -168,7 +168,7 @@
       "content_type": "roadmap",
       "fenced_blocks": [],
       "reader_action": "Review planned work.",
-      "source_fingerprint": "sha256:f6baffd56a967b67d74bc10a6528c6d097f6df6e4e9939d602005366cd1fe093",
+      "source_fingerprint": "sha256:9bc4fffd1b32142941560225b1caf6eb59cff895600766e3d90cd478e979818e",
       "sources": [
         ".github/repository-settings.json",
         "pyproject.toml",

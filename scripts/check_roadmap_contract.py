@@ -11,8 +11,8 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 _ROADMAP_PATH = Path("ROADMAP.md")
 _SECTIONS = {
     "Release safety and future delivery": 5,
-    "Product reliability and integrations": 9,
-    "Architecture, quality, and contributor experience": 9,
+    "Product reliability and integrations": 8,
+    "Architecture, quality, and contributor experience": 8,
     "Compatibility candidates": 2,
     "Community growth": 1,
 }
