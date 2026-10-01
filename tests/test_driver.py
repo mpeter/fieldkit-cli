@@ -1730,11 +1730,11 @@ def test_get_daily_developer_spend_total_reads_openchamber_sessions(tmp_path: Pa
         conn.executemany(
             "INSERT INTO session VALUES (?, ?, ?, ?)",
             [
-                ("fieldkit", now_ms, 1.25, '{"providerID":"openai","id":"gpt-5.6-terra"}'),
-                ("fieldkit", now_ms, 2.50, '{"providerID":"openai","id":"gpt-5.6-terra"}'),
-                ("other", now_ms, 99.0, '{"providerID":"openai","id":"gpt-5.6-terra"}'),
+                ("fieldkit", now_ms, 1.25, '{"providerID":"openai","id":"gpt-6.1-sol"}'),
+                ("fieldkit", now_ms, 2.50, '{"providerID":"openai","id":"gpt-6.1-sol"}'),
+                ("other", now_ms, 99.0, '{"providerID":"openai","id":"gpt-6.1-sol"}'),
                 ("fieldkit", now_ms, 99.0, '{"providerID":"anthropic","id":"claude-opus-5"}'),
-                ("fieldkit", now_ms, 99.0, '{"providerID":"openai","id":"gpt-5.6-sol"}'),
+                ("fieldkit", now_ms, 99.0, '{"providerID":"openai","id":"gpt-6-luna"}'),
             ],
         )
 
@@ -1745,6 +1745,33 @@ def test_get_daily_developer_spend_total_reads_openchamber_sessions(tmp_path: Pa
         total = get_daily_developer_spend_total()
 
     assert total == 3.75
+
+
+def test_get_daily_developer_spend_total_reads_opencode2_sessions_after_an_upgrade(tmp_path: Path) -> None:
+    """OpenCode 2 writes sessions to ``session_v2``; its v1 ``session`` table is frozen."""
+    from fieldkit.driver.spend import get_daily_developer_spend_total
+
+    db = tmp_path / "opencode.db"
+    model = '{"providerID":"openai","id":"gpt-6.1-sol"}'
+    with sqlite3.connect(db) as conn:
+        conn.execute("CREATE TABLE project (id TEXT, worktree TEXT)")
+        conn.execute("CREATE TABLE session (project_id TEXT, time_created INTEGER, cost REAL, model TEXT)")
+        conn.execute("CREATE TABLE session_v2 (project_id TEXT, time_created INTEGER, cost REAL, model TEXT)")
+        conn.execute("INSERT INTO project VALUES ('fieldkit', '/repo/fieldkit-cli')")
+        now_ms = int(datetime.now(UTC).timestamp() * 1000)
+        conn.execute("INSERT INTO session VALUES ('fieldkit', ?, 1.25, ?)", (now_ms, model))
+        conn.executemany(
+            "INSERT INTO session_v2 VALUES ('fieldkit', ?, ?, ?)",
+            [(now_ms, 1.25, model), (now_ms, 4.00, model)],
+        )
+
+    with (
+        patch("fieldkit.driver.spend._get_opencode_db_path", return_value=db),
+        patch("fieldkit.driver.spend.Path.cwd", return_value=Path("/repo/fieldkit-cli")),
+    ):
+        total = get_daily_developer_spend_total()
+
+    assert total == 5.25, "spend after an OpenCode 2 upgrade must come from session_v2 alone"
 
 
 def test_get_daily_developer_spend_total_returns_zero_without_a_current_project_session(tmp_path: Path) -> None:

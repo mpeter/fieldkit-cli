@@ -26,7 +26,7 @@ log = logging.getLogger(__name__)
 
 _DEFAULT_OPENCODE_DB = Path.home() / ".local" / "share" / "opencode" / "opencode.db"
 _DEVELOPER_PROVIDER = "openai"
-_DEVELOPER_MODEL = "gpt-5.6-terra"
+_DEVELOPER_MODEL = "gpt-6.1-sol"
 
 
 @dataclass(frozen=True)
@@ -189,7 +189,9 @@ def get_daily_developer_spend_total() -> float | None:
     cost is recorded in OpenChamber's session database rather than ``llm-calls.db``.
     OpenChamber attaches sessions to the configured project, not to ephemeral
     worktree paths. The calling directory is therefore resolved through its project
-    row before matching OpenAI Terra session costs are summed. Other interactive
+    row before matching OpenAI developer-model session costs are summed. OpenCode 2
+    keeps sessions in ``session_v2`` and leaves its v1 ``session`` table as a frozen
+    pre-upgrade copy, so the current table is read whenever it exists. Other interactive
     or provider-routed sessions must not consume this schedule-specific budget. A
     missing database or project is not evidence of zero spend: unattended admission
     must stop until accounting works. A readable project with no matching session
@@ -208,10 +210,11 @@ def get_daily_developer_spend_total() -> float | None:
         if project is None:
             log.warning("OpenChamber has no project record for %s; cannot verify developer spend", Path.cwd())
             return None
+        session_table = _opencode_session_table(conn)
         row = conn.execute(
-            """
+            f"""
             SELECT COUNT(*), COALESCE(SUM(cost), 0.0)
-            FROM session
+            FROM {session_table}
             WHERE project_id = ? AND time_created >= ?
               AND json_extract(model, '$.providerID') = ?
               AND json_extract(model, '$.id') = ?
@@ -227,6 +230,12 @@ def get_daily_developer_spend_total() -> float | None:
     if row is None or row[0] == 0:
         return 0.0
     return float(row[1])
+
+
+def _opencode_session_table(conn: sqlite3.Connection) -> str:
+    """Return the table that receives new OpenCode sessions."""
+    current = conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_v2'").fetchone()
+    return "session_v2" if current is not None else "session"
 
 
 def _evaluate_daily_spend_cap(

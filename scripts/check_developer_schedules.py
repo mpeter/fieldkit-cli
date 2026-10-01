@@ -12,7 +12,7 @@ from typing import Any
 from fieldkit.driver.admission import ADMITTED_JOBS
 
 _PROVIDER = "openai"
-_MODEL = "gpt-5.6-terra"
+_MODEL = "gpt-6.1-sol"
 _PREFLIGHT_MARKER = "zero-LLM scheduler preflight already acquired"
 
 

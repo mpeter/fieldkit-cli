@@ -13,7 +13,7 @@ _SCRIPT = Path("scripts/check_developer_schedules.py")
 
 
 def _task(
-    name: str, *, enabled: bool = False, provider: str = "openai", model: str = "gpt-5.6-terra"
+    name: str, *, enabled: bool = False, provider: str = "openai", model: str = "gpt-6.1-sol"
 ) -> dict[str, object]:
     return {
         "name": name,
@@ -70,7 +70,7 @@ def test_schedule_policy_admits_a_zero_llm_preflight_gated_job(tmp_path: Path) -
                 {
                     "name": "driver",
                     "enabled": True,
-                    "execution": {"providerID": "openai", "modelID": "gpt-5.6-terra", "prompt": "run driver"},
+                    "execution": {"providerID": "openai", "modelID": "gpt-6.1-sol", "prompt": "run driver"},
                 }
             ],
             "admission",
