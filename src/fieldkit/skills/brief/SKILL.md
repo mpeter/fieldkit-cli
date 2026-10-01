@@ -151,11 +151,12 @@ duplicating prep here.
 
 When a step misbehaves, classify before reacting:
 
-- **RAISE** (`fieldkit issue create`, after checking `fieldkit issue list
-  --status open` for duplicates): a command crashes, exits non-zero without
-  useful output, prints raw Python literals (`None`/`False`/`[]`), emits
-  duplicated or malformed content, or shows wrong date fields. These are tool
-  bugs — the brief is the earliest place they surface.
+- **RAISE** (report it to the user as a tool bug, with the command, exit
+  status, and a short output excerpt, so they can file it): a command crashes,
+  exits non-zero without useful output, prints raw Python literals
+  (`None`/`False`/`[]`), emits duplicated or malformed content, or shows wrong
+  date fields. These are tool bugs — the brief is the earliest place they
+  surface.
 - **SKIP** (report as an operational signal in the synthesis, never as a bug):
   low engagement scores, stalled deals, empty watcher output on a quiet day,
   auth failures (those go to the operator per the failure modes above).

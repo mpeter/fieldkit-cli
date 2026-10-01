@@ -62,7 +62,6 @@ COMMANDS_PACKAGES = [
     "init",
     "skill",
     "datasync",
-    "issue",
     "version",
 ]
 

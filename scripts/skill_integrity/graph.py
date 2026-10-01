@@ -133,8 +133,8 @@ def check_dag(context: model.IntegrityContext, registry: model.Registry) -> list
     # does not need a cross-reference from an agent or command file to be reachable.
     #
     # NOTE: skills reachable only via global skills (~/.agents/skills/) or the
-    # OpenCode runtime context will still appear as G002. This is expected per the
-    # /check-skill-integrity spec — G002 is informational/non-blocking for those cases.
+    # OpenCode runtime context will still appear as G002. This is expected:
+    # G002 is informational and non-blocking for those cases.
     for skill_name, skill_path in all_skill_paths.items():
         if skill_name in reachable:
             continue

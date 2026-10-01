@@ -10,24 +10,6 @@ def llm_disabled() -> bool:
     return bool(os.environ.get("FIELDKIT_NO_LLM") or os.environ.get("NO_LLM"))
 
 
-def get_driver_max_concurrent() -> int:
-    """Return the configured driver concurrency cap, clamped to one through four."""
-    try:
-        data = _loader._load_raw_config()
-    except _loader.ConfigError:
-        return 1
-    if data is None:
-        return 1
-    driver = data.get("driver")
-    if not isinstance(driver, dict):
-        return 1
-    try:
-        value = int(driver.get("max_concurrent", 1))
-    except (TypeError, ValueError):
-        return 1
-    return max(1, min(4, value))
-
-
 def get_vertex_location() -> str | None:
     """Return the configured Vertex region when readable and nonempty."""
     try:
@@ -108,22 +90,6 @@ def get_user_name() -> str:
     """Return the configured user display name, or an empty string."""
     raw = _loader._load_raw_config()
     return str((raw or {}).get("name", "")).strip()
-
-
-def get_github_repo() -> str:
-    """Return the required configured GitHub repository slug."""
-    data = _loader._load_raw_config()
-    if data is None:
-        raise _loader.ConfigError(f"Config file not found or unreadable: {_loader.CONFIG_PATH}")
-    if "github_repo" not in data:
-        raise _loader.ConfigError(
-            f"Config file {_loader.CONFIG_PATH} is missing required key 'github_repo'."
-            " Add: github_repo: owner/repo  (e.g. owner/fieldkit-project)"
-        )
-    value = str(data["github_repo"]).strip()
-    if not value:
-        raise _loader.ConfigError("Config key 'github_repo' must not be empty or whitespace")
-    return value
 
 
 def get_companion_tier() -> str:

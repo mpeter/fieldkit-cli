@@ -181,34 +181,6 @@ def test_gmail_db_path_consistency_get_gmail_db_path_matches_setup_output(tmp_pa
 # ── TestIssuesDirConsistency (flattened) ────────────────────────────────────
 
 
-def test_wizard_write_config_omits_unconfigured_github_repo(tmp_path: Path) -> None:
-    """_wizard_write_config does not install an operator-specific repository default."""
-    from unittest.mock import patch
-
-    import yaml
-
-    config_path = tmp_path / "config.yaml"
-    data_dir = tmp_path / "fieldkit-data"
-
-    import fieldkit.commands.init as setup_mod
-
-    with (
-        patch.object(setup_mod.cfg, "CONFIG_PATH", config_path),
-        patch.object(setup_mod.cfg, "__file__", str(tmp_path / "fieldkit" / "config" / "__init__.py")),
-    ):
-        _wizard_write_config(
-            data_dir=data_dir,
-            name="Test User",
-            email="test@example.com",  # pii-guard: ignore
-            role="",
-            company="",
-            gcp_project="",
-        )
-
-    result = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    assert "github_repo" not in result
-
-
 def test_issues_dir_consistency_wizard_write_config_preserves_custom_github_repo(tmp_path: Path) -> None:
     """Re-running _wizard_write_config does not overwrite a user-customised github_repo."""
     from unittest.mock import patch
@@ -242,37 +214,3 @@ def test_issues_dir_consistency_wizard_write_config_preserves_custom_github_repo
     assert result["github_repo"] == custom_repo, (
         f"Custom github_repo should be preserved, but got: {result['github_repo']!r}"
     )
-
-
-def test_get_github_repo_requires_explicit_post_setup_configuration(tmp_path: Path) -> None:
-    """A fresh setup requires repository selection before issue commands."""
-    from unittest.mock import patch
-
-    from fieldkit.config import ConfigError, get_github_repo
-
-    config_path = tmp_path / "config.yaml"
-    data_dir = tmp_path / "fieldkit-data"
-
-    import fieldkit.commands.init as setup_mod
-
-    with (
-        patch.object(setup_mod.cfg, "CONFIG_PATH", config_path),
-        patch.object(setup_mod.cfg, "__file__", str(tmp_path / "fieldkit" / "config" / "__init__.py")),
-    ):
-        _wizard_write_config(
-            data_dir=data_dir,
-            name="",
-            email="",
-            role="",
-            company="",
-            gcp_project="",
-        )
-
-    # get_github_repo reads CONFIG_PATH — patch it to point to our written config.
-    import fieldkit.config._loader as lib_cfg
-
-    with (
-        patch.object(lib_cfg, "CONFIG_PATH", config_path),
-        pytest.raises(ConfigError, match="missing required key 'github_repo'"),
-    ):
-        get_github_repo()
