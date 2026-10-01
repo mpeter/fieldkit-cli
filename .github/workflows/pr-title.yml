@@ -1,0 +1,37 @@
+name: PR title
+
+# Require a Conventional Commits PR title. Pull requests are squash-merged with
+# the title as the commit subject, so the title is what lands on main, and the
+# local commit-msg hook never sees that commit. See scripts/check_pr_title.py.
+#
+# This lives in its own workflow so the `edited` activity type re-checks a
+# retitled PR without re-running the whole CI suite on every description edit.
+#
+# NOTE: "PR title" is a required status check in branch protection. Do not
+# rename the job — a renamed context never reports, and the PR deadlocks on
+# "Expected — waiting for status to be reported".
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  title:
+    name: PR title
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      # Pure stdlib: no uv sync, no dependency install. The title arrives through
+      # the environment, never interpolated into the script.
+      - name: Check the pull-request title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: python3 scripts/check_pr_title.py
