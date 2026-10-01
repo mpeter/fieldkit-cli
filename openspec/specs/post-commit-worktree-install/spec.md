@@ -22,24 +22,24 @@ The post-commit hook SHALL obtain the invoking checkout root and committed revis
 
 ### Requirement: Root resolution fails closed
 
-If Git cannot return one valid checkout root and revision, the hook SHALL emit an actionable warning, SHALL skip checkout-local synchronization and installation, and SHALL return zero so the commit is not blocked. It SHALL NOT fall back to the hook source checkout.
+If Git cannot return one valid checkout root and revision, the hook SHALL emit an actionable warning, SHALL skip installation, and SHALL return zero so the commit is not blocked. It SHALL NOT fall back to the hook source checkout.
 
 #### Scenario: Malformed Git context
 
 - **WHEN** Git root discovery fails or returns malformed output
-- **THEN** no install or sync subprocess runs
+- **THEN** no install subprocess runs
 - **AND** stderr explains that manual installation is required
 - **AND** the hook exits zero
 
 ### Requirement: Shared checkout root
 
-The hook SHALL use the resolved invoking worktree root for commit diff inspection, agent-surface synchronization, sync-script lookup, and package installation.
+The hook SHALL use the resolved invoking worktree root for both commit diff inspection and package installation.
 
-#### Scenario: Agent surface changes in a linked worktree
+#### Scenario: Package inputs change in a linked worktree
 
-- **GIVEN** `.opencode/agents/` or `.opencode/commands/` changed in a linked worktree
-- **WHEN** the hook synchronizes `.claude/`
-- **THEN** it loads and runs the sync script from that linked worktree
+- **GIVEN** `src/fieldkit/`, `pyproject.toml`, or `uv.lock` changed in a linked worktree commit
+- **WHEN** the hook inspects that commit's changed files
+- **THEN** it reads the diff and runs the install from that linked worktree
 
 ### Requirement: Install provenance
 
