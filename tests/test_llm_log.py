@@ -29,6 +29,7 @@ from fieldkit.llm.log import (
     _init_state,
     _success_callback,
     _write_row,
+    get_db_path,
     init_db,
     set_skill_context,
 )
@@ -119,7 +120,7 @@ def _approved_test_data_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
 def test_get_db_path_returns_existing_default_when_override_is_absent(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("FIELDKIT_LLM_LOG", raising=False)
 
-    resolved_path = llm_log.get_db_path()
+    resolved_path = get_db_path()
 
     assert resolved_path == llm_log.get_fieldkit_data() / "llm-calls.db"
 

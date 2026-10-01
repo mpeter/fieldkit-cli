@@ -377,6 +377,37 @@ def test_operations_treats_completed_partial_watcher_run_as_healthy(source: Data
     assert stages["watchers"]["detail"] == "Watcher data is current."
 
 
+@pytest.mark.parametrize(
+    ("watch_status", "expected_detail", "expected_action"),
+    [
+        (
+            {"items": [{"watcher": "slack-threads", "outcome": "error", "last_run": "2026-08-16T07:00:00Z"}]},
+            "1 watcher run(s) need investigation.",
+            "Inspect fieldkit watch logs, then run fieldkit watch run --all.",
+        ),
+        (WebDataError("watch status timed out"), "watch status timed out", "Run fieldkit watch status."),
+    ],
+    ids=["failed-run", "status-unavailable"],
+)
+def test_watcher_operation_reports_failures_as_errors(
+    source: DataSource, watch_status: Any, expected_detail: str, expected_action: str
+) -> None:
+    source.now = lambda: datetime(2026, 8, 16, 8, tzinfo=UTC)
+
+    def cli(args: list[str]) -> Any:
+        if isinstance(watch_status, WebDataError):
+            raise watch_status
+        return watch_status
+
+    source.cli_json = cli
+
+    stage = source._watcher_operation()
+
+    assert stage.status == "error"
+    assert stage.detail == expected_detail
+    assert stage.action == expected_action
+
+
 def test_operations_treats_an_unexpected_doctor_payload_as_an_error(source: DataSource) -> None:
     source.doctor_json = lambda: {"services": []}
 
