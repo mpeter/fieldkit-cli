@@ -43,6 +43,26 @@ Output is a step-by-step table showing each phase and its result, followed by a
 summary line. Runtime depends on account count and Gmail volume (typically 60–180
 seconds for a full run).
 
+Each subprocess has its own wall-clock ceiling. `fieldkit sync --dry-run` shows
+the selected ceiling beside each command without executing it. A timed-out step
+is reported by name with its configured ceiling; the pipeline continues, then
+exits 1 for a partial run. The in-process `people-index` rebuild has no
+subprocess ceiling.
+
+- `gmail sync`: 30 minutes. It may resume an initial full mailbox sync, not just
+  the typical 20–40 second incremental sync.
+- `account-tags` and `enrich-pursuits`: 5 minutes each to analyse the Gmail cache.
+- `ingest discover`: 1 minute to inspect local inputs before processing.
+- `ingest run`: 20 minutes, allowing for its 15 minute full-queue target and cleanup.
+- `backstory-health`, `pursuit-stalls`, and `slack-threads`: 2 minutes each to
+  analyse existing local data.
+- `sf listview` (with `--sf`): 15 minutes to synchronize remote Salesforce
+  listviews across configured accounts.
+
+These are fixed operational ceilings, not estimates calculated from file or
+account counts. If a real workload needs a different ceiling, review its
+measured behavior before changing the central policy.
+
 ### Import ambient transcripts
 
 Completed ambience-companion sessions under `scratch/ambient/` can enter the

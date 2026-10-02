@@ -42,7 +42,7 @@ import click
 
 from fieldkit.cli_exit import EXIT_PARTIAL
 from fieldkit.cli_registry import declare_write
-from fieldkit.config import TIMEOUT_DATASYNC
+from fieldkit.config import DATASYNC_STEP_TIMEOUTS
 
 LOG_PREFIX = "[sync]"
 
@@ -182,6 +182,9 @@ def _build_steps(cfg: RunConfig) -> list[tuple[str, list[str]]]:
         sf_cmd = [*_fk, "sf", "listview"]  # no TARGET = sync all accounts
         steps.append(("sf listview", sf_cmd))
 
+    for label, cmd in steps:
+        if cmd and label not in DATASYNC_STEP_TIMEOUTS:
+            raise ValueError(f"No data-sync timeout configured for step {label!r}")
     return steps
 
 
@@ -198,19 +201,20 @@ def _step_note(returncode: int, stderr: str, stdout: str) -> str:
 
 def _execute_step(index: int, total: int, label: str, cmd: list[str]) -> _StepExecution:
     """Execute one real subprocess step without writing terminal output."""
+    timeout = DATASYNC_STEP_TIMEOUTS[label]
     t0 = time.monotonic()
     try:
         completed = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            timeout=TIMEOUT_DATASYNC,
+            timeout=timeout,
             check=False,
         )
     except subprocess.TimeoutExpired:
         elapsed = time.monotonic() - t0
-        result = StepResult(index, total, label, cmd, False, elapsed, "timeout")
-        return _StepExecution(result, display=f"TIMEOUT after {elapsed:.0f}s")
+        result = StepResult(index, total, label, cmd, False, elapsed, f"timeout after {timeout}s")
+        return _StepExecution(result, display=f"TIMEOUT after {timeout}s")
     except FileNotFoundError:
         result = StepResult(index, total, label, cmd, False, 0.0, f"command not found: {cmd[0]}")
         return _StepExecution(result, display=result.note)
@@ -267,7 +271,8 @@ def _run_step(
     label_str = f"{label:<22}"
 
     if dry_run:
-        click.echo(f"  {prefix} {label_str}  (dry-run) {' '.join(cmd)}", err=True)
+        timeout = DATASYNC_STEP_TIMEOUTS[label]
+        click.echo(f"  {prefix} {label_str}  (dry-run, timeout={timeout}s) {' '.join(cmd)}", err=True)
         return StepResult(
             index=index,
             total=total,
@@ -275,7 +280,7 @@ def _run_step(
             cmd=cmd,
             success=True,
             elapsed=0.0,
-            note="dry-run",
+            note=f"dry-run (timeout={timeout}s)",
         )
 
     execution = _execute_step(index, total, label, cmd)
