@@ -35,7 +35,7 @@ def _make_patches(
     pipeline_result: str = "# Pipeline Review\n\nAll good.",
     cross_account: list[object] | None = None,
     write_return: int = 0,
-    config: dict | None | bool = None,  # False → falsy config (failure case)
+    config: dict | bool | None = None,  # False → falsy config (failure case)
 ) -> list:
     """Return a list of (target, kwargs) tuples ready for patch()."""
     if backstory_result is None:

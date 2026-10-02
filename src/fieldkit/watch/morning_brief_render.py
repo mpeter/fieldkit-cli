@@ -372,7 +372,7 @@ def _render_project_health_section(account: str | None = None) -> list[str]:
             if row is not None:
                 healths.append(row.health)
         return _project_health_lines(healths, account, matched_any)
-    except Exception:  # noqa: BLE001
+    except Exception:
         # F2 (historic regression follow-up): malformed data and I/O failures are visible.
         log.warning("Project health section unavailable", exc_info=True)
         return []

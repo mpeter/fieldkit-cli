@@ -335,7 +335,7 @@ def _internal_identity() -> tuple[str, set[str]]:
         if "@" in user_email:
             domains.add(user_email.split("@")[-1])
         return user_name, domains
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.debug("transcript_pipeline: failed to load internal identity from config", exc_info=True)
         return "", set()
 

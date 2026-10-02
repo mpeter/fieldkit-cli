@@ -172,7 +172,7 @@ def _load_attendee_names(vault_path: Path, known_internal_names: list[str]) -> t
             for name in vault_external
             if not any(internal in name.lower() or name.lower() in internal for internal in internal_lower)
         ]
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.debug("ingest: failed to extract stakeholder names from vault frontmatter", exc_info=True)
     return internal_team_names, stakeholder_names
 
