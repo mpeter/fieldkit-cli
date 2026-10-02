@@ -3,11 +3,13 @@ import shutil
 import socket
 import sys
 import tempfile
+import warnings
 from pathlib import Path
+from typing import TextIO
 from unittest.mock import patch
 
 import pytest
-from _session_tmpdirs import remove_stale_session_tmpdirs
+from _session_tmpdirs import create_session_tmpdir, remove_stale_session_tmpdirs
 
 import fieldkit.commands.watch.backstory_health as _w_backstory
 import fieldkit.commands.watch.close_date_countdown as _w_close_date_cmd
@@ -60,6 +62,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # ---------------------------------------------------------------------------
 
 _CI_CONFIG_TMPDIR: str | None = None
+_CI_CONFIG_LOCK: TextIO | None = None
 _PRIOR_HOME: str | None = None
 _PRIOR_FIELDKIT_DATA_DIR: str | None = None
 _PRIOR_CONFIG_PATH: Path | None = None
@@ -76,7 +79,7 @@ def pytest_configure(config: pytest.Config) -> None:
     fieldkit_data is intentionally omitted so get_fieldkit_data() falls back
     to <fieldkit_home>/data, keeping ``p.parent.name == "data"`` valid.
     """
-    global _CI_CONFIG_TMPDIR  # noqa: PLW0603
+    global _CI_CONFIG_TMPDIR, _CI_CONFIG_LOCK  # noqa: PLW0603
     global _PRIOR_HOME, _PRIOR_FIELDKIT_DATA_DIR, _PRIOR_CONFIG_PATH  # noqa: PLW0603
     # A killed run never reaches pytest_unconfigure, so its directory below
     # would otherwise accumulate in the system temp directory.
@@ -85,7 +88,8 @@ def pytest_configure(config: pytest.Config) -> None:
     _PRIOR_HOME = os.environ.get("HOME")
     _PRIOR_FIELDKIT_DATA_DIR = os.environ.get("FIELDKIT_DATA_DIR")
     _PRIOR_CONFIG_PATH = _config_loader.CONFIG_PATH
-    _CI_CONFIG_TMPDIR = tempfile.mkdtemp(prefix="fieldkit-ci-")
+    session_dir, _CI_CONFIG_LOCK = create_session_tmpdir(Path(tempfile.gettempdir()))
+    _CI_CONFIG_TMPDIR = str(session_dir)
     test_home = Path(_CI_CONFIG_TMPDIR) / "home"
     test_home.mkdir(parents=True, exist_ok=True)
     os.environ["HOME"] = str(test_home)
@@ -103,7 +107,7 @@ def pytest_configure(config: pytest.Config) -> None:
 
 def pytest_unconfigure(config: pytest.Config) -> None:
     """Remove test config and restore the parent environment after the session."""
-    global _CI_CONFIG_TMPDIR  # noqa: PLW0603
+    global _CI_CONFIG_TMPDIR, _CI_CONFIG_LOCK  # noqa: PLW0603
     global _PRIOR_HOME, _PRIOR_FIELDKIT_DATA_DIR, _PRIOR_CONFIG_PATH  # noqa: PLW0603
     if _CI_CONFIG_TMPDIR is not None:
         if _PRIOR_HOME is None:
@@ -118,7 +122,16 @@ def pytest_unconfigure(config: pytest.Config) -> None:
             _config_loader.CONFIG_PATH = _PRIOR_CONFIG_PATH
             _config.CONFIG_PATH = _PRIOR_CONFIG_PATH
             clear_config_caches()
-        shutil.rmtree(_CI_CONFIG_TMPDIR, ignore_errors=True)
+        try:
+            shutil.rmtree(_CI_CONFIG_TMPDIR)
+        except OSError as exc:
+            warnings.warn(
+                f"Could not remove pytest session directory {_CI_CONFIG_TMPDIR}: {exc}", RuntimeWarning, stacklevel=2
+            )
+        finally:
+            if _CI_CONFIG_LOCK is not None:
+                _CI_CONFIG_LOCK.close()
+            _CI_CONFIG_LOCK = None
         _CI_CONFIG_TMPDIR = None
         _PRIOR_HOME = None
         _PRIOR_FIELDKIT_DATA_DIR = None
