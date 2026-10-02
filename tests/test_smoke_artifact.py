@@ -3,6 +3,7 @@
 import hashlib
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -40,6 +41,7 @@ def test_smoke_records_exact_digest_environment_and_all_contracts(
     artifact = tmp_path / "candidate.whl"
     artifact.write_bytes(b"exact candidate")
     calls: list[tuple[list[str], Path, dict[str, str]]] = []
+    monkeypatch.setenv("EXECUTION_GUARD_SENTINEL", "preserved-in-every-child")
 
     def fake_run(
         argv: list[str], *, cwd: Path, env: dict[str, str], timeout: int = 60
@@ -120,6 +122,7 @@ def test_smoke_records_exact_digest_environment_and_all_contracts(
         "SMOKE124",
     }
     assert calls
+    assert all(env["EXECUTION_GUARD_SENTINEL"] == "preserved-in-every-child" for _, _, env in calls)
     assert all(call_cwd != _REPO_ROOT for _, call_cwd, _ in calls)
     assert all(env["PYTHONSAFEPATH"] == "1" for _, _, env in calls)
     assert all(env["PYTHONPATH"] == "" or Path(env["PYTHONPATH"]).name == "network-guard" for _, _, env in calls)
@@ -211,8 +214,10 @@ def test_all_profile_installs_exact_artifact_extra_and_exercises_each_integratio
 
     assert report.ok
     assert report.profile == "all"
-    install = next(argv for argv in calls if argv[-4:-2] == ["pip", "install"])
+    install = next(argv for argv in calls if argv[1:4] == ["-m", "pip", "install"])
     assert install[-1] == f"{artifact.resolve()}[all]"
+    assert "--no-user" in install
+    assert Path(install[install.index("--prefix") + 1]).name == "venv"
     criterion_ids = {criterion.criterion_id for criterion in report.criteria}
     assert {"SMOKE201", "SMOKE202", "SMOKE203", "SMOKE204", "SMOKE205", "SMOKE206"} <= criterion_ids
     assert "SMOKE107" not in criterion_ids
@@ -236,7 +241,7 @@ def test_uv_installer_targets_the_exact_artifact_and_created_environment(
     monkeypatch.setattr(runner, "_run", fake_run)
     monkeypatch.setattr(runner.shutil, "which", lambda command: "/usr/bin/uv" if command == "uv" else None)
 
-    runner.smoke(
+    report = runner.smoke(
         artifact,
         repo_root=_REPO_ROOT,
         source_revision="a" * 40,
@@ -253,6 +258,10 @@ def test_uv_installer_targets_the_exact_artifact_and_created_environment(
     assert Path(install[4]).parent.name == "bin"
     assert Path(install[4]).parent.parent.name == "venv"
     assert install[-1] == f"{artifact.resolve()}[all]"
+    assert not report.ok
+    assert report.criteria[-1].criterion_id == "SMOKE002"
+    assert report.criteria[-1].status == "fail"
+    assert len(calls) == 2
 
 
 def test_smoke_gives_fresh_environment_creation_a_bounded_setup_timeout(
@@ -309,3 +318,108 @@ def test_main_emits_versioned_json_failure(
     assert payload["schema_version"] == 2
     assert payload["status"] == "fail"
     assert payload["criteria"][0]["criterion_id"] == "SMOKE001"
+
+
+def test_smoke_environment_preserves_routing_and_isolates_application_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Required execution controls survive without exposing app configuration."""
+    inherited = {
+        "PATH": "/required/wrappers:/usr/bin",
+        "HTTPS_PROXY": "http://proxy.example.com:8080",
+        "NO_PROXY": "localhost,127.0.0.1",
+        "SSL_CERT_FILE": "/required/ca.pem",
+        "REQUESTS_CA_BUNDLE": "/required/ca.pem",
+        "UV_INDEX_URL": "https://packages.example.com/simple",
+        "EXECUTION_GUARD_SENTINEL": "must-survive",
+        "FIELDKIT_DATA_DIR": "/outside/runtime",
+        "FIELDKIT_SKILLS_DIR": "/outside/skills",
+        "GOOGLE_APPLICATION_CREDENTIALS": "/outside/credentials.json",
+        "GOOGLE_OAUTH_CLIENT_SECRET": "synthetic-credential",
+        "OPENAI_API_KEY": "synthetic-credential",
+        "PYTHONHOME": "/outside/python",
+        "PYTHONPATH": "/outside/source",
+        "VIRTUAL_ENV": "/outside/venv",
+        "UV_CACHE_DIR": "relative-cache",
+        "UV_PYTHON": "relative-python",
+        "PIP_TARGET": "/outside/install",
+        "PIP_ROOT": "/outside/root",
+        "PIP_LOG": "/outside/pip.log",
+        "PIP_PREFIX": "/outside/prefix",
+        "PIP_USER": "1",
+        "UV_PROJECT_ENVIRONMENT": "/outside/project-venv",
+        "NO_LLM": "1",
+        "PYTHON_DOTENV_DISABLED": "0",
+    }
+    for key, value in inherited.items():
+        monkeypatch.setenv(key, value)
+    before = dict(os.environ)
+
+    environment = runner._smoke_environment(tmp_path)
+
+    assert environment is not os.environ
+    for key in (
+        "PATH",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "SSL_CERT_FILE",
+        "REQUESTS_CA_BUNDLE",
+        "UV_INDEX_URL",
+        "EXECUTION_GUARD_SENTINEL",
+    ):
+        assert environment[key] == inherited[key]
+    for key in (
+        "FIELDKIT_DATA_DIR",
+        "FIELDKIT_SKILLS_DIR",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "GOOGLE_OAUTH_CLIENT_SECRET",
+        "OPENAI_API_KEY",
+        "PYTHONHOME",
+        "VIRTUAL_ENV",
+        "PIP_TARGET",
+        "PIP_ROOT",
+        "PIP_LOG",
+        "PIP_PREFIX",
+        "PIP_USER",
+        "UV_PROJECT_ENVIRONMENT",
+        "NO_LLM",
+    ):
+        assert key not in environment
+    assert environment["HOME"] == str(tmp_path / "home")
+    assert environment["XDG_CONFIG_HOME"] == str(tmp_path / "home" / ".config")
+    assert environment["UV_CACHE_DIR"] == str(tmp_path / "cache" / "uv")
+    assert environment["PIP_CACHE_DIR"] == str(tmp_path / "cache" / "pip")
+    assert environment["UV_PYTHON"] == sys.executable
+    assert environment["PYTHONPATH"] == ""
+    assert environment["PYTHON_DOTENV_DISABLED"] == "1"
+    assert environment["PYTHONNOUSERSITE"] == "1"
+    assert environment["FIELDKIT_NO_LLM"] == "1"
+    assert dict(os.environ) == before
+
+
+@pytest.mark.parametrize("option", ["root", "target", "prefix", "user", "log"])
+def test_pip_destination_configuration_fails_before_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, option: str
+) -> None:
+    """Routing config cannot redirect package installation or logs outside smoke."""
+    artifact = tmp_path / "candidate.whl"
+    artifact.write_bytes(b"candidate")
+    calls: list[list[str]] = []
+
+    def fake_run(
+        argv: list[str], *, cwd: Path, env: dict[str, str], timeout: int = 60
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append(argv)
+        if argv[-2:] == ["config", "list"]:
+            return _completed(argv, stdout=f"global.{option}='/outside/synthetic'\n")
+        return _completed(argv)
+
+    monkeypatch.setattr(runner, "_run", fake_run)
+    report = runner.smoke(artifact, source_revision="a" * 40, expected_version="1.0.1")
+
+    assert not report.ok
+    assert report.criteria[-1].criterion_id == "SMOKE002"
+    assert report.criteria[-1].status == "fail"
+    assert "destination override" in report.criteria[-1].diagnostic
+    assert "/outside/synthetic" not in report.criteria[-1].diagnostic
+    assert not any("install" in argv for argv in calls)

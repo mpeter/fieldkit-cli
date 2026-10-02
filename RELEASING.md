@@ -15,7 +15,15 @@ is updated only after all three are independently verifiable.
 
 The release version is the authoritative project version in `pyproject.toml`;
 the workflow derives its required `v<version>` tag and package-index endpoint
-from that value. Never reuse a version or overwrite an artifact. If a published
+from that value. The metadata policy accepts stable SemVer versions at or after
+the historical `first_public_version` of `1.0.0`; that field remains unchanged for
+successors.
+This check establishes version shape and the historical lower bound only. It does
+not establish that a version is unused, newer than every published version, or
+ready for promotion. Verify the intended version against both package-index and
+GitHub release records before requesting publication approval.
+
+Never reuse a version or overwrite an artifact. If a published
 release needs correction, document it, yank it when it is harmful or unusable,
 and publish a successor version.
 
@@ -34,12 +42,19 @@ below are available.
 
 ## Create and assess one candidate
 
-For the one-time clean-history public cutover, choose an output directory that
-does not exist. This candidate check refuses to replace previous evidence and
-binds its result to the current `HEAD`; its versioned export policy deliberately
-names the planned initial `v1.0.0` tag. Later releases use the same sealed
-workflow and authoritative project version, but do not repeat the clean-history
-export procedure.
+Choose an output directory that does not exist. The candidate check refuses to
+replace previous evidence and binds its result to an exact committed revision.
+The current public-tree and governance policies must select the same canonical
+`v<version>` tag, matching the exported `pyproject.toml` before any package build.
+The active candidate is `v1.0.1`; the historical `first_public_version` stays
+`1.0.0`, and prior policies and evidence remain in their original Git history.
+Do not relabel a previous report or bundle as a successor. Each successor needs
+new same-candidate source, artifact, scan, governance and consumer evidence.
+An export is a content snapshot; it does not publish or rewrite Git history.
+
+The sealed candidate command reads committed Git objects. Builds and tests from
+an uncommitted working tree are local preparation evidence only; they cannot be
+represented as a sealed candidate for its unchanged `HEAD`.
 
 ```console
 PUBLIC_CANDIDATE_REVISION="$(git rev-parse HEAD)" \
@@ -47,8 +62,9 @@ PUBLIC_CANDIDATE_OUTPUT=build/public-candidate \
 make release-check
 ```
 
-The command builds the retained wheel and source distribution once, validates
-the clean public export, creates the closed bundle and its checksums, records a
+The command builds and retains one wheel and source-distribution pair, compares
+a second controlled build for reproducibility, validates the clean public
+export, creates the closed bundle and its checksums, records a
 runtime SBOM and dependency receipt, and writes a JSON report beside the output
 directory. A nonzero result is expected until every manual gate has
 same-candidate evidence: package-name reservation, repository controls,

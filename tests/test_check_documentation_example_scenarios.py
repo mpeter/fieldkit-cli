@@ -2,6 +2,7 @@
 
 import hashlib
 from pathlib import Path
+from threading import Barrier
 
 import pytest
 
@@ -37,7 +38,7 @@ def test_check_binds_each_safe_documentation_block_to_fixed_smoke_criteria(
     monkeypatch.setattr(scenarios, "_build_artifacts", lambda *_args: (wheel, sdist))
     expected_criteria = set().union(*scenarios._BLOCK_CRITERIA.values())
     monkeypatch.setattr(
-        scenarios.smoke_artifact,
+        smoke_artifact,
         "smoke",
         lambda artifact, **_kwargs: _report(artifact, expected_criteria),
     )
@@ -85,7 +86,7 @@ def test_check_fails_when_a_documented_command_criterion_is_missing(
     monkeypatch.setattr(scenarios, "_safe_block_identifiers", lambda _repo: set(scenarios._BLOCK_CRITERIA))
     monkeypatch.setattr(scenarios, "_build_artifacts", lambda *_args: (wheel, sdist))
     monkeypatch.setattr(
-        scenarios.smoke_artifact,
+        smoke_artifact,
         "smoke",
         lambda artifact, **_kwargs: _report(artifact, {"SMOKE002"}),
     )
@@ -94,3 +95,30 @@ def test_check_fails_when_a_documented_command_criterion_is_missing(
 
     assert evidence.status == "fail"
     assert "readme.md.block-2:SMOKE113" in evidence.failures
+
+
+def test_artifact_smokes_run_independently_in_parallel_with_stable_report_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both complete smoke contracts run; speed does not come from skipping one."""
+    wheel = tmp_path / "fieldkit_cli-1.0.1-py3-none-any.whl"
+    sdist = tmp_path / "fieldkit_cli-1.0.1.tar.gz"
+    wheel.write_bytes(b"wheel")
+    sdist.write_bytes(b"sdist")
+    monkeypatch.setattr(scenarios, "_safe_block_identifiers", lambda _repo: set(scenarios._BLOCK_CRITERIA))
+    monkeypatch.setattr(scenarios, "_build_artifacts", lambda *_args: (wheel, sdist))
+    expected_criteria = set().union(*scenarios._BLOCK_CRITERIA.values())
+    started = Barrier(2)
+
+    def smoke(artifact: Path, **_kwargs: object) -> smoke_artifact.SmokeReport:
+        started.wait(timeout=5)
+        return _report(artifact, expected_criteria)
+
+    monkeypatch.setattr(smoke_artifact, "smoke", smoke)
+    evidence = scenarios.check(tmp_path)
+
+    assert evidence.status == "pass"
+    assert [report.artifact_name for report in evidence.artifacts] == [wheel.name, sdist.name]
+    assert all(
+        {criterion.criterion_id for criterion in report.criteria} == expected_criteria for report in evidence.artifacts
+    )

@@ -20,10 +20,10 @@ def _write(path: Path, data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _candidate(tmp_path: Path) -> Path:
+def _candidate(tmp_path: Path, *, version: str = "1.0.0") -> Path:
     candidate = tmp_path / "candidate"
-    wheel = "fieldkit_cli-1.0.0-py3-none-any.whl"
-    sdist = "fieldkit_cli-1.0.0.tar.gz"
+    wheel = f"fieldkit_cli-{version}-py3-none-any.whl"
+    sdist = f"fieldkit_cli-{version}.tar.gz"
     wheel_digest = _write(candidate / "dist" / wheel, b"wheel payload")
     sdist_digest = _write(candidate / "dist" / sdist, b"sdist payload")
     sbom_digest = _write(candidate / "locked-graph.cdx.json", b'{"components": []}\n')
@@ -42,7 +42,7 @@ def _candidate(tmp_path: Path) -> Path:
         "status": "pass",
         "expected_repository": "example/fieldkit-cli",
         "package": "fieldkit-cli",
-        "planned_tag": "v1.0.0",
+        "planned_tag": f"v{version}",
         "export_manifest": {
             "schema_version": 1,
             "source_commit": revision,
@@ -51,7 +51,7 @@ def _candidate(tmp_path: Path) -> Path:
             "policy_oid": "c" * 40,
             "policy_sha256": "d" * 64,
             "expected_repository": "example/fieldkit-cli",
-            "planned_tag": "v1.0.0",
+            "planned_tag": f"v{version}",
             "exported_tree": "e" * 40,
             "included": [],
             "excluded": [],
@@ -103,7 +103,7 @@ def _candidate(tmp_path: Path) -> Path:
             "source_tree": "b" * 40,
             "exported_tree": "e" * 40,
             "expected_repository": "example/fieldkit-cli",
-            "planned_tag": "v1.0.0",
+            "planned_tag": f"v{version}",
             "export_policy_oid": "c" * 40,
             "export_policy_sha256": "d" * 64,
             "scan_policy_oid": "f" * 40,
@@ -973,4 +973,52 @@ def test_https_fetch_classifies_a_timeout_as_retryable_transport_failure(monkeyp
             "https://files.example.test/artifact",
             timeout_seconds=5,
             allowed_download_hosts=frozenset({"files.example.test"}),
+        )
+
+
+def test_successor_consumer_rejects_historical_candidate_report(tmp_path: Path) -> None:
+    candidate = _candidate(tmp_path, version="1.0.1")
+    report_path = candidate / "report.json"
+    expected = release_consumer.expected_release(candidate / "bundle", report_path)
+    assert expected.planned_tag == "v1.0.1"
+    report_path.write_bytes(report_path.read_bytes().replace(b"1.0.1", b"1.0.0"))
+    with pytest.raises(ValueError, match="bind the expected candidate report"):
+        release_consumer.expected_release(candidate / "bundle", report_path)
+
+
+def test_successor_consumer_rejects_historical_index_and_download_receipts(tmp_path: Path) -> None:
+    candidate = _candidate(tmp_path, version="1.0.1")
+    expected = release_consumer.expected_release(candidate / "bundle", candidate / "report.json")
+    observed = tuple(
+        release_consumer.ObservedArtifact(artifact.name.replace("1.0.1", "1.0.0"), artifact.sha256)
+        for artifact in expected.artifacts
+    )
+    report = release_consumer.evaluate_index(expected, observed)
+    assert report.status == "failed"
+    evidence = release_consumer.consumer_evidence(
+        expected,
+        endpoint="https://test.pypi.org/pypi/fieldkit-cli/1.0.1/json",
+        observed=observed,
+        report=report,
+        system="linux",
+        machine="x86_64",
+        python_version="3.12",
+    )
+    assert evidence["planned_tag"] == "v1.0.1"
+    assert evidence["status"] == "failed"
+    schema = json.loads(
+        (Path(__file__).parents[1] / "docs/release-readiness/release-consumer-evidence.schema.json").read_text()
+    )
+    assert list(Draft202012Validator(schema).iter_errors(json.loads(json.dumps(evidence)))) == []
+    stale_downloads = tuple(release_consumer.DownloadedArtifact(tmp_path / item.name, item.sha256) for item in observed)
+    with pytest.raises(ValueError, match="download receipts must match every expected artifact"):
+        release_consumer.consumer_evidence(
+            expected,
+            endpoint="https://test.pypi.org/pypi/fieldkit-cli/1.0.1/json",
+            observed=observed,
+            report=report,
+            system="linux",
+            machine="x86_64",
+            python_version="3.12",
+            downloaded=stale_downloads,
         )

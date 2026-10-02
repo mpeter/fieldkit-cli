@@ -2,6 +2,7 @@
 
 import json
 import shutil
+import tomllib
 from pathlib import Path
 
 import _release_policy as checker
@@ -44,17 +45,42 @@ def test_policy_rejects_unknown_schema_key(release_policy_repo: Path) -> None:
         checker.load_policy(policy_path)
 
 
-def test_package_version_must_match_first_public_version(release_policy_repo: Path) -> None:
-    """The release policy cannot claim 1.0 while package metadata emits another version."""
-    pyproject = release_policy_repo / checker.PYPROJECT_PATH
+def _set_project_version(repo: Path, version: object) -> None:
+    """Change only project metadata without rewriting historical policy evidence."""
+    pyproject = repo / checker.PYPROJECT_PATH
+    source = pyproject.read_text(encoding="utf-8")
+    current = tomllib.loads(source)["project"]["version"]
     pyproject.write_text(
-        pyproject.read_text(encoding="utf-8").replace('version = "1.0.0"', 'version = "1.0.1"'), encoding="utf-8"
+        source.replace(f'version = "{current}"', f"version = {json.dumps(version)}", 1), encoding="utf-8"
     )
+
+
+@pytest.mark.parametrize("version", ["1.0.0", "1.0.1", "1.1.0", "1.10.0", "2.0.0"])
+def test_initial_and_successor_versions_preserve_initial_evidence(release_policy_repo: Path, version: str) -> None:
+    """Stable successors use current metadata while initial evidence stays immutable."""
+    policy_path = release_policy_repo / checker.POLICY_PATH
+    original = policy_path.read_bytes()
+    _set_project_version(release_policy_repo, version)
+
+    report = checker.validate_repository(release_policy_repo)
+
+    assert report.ok
+    assert report.findings == ()
+    assert policy_path.read_bytes() == original
+    assert checker.load_policy(policy_path).first_public_version == "1.0.0"
+
+
+@pytest.mark.parametrize(
+    "version", ["0.9.9", "1.0", "1.0.1rc1", "1.0.1-rc.1", "1.0.1+build", "01.0.1", "v1.0.1", "1.0.1\n", "", 101]
+)
+def test_invalid_or_older_project_version_fails_closed(release_policy_repo: Path, version: object) -> None:
+    """The successor rule retains a stable-format and historical lower-bound gate."""
+    _set_project_version(release_policy_repo, version)
 
     report = checker.validate_repository(release_policy_repo)
 
     assert not report.ok
-    assert any(finding.criterion_id == "REL101" for finding in report.findings)
+    assert [finding.criterion_id for finding in report.findings] == ["REL101"]
 
 
 def test_public_contract_cannot_drop_exit_codes(release_policy_repo: Path) -> None:

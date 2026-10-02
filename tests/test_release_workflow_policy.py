@@ -77,7 +77,7 @@ def _workflow() -> dict[str, object]:
                         "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
                         "with": {
                             "name": "release-evidence-tools-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}",
-                            "path": "scripts/release_promotion_evidence.py scripts/release_bundle.py scripts/release_consumer.py scripts/release_wheelhouse.py pyproject.toml",
+                            "path": "scripts/release_promotion_evidence.py scripts/_release_identity.py scripts/release_bundle.py scripts/release_consumer.py scripts/release_wheelhouse.py pyproject.toml",
                             "if-no-files-found": "error",
                             "retention-days": "90",
                         },
@@ -281,7 +281,9 @@ def test_approval_policy_rejects_an_operator_supplied_archive_url() -> None:
 
 def test_policy_rejects_missing_nonempty_approval_tag_metadata_validation() -> None:
     workflow = _workflow()
-    context = workflow["jobs"]["context"]
+    jobs = workflow["jobs"]
+    assert isinstance(jobs, dict)
+    context = jobs["context"]
     assert isinstance(context, dict)
     steps = context["steps"]
     assert isinstance(steps, list)
@@ -296,7 +298,9 @@ def test_policy_rejects_missing_nonempty_approval_tag_metadata_validation() -> N
 
 def test_policy_rejects_production_acquisition_without_the_manifest_digest() -> None:
     workflow = _workflow()
-    build = workflow["jobs"]["build"]
+    jobs = workflow["jobs"]
+    assert isinstance(jobs, dict)
+    build = jobs["build"]
     assert isinstance(build, dict)
     steps = build["steps"]
     assert isinstance(steps, list)
@@ -311,7 +315,9 @@ def test_policy_rejects_production_acquisition_without_the_manifest_digest() -> 
 
 def test_policy_rejects_unbounded_approval_input_requests() -> None:
     workflow = _workflow()
-    build = workflow["jobs"]["build"]
+    jobs = workflow["jobs"]
+    assert isinstance(jobs, dict)
+    build = jobs["build"]
     assert isinstance(build, dict)
     steps = build["steps"]
     assert isinstance(steps, list)
@@ -512,6 +518,7 @@ def test_checked_in_workflow_preserves_the_candidate_and_renderer_layout() -> No
     assert build_upload["path"].split() == [
         "candidate/",
         "scripts/check_release_consumer.py",
+        "scripts/_release_identity.py",
         "scripts/release_bundle.py",
         "scripts/release_consumer.py",
         "scripts/release_promotion_evidence.py",

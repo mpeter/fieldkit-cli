@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -20,10 +21,10 @@ def _write(path: Path, data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _candidate(tmp_path: Path) -> Path:
+def _candidate(tmp_path: Path, *, version: str = "1.0.0") -> Path:
     candidate = tmp_path / "candidate"
-    wheel = "fieldkit_cli-1.0.0-py3-none-any.whl"
-    sdist = "fieldkit_cli-1.0.0.tar.gz"
+    wheel = f"fieldkit_cli-{version}-py3-none-any.whl"
+    sdist = f"fieldkit_cli-{version}.tar.gz"
     wheel_digest = _write(candidate / "dist" / wheel, b"wheel payload")
     sdist_digest = _write(candidate / "dist" / sdist, b"sdist payload")
     sbom_digest = _write(candidate / "locked-graph.cdx.json", b'{"components": []}\n')
@@ -42,7 +43,7 @@ def _candidate(tmp_path: Path) -> Path:
         "status": "pass",
         "expected_repository": "example/fieldkit-cli",
         "package": "fieldkit-cli",
-        "planned_tag": "v1.0.0",
+        "planned_tag": f"v{version}",
         "export_manifest": {
             "schema_version": 1,
             "source_commit": revision,
@@ -51,7 +52,7 @@ def _candidate(tmp_path: Path) -> Path:
             "policy_oid": "c" * 40,
             "policy_sha256": "d" * 64,
             "expected_repository": "example/fieldkit-cli",
-            "planned_tag": "v1.0.0",
+            "planned_tag": f"v{version}",
             "exported_tree": "e" * 40,
             "included": [],
             "excluded": [],
@@ -103,7 +104,7 @@ def _candidate(tmp_path: Path) -> Path:
             "source_tree": "b" * 40,
             "exported_tree": "e" * 40,
             "expected_repository": "example/fieldkit-cli",
-            "planned_tag": "v1.0.0",
+            "planned_tag": f"v{version}",
             "export_policy_oid": "c" * 40,
             "export_policy_sha256": "d" * 64,
             "scan_policy_oid": "f" * 40,
@@ -473,3 +474,58 @@ def test_verifier_cli_imports_without_the_product_runtime() -> None:
 
     assert result.returncode == 0
     assert "candidate-report" in result.stdout
+
+
+def test_successor_bundle_preserves_exact_report_binding(tmp_path: Path) -> None:
+    candidate = _candidate(tmp_path, version="1.0.1")
+    result = release_bundle.materialize(candidate)
+    assert result.ok is True
+    report_bytes = (candidate / "report.json").read_bytes()
+    assert release_bundle.verify(candidate / "bundle", candidate_report=report_bytes).ok is True
+    with pytest.raises(ValueError, match="bind the expected candidate report"):
+        release_bundle.verify(candidate / "bundle", candidate_report=report_bytes.replace(b"1.0.1", b"1.0.0"))
+
+
+def test_successor_bundle_rejects_stale_artifact_identity(tmp_path: Path) -> None:
+    candidate = _candidate(tmp_path)
+    report_path = candidate / "report.json"
+    report_path.write_text(report_path.read_text().replace('"v1.0.0"', '"v1.0.1"'), encoding="utf-8")
+    with pytest.raises(ValueError, match="artifact filename does not bind"):
+        release_bundle.materialize(candidate)
+
+
+@pytest.mark.parametrize("tag", ["v01.0.1", "v1.0.1rc1", "v1.0.1+build", "v1.0", "1.0.1", "v1.0.1\n"])
+def test_bundle_rejects_noncanonical_release_tags(tmp_path: Path, tag: str) -> None:
+    candidate = _candidate(tmp_path)
+    report_path = candidate / "report.json"
+    report = json.loads(report_path.read_text())
+    report["planned_tag"] = tag
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    with pytest.raises(ValueError, match="canonical stable SemVer"):
+        release_bundle.materialize(candidate)
+
+
+def test_retained_verifier_runs_isolated_with_only_declared_helpers(tmp_path: Path) -> None:
+    candidate = _candidate(tmp_path, version="1.0.1")
+    assert release_bundle.materialize(candidate).ok is True
+    retained = tmp_path / "retained"
+    retained.mkdir()
+    for name in ("release_bundle.py", "_release_identity.py"):
+        shutil.copy2(Path(__file__).parents[1] / "scripts" / name, retained / name)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            str(retained / "release_bundle.py"),
+            "--candidate-report",
+            str(candidate / "report.json"),
+            str(candidate / "bundle"),
+        ],
+        cwd=retained,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+    assert result.returncode == 0
+    assert "PASS" in result.stdout
