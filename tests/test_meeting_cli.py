@@ -1,6 +1,7 @@
 """Tests for fieldkit.meeting.docs_domain and fieldkit.commands.meeting.* CLI adapters."""
 
 import subprocess
+from collections.abc import Iterator
 from pathlib import Path
 from textwrap import dedent
 from unittest.mock import MagicMock, patch
@@ -14,12 +15,20 @@ from fieldkit.meeting.docs_domain import (
     _doc_url,
     _mcpjungle,
     _read_frontmatter,
+    _tab_count,
 )
 from fieldkit.pursuit import write_frontmatter_raw
 
 pytestmark = pytest.mark.unit
 
 _DOMAIN = "fieldkit.meeting.docs_domain"
+
+
+@pytest.fixture(autouse=True)
+def _synthetic_workbook_tabs() -> Iterator[None]:
+    """Keep existing meeting-note tests off the real Docs service."""
+    with patch(f"{_DOMAIN}._tab_count", return_value=1):
+        yield
 
 
 # ---------------------------------------------------------------------------
@@ -199,7 +208,7 @@ def test_open_with_linked_doc(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# historic regression: note tab create call must NOT include 'index' key
+# Note tabs append at the current tab count.
 # ---------------------------------------------------------------------------
 
 
@@ -210,20 +219,22 @@ def _bug272_tab_index_make_pursuit(tmp_path: Path) -> Path:
     return p
 
 
-def test_bug272_tab_index_create_call_has_no_index_key(tmp_path: Path) -> None:
-    """The dict passed to _mcpjungle for action=create must not contain 'index'."""
+def test_bug272_tab_index_create_call_appends_at_current_count(tmp_path: Path) -> None:
+    """A tool requiring index accepts the current tab count as the append position."""
     p = _bug272_tab_index_make_pursuit(tmp_path)
     captured_calls: list[dict[str, object]] = []
 
     def fake_mcpjungle(tool: str, input_data: dict[str, object]) -> str:
         captured_calls.append({"tool": tool, "input": input_data})
         if input_data.get("action") == "create":
-            return '{"result": {"tab_id": "t.1"}}'
+            assert input_data["index"] == 3
+            return '{"result": {"tab_id": "t.new"}}'
         return ""
 
     runner = CliRunner()
     with (
         patch(f"{_DOMAIN}._mcpjungle", side_effect=fake_mcpjungle),
+        patch(f"{_DOMAIN}._tab_count", return_value=3),
         patch(f"{_DOMAIN}._user_google_email", return_value="user@example.com"),  # pii-guard: ignore
         patch("fieldkit.commands.meeting.note_cmd.sys.stdin.isatty", return_value=False),
     ):
@@ -232,9 +243,46 @@ def test_bug272_tab_index_create_call_has_no_index_key(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     create_calls = [c for c in captured_calls if c["input"].get("action") == "create"]  # type: ignore[union-attr]
     assert len(create_calls) == 1, "Expected exactly one create call"
-    assert "index" not in create_calls[0]["input"], (
-        "The 'index' key must be absent from the create payload (historic regression)"
+    assert create_calls[0]["input"]["index"] == 3
+    populate = next(c for c in captured_calls if c["input"].get("action") == "populate_from_markdown")
+    assert populate["input"]["tab_id"] == "t.new"
+
+
+def test_tab_count_reads_current_doc_tabs() -> None:
+    docs = MagicMock()
+    docs.documents.return_value.get.return_value.execute.return_value = {
+        "tabs": [{"tabProperties": {"tabId": "t.0"}}, {"tabProperties": {"tabId": "t.1"}}]
+    }
+    with patch("fieldkit.ingest.docs.get_docs_service", return_value=docs):
+        assert _tab_count("docABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcd") == 2
+    docs.documents.return_value.get.assert_called_once_with(
+        documentId="docABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcd",
+        includeTabsContent=True,
+        fields="tabs(tabProperties(tabId))",
     )
+
+
+@pytest.mark.parametrize(
+    "tool_response",
+    [
+        "UserInputError: 'index' is required for the 'create' action.\npassword=private-value",
+        '{"isError": true, "content": [{"type": "text", "text": "Index is required for create"}]}',
+        '{"error": {"message": "Index is required for create"}}',
+    ],
+)
+def test_meeting_note_surfaces_bounded_tool_error(tmp_path: Path, tool_response: str) -> None:
+    p = _bug272_tab_index_make_pursuit(tmp_path)
+    with (
+        patch(f"{_DOMAIN}._mcpjungle", return_value=tool_response),
+        patch(f"{_DOMAIN}._user_google_email", return_value="user@example.com"),  # pii-guard: ignore
+        patch("fieldkit.commands.meeting.note_cmd.sys.stdin.isatty", return_value=False),
+    ):
+        result = CliRunner().invoke(cli, ["note", str(p), "--content", "notes"])
+    assert result.exit_code == 3
+    assert "index" in result.output.lower()
+    assert "Check MCP connection" not in result.output
+    assert "private-value" not in result.output
+    assert len(result.output) < 400
 
 
 def test_bug272_tab_index_create_call_has_required_fields(tmp_path: Path) -> None:
