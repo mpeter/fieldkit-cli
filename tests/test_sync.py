@@ -2,6 +2,8 @@
 
 import json
 import sqlite3
+import subprocess
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock, patch
@@ -10,6 +12,7 @@ import pytest
 from click.testing import CliRunner
 
 from fieldkit.commands.datasync.cli import RunConfig, _build_steps, _run_people_index_step, cli
+from fieldkit.config import DATASYNC_STEP_TIMEOUTS
 
 pytestmark = pytest.mark.unit
 
@@ -85,6 +88,31 @@ def test_build_steps_quick_plus_sf_has_three_steps(_preflight_runner) -> None:
     steps = _build_steps(cfg)
     # 2 ingest + 3 watchers + 1 sf = 6
     assert len(steps) == 6
+
+
+@pytest.mark.parametrize("cfg", [RunConfig(), RunConfig(quick=True), RunConfig(sf=True), RunConfig(account="acme")])
+def test_every_configured_subprocess_step_has_an_explicit_timeout(cfg: RunConfig) -> None:
+    steps = _build_steps(cfg)
+
+    subprocess_labels = {label for label, cmd in steps if cmd}
+    assert subprocess_labels <= DATASYNC_STEP_TIMEOUTS.keys()
+    assert all(DATASYNC_STEP_TIMEOUTS[label] > 0 for label in subprocess_labels)
+
+
+def test_full_run_with_optional_salesforce_step_uses_every_timeout_entry() -> None:
+    steps = _build_steps(RunConfig(sf=True))
+
+    assert {label for label, cmd in steps if cmd} == DATASYNC_STEP_TIMEOUTS.keys()
+
+
+def test_new_subprocess_step_without_timeout_is_rejected() -> None:
+    from fieldkit.commands.datasync import cli as datasync
+
+    with (
+        patch.object(datasync, "DATASYNC_STEP_TIMEOUTS", {}),
+        pytest.raises(ValueError, match="No data-sync timeout configured for step 'gmail sync'"),
+    ):
+        _build_steps(RunConfig())
 
 
 # ---------------------------------------------------------------------------
@@ -192,6 +220,79 @@ def test_cli_json_dry_run_exercises_real_pipeline(_preflight_runner) -> None:
         "pursuit-stalls",
         "slack-threads",
     ]
+    assert payload["items"][0]["note"] == "dry-run (timeout=60s)"
+    assert payload["items"][1]["note"] == "dry-run (timeout=1200s)"
+
+
+def test_dry_run_displays_optional_step_timeout_without_running_it(_preflight_runner) -> None:
+    with patch("subprocess.run") as run:
+        result = _preflight_runner.invoke(cli, ["--sf", "--dry-run"])
+
+    assert result.exit_code == 0
+    assert "sf listview" in result.output
+    assert "timeout=900s" in result.output
+    run.assert_not_called()
+
+
+def test_short_and_long_steps_pass_distinct_ceilings_to_subprocess() -> None:
+    from fieldkit.commands.datasync.cli import _execute_step
+
+    completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+    with patch("subprocess.run", return_value=completed) as run:
+        short = _execute_step(1, 2, "ingest discover", ["synthetic-discover"])
+        long = _execute_step(2, 2, "ingest run", ["synthetic-run"])
+
+    assert short.result.success and long.result.success
+    assert [call.kwargs["timeout"] for call in run.call_args_list] == [60, 1200]
+
+
+def test_timed_out_synthetic_child_is_reaped_and_reports_only_step_policy() -> None:
+    from fieldkit.commands.datasync.cli import _execute_step
+
+    real_popen = subprocess.Popen
+    children: list[subprocess.Popen[str]] = []
+
+    def capture_child(*args: object, **kwargs: object) -> subprocess.Popen[str]:
+        child = real_popen(*args, **kwargs)  # type: ignore[arg-type]
+        children.append(child)
+        return child
+
+    cmd = [sys.executable, "-c", "import time; print('private synthetic output', flush=True); time.sleep(10)"]
+    with (
+        patch.dict(DATASYNC_STEP_TIMEOUTS, {"ingest discover": 0.1}),
+        patch("fieldkit.commands.datasync.cli.subprocess.Popen", side_effect=capture_child),
+    ):
+        execution = _execute_step(1, 1, "ingest discover", cmd)
+
+    assert execution.result.success is False
+    assert execution.result.note == "timeout after 0.1s"
+    assert execution.display == "TIMEOUT after 0.1s"
+    assert children and children[0].poll() is not None
+    assert "private synthetic output" not in (
+        execution.result.note + execution.stdout + execution.stderr + (execution.display or "")
+    )
+
+
+def test_timeout_makes_cli_partial_and_keeps_other_steps_running(_preflight_runner) -> None:
+    calls = 0
+
+    def run_child(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise subprocess.TimeoutExpired(args[0], kwargs["timeout"], output="private synthetic output")
+        return subprocess.CompletedProcess(args=args[0], returncode=0, stdout="", stderr="")
+
+    with patch("subprocess.run", side_effect=run_child):
+        result = _preflight_runner.invoke(cli, ["--quick", "--json"])
+
+    payload = json.loads(result.stdout)
+    assert result.exit_code == 1
+    assert payload["items"][0]["label"] == "ingest discover"
+    assert payload["items"][0]["note"] == "timeout after 60s"
+    assert payload["failed"] == 1 and payload["succeeded"] == 4
+    assert calls == 5
+    assert "private synthetic output" not in result.output
 
 
 def test_cli_all_steps_succeed_exits_zero(_preflight_runner) -> None:

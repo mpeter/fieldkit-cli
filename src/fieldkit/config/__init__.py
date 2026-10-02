@@ -53,9 +53,9 @@ from fieldkit.config._shadowbot import get_shadowbot_chrome_cookies_path as get_
 from fieldkit.config._shadowbot import get_shadowbot_client_id as get_shadowbot_client_id
 from fieldkit.config._shadowbot import get_shadowbot_redirect_uri as get_shadowbot_redirect_uri
 from fieldkit.config._shadowbot import get_shadowbot_token_endpoint as get_shadowbot_token_endpoint
+from fieldkit.config._timeouts import DATASYNC_STEP_TIMEOUTS as DATASYNC_STEP_TIMEOUTS
 from fieldkit.config._timeouts import TIMEOUT_COMPANION_ACTION as TIMEOUT_COMPANION_ACTION
 from fieldkit.config._timeouts import TIMEOUT_CRON as TIMEOUT_CRON
-from fieldkit.config._timeouts import TIMEOUT_DATASYNC as TIMEOUT_DATASYNC
 from fieldkit.config._timeouts import TIMEOUT_EVAL as TIMEOUT_EVAL
 from fieldkit.config._timeouts import TIMEOUT_GH_CLI as TIMEOUT_GH_CLI
 from fieldkit.config._timeouts import TIMEOUT_GWS_CLI as TIMEOUT_GWS_CLI
@@ -70,11 +70,11 @@ from fieldkit.config._timeouts import TIMEOUT_SHADOWBOT_QUERY as TIMEOUT_SHADOWB
 
 __all__ = [
     "CONFIG_PATH",
+    "DATASYNC_STEP_TIMEOUTS",
     "GOOGLE_OAUTH_SCOPES",
     "SHADOWBOT_DEFAULT_CLIENT_ID",
     "TIMEOUT_COMPANION_ACTION",
     "TIMEOUT_CRON",
-    "TIMEOUT_DATASYNC",
     "TIMEOUT_EVAL",
     "TIMEOUT_GH_CLI",
     "TIMEOUT_GWS_CLI",

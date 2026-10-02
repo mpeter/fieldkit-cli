@@ -1,4 +1,4 @@
-"""Named timeout constants for subprocess and HTTP calls (implementation note).
+"""Named timeout policies for subprocess and HTTP calls (implementation note).
 
 Centralises timeout values that were previously scattered as magic numbers
 across 10+ files. All values are in seconds.
@@ -19,8 +19,26 @@ TIMEOUT_GWS_CLI: int = 30
 TIMEOUT_MCP_TOOL: int = 60
 """External tool / MCP calls: docs/cli, slack_threads."""
 
-TIMEOUT_DATASYNC: int = 300
-"""Long-running datasync operations."""
+DATASYNC_STEP_TIMEOUTS: dict[str, int] = {
+    # Gmail may resume a full mailbox sync; the other Gmail steps analyse its cache.
+    "gmail sync": 1800,
+    "account-tags": 300,
+    "enrich-pursuits": 300,
+    # Discovery inspects local inputs. Ingest run targets a 15-minute queue.
+    "ingest discover": 60,
+    "ingest run": 1200,
+    # Watchers analyse existing local data; listview sync contacts Salesforce.
+    "backstory-health": 120,
+    "pursuit-stalls": 120,
+    "slack-threads": 120,
+    "sf listview": 900,
+}
+"""Per-subprocess ceilings for ``fieldkit sync``, in seconds.
+
+The in-process people-index rebuild has no subprocess deadline. Add every new
+subprocess-backed step here explicitly; the runner rejects an unmapped label.
+These are operational ceilings based on the step's work, not input-size estimates.
+"""
 
 TIMEOUT_EVAL: int = 10
 """Skill eval runner subprocess calls."""

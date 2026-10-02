@@ -23,7 +23,7 @@ from fieldkit.commands.datasync.cli import (
     _truncate_output,
     cli,
 )
-from fieldkit.config import TIMEOUT_DATASYNC
+from fieldkit.config import DATASYNC_STEP_TIMEOUTS
 
 pytestmark = pytest.mark.unit
 
@@ -121,7 +121,7 @@ def test_run_step_verbose_true_prints_stderr_on_failure() -> None:
         patch("fieldkit.commands.datasync.cli.click.echo", side_effect=fake_echo),
         patch("subprocess.run", return_value=proc),
     ):
-        _run_step(1, 1, "test-step", ["fieldkit", "watch", "test"], dry_run=False, verbose=True)
+        _run_step(1, 1, "backstory-health", ["fieldkit", "watch", "test"], dry_run=False, verbose=True)
 
     output_text = "\n".join(captured_lines)
     assert "line 1: error" in output_text, "Full stderr line 1 not in verbose output"
@@ -143,7 +143,7 @@ def test_run_step_verbose_true_prints_stdout_on_success() -> None:
         patch("fieldkit.commands.datasync.cli.click.echo", side_effect=fake_echo),
         patch("subprocess.run", return_value=proc),
     ):
-        _run_step(1, 1, "test-step", ["fieldkit", "watch", "test"], dry_run=False, verbose=True)
+        _run_step(1, 1, "backstory-health", ["fieldkit", "watch", "test"], dry_run=False, verbose=True)
 
     output_text = "\n".join(captured_lines)
     assert "step started" in output_text
@@ -165,7 +165,7 @@ def test_run_step_verbose_false_suppresses_full_output() -> None:
         patch("fieldkit.commands.datasync.cli.click.echo", side_effect=fake_echo),
         patch("subprocess.run", return_value=proc),
     ):
-        _run_step(1, 1, "test-step", ["fieldkit", "watch", "test"], dry_run=False, verbose=False)
+        _run_step(1, 1, "backstory-health", ["fieldkit", "watch", "test"], dry_run=False, verbose=False)
 
     output_text = "\n".join(captured_lines)
     # The summary line contains the first line of stderr (truncated), but
@@ -188,20 +188,20 @@ def test_run_step_verbose_default_is_false() -> None:
         patch("subprocess.run", return_value=proc),
     ):
         # Call without verbose keyword — must not raise
-        _run_step(1, 1, "test-step", ["fieldkit", "watch", "test"], dry_run=False)
+        _run_step(1, 1, "backstory-health", ["fieldkit", "watch", "test"], dry_run=False)
 
     # Only the summary line should appear (no verbose header)
-    header_lines = [ln for ln in captured_lines if "--- test-step" in ln]
+    header_lines = [ln for ln in captured_lines if "--- backstory-health" in ln]
     assert header_lines == [], "Default (verbose=False) must not print verbose headers"
 
 
-def test_run_step_retains_datasync_timeout() -> None:
+def test_run_step_uses_named_datasync_timeout() -> None:
     proc = _run_step_make_completed_process(returncode=0)
     with patch("subprocess.run", return_value=proc) as run:
-        result = _run_step(1, 1, "test-step", ["fieldkit", "watch", "test"], dry_run=False)
+        result = _run_step(1, 1, "backstory-health", ["fieldkit", "watch", "test"], dry_run=False)
 
     assert result.success is True
-    assert run.call_args.kwargs["timeout"] == TIMEOUT_DATASYNC
+    assert run.call_args.kwargs["timeout"] == DATASYNC_STEP_TIMEOUTS["backstory-health"]
 
 
 def test_run_step_verbose_empty_output_no_header() -> None:
@@ -217,9 +217,9 @@ def test_run_step_verbose_empty_output_no_header() -> None:
         patch("fieldkit.commands.datasync.cli.click.echo", side_effect=fake_echo),
         patch("subprocess.run", return_value=proc),
     ):
-        _run_step(1, 1, "test-step", ["fieldkit", "watch", "test"], dry_run=False, verbose=True)
+        _run_step(1, 1, "backstory-health", ["fieldkit", "watch", "test"], dry_run=False, verbose=True)
 
-    header_lines = [ln for ln in captured_lines if "--- test-step" in ln]
+    header_lines = [ln for ln in captured_lines if "--- backstory-health" in ln]
     assert header_lines == [], "No verbose header when subprocess output is empty"
 
 
@@ -360,17 +360,17 @@ def test_truncate_output_verbose_step_output_is_capped() -> None:
         patch("fieldkit.commands.datasync.cli.click.echo", side_effect=fake_echo),
         patch("subprocess.run", return_value=proc),
     ):
-        _run_step(1, 1, "test-step", ["fieldkit", "watch", "test"], dry_run=False, verbose=True)
+        _run_step(1, 1, "backstory-health", ["fieldkit", "watch", "test"], dry_run=False, verbose=True)
 
-    # Isolate the verbose block: lines after the "--- test-step stderr ---" header
+    # Isolate the verbose block: lines after the "--- backstory-health stderr ---" header
     all_output = "\n".join(captured_lines)
-    assert "--- test-step stderr ---" in all_output, "Verbose header must be present"
+    assert "--- backstory-health stderr ---" in all_output, "Verbose header must be present"
 
     # The verbose content (the echo call after the header) must contain the truncation notice
     # and must NOT contain early head lines (they should have been dropped by the cap).
     # The summary line (before the header) may contain "error line 0" as the step note —
     # we only check the verbose block itself.
-    header_idx = next(i for i, ln in enumerate(captured_lines) if "--- test-step stderr ---" in ln)
+    header_idx = next(i for i, ln in enumerate(captured_lines) if "--- backstory-health stderr ---" in ln)
     verbose_content = "\n".join(captured_lines[header_idx + 1 :])
     assert "truncated" in verbose_content.lower(), "Truncation notice must appear in verbose content"
     # Head lines must be absent from the verbose content (they were dropped by the cap)
