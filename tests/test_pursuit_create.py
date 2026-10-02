@@ -12,7 +12,9 @@ import yaml
 from click.testing import CliRunner
 
 from fieldkit.commands.pursuit.audit import audit_file
+from fieldkit.commands.pursuit.audit_cmd import cli as audit_cli
 from fieldkit.commands.pursuit.create_cmd import cli as create_cli
+from fieldkit.commands.pursuit.pipeline_health import cli as health_cli
 from fieldkit.pursuit.enums import Stage
 from fieldkit.pursuit.io import write_frontmatter_raw
 
@@ -182,3 +184,29 @@ def test_create_cmd_supported_stage_passes_audit_stage_check(tmp_path: Path, sta
     assert result.exit_code == 0
     assert yaml.safe_load(target.read_text(encoding="utf-8").split("---", 2)[1])["stage"] == stage
     assert not any("`stage` value" in finding.message for finding in audit_file(target).findings)
+
+
+@pytest.mark.unit
+def test_create_cmd_default_stage_guidance_has_read_only_verification(tmp_path: Path) -> None:
+    root = _setup_account(tmp_path, "acme")
+    with patch("fieldkit.commands.pursuit.create_cmd._data_root", return_value=root):
+        created = CliRunner().invoke(create_cli, ["--account", "acme", "--name", "First"])
+
+    target = root / "accounts" / "acme" / "pursuits" / "first.md"
+    assert created.exit_code == 0
+    assert target.exists()
+    assert "pre-pipeline pursuits" in created.output
+    assert "even with --include-prospect" in created.output
+    assert "fieldkit pursuit audit --account acme --json" in created.output
+    assert "fieldkit pursuit health --account acme --include-prospect" in created.output
+
+    before = {path.relative_to(root) for path in root.rglob("*")}
+    with patch("fieldkit.commands.pursuit.audit_cmd._data_root", return_value=root):
+        audit = CliRunner().invoke(audit_cli, ["--account", "acme", "--json"])
+    assert audit.exit_code in {0, 1}  # Incomplete scaffold may produce findings.
+    assert any(item["relative_path"] == "acme/pursuits/first.md" for item in json.loads(audit.stdout))
+    assert {path.relative_to(root) for path in root.rglob("*")} == before
+
+    with patch("fieldkit.commands.pursuit.pipeline_health.get_fieldkit_home", return_value=root):
+        health = CliRunner().invoke(health_cli, ["--account", "acme", "--include-prospect", "--json"])
+    assert health.exit_code == 3  # The default pre-pipeline stage is not in health.
