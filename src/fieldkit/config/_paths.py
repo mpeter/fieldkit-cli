@@ -102,17 +102,3 @@ def get_watchers_dir() -> Path:
 def get_accounts_root() -> Path:
     """Return the accounts directory under the configured workspace."""
     return get_fieldkit_home() / "accounts"
-
-
-def get_harness_scratch_root() -> Path:
-    """Return the non-cached cache-class root for ephemeral harness worktrees."""
-    override = os.environ.get("FIELDKIT_HARNESS_ROOT")
-    if override and override.strip():
-        candidate = Path(override.strip()).expanduser()
-        if not candidate.is_absolute():
-            raise _loader.ConfigError(f"FIELDKIT_HARNESS_ROOT must be an absolute path, got: {override.strip()!r}")
-        return candidate.resolve()
-    xdg = os.environ.get("XDG_CACHE_HOME")
-    xdg_path = Path(xdg).expanduser() if xdg and xdg.strip() else None
-    base = xdg_path if xdg_path is not None and xdg_path.is_absolute() else Path.home() / ".cache"
-    return (base / "fieldkit").resolve()

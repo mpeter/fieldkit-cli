@@ -1,4 +1,4 @@
-.PHONY: verify test lint bootstrap contributor-hooks pr-check install reinstall install-health artifact-check release-check release-policy-check release-workflow-policy-check public-tree-safety quality quality-full gazepy gaze-baseline gaze-report audit-check hooks update-schema eval-skills install-skills sync-claude docs docs-site changelog changelog-preview mutation-report
+.PHONY: verify test lint bootstrap contributor-hooks pr-check install reinstall install-health artifact-check release-check release-policy-check release-workflow-policy-check public-tree-safety quality quality-full gazepy gaze-baseline gaze-report audit-check hooks update-schema eval-skills install-skills docs docs-site changelog changelog-preview mutation-report
 
 # Broad pytest targets use four workers by default so a developer workstation retains
 # memory for its interactive services. Override deliberately for a larger host, e.g.
@@ -83,13 +83,6 @@ release-workflow-policy-check:
 public-tree-safety:
 	uv run python scripts/check_public_tree_safety.py --repo .
 
-# sync-claude — best-effort mirror of .opencode/agents/ and .opencode/commands/ into .claude/
-# Run after adding or modifying agents or commands so Claude Code users see the same
-# surface as OpenCode users. The post-commit hook calls this automatically when
-# .opencode/agents/ or .opencode/commands/ changes.
-sync-claude:
-	uv run python scripts/sync_claude_dir.py || true
-
 # verify — run the pytest suite; contract scripts run under quality targets
 # Used by CI and as a pre-session sanity check.
 verify:
@@ -150,7 +143,6 @@ quality:
 	$(call RUN_QUALITY_STAGE,ruff-format,--quality-base "$(QUALITY_BASE)",uv run ruff format --check .)
 	$(call RUN_QUALITY_STAGE,markdown-links,--quality-base "$(QUALITY_BASE)",uvx pre-commit==4.6.1 run markdown-link-check --all-files)
 	$(call RUN_QUALITY_STAGE,docs-site,--quality-base "$(QUALITY_BASE)",make docs-site)
-	$(call RUN_QUALITY_STAGE,claude-sync,--quality-base "$(QUALITY_BASE)",uv run python scripts/sync_claude_dir.py --check)
 	$(call RUN_QUALITY_STAGE,mypy,--quality-base "$(QUALITY_BASE)",uv run mypy src/fieldkit/ hooks/*.py --no-error-summary)
 	$(call RUN_QUALITY_STAGE,tach,--quality-base "$(QUALITY_BASE)",uvx tach check)
 	$(call RUN_QUALITY_STAGE,dependency-profiles,--quality-base "$(QUALITY_BASE)",uv run python scripts/check_dependency_profiles.py)
@@ -182,7 +174,6 @@ quality-full:
 	$(call RUN_FULL_QUALITY_STAGE,supply-chain-policy,,uv run python scripts/check_supply_chain_policy.py policy)
 	$(call RUN_FULL_QUALITY_STAGE,release-policy,,uv run python scripts/check_release.py policy)
 	$(call RUN_FULL_QUALITY_STAGE,skill-integrity,,uv run python scripts/check_skill_integrity.py --report reports/skill-integrity.json)
-	$(call RUN_FULL_QUALITY_STAGE,claude-sync,,uv run python scripts/sync_claude_dir.py --check)
 	$(call RUN_FULL_QUALITY_STAGE,click-params,,uv run python scripts/check_click_params.py src/fieldkit/commands/)
 	$(call RUN_FULL_QUALITY_STAGE,cli-docs,,uv run python scripts/generate_cli_docs.py --check)
 	$(call RUN_FULL_QUALITY_STAGE,dependency-map,,uv run python scripts/generate_dep_map.py --check)

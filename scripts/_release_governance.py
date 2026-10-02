@@ -8,7 +8,12 @@ import re
 import stat
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING or __package__:
+    from scripts import _release_identity
+else:
+    import _release_identity
 
 _POLICY_KEYS = {"schema_version", "candidate", "roles", "support", "external_controls"}
 _PLANNED_CANDIDATE_KEYS = {"repository", "package", "planned_tag"}
@@ -203,8 +208,7 @@ def _planned_candidate(value: object, subject: str) -> PlannedCandidate:
     planned_tag = _string(raw["planned_tag"], f"{subject}.planned_tag")
     if _REPOSITORY.fullmatch(repository) is None:
         raise ValueError(f"{subject}.repository must use literal OWNER/REPO form")
-    if not planned_tag.startswith("v"):
-        raise ValueError(f"{subject}.planned_tag must start with v")
+    _release_identity.tag_version(raw["planned_tag"])
     return PlannedCandidate(repository, package, planned_tag)
 
 
@@ -219,8 +223,7 @@ def _evidence_candidate(value: object, subject: str) -> CandidateIdentity:
         raise ValueError(f"{subject}.repository must use literal OWNER/REPO form")
     if _REVISION.fullmatch(revision) is None:
         raise ValueError(f"{subject}.revision must be a full lowercase Git SHA")
-    if not planned_tag.startswith("v"):
-        raise ValueError(f"{subject}.planned_tag must start with v")
+    _release_identity.tag_version(raw["planned_tag"])
     return CandidateIdentity(repository, revision, package, planned_tag)
 
 
@@ -330,6 +333,8 @@ def _candidate_report(path: Path, candidate: PlannedCandidate) -> CandidateIdent
     validation_artifacts = _artifact_identities(
         artifact_validation["artifacts"], "candidate report artifact_validation.artifacts", validation=True
     )
+    for kind, name, _digest in validation_artifacts:
+        _release_identity.validate_artifact_identity(name, kind, candidate.package, candidate.planned_tag)
     license_evidence = _object(raw["license_evidence"], "candidate report license_evidence")
     _exact_keys(license_evidence, _LICENSE_EVIDENCE_KEYS, "candidate report license_evidence")
     if license_evidence["schema_version"] != 1 or license_evidence["status"] != "pass":

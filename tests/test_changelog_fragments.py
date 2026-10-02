@@ -44,7 +44,7 @@ _PRIVATE_TRACKER_ID = "bug" + "-890"
         "docs/ops-runbook.md",
         "docs/subtleties/sf.md",
         "openspec/changes/foo/tasks.md",
-        ".opencode/skills/proctor/SKILL.md",
+        "src/fieldkit/skills/example/SKILL.md",
         ".specify/memory.md",
         "AGENTS.md",
         "CHANGELOG.md",

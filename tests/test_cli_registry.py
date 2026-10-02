@@ -180,34 +180,6 @@ def test_to_dict_exposes_declaration_provenance() -> None:
 # ---------------------------------------------------------------------------
 
 
-_GITHUB_MUTATING_ISSUE_COMMANDS = (
-    "issue create",
-    "issue close",
-    "issue reopen",
-    "issue fix",
-    "issue plan",
-    "issue edit",
-    "issue note",
-    "issue link",
-    "issue sync-milestone",
-)
-
-
-@pytest.mark.parametrize("full_name", _GITHUB_MUTATING_ISSUE_COMMANDS)
-def test_github_mutating_issue_commands_are_declared_external(full_name: str) -> None:
-    """Each of these POSTs/PATCHes the GitHub REST API via GHIssueStore.
-
-    Before declarations existed they all classified "read-only", because that
-    is what flag inference reports for a command exposing neither --confirm nor
-    --dry-run. Dropping a declaration would silently restore that, so pin it.
-    """
-    entries = {e.full_name: e for e in build_registry()}
-    entry = entries[full_name]
-    assert entry.write_class == "external"
-    assert entry.write_class_source == "declared"
-    assert entry.confirm_exempt, "an external write without --confirm must record why"
-
-
 # ---------------------------------------------------------------------------
 # walk_cli — the traversal shared with scripts/generate_cli_docs.py
 # ---------------------------------------------------------------------------

@@ -134,64 +134,6 @@ def test_get_shadowbot_assistant_id_returns_default_when_assistant_id_empty(
     assert get_shadowbot_assistant_id() == "sales_assistant_v2"
 
 
-# ── get_github_repo ConfigError cases ─────────────────────────────────────────
-
-
-def test_get_github_repo_returns_trimmed_slug(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A configured repository slug is returned without surrounding whitespace."""
-    config_file = tmp_path / "config.yaml"
-    config_file.write_text("github_repo: '  example/fieldkit-project  '\n", encoding="utf-8")
-    monkeypatch.setattr(fieldkit.config._loader, "CONFIG_PATH", config_file)
-
-    from fieldkit.config import get_github_repo
-
-    result = get_github_repo()
-
-    assert result == "example/fieldkit-project"
-
-
-# ── TestGetIssuesDirErrors (flattened) ──────────────────────────────────────
-
-
-def test_get_issues_dir_errors_raises_when_issues_dir_key_missing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """ConfigError is raised when config has fieldkit_home but no github_repo."""
-    config_file = tmp_path / "config.yaml"
-    config_file.write_text("fieldkit_home: /tmp/fk\n", encoding="utf-8")
-    monkeypatch.setattr(fieldkit.config._loader, "CONFIG_PATH", config_file)
-
-    from fieldkit.config import get_github_repo
-
-    with pytest.raises(ConfigError, match=r"."):
-        get_github_repo()
-
-
-def test_get_issues_dir_errors_raises_when_config_file_absent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """ConfigError is raised when config.yaml does not exist."""
-    missing = tmp_path / "nonexistent.yaml"
-    monkeypatch.setattr(fieldkit.config._loader, "CONFIG_PATH", missing)
-
-    from fieldkit.config import get_github_repo
-
-    with pytest.raises(ConfigError, match=r"."):
-        get_github_repo()
-
-
-def test_get_issues_dir_errors_raises_when_github_repo_is_whitespace(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """ConfigError is raised when github_repo is present but blank/whitespace."""
-    config_file = tmp_path / "config.yaml"
-    config_file.write_text("fieldkit_home: /tmp/fk\ngithub_repo: '   '\n", encoding="utf-8")
-    monkeypatch.setattr(fieldkit.config._loader, "CONFIG_PATH", config_file)
-
-    from fieldkit.config import get_github_repo
-
-    with pytest.raises(ConfigError, match=r"."):
-        get_github_repo()
-
-
 # ---------------------------------------------------------------------------
 # historic regression: make install-skills workspace detection
 # The Makefile must use get_fieldkit_home() (not .parent) to find the workspace

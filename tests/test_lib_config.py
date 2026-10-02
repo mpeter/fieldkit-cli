@@ -20,7 +20,6 @@ from fieldkit.config import (
     get_email_domain,
     get_fieldkit_data,
     get_fieldkit_home,
-    get_harness_scratch_root,
     get_integration_configuration_state,
     get_sf_rest_base_url,
     get_sf_session_id,
@@ -216,63 +215,6 @@ def test_get_fieldkit_data_respects_env_var_override(tmp_path: Path, monkeypatch
     clear_config_caches()
     result = get_fieldkit_data()
     assert result == env_dir.resolve()
-
-
-# ---------------------------------------------------------------------------
-# get_harness_scratch_root — cache-class root for ephemeral harness worktrees
-# (historic regression). Not get_fieldkit_data(); never cached.
-# ---------------------------------------------------------------------------
-
-
-def test_get_harness_scratch_root_respects_env_var_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """FIELDKIT_HARNESS_ROOT overrides XDG/default resolution (driver sets it per run)."""
-    env_dir = tmp_path / "scratch"
-    env_dir.mkdir()
-    monkeypatch.setenv("FIELDKIT_HARNESS_ROOT", str(env_dir))
-
-    result = get_harness_scratch_root()
-
-    assert result == env_dir.resolve()
-
-
-def test_get_harness_scratch_root_defaults_to_xdg_cache_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """With no override, the root is XDG_CACHE_HOME/fieldkit."""
-    monkeypatch.delenv("FIELDKIT_HARNESS_ROOT", raising=False)
-    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
-
-    result = get_harness_scratch_root()
-
-    assert result == (tmp_path / "fieldkit").resolve()
-
-
-def test_get_harness_scratch_root_defaults_to_dot_cache_without_xdg(monkeypatch: pytest.MonkeyPatch) -> None:
-    """With neither override nor XDG_CACHE_HOME, the root is ~/.cache/fieldkit."""
-    monkeypatch.delenv("FIELDKIT_HARNESS_ROOT", raising=False)
-    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
-
-    result = get_harness_scratch_root()
-
-    assert result == (Path.home() / ".cache" / "fieldkit").resolve()
-
-
-def test_get_harness_scratch_root_relative_override_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A non-absolute FIELDKIT_HARNESS_ROOT is a config error, not silently resolved against cwd."""
-    monkeypatch.setenv("FIELDKIT_HARNESS_ROOT", "relative/scratch")
-
-    with pytest.raises(ConfigError, match="must be an absolute path"):
-        get_harness_scratch_root()
-
-
-def test_driver_and_health_worktree_roots_share_the_harness_scratch_root() -> None:
-    """historic regression/historic regression: both subsystems resolve under one root — they must not fork."""
-    from fieldkit.driver.runner import _worktrees_root as driver_root
-    from fieldkit.health.runner import _worktrees_root as health_root
-
-    base = get_harness_scratch_root()
-
-    assert driver_root().is_relative_to(base)
-    assert health_root().is_relative_to(base)
-    assert driver_root() != health_root()
 
 
 def test_get_fieldkit_data_falls_through_when_env_var_unset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

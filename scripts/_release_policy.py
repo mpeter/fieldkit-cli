@@ -7,6 +7,12 @@ import re
 import tomllib
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING or __package__:
+    from scripts._release_identity import STABLE_VERSION_PATTERN
+else:
+    from _release_identity import STABLE_VERSION_PATTERN
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 POLICY_PATH = Path("docs/release-readiness/release-policy.json")
@@ -23,7 +29,7 @@ _PUBLIC_CONTRACT = (
 )
 _REQUIRED_ASSETS = ("wheel", "sdist", "cyclonedx-json", "sha256sums", "release-evidence")
 _RECOVERY_ACTIONS = ("document", "yank-when-harmful-or-unusable", "publish-successor-version")
-_SEMVER = re.compile(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\Z")
+_SEMVER = re.compile(STABLE_VERSION_PATTERN + r"\Z")
 
 
 @dataclass(frozen=True, order=True)
@@ -241,9 +247,18 @@ def validate_repository(repo_root: Path = REPO_ROOT) -> Report:
     findings: list[Finding] = []
     if project.get("name") != policy.distribution:
         findings.append(Finding("REL100", str(PYPROJECT_PATH), f"project distribution must be {policy.distribution}"))
-    if project.get("version") != policy.first_public_version:
+    version = project.get("version")
+    if (
+        not isinstance(version, str)
+        or _SEMVER.fullmatch(version) is None
+        or tuple(map(int, version.split("."))) < tuple(map(int, policy.first_public_version.split(".")))
+    ):
         findings.append(
-            Finding("REL101", str(PYPROJECT_PATH), f"project version must be {policy.first_public_version}")
+            Finding(
+                "REL101",
+                str(PYPROJECT_PATH),
+                f"project version must be stable SemVer at or after {policy.first_public_version}",
+            )
         )
     if scripts.get(policy.command) != "fieldkit.__main__:main":
         findings.append(

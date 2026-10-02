@@ -378,3 +378,20 @@ def test_export_does_not_follow_predictable_manifest_temporary_symlink(tmp_path:
     export_public_tree.export_tree(repo, revision, policy, tmp_path / "public", manifest_path)
 
     assert protected.read_text(encoding="utf-8") == "preserve me\n"
+
+
+def test_export_supports_successor_tag_without_changing_source_binding(tmp_path: Path) -> None:
+    repo, _revision, policy = _repository(tmp_path)
+    policy.write_text(policy.read_text().replace("v1.0.0", "v1.0.1"), encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "select successor")
+    revision = _git(repo, "rev-parse", "HEAD")
+    destination, manifest_path = tmp_path / "export", tmp_path / "manifest.json"
+    result = export_public_tree.export_tree(repo, revision, policy, destination, manifest_path)
+    assert result.planned_tag == "v1.0.1"
+    assert export_public_tree.verify_export(repo, destination, manifest_path, policy) == result
+    payload = json.loads(manifest_path.read_text())
+    payload["planned_tag"] = "v1.0.0"
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(export_public_tree.ExportError, match="repository or planned tag mismatch"):
+        export_public_tree.verify_export(repo, destination, manifest_path, policy)

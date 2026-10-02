@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -13,6 +14,19 @@ import tempfile
 from argparse import ArgumentParser
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING or __package__:
+    from scripts import _release_identity
+else:
+    # Load only the retained sibling, including under Python isolated mode (-I).
+    _identity_spec = importlib.util.spec_from_file_location(
+        "_release_identity", Path(__file__).resolve().with_name("_release_identity.py")
+    )
+    if _identity_spec is None or _identity_spec.loader is None:
+        raise ImportError("retained release identity validator is unavailable")
+    _release_identity = importlib.util.module_from_spec(_identity_spec)
+    _identity_spec.loader.exec_module(_release_identity)
 
 _BUNDLE_DIRECTORY = "bundle"
 _CHECKSUMS_NAME = "SHA256SUMS"
@@ -269,7 +283,8 @@ def _candidate_inputs(report_bytes: bytes) -> tuple[dict[str, object], tuple[tup
     build_requirements = _object(report["release_build_requirements"], "candidate release build requirements")
     runtime_wheelhouse = _object(report["runtime_wheelhouse"], "candidate runtime wheelhouse")
     scan = _object(report["scan"], "candidate scan")
-    _string(report["package"], "candidate package")
+    package_name = _string(report["package"], "candidate package")
+    _release_identity.tag_version(report["planned_tag"])
     source_commit = _string(manifest.get("source_commit"), "candidate source commit")
     if report.get("expected_repository") != manifest.get("expected_repository") or report.get(
         "planned_tag"
@@ -359,6 +374,7 @@ def _candidate_inputs(report_bytes: bytes) -> tuple[dict[str, object], tuple[tup
             raise ValueError("candidate artifact name is reserved or duplicated")
         if (kind == "wheel" and not name.endswith(".whl")) or (kind == "sdist" and not name.endswith(".tar.gz")):
             raise ValueError("candidate artifact name does not match its kind")
+        _release_identity.validate_artifact_identity(name, kind, package_name, report["planned_tag"])
         names.add(name)
         entries.append(
             (
@@ -618,8 +634,7 @@ def _verify_provenance(provenance: dict[str, object], checksums: tuple[tuple[str
     repository = _string(provenance["expected_repository"], "bundle expected repository")
     if re.fullmatch(r"[a-z0-9-]+/fieldkit-cli", repository) is None:
         raise ValueError("bundle expected repository is invalid")
-    if provenance["planned_tag"] != "v1.0.0":
-        raise ValueError("bundle planned tag is invalid")
+    _release_identity.tag_version(provenance["planned_tag"])
     artifacts = provenance["artifacts"]
     if not isinstance(artifacts, list) or len(artifacts) != 2:
         raise ValueError("bundle provenance artifacts must contain one wheel and one source distribution")
