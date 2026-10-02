@@ -17,6 +17,7 @@ from fieldkit.cli_registry import declare_write
 from fieldkit.config import get_fieldkit_home
 from fieldkit.pursuit.enums import Stage
 from fieldkit.pursuit.io import render_raw_key_value, write_frontmatter_raw
+from fieldkit.pursuit.stages import ALL_STAGES
 
 LOG_PREFIX = "[pursuit-create]"
 
@@ -127,6 +128,10 @@ def cli(
     account: str, name: str, title: str | None, stage: str, sf_opportunity_id: str, dry_run: bool, as_json: bool
 ) -> None:
     """Scaffold a new pursuit file with compliant frontmatter."""
+    if stage not in ALL_STAGES:
+        click.echo(f"{LOG_PREFIX} Invalid stage: {stage}. Valid stages: {sorted(ALL_STAGES)}", err=True)
+        raise SystemExit(EXIT_DATA) from None
+
     slug = _slugify(name)
     pursuit_title = title or name
     today = datetime.now(tz=UTC).date().isoformat()
