@@ -4,7 +4,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Provide reviewable pull-request evidence.",
-      "source_fingerprint": "sha256:918dafd8c9f670c78f35f94c4e53bff7f9d46364fe5df14196f9bbe4893f8c51",
+      "source_fingerprint": "sha256:e7ba34798e453f2e4c435d634c8817c4ee908fc4bc9fbb24ae4d50efae880151",
       "sources": [
         "CONTRIBUTING.md",
         ".github/workflows/ci.yml"
@@ -55,7 +55,7 @@
         }
       ],
       "reader_action": "Prepare and submit a contribution.",
-      "source_fingerprint": "sha256:cf8b0acc154ad18a1eb315eb485fb51d80030639b501cd4aec1f9f280383d3e2",
+      "source_fingerprint": "sha256:b75d595e4d4c1f50c210c7447c12e9723fc1365da9875b9892b037e1a447c5f1",
       "sources": [
         "Makefile",
         "pyproject.toml",
@@ -105,7 +105,7 @@
         }
       ],
       "reader_action": "Choose an installation or contribution path.",
-      "source_fingerprint": "sha256:6c31ad8082ee8419d470b879cf09b19543ccb1e4f3d0ddc464aef179aef3e9ab",
+      "source_fingerprint": "sha256:d7681ef08a3c4fb0ce285ba5ee3ee1e6c857a34fdd34016c924100f12db2fdda",
       "sources": [
         "pyproject.toml",
         "src/fieldkit/__main__.py",
@@ -145,7 +145,7 @@
         }
       ],
       "reader_action": "Prepare, assess, and recover an operator-approved release candidate.",
-      "source_fingerprint": "sha256:005c04052438339b97669229382e427826ae73cdb696bfc30c6333899c03ae1b",
+      "source_fingerprint": "sha256:e7696dba9edfcd1a4c771d6d76f5c7d86c321367e7d85820cdb0da344893fbd9",
       "sources": [
         "Makefile",
         ".github/workflows/release.yml",
@@ -1155,7 +1155,7 @@
       "content_type": "reference",
       "fenced_blocks": [],
       "reader_action": "Check whether an environment is supported.",
-      "source_fingerprint": "sha256:65dbb10fd47bf78b59f98e08200f56f1a33aae96090550c5ab83c02e5fdb6e2e",
+      "source_fingerprint": "sha256:9858e894be0e109ff47762e3658875fe78193bfee32bba0c3645d369e998a025",
       "sources": [
         "docs/release-readiness/compatibility-policy.json",
         ".github/workflows/compatibility.yml",
@@ -1257,7 +1257,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Review dependency trust and update requirements.",
-      "source_fingerprint": "sha256:d9c81bcf4e64b53181ceea482d2000f4e114b3996e8e27347f433394008e4228",
+      "source_fingerprint": "sha256:196a1e754022c2451da2a33863cf0ab70f575c8d98ab679e8459ad19cb5d4c4d",
       "sources": [
         "docs/release-readiness/dependency-security-policy.json",
         "pyproject.toml",
@@ -1345,7 +1345,7 @@
         }
       ],
       "reader_action": "Install fieldkit and complete a credential-free first run.",
-      "source_fingerprint": "sha256:3366b9e1ec2c7082392ee33ad721e739aced66378c9e003a5ee28d256fb8e941",
+      "source_fingerprint": "sha256:ce9642773ef4a57850295654d6d216fd5bc62ec31b5cba53d7364985aa9da21a",
       "sources": [
         "pyproject.toml",
         "scripts/check_compatibility_policy.py",
