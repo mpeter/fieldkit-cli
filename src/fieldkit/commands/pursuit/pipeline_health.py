@@ -323,7 +323,7 @@ def cli(account: str | None, include_prospect: bool, as_json: bool, strict: bool
     items = health_check(root, account_filter=account, today=today, include_prospect=include_prospect)
 
     if not items:
-        click.echo(no_files_message("pursuit", account))
+        click.echo(no_files_message("pursuit", account), err=True)
         raise SystemExit(EXIT_DATA) from None
 
     high = [i for i in items if i.risk_tier == "HIGH"]
