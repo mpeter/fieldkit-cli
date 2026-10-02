@@ -144,8 +144,6 @@ def cli(
         raise SystemExit(EXIT_DATA) from None
 
     pursuits_dir = account_dir / "pursuits"
-    pursuits_dir.mkdir(exist_ok=True)
-
     target = pursuits_dir / f"{slug}.md"
     if target.exists():
         click.echo(f"{LOG_PREFIX} File already exists: {target}", err=True)
@@ -182,6 +180,7 @@ def cli(
         )
         return
 
+    pursuits_dir.mkdir(exist_ok=True)
     try:
         write_frontmatter_raw(target, frontmatter, body, create=True, exclusive_create=True)
     except FileExistsError:
