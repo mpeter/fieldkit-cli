@@ -134,3 +134,17 @@ def test_create_cmd_json_dry_run_does_not_write(tmp_path: Path) -> None:
         "slug": "new-deal",
     }
     assert not target.exists()
+    assert not target.parent.exists()
+
+
+@pytest.mark.unit
+def test_create_cmd_text_dry_run_keeps_workspace_unchanged(tmp_path: Path) -> None:
+    root = _setup_account(tmp_path, "acme")
+    pursuits_dir = root / "accounts" / "acme" / "pursuits"
+
+    with patch("fieldkit.commands.pursuit.create_cmd._data_root", return_value=root):
+        for _ in range(2):
+            result = CliRunner().invoke(create_cli, ["--account", "acme", "--name", "New Deal", "--dry-run"])
+            assert result.exit_code == 0
+            assert f"Would create: {pursuits_dir / 'new-deal.md'}" in result.output
+            assert not pursuits_dir.exists()
