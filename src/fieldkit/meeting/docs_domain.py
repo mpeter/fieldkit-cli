@@ -85,7 +85,7 @@ def _mcpjungle(tool: str, input_data: dict[str, object]) -> str:
         check=False,
     )
     if result.returncode != 0:
-        raise RuntimeError(f"mcpjungle {tool} failed: {result.stderr or result.stdout}")
+        raise RuntimeError(f"mcpjungle {tool} failed: {_tool_error_text(result.stderr or result.stdout)}")
     return result.stdout or result.stderr
 
 
@@ -132,6 +132,34 @@ def _set_pageless(doc_id: str) -> None:
             ]
         },
     ).execute()
+
+
+def _tab_count(doc_id: str) -> int:
+    """Read the current top-level tab count before appending a meeting note."""
+    from fieldkit.ingest.docs import get_docs_service
+
+    doc = (
+        get_docs_service()
+        .documents()
+        .get(documentId=doc_id, includeTabsContent=True, fields="tabs(tabProperties(tabId))")
+        .execute()
+    )
+    tabs = doc.get("tabs") if isinstance(doc, dict) else None
+    if not isinstance(tabs, list) or not all(isinstance(tab, dict) for tab in tabs):
+        raise RuntimeError("Could not add meeting note: Docs API did not return a valid tab list")
+    return len(tabs)
+
+
+def _tool_error_text(value: str) -> str:
+    """Keep an actionable tool error brief and remove common credential forms."""
+    single_line = re.sub(r"[\x00-\x1f\x7f]+", " ", value).strip()
+    redacted = re.sub(
+        r"(?i)\b(authorization|api[_-]?key|access[_-]?token|password|secret)\s*[:=]\s*\S+",
+        r"\1=[redacted]",
+        single_line,
+    )
+    redacted = re.sub(r"(?i)\b(?:Bearer\s+\S+|sk-\S+|ghp_\S+|github_pat_\S+)", "[redacted]", redacted)
+    return redacted[:200] or "unknown tool error"
 
 
 def _media_markdown(content: str) -> object:
@@ -325,10 +353,8 @@ def add_note(pursuit_file: Path, meeting_title: str, content: str) -> NoteResult
     today = date.today().isoformat()
     tab_name = f"{today} — {meeting_title}" if meeting_title else f"{today} — Meeting Note"
 
-    # historic regression: omit 'index' entirely — the API appends the tab at the natural end
-    # position by default.  Passing index=999 always exceeds the valid range
-    # [0, current_tab_count] and the API rejects the call.
     note_md = f"# {tab_name}\n\n{content}\n" if content.strip() else f"# {tab_name}\n"
+    index = _tab_count(doc_id)
     result_raw = _mcpjungle(
         "google_workspace__manage_doc_tab",
         {
@@ -336,6 +362,7 @@ def add_note(pursuit_file: Path, meeting_title: str, content: str) -> NoteResult
             "user_google_email": _user_google_email(),
             "action": "create",
             "title": tab_name,
+            "index": index,
         },
     )
     if not result_raw or not result_raw.strip():
@@ -346,24 +373,32 @@ def add_note(pursuit_file: Path, meeting_title: str, content: str) -> NoteResult
     try:
         result = json.loads(result_raw)
     except json.JSONDecodeError:
-        raise RuntimeError(
-            f"Could not add meeting note: Drive API returned unexpected response "
-            f"(not JSON). Check MCP connection.\nRaw: {result_raw[:200]}"
-        ) from None
-    tab_id = result.get("result", {}).get("tab_id", "")
+        raise RuntimeError(f"Could not add meeting note: Docs tool error: {_tool_error_text(result_raw)}") from None
+    if not isinstance(result, dict):
+        raise RuntimeError("Could not add meeting note: Docs tool returned an invalid response")
+    if result.get("isError") or result.get("error") is not None:
+        error = result.get("error") or result.get("content") or result.get("message")
+        if isinstance(error, dict):
+            error = error.get("message") or error.get("error")
+        if isinstance(error, list):
+            error = " ".join(str(item.get("text", "")) for item in error if isinstance(item, dict))
+        raise RuntimeError(f"Could not add meeting note: Docs tool error: {_tool_error_text(str(error))}")
+    payload = result.get("result")
+    tab_id = payload.get("tab_id") if isinstance(payload, dict) else None
+    if not isinstance(tab_id, str) or not tab_id:
+        raise RuntimeError("Could not add meeting note: Docs tool did not return the new tab ID")
 
     # Populate the tab with meeting note content
-    if tab_id:
-        _mcpjungle(
-            "google_workspace__manage_doc_tab",
-            {
-                "document_id": doc_id,
-                "user_google_email": _user_google_email(),
-                "action": "populate_from_markdown",
-                "tab_id": tab_id,
-                "content": note_md,
-            },
-        )
+    _mcpjungle(
+        "google_workspace__manage_doc_tab",
+        {
+            "document_id": doc_id,
+            "user_google_email": _user_google_email(),
+            "action": "populate_from_markdown",
+            "tab_id": tab_id,
+            "content": note_md,
+        },
+    )
 
     url = _validated_doc_url(doc_id)
     return NoteResult(tab_name=tab_name, url=url)
