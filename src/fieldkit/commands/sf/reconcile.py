@@ -142,7 +142,7 @@ def _run_reconcile_dry(path: str) -> str:
             "sf_close_date": str(model.sf_close_date) if model.sf_close_date else "",
             "sf_arr": str(model.sf_arr) if model.sf_arr else "",
         }
-    except Exception:  # noqa: BLE001
+    except Exception:
         # WARNING, not DEBUG: the CLI sets basicConfig(level=INFO) in __main__.py and
         # reconcile has no --verbose escape, so a DEBUG record here would be invisible
         # in every normal run — which is the silence historic regression exists to remove. Matches
@@ -226,7 +226,7 @@ def _run_reconcile(path: str) -> str:
             "sf_close_date": str(model.sf_close_date) if model.sf_close_date else "",
             "sf_arr": str(model.sf_arr) if model.sf_arr else "",
         }
-    except Exception:  # noqa: BLE001
+    except Exception:
         # WARNING, not DEBUG: the CLI sets basicConfig(level=INFO) in __main__.py and
         # reconcile has no --verbose escape, so a DEBUG record here would be invisible
         # in every normal run — which is the silence historic regression exists to remove. Matches

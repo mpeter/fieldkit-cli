@@ -100,7 +100,7 @@ def _build_group_entry(name: str, desc: str, module_path: str) -> dict[str, Any]
                 flags = getattr(mod, "FLAGS", None)
                 if flags:
                     entry["flags"] = [{"flag": k, "description": v} for k, v in flags.items()]
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.debug("Subcommand introspection failed for %s", name, exc_info=True)
         entry["subcommands"] = []
     return entry

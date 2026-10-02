@@ -89,7 +89,7 @@ def _load_config_fields() -> dict[str, str]:
 
         raw = CONFIG_PATH.read_text(encoding="utf-8")
         data = yaml.safe_load(raw)
-    except Exception:  # noqa: BLE001  — any parse/IO failure → empty
+    except Exception:  # any parse/IO failure → empty
         log.debug("Failed to load config fields from %s", CONFIG_PATH, exc_info=True)
         return {}
 
@@ -127,7 +127,7 @@ def _read_identity_yaml(identity_path: Path) -> dict[str, str]:
     try:
         identity_raw = identity_path.read_text(encoding="utf-8")
         identity_data = yaml.safe_load(identity_raw)
-    except Exception:  # noqa: BLE001
+    except Exception:
         log.debug("Failed to read identity.yaml at %s", identity_path, exc_info=True)
         return defaults
 
@@ -166,7 +166,7 @@ def _territory_from_accounts(data_repo_raw: str) -> str:
             sf_terr = info.get("sf_territory")
             if sf_terr and isinstance(sf_terr, str):
                 return sf_terr
-    except Exception:  # noqa: BLE001
+    except Exception:
         log.debug("Failed to resolve territory from accounts.yaml for %s", data_repo_raw, exc_info=True)
     return ""
 
@@ -198,7 +198,7 @@ def _load_identity_fields() -> dict[str, str]:
 
         raw = CONFIG_PATH.read_text(encoding="utf-8")
         data = yaml.safe_load(raw)
-    except Exception:  # noqa: BLE001
+    except Exception:
         log.debug("Failed to load identity fields from %s", CONFIG_PATH, exc_info=True)
         return defaults
 
@@ -234,13 +234,13 @@ def _load_account_fields() -> dict[str, str]:
 
     try:
         slugs = get_account_names()
-    except Exception:  # noqa: BLE001
+    except Exception:
         log.debug("Failed to load account names", exc_info=True)
         slugs = []
 
     try:
         domains = get_internal_domains()
-    except Exception:  # noqa: BLE001
+    except Exception:
         log.debug("Failed to load internal domains", exc_info=True)
         domains = []
 
@@ -271,7 +271,7 @@ def _load_account_fields() -> dict[str, str]:
                 md_files = sorted(pursuits_dir.glob("*.md"))
                 if md_files:
                     ctx["primary_pursuit"] = md_files[0].stem
-        except Exception:  # noqa: BLE001
+        except Exception:
             log.debug("Failed to resolve primary_pursuit for account %s", primary, exc_info=True)
 
     return ctx

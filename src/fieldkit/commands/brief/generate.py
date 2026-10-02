@@ -74,7 +74,7 @@ def _collect_pipeline_review(*, no_llm: bool, account: str | None = None) -> str
             no_llm=no_llm,
             today=datetime.now(tz=UTC).date(),
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         msg = f"[Pipeline Review] unavailable: {exc}"
         log.warning(msg, exc_info=True)
         return msg
