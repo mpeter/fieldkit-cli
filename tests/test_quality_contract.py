@@ -118,6 +118,21 @@ def test_hosted_public_tree_scans_install_the_pinned_scanner_on_path() -> None:
     assert 'echo "$RUNNER_TEMP" >> "$GITHUB_PATH"' in release
 
 
+def test_full_enforcement_provisions_pinned_scanner_before_quality_gate() -> None:
+    """The scheduled runner must install and verify the scanner before invoking quality-full."""
+    full = (_ROOT / ".github" / "workflows" / "full-enforcement.yml").read_text(encoding="utf-8")
+    assert 'GITLEAKS_VERSION: "8.30.1"' in full
+    assert 'GITLEAKS_LINUX_X64_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"' in full
+    install = full.index("- name: Install the pinned public-tree secret scanner")
+    verify = full.index("- name: Verify the pinned public-tree secret scanner")
+    gate = full.index("- name: Run complete quality gate")
+    assert install < verify < gate
+    assert "sha256sum --check" in full[install:verify]
+    assert 'echo "$RUNNER_TEMP" >> "$GITHUB_PATH"' in full[install:verify]
+    assert 'test "$(command -v gitleaks)" = "$RUNNER_TEMP/gitleaks"' in full[verify:gate]
+    assert 'test "$(gitleaks version)" = "$GITLEAKS_VERSION"' in full[verify:gate]
+
+
 @pytest.mark.parametrize(
     ("arguments", "expected_timeout"),
     [
