@@ -330,3 +330,42 @@ def test_runtime_license_evidence_covers_every_optional_profile_but_excludes_dev
     sync_command = next(command for command in commands if command[:2] == ["uv", "sync"])
     assert "--no-dev" in sync_command
     assert "--all-extras" in sync_command
+
+
+@pytest.mark.parametrize("version", ["1.0.0", "1.0.1", "2.0.0"])
+def test_package_identity_binds_stable_version_to_tag(tmp_path: Path, version: str) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        f'[project]\nname = "fieldkit-cli"\nversion = "{version}"\n', encoding="utf-8"
+    )
+    assert check_public_candidate._package_identity(tmp_path, f"v{version}") == "fieldkit-cli"
+
+
+@pytest.mark.parametrize("version", ["1.0.0", "1.0.2", "1.0.1rc1", "01.0.1", "1.0.1+local"])
+def test_package_identity_rejects_mismatched_version(tmp_path: Path, version: str) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        f'[project]\nname = "fieldkit-cli"\nversion = "{version}"\n', encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match=r"project\.version does not match"):
+        check_public_candidate._package_identity(tmp_path, "v1.0.1")
+
+
+def test_candidate_rejects_stale_project_version_before_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = tmp_path / "source"
+    repo.mkdir()
+    _write_candidate_repository(repo)
+    policy = repo / "docs/release-readiness/public-tree-policy.json"
+    policy.write_text(policy.read_text().replace("v1.0.0", "v1.0.1"), encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "select successor")
+    revision = _git(repo, "rev-parse", "HEAD")
+
+    def forbidden_build(*_args: object) -> tuple[Path, ...]:
+        pytest.fail("mismatched package must be rejected before any build")
+
+    monkeypatch.setattr(check_public_candidate, "_build_export", forbidden_build)
+    output = tmp_path / "candidate"
+    with pytest.raises(ValueError, match=r"project\.version does not match"):
+        check_public_candidate.check_candidate(
+            repo, revision, expected_repository="example/fieldkit-cli", planned_tag="v1.0.1", output_dir=output
+        )
+    assert not output.exists()

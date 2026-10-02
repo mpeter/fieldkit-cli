@@ -83,6 +83,7 @@ jobs:
           name: release-evidence-tools-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
           path: |
             scripts/release_promotion_evidence.py
+            scripts/_release_identity.py
             scripts/release_bundle.py
             scripts/release_consumer.py
             scripts/release_wheelhouse.py
@@ -168,6 +169,7 @@ jobs:
           path: |
             candidate/
             scripts/check_release_consumer.py
+            scripts/_release_identity.py
             scripts/release_bundle.py
             scripts/release_consumer.py
             scripts/release_promotion_evidence.py

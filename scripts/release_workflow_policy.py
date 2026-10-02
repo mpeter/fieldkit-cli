@@ -8,11 +8,11 @@ import re
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
-if __package__:
+if TYPE_CHECKING or __package__:
     from scripts.public_tree_scan import GITLEAKS_LINUX_X64_SHA256, GITLEAKS_VERSION
 else:
     from public_tree_scan import GITLEAKS_LINUX_X64_SHA256, GITLEAKS_VERSION
@@ -89,6 +89,7 @@ _PROMOTION_EVIDENCE_ACTIONS = _CONSUMER_ACTIONS
 _CONTEXT_EVIDENCE_PATHS = frozenset(
     {
         "scripts/release_promotion_evidence.py",
+        "scripts/_release_identity.py",
         "scripts/release_bundle.py",
         "scripts/release_consumer.py",
         "scripts/release_wheelhouse.py",

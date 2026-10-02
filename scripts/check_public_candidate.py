@@ -14,10 +14,19 @@ import tempfile
 import tomllib
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-if __package__:
-    from scripts import check_artifacts, export_public_tree, public_tree_scan, release_bundle, release_wheelhouse
+if TYPE_CHECKING or __package__:
+    from scripts import (
+        _release_identity,
+        check_artifacts,
+        export_public_tree,
+        public_tree_scan,
+        release_bundle,
+        release_wheelhouse,
+    )
 else:
+    import _release_identity
     import check_artifacts
     import export_public_tree
     import public_tree_scan
@@ -78,7 +87,7 @@ def _validate_expected_identity(
         raise ValueError("verified export planned tag does not match the requested candidate")
 
 
-def _package_identity(export_dir: Path) -> str:
+def _package_identity(export_dir: Path, planned_tag: str) -> str:
     """Read the distribution name whose metadata the artifact checker validates."""
     try:
         project = tomllib.loads((export_dir / "pyproject.toml").read_text(encoding="utf-8")).get("project")
@@ -86,6 +95,8 @@ def _package_identity(export_dir: Path) -> str:
         raise ValueError(f"candidate pyproject.toml cannot provide package identity: {error}") from error
     if not isinstance(project, dict):
         raise ValueError("candidate pyproject.toml project metadata must be an object")
+    if project.get("version") != _release_identity.tag_version(planned_tag):
+        raise ValueError("candidate project.version does not match the planned tag")
     package = project.get("name")
     if not isinstance(package, str) or not package.strip():
         raise ValueError("candidate pyproject.toml project.name must be a non-empty string")
@@ -361,6 +372,7 @@ def check_candidate(
         manifest = export_public_tree.export_tree(repo, revision, policy_path, export_dir, manifest_path)
         _validate_expected_identity(manifest, expected_repository, planned_tag)
         verified_manifest = export_public_tree.verify_export(repo, export_dir, manifest_path, policy_path)
+        package = _package_identity(export_dir, planned_tag)
         artifacts = _build_export(export_dir, staging / "dist")
         rebuilt_artifacts = _build_export(export_dir, staging / "rebuild")
         _require_reproducible_builds(artifacts, rebuilt_artifacts)
@@ -390,7 +402,7 @@ def check_candidate(
         report = CandidateReport(
             6,
             expected_repository,
-            _package_identity(export_dir),
+            package,
             planned_tag,
             verified_manifest,
             validation,

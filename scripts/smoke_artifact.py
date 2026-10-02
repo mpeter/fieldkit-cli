@@ -101,6 +101,82 @@ def _venv_commands(root: Path) -> tuple[Path, Path]:
     return scripts / f"python{executable_suffix}", scripts / f"fieldkit{executable_suffix}"
 
 
+def _smoke_environment(root: Path) -> dict[str, str]:
+    """Preserve execution routing while isolating application state and credentials."""
+    environment = os.environ.copy()
+    # Keep inherited proxy, CA, registry and execution-control settings. Only
+    # application settings/credentials and Python source overrides are removed.
+    for key in tuple(environment):
+        if key.startswith("FIELDKIT_"):
+            environment.pop(key)
+    for key in (
+        "PYTHONHOME",
+        "VIRTUAL_ENV",
+        "UV_PROJECT_ENVIRONMENT",
+        "UV_TARGET",
+        "UV_PREFIX",
+        "PIP_TARGET",
+        "PIP_ROOT",
+        "PIP_LOG",
+        "PIP_PREFIX",
+        "PIP_USER",
+        "NO_LLM",
+        "GOOGLE_OAUTH_CLIENT_ID",
+        "GOOGLE_OAUTH_CLIENT_SECRET",
+        "GOOGLE_CLIENT_ID",
+        "GOOGLE_CLIENT_SECRET",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "SF_PIPELINE_ROOT",
+        "LLM_MODEL",
+        "TRANSCRIBE_MODEL",
+        "SHADOWBOT_STATE_FILE",
+    ):
+        environment.pop(key, None)
+    home = root / "home"
+    environment.update(
+        {
+            "HOME": str(home),
+            "USERPROFILE": str(home),
+            "PYTHONPATH": "",
+            "PYTHONSAFEPATH": "1",
+            "PYTHONNOUSERSITE": "1",
+            "PYTHON_DOTENV_DISABLED": "1",
+            "TMPDIR": str(root / "tmp"),
+            "TMP": str(root / "tmp"),
+            "TEMP": str(root / "tmp"),
+            "XDG_CONFIG_HOME": str(home / ".config"),
+            "XDG_DATA_HOME": str(home / ".local" / "share"),
+            "XDG_CACHE_HOME": str(root / "cache"),
+            "XDG_STATE_HOME": str(home / ".local" / "state"),
+            "UV_CACHE_DIR": str(root / "cache" / "uv"),
+            "PIP_CACHE_DIR": str(root / "cache" / "pip"),
+            "UV_PYTHON": sys.executable,
+            "FIELDKIT_NO_LLM": "1",
+        }
+    )
+    return environment
+
+
+def _pip_configuration_error(python: Path, cwd: Path, env: dict[str, str]) -> str | None:
+    """Retain routing configuration but reject configured write destinations."""
+    result = _run([str(python), "-m", "pip", "config", "list"], cwd=cwd, env=env)
+    if result.returncode != 0:
+        return "cannot verify pip configuration destinations"
+    destination_options = {"root", "target", "prefix", "user", "log"}
+    for line in result.stdout.splitlines():
+        key, separator, _value = line.partition("=")
+        if not separator:
+            return "cannot parse pip configuration destinations"
+        option = key.rsplit(".", 1)[-1].replace("_", "-").lower()
+        if option in destination_options:
+            return f"pip configuration destination override is not supported: {option}"
+    return None
+
+
 def smoke(
     artifact: Path,
     *,
@@ -124,20 +200,10 @@ def smoke(
         root = Path(raw_root)
         run_dir = root / "run"
         run_dir.mkdir()
-        home = root / "home"
         temporary_dir = root / "tmp"
         temporary_dir.mkdir()
         workspace = root / "workspace"
-        env = {
-            "HOME": str(home),
-            "PATH": os.environ.get("PATH", ""),
-            "PYTHONPATH": "",
-            "PYTHONSAFEPATH": "1",
-            "TMPDIR": str(temporary_dir),
-            "XDG_CONFIG_HOME": str(home / ".config"),
-            "XDG_DATA_HOME": str(home / ".local" / "share"),
-            "FIELDKIT_NO_LLM": "1",
-        }
+        env = _smoke_environment(root)
         create_argv = (
             [uv, "venv", "--python", sys.executable, str(root / "venv")]
             if uv is not None
@@ -162,12 +228,22 @@ def smoke(
         if uv is not None:
             install_argv = [uv, "pip", "install", "--python", str(python), install_target]
         else:
-            install_argv = [str(python), "-m", "pip", "install", "--disable-pip-version-check", install_target]
-        install = _run(
-            install_argv,
-            cwd=run_dir,
-            env=env,
-            timeout=INSTALL_TIMEOUT_SECONDS,
+            install_argv = [
+                str(python),
+                "-m",
+                "pip",
+                "install",
+                "--disable-pip-version-check",
+                "--prefix",
+                str(root / "venv"),
+                "--no-user",
+                install_target,
+            ]
+        configuration_error = _pip_configuration_error(python, run_dir, env) if uv is None else None
+        install = (
+            subprocess.CompletedProcess(install_argv, 1, stdout="", stderr=configuration_error)
+            if configuration_error is not None
+            else _run(install_argv, cwd=run_dir, env=env, timeout=INSTALL_TIMEOUT_SECONDS)
         )
         criteria.append(_criterion("SMOKE002", install))
         if install.returncode != 0:
