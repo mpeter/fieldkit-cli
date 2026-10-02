@@ -11,9 +11,11 @@ import pytest
 import yaml
 from click.testing import CliRunner
 
+from fieldkit.commands.pursuit.audit import audit_file
 from fieldkit.commands.pursuit.audit_cmd import cli as audit_cli
 from fieldkit.commands.pursuit.create_cmd import cli as create_cli
 from fieldkit.commands.pursuit.pipeline_health import cli as health_cli
+from fieldkit.pursuit.enums import Stage
 from fieldkit.pursuit.io import write_frontmatter_raw
 
 # ---------------------------------------------------------------------------
@@ -150,6 +152,38 @@ def test_create_cmd_text_dry_run_keeps_workspace_unchanged(tmp_path: Path) -> No
             assert result.exit_code == 0
             assert f"Would create: {pursuits_dir / 'new-deal.md'}" in result.output
             assert not pursuits_dir.exists()
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("dry_run", [False, True])
+@pytest.mark.parametrize("as_json", [False, True])
+def test_create_cmd_rejects_invalid_stage_without_writing(tmp_path: Path, dry_run: bool, as_json: bool) -> None:
+    root = _setup_account(tmp_path, "acme")
+    pursuits_dir = root / "accounts" / "acme" / "pursuits"
+    args = ["--account", "acme", "--name", "New Deal", "--stage", "banana"]
+    args.extend(["--dry-run"] if dry_run else [])
+    args.extend(["--json"] if as_json else [])
+
+    with patch("fieldkit.commands.pursuit.create_cmd._data_root", return_value=root):
+        result = CliRunner().invoke(create_cli, args)
+
+    assert result.exit_code == 3
+    assert "Invalid stage: banana" in result.stderr
+    assert result.stdout == ""
+    assert not pursuits_dir.exists()
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("stage", [member.value for member in Stage])
+def test_create_cmd_supported_stage_passes_audit_stage_check(tmp_path: Path, stage: str) -> None:
+    root = _setup_account(tmp_path, "acme")
+    with patch("fieldkit.commands.pursuit.create_cmd._data_root", return_value=root):
+        result = CliRunner().invoke(create_cli, ["--account", "acme", "--name", "New Deal", "--stage", stage])
+
+    target = root / "accounts" / "acme" / "pursuits" / "new-deal.md"
+    assert result.exit_code == 0
+    assert yaml.safe_load(target.read_text(encoding="utf-8").split("---", 2)[1])["stage"] == stage
+    assert not any("`stage` value" in finding.message for finding in audit_file(target).findings)
 
 
 @pytest.mark.unit

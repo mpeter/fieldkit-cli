@@ -290,7 +290,7 @@ def cli(account: str | None, quota: float | None, as_json: bool) -> None:
     result = compute_forecast(root, account_filter=account, quota=quota, today=today)
 
     if not result.deals:
-        click.echo(no_files_message("pursuit", account))
+        click.echo(no_files_message("pursuit", account), err=True)
         raise SystemExit(EXIT_DATA) from None
 
     # implementation change: warn on $0 ACV deals (data quality issue).

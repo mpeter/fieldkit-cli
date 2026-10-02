@@ -402,7 +402,7 @@ def cli(
     results = audit_directory(root, account_filter=account, today=today)
 
     if not results:
-        click.echo(no_files_message("pursuit", account))
+        click.echo(no_files_message("pursuit", account), err=True)
         raise SystemExit(EXIT_DATA) from None
 
     _emit_results(
