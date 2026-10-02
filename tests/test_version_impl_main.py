@@ -24,7 +24,6 @@ _STUB_FEATURES = {
     "skills": {"available": True, "count": 1},
     "config": {"available": True},
     "services": {"mcpjungle": {"available": True}},
-    "issues": {"available": True},
 }
 
 
@@ -183,7 +182,7 @@ def test_main_json_without_features_flattens_cli_section_to_top_level(capsys: py
 
 
 def test_main_json_without_features_falls_back_when_cli_section_absent(capsys: pytest.CaptureFixture[str]) -> None:
-    stub_no_cli = {"skills": {}, "config": {}, "services": {}, "issues": {}}
+    stub_no_cli = {"skills": {}, "config": {}, "services": {}}
     with patch.object(_impl, "_collect_features", return_value=stub_no_cli):
         rc = _impl.main(["--json"])
 

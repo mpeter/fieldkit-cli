@@ -6,10 +6,12 @@ import json
 import subprocess
 import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-if __package__:
+if TYPE_CHECKING or __package__:
     from scripts import smoke_artifact
 else:
     import smoke_artifact
@@ -129,10 +131,14 @@ def check(repo_root: Path = _REPO_ROOT) -> DocumentationScenarioEvidence:
         )
     with tempfile.TemporaryDirectory(prefix="fieldkit-documentation-scenarios-") as temporary_directory:
         wheel, sdist = _build_artifacts(repo_root, Path(temporary_directory) / "dist")
-        reports = (
-            smoke_artifact.smoke(wheel, repo_root=repo_root),
-            smoke_artifact.smoke(sdist, repo_root=repo_root),
-        )
+        # Each smoke owns its temporary environment and preserves all criteria.
+        # These two independent installs dominate this check's elapsed time;
+        # run them concurrently without reusing an installed environment or
+        # dropping either artifact's evidence. Preserve wheel/sdist report order.
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            wheel_future = executor.submit(smoke_artifact.smoke, wheel, repo_root=repo_root)
+            sdist_future = executor.submit(smoke_artifact.smoke, sdist, repo_root=repo_root)
+            reports = (wheel_future.result(), sdist_future.result())
     observed = [{criterion.criterion_id: criterion.status for criterion in report.criteria} for report in reports]
     failures = tuple(
         f"{block}:{criterion_id}"

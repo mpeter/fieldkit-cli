@@ -739,7 +739,7 @@ def test_hook_install_rejects_oversized_existing_hook(tmp_path: Path) -> None:
     hooks_dir = primary / ".git" / "hooks"
     (hooks_dir / "pre-commit").write_bytes(b"x" * (install_git_hooks.MAX_CUSTOM_HOOK_BYTES + 1))
 
-    result = _make(cwd=linked)
+    result = _make(cwd=linked, env=_tool_environment(tmp_path, hooks_dir))
 
     assert result.returncode != 0
     assert "existing hook exceeds" in result.stderr

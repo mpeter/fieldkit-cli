@@ -81,6 +81,11 @@ tests or other evidence appropriate to the change. Call out privacy, security, c
 persisted-data effects. The pull-request template is intentionally proportional; mark an item not
 applicable instead of manufacturing evidence.
 
+Pull requests are squash-merged. The pull-request title becomes the commit subject on `main` and the
+description becomes its body, so give the pull request a conventional title such as
+`fix(cli): handle missing config`; the `PR title` check enforces this. Commits on your branch can be as
+granular as you like, and merging `main` into your branch to bring it up to date is fine.
+
 Maintainers may request a smaller scope, a design discussion, tests, documentation, or a changelog
 fragment. Review focuses on behavior, safety, maintainability, and compatibility rather than who
 authored the change. AI-assisted contributions are welcome under the same standard: the contributor

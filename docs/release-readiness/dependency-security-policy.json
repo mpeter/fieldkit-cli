@@ -21,6 +21,24 @@
       "rationale": "The installed distribution metadata reports UNKNOWN, while the tagged upstream source carries Apache-2.0.",
       "expires_on": "2026-12-10",
       "review_condition": "Review on any package version or license-metadata change, and no later than the expiry date."
+    },
+    {
+      "package_url": "pkg:githubactions/astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7",
+      "spdx_license": "MIT",
+      "owner": "@mpeter",
+      "evidence_url": "https://github.com/astral-sh/setup-uv/blob/c18668ad3cf93ea998bef934396af7bb5c839dc7/LICENSE",
+      "rationale": "GitHub dependency review omits Action license metadata; the exact upstream Action revision carries an MIT LICENSE.",
+      "expires_on": "2026-12-10",
+      "review_condition": "Review on any Action revision or license-metadata change, and no later than the expiry date."
+    },
+    {
+      "package_url": "pkg:githubactions/github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2",
+      "spdx_license": "MIT",
+      "owner": "@mpeter",
+      "evidence_url": "https://github.com/github/codeql-action/blob/2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2/LICENSE",
+      "rationale": "GitHub dependency review omits Action license metadata; the exact upstream Action revision carries an MIT LICENSE.",
+      "expires_on": "2026-12-10",
+      "review_condition": "Review on any Action revision or license-metadata change, and no later than the expiry date."
     }
   ]
 }

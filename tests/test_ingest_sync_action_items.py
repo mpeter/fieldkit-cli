@@ -109,7 +109,7 @@ def test_sync_action_items_vault_missing_missing_vault_path_does_not_raise(tmp_p
     """When vault_path does not exist, frontmatter read is skipped silently."""
     missing_vault = tmp_path / "meetings" / "nonexistent.md"
 
-    mock_classified = [MagicMock(cls=MagicMock(value="my_task"))]
+    mock_classified = [MagicMock()]
     mock_classified[0].cls.value = "my_task"
 
     tasks_path = tmp_path / "TASKS.md"

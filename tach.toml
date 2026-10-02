@@ -48,10 +48,6 @@ path = "fieldkit.google_oauth"
 depends_on = ["fieldkit.errors"]  # Shared OAuth refresh and private token persistence.
 
 [[modules]]
-path = "fieldkit.driver"
-depends_on = ["fieldkit.config", "fieldkit.errors", "fieldkit.util", "fieldkit.llm"]  # The driver stores run status atomically and resolves the LLM log database.
-
-[[modules]]
 path = "fieldkit.provenance"
 depends_on = ["fieldkit.pursuit"]  # Derived-document markers use pursuit.io's safe YAML renderer.
 
@@ -116,10 +112,6 @@ path = "fieldkit.shadowbot"
 depends_on = ["fieldkit.config", "fieldkit.errors"]
 
 [[modules]]
-path = "fieldkit.health"
-depends_on = ["fieldkit.config", "fieldkit.errors", "fieldkit.util"]  # Health owns a gate table and runner; filing uses an injected protocol.
-
-[[modules]]
 path = "fieldkit.companion"
 depends_on = ["fieldkit.config", "fieldkit.errors", "fieldkit.util"]  # companion loop: feed reads workspace files, cursor via locked_json_update
 
@@ -151,10 +143,8 @@ depends_on = [
     "fieldkit.shadowbot",
     "fieldkit.util",  # Shared non-empty post-write guard.
     "fieldkit.provenance",  # Derived-document marker on emitted summaries.
-    "fieldkit.driver",  # fieldkit.commands.driver delegates to fieldkit.driver domain
     "fieldkit.web",  # fieldkit.commands.web delegates to fieldkit.web domain
     "fieldkit.companion",  # fieldkit.commands.companion delegates to fieldkit.companion domain
-    "fieldkit.health",  # fieldkit.commands.health delegates to the health domain.
     "fieldkit.meeting",  # fieldkit.commands.meeting delegates to the meeting domain.
     "fieldkit.contact",  # fieldkit.commands.contact delegates to the contact domain.
     "fieldkit.gtask",  # fieldkit.commands.gtask delegates to the Google Tasks domain.

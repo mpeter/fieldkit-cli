@@ -26,19 +26,17 @@ from fieldkit.errors import AuthError, FieldkitError, LLMError, WebDataError
 from fieldkit.gtask import client as tasks_mod
 from fieldkit.web import actions as actions_mod
 from fieldkit.web import chat as chat_mod
-from fieldkit.web import prs as prs_mod
 from fieldkit.web.data import DataSource
 from fieldkit.web.events import alert_event_stream
 
 log = logging.getLogger(__name__)
 
 _GUARDED_PREFIXES = ("/api/", "/events")
-_WRITE_PREFIXES = ("/api/tasks/", "/api/proposals/", "/api/prs/")
+_WRITE_PREFIXES = ("/api/tasks/", "/api/proposals/")
 _MAX_REQUEST_BYTES = 32_768
 _MAX_HISTORY_TURNS = 6
 _MAX_HISTORY_TURN_CHARS = 2_000
 _MAX_CHAT_MESSAGE_CHARS = 4_000
-_MAX_COMMENT_CHARS = 4_000
 _MAX_TASK_TITLE_CHARS = 500
 
 ASGIMessage: TypeAlias = MutableMapping[str, Any]
@@ -112,12 +110,6 @@ class ChatRequest(BaseModel):
     history: list[ChatTurn] = Field(default_factory=list, max_length=_MAX_HISTORY_TURNS)
 
 
-class CommentRequest(BaseModel):
-    """POST /api/prs/{number}/comment body."""
-
-    body: str = Field(min_length=1, max_length=_MAX_COMMENT_CHARS)
-
-
 class CreateTaskRequest(BaseModel):
     """POST /api/tasks/create body."""
 
@@ -167,8 +159,6 @@ def create_app(
     *,
     token: str | None = None,
     synthesize_fn: Any = None,
-    github_repo: str | None = None,
-    gh_runner: Any = None,
     tier_provider: Callable[[], str] | None = None,
     allowlist_provider: Callable[[], list[str]] | None = None,
     data_path_provider: Callable[[], Path] | None = None,
@@ -183,9 +173,6 @@ def create_app(
             When unset, requests must carry a loopback Host header
             (DNS-rebinding guard).
         synthesize_fn: Injectable LLM call for /api/chat (tests).
-        github_repo: GitHub slug for the PR queue (defaults to the
-            ``github_repo`` config key, resolved lazily per request).
-        gh_runner: Injectable gh invocation for the PR queue (tests).
 
     Returns:
         A configured FastAPI instance.
@@ -311,24 +298,19 @@ def create_app(
             return JSONResponse({"error": f"LLM unavailable: {exc}"}, status_code=503)
         return JSONResponse({"reply": reply})
 
-    def _resolve_repo() -> str:
-        if github_repo is not None:
-            return github_repo
-        from fieldkit.config import get_github_repo
-
-        return get_github_repo()
-
     def _require_write_auth(request: Request) -> JSONResponse | None:
-        """Gate outward-facing write actions (merge/comment) on the token.
+        """Gate dashboard write actions on the token.
 
         Unlike reads, writes require a token even on loopback: any local
         page that survived the Host check (or a future guard regression)
-        must still not be able to merge PRs. No token configured = writes
+        must still not be able to act. No token configured = writes
         disabled entirely.
         """
         if token is None:
             return JSONResponse(
-                {"error": "write actions disabled — serve with a token (fieldkit web token) to enable merge/comment"},
+                {
+                    "error": "write actions disabled — serve with a token (fieldkit web token) to enable dashboard writes"
+                },
                 status_code=403,
             )
         if not _token_matches(request, token):
@@ -444,46 +426,6 @@ def create_app(
         except FieldkitError as exc:
             return JSONResponse({"error": str(exc)[:500]}, status_code=502)
         return _action_response(outcome, approval=True)
-
-    @app.get("/api/prs")
-    def prs() -> JSONResponse:
-        """List open PRs with CI rollup summaries."""
-        try:
-            repo = _resolve_repo()
-            runner = gh_runner if gh_runner is not None else prs_mod.run_gh
-            return JSONResponse({"prs": prs_mod.list_prs(repo, gh_runner=runner), "writes_enabled": token is not None})
-        except WebDataError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=502)
-        except FieldkitError as exc:
-            return JSONResponse({"error": f"config: {exc}"}, status_code=502)
-
-    @app.post("/api/prs/{number}/merge")
-    def merge(number: int, request: Request) -> JSONResponse:
-        """Squash-merge a PR. Requires the token even on loopback."""
-        denied = _require_write_auth(request)
-        if denied is not None:
-            return denied
-        try:
-            result = prs_mod.merge_pr(_resolve_repo(), number, gh_runner=gh_runner or prs_mod.run_gh)
-        except WebDataError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=502)
-        except FieldkitError as exc:
-            return JSONResponse({"error": f"config: {exc}"}, status_code=502)
-        return JSONResponse({"result": result})
-
-    @app.post("/api/prs/{number}/comment")
-    def comment(number: int, body: CommentRequest, request: Request) -> JSONResponse:
-        """Comment on a PR (the bounce action). Requires the token."""
-        denied = _require_write_auth(request)
-        if denied is not None:
-            return denied
-        try:
-            result = prs_mod.comment_pr(_resolve_repo(), number, body.body, gh_runner=gh_runner or prs_mod.run_gh)
-        except WebDataError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
-        except FieldkitError as exc:
-            return JSONResponse({"error": f"config: {exc}"}, status_code=502)
-        return JSONResponse({"result": result})
 
     @app.get("/events")
     def events() -> StreamingResponse:

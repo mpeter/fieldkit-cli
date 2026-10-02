@@ -13,9 +13,15 @@ import sys
 import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
+from typing import TYPE_CHECKING
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError, ValidationError
+
+if TYPE_CHECKING or __package__:
+    from scripts import _release_identity
+else:
+    import _release_identity
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _POLICY_PATH = Path("docs/release-readiness/public-tree-policy.json")
@@ -124,8 +130,10 @@ def _load_policy(path: Path) -> Policy:
     expected_repository = raw.get("expected_repository")
     planned_tag = raw.get("planned_tag")
     raw_rules = raw.get("rules")
-    if planned_tag != "v1.0.0":
-        raise ExportError("public-tree policy has an unexpected planned tag")
+    try:
+        _release_identity.tag_version(planned_tag)
+    except ValueError as error:
+        raise ExportError(str(error)) from error
     if not isinstance(raw_rules, list) or not raw_rules:
         raise ExportError("public-tree policy rules must be a non-empty list")
     rules: list[Rule] = []
@@ -463,10 +471,10 @@ def _materialized_entries(destination: Path, manifest: ExportManifest) -> tuple[
     actual_directories: set[str] = set()
     for candidate in destination.rglob("*"):
         path = candidate.relative_to(destination).as_posix()
-        mode = candidate.lstat().st_mode
-        if stat.S_ISREG(mode) or stat.S_ISLNK(mode):
+        filesystem_mode = candidate.lstat().st_mode
+        if stat.S_ISREG(filesystem_mode) or stat.S_ISLNK(filesystem_mode):
             actual_paths.add(path)
-        elif stat.S_ISDIR(mode):
+        elif stat.S_ISDIR(filesystem_mode):
             actual_directories.add(path)
         else:
             raise ExportError(f"unsupported filesystem entry: {path}")

@@ -24,7 +24,6 @@ _COMMANDS: dict[str, tuple[str, str]] = {
     "gtask": ("Google Tasks — previewable create and complete actions", "fieldkit.commands.gtask.cli"),
     "golive": ("Deterministic go-live revenue sourcing", "fieldkit.commands.golive.cli"),
     "ingest": ("Source provenance and ingestion pipeline", "fieldkit.commands.ingest.cli"),
-    "issue": ("GitHub Issues-backed bug/enhancement tracker", "fieldkit.commands.issue.cli"),
     "meeting": ("Pursuit Workbook — Google Docs integration for pursuits", "fieldkit.commands.meeting.cli"),
     "pipeline": ("Pipeline review report generator", "fieldkit.commands.pipeline.cli"),
     "pursuit": ("Pursuit file management", "fieldkit.commands.pursuit.cli"),

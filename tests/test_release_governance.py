@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from typing import Any
 
 import check_release_governance as cli
 import pytest
@@ -158,13 +159,13 @@ def test_candidate_report_rejects_an_unbound_runtime_requirements_receipt(tmp_pa
         governance.validate(policy_path, candidate_path)
 
 
-def test_checked_in_policy_declares_the_intended_first_public_release() -> None:
+def test_checked_in_policy_declares_the_intended_successor_release() -> None:
     """The portable policy carries no operator identity or invented live proof."""
     policy = governance.load_policy(_REPO_ROOT / "docs/release-readiness/release-governance-policy.json")
 
     assert policy.candidate.repository.endswith("/fieldkit-cli")
     assert policy.candidate.package == "fieldkit-cli"
-    assert policy.candidate.planned_tag == "v1.0.0"
+    assert policy.candidate.planned_tag == "v1.0.1"
     assert all(control.status == "pending" for control in policy.controls)
 
 
@@ -177,7 +178,7 @@ def test_checked_in_policy_matches_its_published_schema() -> None:
         (_REPO_ROOT / "docs/release-readiness/release-governance-policy.schema.json").read_text(encoding="utf-8")
     )
 
-    assert list(Draft202012Validator(schema).iter_errors(policy)) == []
+    assert list(Draft202012Validator(schema).iter_errors(json.loads(json.dumps(policy)))) == []
 
 
 def test_schema_rejects_evidenced_control_without_evidence() -> None:
@@ -192,7 +193,7 @@ def test_schema_rejects_evidenced_control_without_evidence() -> None:
         (_REPO_ROOT / "docs/release-readiness/release-governance-policy.schema.json").read_text(encoding="utf-8")
     )
 
-    errors = list(Draft202012Validator(schema).iter_errors(policy))
+    errors = list(Draft202012Validator(schema).iter_errors(json.loads(json.dumps(policy))))
 
     assert errors
 
@@ -435,7 +436,7 @@ def test_candidate_report_rejects_extra_artifacts(tmp_path: Path) -> None:
 
 
 def test_cli_maps_deep_json_to_data_error(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """Parser recursion remains inside the documented malformed-input boundary."""
+    """Deep malformed input fails safely regardless of decoder recursion limits."""
     candidate_path = tmp_path / "candidate.json"
     candidate_path.write_text("[" * 2_000 + "]" * 2_000, encoding="utf-8")
 
@@ -444,7 +445,10 @@ def test_cli_maps_deep_json_to_data_error(tmp_path: Path, capsys: pytest.Capture
     )
 
     assert result == 3
-    assert "cannot load" in capsys.readouterr().err
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert "release governance validation error:" in output.err
+    assert str(candidate_path) in output.err
 
 
 def test_candidate_report_must_be_a_bounded_regular_file(tmp_path: Path) -> None:
@@ -454,3 +458,50 @@ def test_candidate_report_must_be_a_bounded_regular_file(tmp_path: Path) -> None
 
     with pytest.raises(ValueError, match="exceeds the"):
         governance.validate(_write(tmp_path / "governance.json", _policy()), report_path)
+
+
+def test_successor_policy_rejects_historical_candidate_report(tmp_path: Path) -> None:
+    policy = json.loads(json.dumps(_policy()).replace("v1.0.0", "v1.0.1"))
+    policy_path = _write(tmp_path / "policy.json", policy)
+    candidate_path = _write(tmp_path / "report.json", _candidate_report())
+    with pytest.raises(ValueError, match="planned tag does not bind"):
+        governance.validate(policy_path, candidate_path)
+
+
+def test_successor_policy_keeps_external_controls_pending(tmp_path: Path) -> None:
+    policy = json.loads(json.dumps(_policy()).replace("1.0.0", "1.0.1"))
+    candidate = json.loads(json.dumps(_candidate_report()).replace("1.0.0", "1.0.1"))
+    result = governance.validate(_write(tmp_path / "policy.json", policy), _write(tmp_path / "report.json", candidate))
+    assert result.status == "pending"
+    assert result.publication_authorized is False
+
+
+def test_cli_maps_decoder_recursion_to_data_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Exercise parser overflow deterministically without blocking policy parsing."""
+    policy_path = _write(tmp_path / "policy.json", _policy())
+    candidate_path = tmp_path / "candidate.json"
+    candidate_text = '{"simulated_decoder_overflow": true}'
+    candidate_path.write_text(candidate_text, encoding="utf-8")
+    original_loads = governance.json.loads
+    policy_parsed = False
+
+    def loads(value: str, **kwargs: Any) -> Any:
+        nonlocal policy_parsed
+        if value == candidate_text:
+            assert policy_parsed is True
+            raise RecursionError("simulated decoder recursion")
+        result = original_loads(value, **kwargs)
+        policy_parsed = True
+        return result
+
+    monkeypatch.setattr(governance.json, "loads", loads)
+    result = cli.main(["--policy", str(policy_path), "--candidate-report", str(candidate_path)])
+
+    assert result == 3
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert "cannot load" in output.err
+    assert "simulated decoder recursion" in output.err
+    assert str(candidate_path) in output.err

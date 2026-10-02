@@ -14,7 +14,7 @@
       "properties": {
         "repository": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"},
         "package": {"type": "string", "minLength": 1},
-        "planned_tag": {"type": "string", "pattern": "^v.+"}
+        "planned_tag": {"type": "string", "pattern": "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?![\\s\\S])"}
       }
     },
     "roles": {
@@ -64,7 +64,7 @@
                   "repository": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"},
                   "revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
                   "package": {"type": "string", "minLength": 1},
-                  "planned_tag": {"type": "string", "pattern": "^v.+"}
+                  "planned_tag": {"type": "string", "pattern": "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?![\\s\\S])"}
                 }
               },
               "record": {"type": "string", "pattern": "^https://"}

@@ -18,21 +18,16 @@ import json
 import sqlite3
 import uuid
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any
 from unittest.mock import patch
 
 import pytest
 from click.testing import CliRunner
 
 from fieldkit.commands.companion.cli import cli as companion_cli
-from fieldkit.commands.driver.cli import cli as driver_cli
 from fieldkit.commands.gmail.account_tags import cli as account_tags_cli
 from fieldkit.commands.gmail.query import cli as query_cli
-from fieldkit.commands.health.cli import cli as health_cli
 from fieldkit.commands.shadowbot.cli import cli as shadowbot_cli
 from fieldkit.commands.web.cli import cli as web_cli
-from fieldkit.health.runner import HealthRunResult
 from fieldkit.shadowbot.client import ShadowbotResponse
 
 pytestmark = pytest.mark.unit
@@ -331,198 +326,6 @@ def test_gmail_backstory_gap_prose_is_unchanged(tmp_path: Path, monkeypatch: pyt
     assert result.exit_code == 0, result.output
     assert "# Backstory Gap Report" in result.output
     assert "**Total gap contacts across all accounts: 1**" in result.output
-
-
-# ---------------------------------------------------------------------------
-# driver
-# ---------------------------------------------------------------------------
-
-
-def _driver_result(outcome: str = "ok", error: str = "") -> SimpleNamespace:
-    return SimpleNamespace(
-        issue_number=1234,
-        issue_title="historic regression example",
-        branch="fix/historic regression",
-        outcome=outcome,
-        elapsed_seconds=12.5,
-        spend_note="spend: $0.10",
-        error=error,
-    )
-
-
-def test_driver_run_json_reports_the_result(tmp_path: Path) -> None:
-    """driver run --json emits the run record instead of the status lines."""
-    with (
-        patch("fieldkit.commands.driver.cli._repo_root", return_value=tmp_path),
-        patch("fieldkit.driver.runner.run_driver", return_value=_driver_result()),
-    ):
-        result = CliRunner().invoke(driver_cli, ["run", "--json"])
-
-    assert result.exit_code == 0, result.output
-    payload = json.loads(result.stdout)
-    assert payload["issue_number"] == 1234
-    assert payload["outcome"] == "ok"
-    assert payload["dry_run"] is False
-
-
-def test_driver_run_json_keeps_exit_1_on_a_failed_run(tmp_path: Path) -> None:
-    """A failed run still exits 1 — and still hands back the error field."""
-    with (
-        patch("fieldkit.commands.driver.cli._repo_root", return_value=tmp_path),
-        patch("fieldkit.driver.runner.run_driver", return_value=_driver_result("failed", "opencode exited 1")),
-    ):
-        result = CliRunner().invoke(driver_cli, ["run", "--json"])
-
-    assert result.exit_code == 1
-    payload = json.loads(result.stdout)
-    assert payload["outcome"] == "failed"
-    assert payload["error"] == "opencode exited 1"
-
-
-def test_driver_list_json_lists_ready_issues() -> None:
-    """driver list --json emits {items, count, filters}."""
-    issues = [SimpleNamespace(number=7, title="implementation change example", attempt_count=2)]
-
-    with (
-        patch("fieldkit.commands.driver.cli.get_github_repo", return_value="owner/repo"),
-        patch("fieldkit.commands.driver.cli.list_ready_issues", return_value=issues),
-    ):
-        result = CliRunner().invoke(driver_cli, ["list", "--json"])
-
-    assert result.exit_code == 0, result.output
-    payload = json.loads(result.stdout)
-    assert payload["items"] == [{"number": 7, "title": "implementation change example", "attempt_count": 2}]
-    assert payload["count"] == 1
-    assert payload["filters"]["repo"] == "owner/repo"
-
-
-def test_driver_list_json_with_no_issues_is_an_empty_document() -> None:
-    """An empty queue is count 0, not the "No agent-ready issues." prose."""
-    with (
-        patch("fieldkit.commands.driver.cli.get_github_repo", return_value="owner/repo"),
-        patch("fieldkit.commands.driver.cli.list_ready_issues", return_value=[]),
-    ):
-        result = CliRunner().invoke(driver_cli, ["list", "--json"])
-
-    assert result.exit_code == 0, result.output
-    payload = json.loads(result.stdout)
-    assert payload["count"] == 0
-    assert payload["items"] == []
-
-
-def _write_run_status(data_root: Path, subdir: str, filename: str, runs: list[dict[str, Any]]) -> None:
-    log_dir = data_root / "logs" / subdir
-    log_dir.mkdir(parents=True, exist_ok=True)
-    (log_dir / filename).write_text(json.dumps({"runs": runs}), encoding="utf-8")
-
-
-def test_driver_status_json_returns_newest_first(tmp_path: Path) -> None:
-    """driver status --json orders runs newest-first, matching the prose view."""
-    _write_run_status(
-        tmp_path,
-        "driver",
-        "driver-run-status.json",
-        [{"outcome": "ok", "issue_number": 1, "ts": "2026-01-01T00:00:00"}, {"outcome": "failed", "issue_number": 2}],
-    )
-
-    with patch("fieldkit.commands.driver._status.get_fieldkit_data", return_value=tmp_path):
-        result = CliRunner().invoke(driver_cli, ["status", "--json"])
-
-    assert result.exit_code == 0, result.output
-    payload = json.loads(result.stdout)
-    assert payload["count"] == 2
-    assert payload["items"][0]["issue_number"] == 2
-    assert payload["error"] is None
-
-
-def test_driver_status_json_reports_an_unreadable_status_file(tmp_path: Path) -> None:
-    """A corrupt status file exits 0 today, so the document carries the error."""
-    log_dir = tmp_path / "logs" / "driver"
-    log_dir.mkdir(parents=True)
-    (log_dir / "driver-run-status.json").write_text("{not json", encoding="utf-8")
-
-    with patch("fieldkit.commands.driver._status.get_fieldkit_data", return_value=tmp_path):
-        result = CliRunner().invoke(driver_cli, ["status", "--json"])
-
-    assert result.exit_code == 0, result.output
-    payload = json.loads(result.stdout)
-    assert payload["error"] == "could not read driver run status"
-    assert payload["items"] == []
-
-
-# ---------------------------------------------------------------------------
-# health
-# ---------------------------------------------------------------------------
-
-
-def _health_result(outcome: str = "ok") -> HealthRunResult:
-    return HealthRunResult(
-        outcome=outcome,
-        checks_run=4,
-        gate_failures=("mypy",) if outcome != "ok" else (),
-        runner_errors=(),
-        issues_filed=(),
-        issues_deduped=(),
-        elapsed_seconds=31.4,
-    )
-
-
-def test_health_run_json_serializes_the_result(tmp_path: Path) -> None:
-    """health run --json emits the HealthRunResult fields."""
-    with (
-        patch("fieldkit.commands.health.cli._repo_root", return_value=tmp_path),
-        patch("fieldkit.commands.health.cli.get_github_repo", return_value="owner/repo"),
-        patch("fieldkit.commands.health.cli._GHIssueFiler"),
-        patch("fieldkit.commands.health.cli.run_health", return_value=_health_result()),
-    ):
-        result = CliRunner().invoke(health_cli, ["run", "--json"])
-
-    assert result.exit_code == 0, result.output
-    payload = json.loads(result.stdout)
-    assert payload["outcome"] == "ok"
-    assert payload["checks_run"] == 4
-    assert payload["dry_run"] is False
-
-
-def test_health_run_json_keeps_exit_1_on_a_degraded_run(tmp_path: Path) -> None:
-    """A partial outcome still exits 1 — and still names the failed gate."""
-    with (
-        patch("fieldkit.commands.health.cli._repo_root", return_value=tmp_path),
-        patch("fieldkit.commands.health.cli.get_github_repo", return_value="owner/repo"),
-        patch("fieldkit.commands.health.cli._GHIssueFiler"),
-        patch("fieldkit.commands.health.cli.run_health", return_value=_health_result("partial")),
-    ):
-        result = CliRunner().invoke(health_cli, ["run", "--json"])
-
-    assert result.exit_code == 1
-    payload = json.loads(result.stdout)
-    assert payload["outcome"] == "partial"
-    assert payload["gate_failures"] == ["mypy"]
-
-
-def test_health_status_json_lists_recent_runs(tmp_path: Path) -> None:
-    """health status --json emits {items, count, filters}."""
-    _write_run_status(tmp_path, "health", "health-run-status.json", [{"outcome": "ok", "checks_run": 4}])
-
-    with patch("fieldkit.commands.health.cli.get_fieldkit_data", return_value=tmp_path):
-        result = CliRunner().invoke(health_cli, ["status", "--json"])
-
-    assert result.exit_code == 0, result.output
-    payload = json.loads(result.stdout)
-    assert payload["count"] == 1
-    assert payload["items"][0]["outcome"] == "ok"
-    assert payload["filters"]["limit"] == 10
-
-
-def test_health_status_json_with_no_runs_is_an_empty_document(tmp_path: Path) -> None:
-    """A missing status file yields count 0, not the prose notice."""
-    with patch("fieldkit.commands.health.cli.get_fieldkit_data", return_value=tmp_path):
-        result = CliRunner().invoke(health_cli, ["status", "--json"])
-
-    assert result.exit_code == 0, result.output
-    payload = json.loads(result.stdout)
-    assert payload["count"] == 0
-    assert payload["items"] == []
 
 
 # ---------------------------------------------------------------------------

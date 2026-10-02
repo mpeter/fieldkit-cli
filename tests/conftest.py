@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from _session_tmpdirs import remove_stale_session_tmpdirs
 
 import fieldkit.commands.watch.backstory_health as _w_backstory
 import fieldkit.commands.watch.close_date_countdown as _w_close_date_cmd
@@ -59,8 +60,6 @@ ROOT = Path(__file__).resolve().parents[1]
 # ---------------------------------------------------------------------------
 
 _CI_CONFIG_TMPDIR: str | None = None
-_HARNESS_TMPDIR: str | None = None
-_PRIOR_HARNESS_ROOT: str | None = None
 _PRIOR_HOME: str | None = None
 _PRIOR_FIELDKIT_DATA_DIR: str | None = None
 _PRIOR_CONFIG_PATH: Path | None = None
@@ -77,18 +76,12 @@ def pytest_configure(config: pytest.Config) -> None:
     fieldkit_data is intentionally omitted so get_fieldkit_data() falls back
     to <fieldkit_home>/data, keeping ``p.parent.name == "data"`` valid.
     """
-    global _CI_CONFIG_TMPDIR, _HARNESS_TMPDIR, _PRIOR_HARNESS_ROOT  # noqa: PLW0603
+    global _CI_CONFIG_TMPDIR  # noqa: PLW0603
     global _PRIOR_HOME, _PRIOR_FIELDKIT_DATA_DIR, _PRIOR_CONFIG_PATH  # noqa: PLW0603
-    # historic regression: driver/health worktree roots resolve from FIELDKIT_HARNESS_ROOT
-    # (default ~/.cache/fieldkit). Pin it to a session tmp dir UNCONDITIONALLY —
-    # even when the operator (or a parent driver run) already exported one — so
-    # no test reaching _worktrees_root() or health's _cleanup_stale_worktrees()
-    # can ever sweep a real cache. Stash the prior value; pytest_unconfigure
-    # restores it. Set before xdist workers spawn so it reaches them via
-    # inherited env; a monkeypatch would not (L02).
-    _PRIOR_HARNESS_ROOT = os.environ.get("FIELDKIT_HARNESS_ROOT")
-    _HARNESS_TMPDIR = tempfile.mkdtemp(prefix="fieldkit-harness-ci-")
-    os.environ["FIELDKIT_HARNESS_ROOT"] = _HARNESS_TMPDIR
+    # A killed run never reaches pytest_unconfigure, so its directory below
+    # would otherwise accumulate in the system temp directory.
+    if not hasattr(config, "workerinput"):
+        remove_stale_session_tmpdirs(Path(tempfile.gettempdir()))
     _PRIOR_HOME = os.environ.get("HOME")
     _PRIOR_FIELDKIT_DATA_DIR = os.environ.get("FIELDKIT_DATA_DIR")
     _PRIOR_CONFIG_PATH = _config_loader.CONFIG_PATH
@@ -110,16 +103,8 @@ def pytest_configure(config: pytest.Config) -> None:
 
 def pytest_unconfigure(config: pytest.Config) -> None:
     """Remove test config and restore the parent environment after the session."""
-    global _CI_CONFIG_TMPDIR, _HARNESS_TMPDIR, _PRIOR_HARNESS_ROOT  # noqa: PLW0603
+    global _CI_CONFIG_TMPDIR  # noqa: PLW0603
     global _PRIOR_HOME, _PRIOR_FIELDKIT_DATA_DIR, _PRIOR_CONFIG_PATH  # noqa: PLW0603
-    if _HARNESS_TMPDIR is not None:
-        if _PRIOR_HARNESS_ROOT is None:
-            os.environ.pop("FIELDKIT_HARNESS_ROOT", None)
-        else:
-            os.environ["FIELDKIT_HARNESS_ROOT"] = _PRIOR_HARNESS_ROOT
-        shutil.rmtree(_HARNESS_TMPDIR, ignore_errors=True)
-        _HARNESS_TMPDIR = None
-        _PRIOR_HARNESS_ROOT = None
     if _CI_CONFIG_TMPDIR is not None:
         if _PRIOR_HOME is None:
             os.environ.pop("HOME", None)

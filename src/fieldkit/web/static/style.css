@@ -190,16 +190,3 @@ details .meta { font-size: 12px; color: var(--muted); font-weight: 400; }
   .task-create-form { grid-template-columns: 1fr; }
 }
 
-.pr-row { margin-bottom: 10px; }
-.pr-row .deal a { color: var(--accent); text-decoration: none; margin-right: 6px; }
-.pr-actions { margin-top: 8px; display: flex; gap: 8px; }
-.pr-actions button {
-  padding: 7px 16px;
-  border: 0;
-  border-radius: var(--radius);
-  font-weight: 600;
-  cursor: pointer;
-}
-.pr-actions button:disabled { opacity: 0.4; cursor: not-allowed; }
-.pr-merge { background: var(--green); color: #06220f; }
-.pr-bounce { background: var(--panel); color: var(--text); outline: 1px solid #333c46; }

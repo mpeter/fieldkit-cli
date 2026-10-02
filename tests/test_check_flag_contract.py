@@ -123,7 +123,7 @@ def test_confirm_exemption_suppresses_the_violation_but_is_reported(
             "issue create",
             write_class="external",
             opts=("--json",),
-            confirm_exempt="driver loop invokes this unattended",
+            confirm_exempt="a scheduled job invokes this unattended",
         )
     ]
     exit_code = checker.check(entries=entries)
@@ -131,7 +131,7 @@ def test_confirm_exemption_suppresses_the_violation_but_is_reported(
     assert exit_code == 0
     assert "EXEMPT" in out
     assert "issue create" in out
-    assert "driver loop invokes this unattended" in out
+    assert "a scheduled job invokes this unattended" in out
 
 
 # --------------------------------------------------------------------------
