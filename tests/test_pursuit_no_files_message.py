@@ -36,6 +36,31 @@ def test_no_files_message_never_contains_path_separator() -> None:
     assert "\\" not in msg
 
 
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "name,cli,patch_target",
+    [
+        ("audit", audit_cli, "fieldkit.commands.pursuit.audit_cmd.get_fieldkit_home"),
+        ("health", health_cli, "fieldkit.commands.pursuit.pipeline_health.get_fieldkit_home"),
+        ("forecast", forecast_cli, "fieldkit.commands.pursuit.forecast.get_fieldkit_home"),
+    ],
+    ids=["audit", "health", "forecast"],
+)
+@pytest.mark.parametrize("account_filter", [False, True], ids=["all", "account"])
+def test_json_empty_pursuit_scope_keeps_stdout_empty(
+    name: str, cli: object, patch_target: str, account_filter: bool, tmp_path: Path
+) -> None:
+    """An empty JSON report stays off stdout and retains the data-error exit."""
+    (tmp_path / "accounts" / "acme").mkdir(parents=True)
+    args = ["--json", "--account", "acme"] if account_filter else ["--json"]
+    with patch(patch_target, return_value=tmp_path):
+        result = CliRunner().invoke(cli, args, catch_exceptions=False)  # type: ignore[arg-type]
+
+    assert result.exit_code == 3, name
+    assert result.stdout == "", name
+    assert result.stderr == no_files_message("pursuit", "acme" if account_filter else None) + "\n"
+
+
 # ---------------------------------------------------------------------------
 # CLI-level "Accounts directory not found" regression coverage.
 #
