@@ -50,7 +50,7 @@ _SPDX_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9.+-]*")
 _REVISION = re.compile(r"[0-9a-f]{40}")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _PYPI_NAME = re.compile(r"[-_.]+")
-_CODEQL_ACTION_REVISION = "cdf488f595d80d6e07e03d4674febd5ab45fa938"
+_CODEQL_ACTION_REVISION = "2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2"
 _SCORECARD_ACTION_REVISION = "2d1146689b8cda280b9bc96326124645441f03bc"
 
 
