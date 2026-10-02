@@ -376,7 +376,7 @@ def add_note(pursuit_file: Path, meeting_title: str, content: str) -> NoteResult
         raise RuntimeError(f"Could not add meeting note: Docs tool error: {_tool_error_text(result_raw)}") from None
     if not isinstance(result, dict):
         raise RuntimeError("Could not add meeting note: Docs tool returned an invalid response")
-    if result.get("isError") or "error" in result:
+    if result.get("isError") or result.get("error") is not None:
         error = result.get("error") or result.get("content") or result.get("message")
         if isinstance(error, dict):
             error = error.get("message") or error.get("error")
