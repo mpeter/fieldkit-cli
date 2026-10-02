@@ -95,35 +95,6 @@ def main() -> int:
 
     changed = [f.strip() for f in result.stdout.splitlines() if f.strip()]
     install_inputs_touched = any(f.startswith("src/fieldkit/") or f in {"pyproject.toml", "uv.lock"} for f in changed)
-    opencode_touched = any(f.startswith(".opencode/agents/") or f.startswith(".opencode/commands/") for f in changed)
-
-    # Sync .opencode/ → .claude/ when agents or commands change (with prune).
-    if opencode_touched:
-        python_bin = shutil.which("python3") or shutil.which("python")
-        sync_script = repo_root / "scripts" / "sync_claude_dir.py"
-        if python_bin and sync_script.is_file():
-            print("post-commit: .opencode/ changed — syncing .claude/ (with prune)…")
-            try:
-                subprocess.run(
-                    [python_bin, str(sync_script), "--prune"],
-                    cwd=repo_root,
-                    check=False,
-                    timeout=30,
-                )
-            except (subprocess.TimeoutExpired, OSError):
-                print(
-                    "post-commit: WARNING — .claude/ sync failed. Run `make sync-claude` manually.",
-                    file=sys.stderr,
-                )
-        else:
-            # Never skip silently: an unfindable sync script means .claude/ quietly
-            # stops being pruned, and the drift only surfaces much later as a failing
-            # check on an unrelated PR.
-            missing = "python3" if not python_bin else str(sync_script)
-            print(
-                f"post-commit: WARNING — cannot sync .claude/ ({missing} not found). Run `make sync-claude` manually.",
-                file=sys.stderr,
-            )
 
     if not install_inputs_touched:
         return 0

@@ -24,21 +24,8 @@ from fieldkit.commands.version import (
     _probe_skills,
     main,
 )
-from fieldkit.commands.version._impl import _probe_issues
 
 pytestmark = pytest.mark.unit
-
-# Stub returned by _probe_issues mock — avoids 4 live GitHub API calls (~5s)
-# in tests that don't exercise issue-probe logic specifically.
-_STUB_ISSUES = {
-    "available": True,
-    "repo": "test/repo",
-    "open_bugs": 5,
-    "open_enhancements": 3,
-    "closed": 10,
-    "wontfix": 0,
-}
-
 
 # ---------------------------------------------------------------------------
 # Plain version
@@ -61,8 +48,7 @@ def test_fieldkit_version_prints_version_string(capsys: pytest.CaptureFixture) -
 
 
 def test_fieldkit_version_json_flag_emits_json(capsys: pytest.CaptureFixture) -> None:
-    with patch("fieldkit.commands.version._probe_issues", return_value=_STUB_ISSUES):
-        main(["--json"])
+    main(["--json"])
     out = capsys.readouterr().out
     data = json.loads(out)
     assert "version" in data
@@ -114,27 +100,25 @@ def test_fieldkit_version_version_group_dispatches(capsys: pytest.CaptureFixture
 
 
 def _features_human() -> str:
-    """Run --features with stubbed issues and return output. Cached at module level."""
+    """Run --features and return output. Cached at module level."""
     import io
     from contextlib import redirect_stdout
 
-    with patch("fieldkit.commands.version._probe_issues", return_value=_STUB_ISSUES):
-        buf = io.StringIO()
-        with redirect_stdout(buf):
-            main(["--features"])
-        return buf.getvalue()
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        main(["--features"])
+    return buf.getvalue()
 
 
 def _features_json() -> dict:
-    """Run --features --json with stubbed issues and return parsed dict. Cached at module level."""
+    """Run --features --json and return the parsed dict. Cached at module level."""
     import io
     from contextlib import redirect_stdout
 
-    with patch("fieldkit.commands.version._probe_issues", return_value=_STUB_ISSUES):
-        buf = io.StringIO()
-        with redirect_stdout(buf):
-            main(["--features", "--json"])
-        return json.loads(buf.getvalue())
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        main(["--features", "--json"])
+    return json.loads(buf.getvalue())
 
 
 # Module-level cache — computed once per worker process, shared across tests in the same worker.
@@ -161,8 +145,7 @@ def features_json() -> dict:  # type: ignore[return]
 
 
 def test_render_features_human_returns_0() -> None:
-    with patch("fieldkit.commands.version._probe_issues", return_value=_STUB_ISSUES):
-        rc = main(["--features"])
+    rc = main(["--features"])
     assert rc == 0
 
 
@@ -201,8 +184,7 @@ def test_render_features_human_check_icons_present(features_human_out: str) -> N
 
 
 def test_collect_features_returns_0() -> None:
-    with patch("fieldkit.commands.version._probe_issues", return_value=_STUB_ISSUES):
-        rc = main(["--features", "--json"])
+    rc = main(["--features", "--json"])
     assert rc == 0
 
 
@@ -441,83 +423,3 @@ def test_probe_gmail_reports_populated_cache(tmp_path: Path) -> None:
         result = _probe_gmail()
 
     assert result == {"available": True, "path": str(db), "size_mb": 1.0}
-
-
-# ---------------------------------------------------------------------------
-# _probe_issues (uses GitHub API via get_github_repo())
-# ---------------------------------------------------------------------------
-
-
-# ── TestProbeIssues (flattened) ─────────────────────────────────────────────
-
-
-def test_probe_issues_returns_counts_from_configured_github_repo() -> None:
-    """_probe_issues returns available=True and counts from gh subprocess calls."""
-    import json
-
-    open_bugs_response = MagicMock()
-    open_bugs_response.returncode = 0
-    open_bugs_response.stdout = json.dumps([{"number": 1}, {"number": 2}])
-
-    open_enhs_response = MagicMock()
-    open_enhs_response.returncode = 0
-    open_enhs_response.stdout = json.dumps([{"number": 3}])
-
-    closed_bugs_response = MagicMock()
-    closed_bugs_response.returncode = 0
-    closed_bugs_response.stdout = json.dumps([{"number": 4}, {"number": 5}, {"number": 6}])
-
-    closed_enhs_response = MagicMock()
-    closed_enhs_response.returncode = 0
-    closed_enhs_response.stdout = json.dumps([])
-
-    with (
-        patch("fieldkit.config.get_github_repo", return_value="owner/repo"),
-        patch(
-            "subprocess.run",
-            side_effect=[
-                open_bugs_response,
-                open_enhs_response,
-                closed_bugs_response,
-                closed_enhs_response,
-            ],
-        ),
-    ):
-        result = _probe_issues()
-
-    assert result["available"] is True
-    assert result["open_bugs"] == 2
-    assert result["open_enhancements"] == 1
-    assert result["closed"] == 3
-
-
-def test_probe_issues_returns_available_false_when_issues_dir_not_configured() -> None:
-    from fieldkit.config import ConfigError
-
-    with patch(
-        "fieldkit.config.get_github_repo",
-        side_effect=ConfigError("github_repo not configured in config.yaml"),
-    ):
-        result = _probe_issues()
-
-    assert result["available"] is False
-    assert "github_repo" in result.get("error", "").lower()
-    assert result["open_bugs"] == 0
-    assert result["open_enhancements"] == 0
-
-
-def test_probe_issues_does_not_use_get_fieldkit_root_on_config_error() -> None:
-    """Must not fall back to get_fieldkit_root() on config error."""
-    from fieldkit.config import ConfigError
-
-    with (
-        patch(
-            "fieldkit.config.get_github_repo",
-            side_effect=ConfigError("not configured"),
-        ),
-        patch("fieldkit.config.get_fieldkit_root") as mock_root,
-    ):
-        result = _probe_issues()
-
-    mock_root.assert_not_called()
-    assert result["available"] is False

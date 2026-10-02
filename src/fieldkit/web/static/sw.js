@@ -1,7 +1,9 @@
 /* fieldkit service worker — offline shell + last-known brief. */
 "use strict";
 
-const CACHE = "fieldkit-v3";
+// Bump on any SHELL change: the shell is served cache-first, and only a changed
+// worker reinstalls and drops the previous cache.
+const CACHE = "fieldkit-v4";
 const SHELL = ["/", "/static/style.css", "/static/app.js", "/static/icon.svg", "/manifest.json"];
 
 self.addEventListener("install", e => {

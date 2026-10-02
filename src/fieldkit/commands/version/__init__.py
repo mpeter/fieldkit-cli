@@ -40,13 +40,11 @@ from fieldkit.commands.version._impl import _fieldkit_version as _fieldkit_versi
 from fieldkit.commands.version._impl import _icon as _icon
 from fieldkit.commands.version._impl import _print_config as _print_config
 from fieldkit.commands.version._impl import _print_groups as _print_groups
-from fieldkit.commands.version._impl import _print_issues as _print_issues
 from fieldkit.commands.version._impl import _print_services as _print_services
 from fieldkit.commands.version._impl import _print_skills as _print_skills
 from fieldkit.commands.version._impl import _probe_config as _probe_config
 from fieldkit.commands.version._impl import _probe_gmail as _probe_gmail
 from fieldkit.commands.version._impl import _probe_groups as _probe_groups
-from fieldkit.commands.version._impl import _probe_issues as _probe_issues
 from fieldkit.commands.version._impl import _probe_mcpjungle as _probe_mcpjungle
 from fieldkit.commands.version._impl import _probe_sf_cookies as _probe_sf_cookies
 from fieldkit.commands.version._impl import _probe_sf_token as _probe_sf_token
@@ -100,7 +98,6 @@ def _collect_features() -> dict[str, Any]:
             "sf_cookies": _probe_sf_cookies(),
             "chrome_debug": _probe_chrome_debug(),
         },
-        "issues": _probe_issues(),
     }
 
 
