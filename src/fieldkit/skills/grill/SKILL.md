@@ -98,7 +98,9 @@ transcripts, Gmail, Salesforce, Slack, or Backstory. Record:
 - the source location or query needed to verify it.
 
 Ask Salesforce's exact native question, then one concise question testing missing evidence.
-Present choices without recommending one; answers only clarify staged evidence.
+Present choices without recommending one; answers only clarify staged evidence. For
+per-element red flags and coaching-question ideas, read on demand:
+`references/meddpicc-coaching.md`.
 
 Slack and Backstory are context, never confirmation. Assign Backstory only with opportunity-specific
 evidence. Treat web inference, SalesAI, colleagues, and absent results as context. Customer evidence needs a source and date.
