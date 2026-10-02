@@ -269,6 +269,34 @@ def test_exact_unexpired_unknown_license_exception_passes(tmp_path: Path) -> Non
     assert report.findings == ()
 
 
+def test_action_license_exception_applies_only_to_reviewed_revision() -> None:
+    """An action update with absent GitHub license metadata needs fresh review."""
+    policy = checker.load_policy(_REPO_ROOT / checker.POLICY_PATH, today=date(2026, 10, 2))
+    reviewed = "pkg:githubactions/astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7"
+    changes = [{"change_type": "added", "package_url": reviewed, "license": None}]
+
+    accepted = checker.review_dependency_changes(changes, policy, today=date(2026, 10, 2))
+    changes[0]["package_url"] = "pkg:githubactions/astral-sh/setup-uv@" + "a" * 40
+    unreviewed = checker.review_dependency_changes(changes, policy, today=date(2026, 10, 2))
+
+    assert accepted.ok
+    assert not unreviewed.ok
+    assert unreviewed.findings[0].criterion_id == "DEP102"
+
+
+def test_action_license_exception_requires_evidence_at_exact_revision(tmp_path: Path) -> None:
+    """A mismatched or unpinned license URL cannot justify an Action exception."""
+    path = _policy(tmp_path)
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    exception = raw["license_exceptions"][0]
+    exception["package_url"] = "pkg:githubactions/example/setup@" + "a" * 40
+    exception["evidence_url"] = "https://github.com/example/setup/blob/" + "b" * 40 + "/LICENSE"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="pinned action's LICENSE"):
+        checker.load_policy(path, today=date(2026, 10, 2))
+
+
 def test_expired_unknown_license_exception_fails_closed(tmp_path: Path) -> None:
     """An exception cannot survive its explicit review deadline."""
     with pytest.raises(ValueError, match="expired license exception"):

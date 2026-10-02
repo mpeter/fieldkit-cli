@@ -65,17 +65,19 @@ the candidate non-promotable.
 ## Requesting a license exception
 
 An exception is appropriate only when authoritative upstream evidence identifies an allowlisted
-license but package metadata does not. The policy entry must include all of the following:
+license but package metadata does not. For GitHub Actions, the evidence must be the upstream
+`LICENSE` file at the exact pinned revision. The policy entry must include all of the following:
 
-1. An exact-version PyPI package URL.
+1. An exact-version PyPI package URL or a GitHub Actions URL with a full commit pin.
 2. The screened SPDX identifier.
 3. A responsible GitHub maintainer.
 4. A stable HTTPS link to license evidence for that exact release.
 5. A factual rationale for the metadata mismatch.
 6. An expiry date and an earlier review condition, such as any package-version change.
 
-Changing the package version invalidates the exception automatically because the package URL no
-longer matches. Expired exceptions make the policy gate fail before dependency review begins.
+Changing the package version or Action pin invalidates the exception automatically because the
+package URL no longer matches. Expired exceptions make the policy gate fail before dependency
+review begins.
 
 ## Maintainer verification
 

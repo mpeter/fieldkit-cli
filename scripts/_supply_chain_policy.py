@@ -311,14 +311,23 @@ def load_policy(path: Path = REPO_ROOT / POLICY_PATH, *, today: date | None = No
             expires_on=_date(item["expires_on"], f"{subject}.expires_on"),
             review_condition=_string(item["review_condition"], f"{subject}.review_condition"),
         )
-        if not exception.package_url.startswith("pkg:pypi/") or "@" not in exception.package_url:
-            raise ValueError(f"{subject}.package_url must be an exact-version PyPI purl")
+        action = re.fullmatch(
+            r"pkg:githubactions/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)(?:/[A-Za-z0-9_.-]+)*@([0-9a-f]{40})",
+            exception.package_url,
+        )
+        if action is None and (not exception.package_url.startswith("pkg:pypi/") or "@" not in exception.package_url):
+            raise ValueError(f"{subject}.package_url must be an exact-version PyPI or pinned GitHub Action purl")
         if exception.spdx_license not in allowed:
             raise ValueError(f"{subject}.spdx_license must be allowlisted")
         if not exception.owner.startswith("@"):
             raise ValueError(f"{subject}.owner must be a GitHub handle")
         if not exception.evidence_url.startswith("https://"):
             raise ValueError(f"{subject}.evidence_url must use https")
+        if action is not None:
+            owner, repository, revision = action.groups()
+            expected_evidence = f"https://github.com/{owner}/{repository}/blob/{revision}/LICENSE"
+            if exception.evidence_url != expected_evidence:
+                raise ValueError(f"{subject}.evidence_url must identify the pinned action's LICENSE")
         exceptions.append(exception)
     package_urls = tuple(item.package_url for item in exceptions)
     if len(package_urls) != len(set(package_urls)):
