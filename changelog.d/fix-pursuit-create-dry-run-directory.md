@@ -1,1 +1,3 @@
-Fix `pursuit create --dry-run` so previews do not create an empty `pursuits/` directory.
+### Keep pursuit previews read-only
+
+`pursuit create --dry-run` no longer creates an empty `pursuits/` directory.
