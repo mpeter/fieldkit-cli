@@ -457,80 +457,6 @@ class DataSource:
             "Review pending companion proposals.",
         )
 
-    def _latest_admission_decision(self) -> dict[str, Any] | None:
-        if self.data_dir is None:
-            return None
-        try:
-            ledger = json.loads((self.data_dir / "driver" / "developer-admission.json").read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return None
-        decisions = ledger.get("decisions", []) if isinstance(ledger, dict) else []
-        if not isinstance(decisions, list):
-            return None
-        for decision in reversed(decisions):
-            if isinstance(decision, dict):
-                return decision
-        return None
-
-    def _developer_operation(self) -> OperationStage:
-        admission = self._latest_admission_decision()
-        if admission is not None and admission.get("allowed") is False:
-            reason = str(admission.get("reason_code", "unknown"))
-            detail = str(admission.get("detail", "Developer admission was denied."))
-            updated_at = admission.get("ts") if isinstance(admission.get("ts"), str) else None
-            if reason == "lease-held":
-                return OperationStage("developer", "ok", f"Developer lease is in use: {detail}", updated_at, "")
-            if reason == "daily-run-limit-reached":
-                return OperationStage(
-                    "developer",
-                    "ok",
-                    "Daily developer run limit reached; next eligibility is the next UTC day.",
-                    updated_at,
-                    "",
-                )
-            return OperationStage(
-                "developer",
-                "error",
-                f"Developer admission denied: {reason} — {detail}",
-                updated_at,
-                "Review the developer admission policy before another dispatch.",
-            )
-        try:
-            driver_data = self.cli_json(["driver", "status", "--json"])
-        except WebDataError as exc:
-            return OperationStage("developer", "error", str(exc), None, "Run fieldkit driver status.")
-        driver_items = driver_data.get("items", []) if isinstance(driver_data, dict) else []
-        latest_driver = driver_items[0] if driver_items and isinstance(driver_items[0], dict) else None
-        if latest_driver is None:
-            return OperationStage(
-                "developer",
-                "missing",
-                "No developer run has been recorded.",
-                None,
-                "Review the admission policy before enabling a workflow.",
-            )
-        outcome = str(latest_driver.get("outcome", "unknown"))
-        updated_at = latest_driver.get("ts") if isinstance(latest_driver.get("ts"), str) else None
-        if outcome == "failed":
-            return OperationStage(
-                "developer",
-                "error",
-                str(latest_driver.get("error", "Driver failed.")),
-                updated_at,
-                "Review the recorded driver failure before another dispatch.",
-            )
-        if admission is not None and admission.get("allowed") is True:
-            admission_reason = str(admission.get("reason_code", "admitted"))
-            admission_updated_at = admission.get("ts") if isinstance(admission.get("ts"), str) else updated_at
-            return OperationStage(
-                "developer",
-                "ok",
-                f"Latest developer admission: {admission_reason}. Latest driver outcome: {outcome}.",
-                admission_updated_at,
-                "",
-            )
-        return OperationStage("developer", "ok", f"Latest driver outcome: {outcome}.", updated_at, "")
-
     def operations(self) -> dict[str, Any]:
         """Return the operator-facing state of the deterministic attention chain."""
         proposals = self.list_proposals()
@@ -539,7 +465,6 @@ class DataSource:
             self._watcher_operation(),
             self._brief_operation(),
             self._companion_operation(proposals),
-            self._developer_operation(),
         ]
 
         next_action = next(

@@ -8,9 +8,11 @@
     "private": false,
     "visibility": "public",
     "default_branch": "main",
-    "allow_squash_merge": false,
+    "allow_squash_merge": true,
     "allow_merge_commit": false,
-    "allow_rebase_merge": true,
+    "allow_rebase_merge": false,
+    "squash_merge_commit_title": "PR_TITLE",
+    "squash_merge_commit_message": "PR_BODY",
     "allow_auto_merge": true,
     "delete_branch_on_merge": true
   },
@@ -59,6 +61,9 @@
               },
               {
                 "context": "Changelog fragment"
+              },
+              {
+                "context": "PR title"
               }
             ]
           }

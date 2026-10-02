@@ -116,12 +116,14 @@ def _approved_test_data_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setenv("FIELDKIT_DATA_DIR", str(tmp_path))
 
 
-def test_get_db_path_returns_existing_default_when_override_is_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_get_db_path_returns_existing_default_when_override_is_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.delenv("FIELDKIT_LLM_LOG", raising=False)
 
     resolved_path = llm_log.get_db_path()
 
-    assert resolved_path == llm_log.get_fieldkit_data() / "llm-calls.db"
+    assert resolved_path == tmp_path / "llm-calls.db"
 
 
 def test_get_db_path_accepts_override_under_data_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -966,14 +968,11 @@ def test_get_read_db_path_does_not_fall_back_for_explicit_override(
 def test_get_db_path_accepts_parent_data_root_from_isolated_child(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from fieldkit.driver.opencode import _build_opencode_env
-
     parent_data = tmp_path / "parent-data"
     child_data = tmp_path / "worktree" / ".fieldkit-data"
-    durable_db = parent_data / "driver" / "llm-runs" / "run.db"
-    env = _build_opencode_env(1266, child_data, durable_db)
-    monkeypatch.setenv("FIELDKIT_DATA_DIR", env["FIELDKIT_DATA_DIR"])
-    monkeypatch.setenv("FIELDKIT_LLM_LOG", env["FIELDKIT_LLM_LOG"])
+    durable_db = parent_data / "llm-runs" / "run.db"
+    monkeypatch.setenv("FIELDKIT_DATA_DIR", str(child_data))
+    monkeypatch.setenv("FIELDKIT_LLM_LOG", str(durable_db))
     monkeypatch.setattr(llm_log, "get_fieldkit_data", lambda: child_data)
     monkeypatch.setattr(llm_log, "get_configured_fieldkit_data", lambda: parent_data)
 

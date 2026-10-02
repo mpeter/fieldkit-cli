@@ -4,7 +4,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Provide reviewable pull-request evidence.",
-      "source_fingerprint": "sha256:dcdd4fb6ecd21f44c8855bfb620cc6f0535acab0a13333d8ad7d35c9a70bfed6",
+      "source_fingerprint": "sha256:918dafd8c9f670c78f35f94c4e53bff7f9d46364fe5df14196f9bbe4893f8c51",
       "sources": [
         "CONTRIBUTING.md",
         ".github/workflows/ci.yml"
@@ -29,7 +29,7 @@
         }
       ],
       "reader_action": "Apply repository engineering constraints.",
-      "source_fingerprint": "sha256:95273e927f2d3b45d1177d748c5846377e6013c164cde4b4d62c7357b1dc7fd3",
+      "source_fingerprint": "sha256:8a25444bb7e54d6800112871043be6170a2c7e0e221af62dcc32b06355f4181a",
       "sources": [
         "Makefile",
         "pyproject.toml",
@@ -55,11 +55,10 @@
         }
       ],
       "reader_action": "Prepare and submit a contribution.",
-      "source_fingerprint": "sha256:ed18335ce71a0ffa8d08f627496e61d7c09c3c3a42646fe912d2d7d5f823f91f",
+      "source_fingerprint": "sha256:b4e13948691d3a5213f4c941be3e3dc9917b109323abcc6a210f33a39728a397",
       "sources": [
         "Makefile",
         "pyproject.toml",
-        "scripts/sync_claude_dir.py",
         ".github/workflows/ci.yml"
       ]
     },
@@ -67,7 +66,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Understand current project authority.",
-      "source_fingerprint": "sha256:bd2e4e012b6c04d72b0330e6c38a3d43a38c0df824c23dc6f7006b8e5731a245",
+      "source_fingerprint": "sha256:44c532390e75bb132e988170c278f86ddbaa25a7146b634eeccf932a4a225356",
       "sources": [
         ".github/CODEOWNERS",
         ".github/repository-settings.json"
@@ -106,7 +105,7 @@
         }
       ],
       "reader_action": "Choose an installation or contribution path.",
-      "source_fingerprint": "sha256:e696f802afb88714a28f2b54e72b146e2a7d80feee6e12193f3faa166951f139",
+      "source_fingerprint": "sha256:d1da5a48a832978a27cc7f0b9c9bfdbd39e608a9feedf9f76cb5dbdcbee0d599",
       "sources": [
         "pyproject.toml",
         "src/fieldkit/__main__.py",
@@ -146,7 +145,7 @@
         }
       ],
       "reader_action": "Prepare, assess, and recover an operator-approved release candidate.",
-      "source_fingerprint": "sha256:7e156eedb3b2bc068b3cec295dccf1fc042cbc5f3cd198ea7040e64071ec345c",
+      "source_fingerprint": "sha256:5cd38e25d33bcf2df380877dcea72d50ff7de84f09ce3ddfdfa049b5dbbebd06",
       "sources": [
         "Makefile",
         ".github/workflows/release.yml",
@@ -168,7 +167,7 @@
       "content_type": "roadmap",
       "fenced_blocks": [],
       "reader_action": "Review planned work.",
-      "source_fingerprint": "sha256:f6baffd56a967b67d74bc10a6528c6d097f6df6e4e9939d602005366cd1fe093",
+      "source_fingerprint": "sha256:9868a0108335929033011868861c881d6dcce3a034b284c286d5a5fa048df716",
       "sources": [
         ".github/repository-settings.json",
         "pyproject.toml",
@@ -184,13 +183,13 @@
         {
           "classification": "structural_assertion",
           "id": "roadmap.md.table-2",
-          "sha256": "dba1bf4672cdb2700d999ffcfe0fa0002b3bcadf23ae5624921cabec9e75cc34",
+          "sha256": "9d1d7deaa2511b27ca9267de30eba6dd67d3d09e112673917312691b4536bda0",
           "verification_id": "automated.roadmap-contract"
         },
         {
           "classification": "structural_assertion",
           "id": "roadmap.md.table-3",
-          "sha256": "5152bc472e238d3aa60e258909d5366769772b191c69750bb7029e99a1ee0229",
+          "sha256": "fd6239298e68d865a508c843bdd05f6f1f7fd77ed8116a63c8da4bbb86c78395",
           "verification_id": "automated.roadmap-contract"
         },
         {
@@ -211,7 +210,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Report a vulnerability without public disclosure.",
-      "source_fingerprint": "sha256:49cd42a0609f67a3af799e6de89233b75382e69de87c836abdb6f1f5f97b059b",
+      "source_fingerprint": "sha256:a9d1fec419b6707cdddb333a79306d5bc848c6f1feee7bd097cd3b0b342e7c66",
       "sources": [
         ".github/repository-settings.json",
         ".github/ISSUE_TEMPLATE/config.yml"
@@ -239,7 +238,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Assess the supported security boundary before enabling an integration or reporting a vulnerability.",
-      "source_fingerprint": "sha256:827db659778a89638b3c315fd1bd759af2eada7292ecc508a43b61f15fc7f64d",
+      "source_fingerprint": "sha256:5ea9f89e013595ace8eb6763253b4f357785e186f9f0acd07bddb88a10190c8e",
       "sources": [
         "SECURITY.md",
         "docs/privacy.md",
@@ -258,7 +257,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Place new state in the correct configured root.",
-      "source_fingerprint": "sha256:dd6b9119e92c7d74139d0becc6cc767abff3440559d3102d5f2ac3ae9cbc2e19",
+      "source_fingerprint": "sha256:6d2ae4a521c8c3ba1d95811635f345a24dffd1f487081d952381732b67409eb9",
       "sources": [
         "src/fieldkit/config/**/*.py"
       ]
@@ -267,7 +266,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Add an integration without changing the base installation boundary.",
-      "source_fingerprint": "sha256:7ff7694a454477f6d072bc05178ca91f57fa94cf162675447ef8da8f06095945",
+      "source_fingerprint": "sha256:15f645e60b6e31b7b55de2af9fa40b8449b1f22bfe76fb8f151482c5b447b86d",
       "sources": [
         "pyproject.toml",
         "src/fieldkit/__main__.py"
@@ -277,7 +276,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Implement a command with the established command-to-domain boundary.",
-      "source_fingerprint": "sha256:923efdd6dbd765c07a1242802139dcb6adc0524ec7befc5648a443e16042689e",
+      "source_fingerprint": "sha256:ddbdb679c1ed613b88249747bda7e401a566cc89aaab8776b3990eed1015722d",
       "sources": [
         "src/fieldkit/__main__.py",
         "src/fieldkit/cli_exit.py"
@@ -287,7 +286,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Choose the canonical safe write mechanism for persistent state.",
-      "source_fingerprint": "sha256:9ec2ef6410659fbaadcdf7eb79a88f175a3f5755bbf0c3eec625999260bc538f",
+      "source_fingerprint": "sha256:e060bc6607e106a666ba619394456655fd7cfecd29491f372ca31cb5f6152af9",
       "sources": [
         "src/fieldkit/**/*.py"
       ]
@@ -769,97 +768,6 @@
         },
         {
           "classification": "generated_reference",
-          "id": "docs.cli.reference.md.block-66",
-          "language": "",
-          "sha256": "c94f52cc1c716b3619a550b751fc8fdcb8a68431bdb7618834f702af8d0a6cc0",
-          "verification_id": "automated.generated-reference"
-        },
-        {
-          "classification": "generated_reference",
-          "id": "docs.cli.reference.md.block-67",
-          "language": "",
-          "sha256": "60f4509132925730d40fa3f0339087dca6bf9e5cb520c98f5591a2dfc8e536fc",
-          "verification_id": "automated.generated-reference"
-        },
-        {
-          "classification": "generated_reference",
-          "id": "docs.cli.reference.md.block-68",
-          "language": "",
-          "sha256": "c2a023b59f725f9bbc3fbeb218516546f0fd4f173b06274acd0690fbd502698d",
-          "verification_id": "automated.generated-reference"
-        },
-        {
-          "classification": "generated_reference",
-          "id": "docs.cli.reference.md.block-69",
-          "language": "",
-          "sha256": "2ef7421572b52086bd900d2cae976e8e93da2bfe2a285d7a30a7387199c48117",
-          "verification_id": "automated.generated-reference"
-        },
-        {
-          "classification": "generated_reference",
-          "id": "docs.cli.reference.md.block-70",
-          "language": "",
-          "sha256": "7df174f9c52cae603724e50ed7ee5df9d101bd526a1d41c40b24bbab1859f1b2",
-          "verification_id": "automated.generated-reference"
-        },
-        {
-          "classification": "generated_reference",
-          "id": "docs.cli.reference.md.block-71",
-          "language": "",
-          "sha256": "482f963f171d7b83fc2d6736bbe445a3a6cd15eca810794d9aa4603ef0daa28f",
-          "verification_id": "automated.generated-reference"
-        },
-        {
-          "classification": "generated_reference",
-          "id": "docs.cli.reference.md.block-72",
-          "language": "",
-          "sha256": "0ce481dc7da3757dec2314d529149087977543542984d726b1b2703737b2c0ad",
-          "verification_id": "automated.generated-reference"
-        },
-        {
-          "classification": "generated_reference",
-          "id": "docs.cli.reference.md.block-73",
-          "language": "",
-          "sha256": "6877cc6b781384ec05383722264e5d61c91322bec22ebecdfd32ec3ca92a87ec",
-          "verification_id": "automated.generated-reference"
-        },
-        {
-          "classification": "generated_reference",
-          "id": "docs.cli.reference.md.block-74",
-          "language": "",
-          "sha256": "9c101265eea031c4330b97626b015b63ae463a7d959a047990733ef246533819",
-          "verification_id": "automated.generated-reference"
-        },
-        {
-          "classification": "generated_reference",
-          "id": "docs.cli.reference.md.block-75",
-          "language": "",
-          "sha256": "a85c8bb6435d171245a36710542cd5d34ad2c7861ad1149f9f343acd18e21212",
-          "verification_id": "automated.generated-reference"
-        },
-        {
-          "classification": "generated_reference",
-          "id": "docs.cli.reference.md.block-76",
-          "language": "",
-          "sha256": "6c9207053a214903c5961e9fe12ffc7186108d587052f59b63f6f6f4315a0d69",
-          "verification_id": "automated.generated-reference"
-        },
-        {
-          "classification": "generated_reference",
-          "id": "docs.cli.reference.md.block-77",
-          "language": "",
-          "sha256": "b2aace85130df36c329c5ccd6960575bd15939389e7a1437ab1365c7c71f5465",
-          "verification_id": "automated.generated-reference"
-        },
-        {
-          "classification": "generated_reference",
-          "id": "docs.cli.reference.md.block-78",
-          "language": "",
-          "sha256": "26abd57ba22c35dd4f2ed12e2fa36f3210b042b96cfe40c6c922ccc6648328e9",
-          "verification_id": "automated.generated-reference"
-        },
-        {
-          "classification": "generated_reference",
           "id": "docs.cli.reference.md.block-79",
           "language": "",
           "sha256": "129ed009708871ce8fda02eecf1f18d28ccaf5b17dc28f471c5cda5aa486cb36",
@@ -1224,7 +1132,7 @@
         }
       ],
       "reader_action": "Look up command syntax and options.",
-      "source_fingerprint": "sha256:45a7a09f5d3854e5b4d42fab067cfcdc1d1e1b786037924f40ae4b14bbb6f22f",
+      "source_fingerprint": "sha256:fefb5742006f33eef271ad6d564bb1c19ca0a1aa4d79837893d4fb7d66b6cd0b",
       "sources": [
         "src/fieldkit/commands/**/*.py",
         "src/fieldkit/__main__.py"
@@ -1233,7 +1141,7 @@
         {
           "classification": "generated_reference",
           "id": "docs.cli.reference.md.table-1",
-          "sha256": "1507cea06ca63b916f210e2277e78915ca7e395866a41447fc7b4239f7c98bd3",
+          "sha256": "3d4239909dc62f638d55d6dd351985531c2be6690d21213eaad83bb64c41988a",
           "verification_id": "automated.generated-reference"
         }
       ]
@@ -1261,7 +1169,7 @@
       "content_type": "concept",
       "fenced_blocks": [],
       "reader_action": "Understand fieldkit's product and data model.",
-      "source_fingerprint": "sha256:210f0f211f5cb40e112a6e11afd1993c324bbf645e1e2c28ea38703a3946f4d2",
+      "source_fingerprint": "sha256:6a87df33960ed9353e672b4e80e3bb81f9d68ffcd590018785f6eb40c1f3af17",
       "sources": [
         "src/fieldkit/config/**/*.py",
         "src/fieldkit/pursuit/io.py"
@@ -1307,7 +1215,7 @@
         }
       ],
       "reader_action": "Inspect the generated module dependency graph.",
-      "source_fingerprint": "sha256:08f0b957db27099549719b0f2cb16a5e24448239a9f5f209f178ba17f8b3c402",
+      "source_fingerprint": "sha256:aeb820b589803099245b0ead6152255ce5771a104779329ff3b2f332c50cc625",
       "sources": [
         "tach.toml",
         "src/fieldkit/**/*.py",
@@ -1317,13 +1225,13 @@
         {
           "classification": "generated_reference",
           "id": "docs.dependency.map.md.table-1",
-          "sha256": "1d354d5988c80e3f4917cba7b8e6dfe044f6e26ba4150a1510a60346682353a1",
+          "sha256": "b235ba84d964dbd4759fc7ba9a6c6f9ae9d490ec307e7e2ffcb69584836b7cbe",
           "verification_id": "automated.generated-dependency-map"
         },
         {
           "classification": "generated_reference",
           "id": "docs.dependency.map.md.table-2",
-          "sha256": "9fa76ab0ad5c761f74ec7885082644c60854dbe15fb3ac490a8594d56a200fc8",
+          "sha256": "c8ee3aa2d53a09c65997f560e5d27ba69d4e7d78ef73d175dfa3989738dd4e5d",
           "verification_id": "automated.generated-dependency-map"
         },
         {
@@ -1344,7 +1252,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Review dependency trust and update requirements.",
-      "source_fingerprint": "sha256:c0bf910cb3001eef3e8b21093ec55b0d00f0cc0380d05cd25c319a7f7493b90c",
+      "source_fingerprint": "sha256:c2a8829e0c6c09a519f1c60d60874d4fdf1b78786bb98aed291d41dccf85e4f6",
       "sources": [
         "docs/release-readiness/dependency-security-policy.json",
         "pyproject.toml",
@@ -1357,7 +1265,7 @@
       "content_type": "concept",
       "fenced_blocks": [],
       "reader_action": "Preserve local-first command, persistence, and integration invariants in a contribution.",
-      "source_fingerprint": "sha256:69b5b740e34094882fb11e25d522b4b387678c9efb6c1dbb920798780dc0864a",
+      "source_fingerprint": "sha256:113863a148cf062a1c51b761cfbbb2d83adee0bdf7d7392b49fefa40bdd13d9c",
       "sources": [
         "AGENTS.md",
         "src/fieldkit/__main__.py",
@@ -1432,7 +1340,7 @@
         }
       ],
       "reader_action": "Install fieldkit and complete a credential-free first run.",
-      "source_fingerprint": "sha256:6d16065714b7eb493e525d671bd536fc71d24a8fb66ca37f77261766422f916a",
+      "source_fingerprint": "sha256:69247e700677e4919ad062969833ad170f3c24b5a2d3cfc61c6d95cf5b586642",
       "sources": [
         "pyproject.toml",
         "scripts/check_compatibility_policy.py",
@@ -1562,7 +1470,7 @@
         }
       ],
       "reader_action": "Initialize a workspace.",
-      "source_fingerprint": "sha256:9b9293e7934dd96b3aeaf79e55cfc4e5defdf3bc55f58ca36ec806c1d47433d0",
+      "source_fingerprint": "sha256:bd05ad5e268d689125593881d86bc857b7ae4e803a62146cc5df11256b2897f4",
       "sources": [
         "src/fieldkit/commands/init/**/*.py",
         "src/fieldkit/config/**/*.py"
@@ -1967,7 +1875,7 @@
       "content_type": "concept",
       "fenced_blocks": [],
       "reader_action": "Understand local storage and external data flows.",
-      "source_fingerprint": "sha256:9ec2ef6410659fbaadcdf7eb79a88f175a3f5755bbf0c3eec625999260bc538f",
+      "source_fingerprint": "sha256:e060bc6607e106a666ba619394456655fd7cfecd29491f372ca31cb5f6152af9",
       "sources": [
         "src/fieldkit/**/*.py"
       ],
@@ -1975,7 +1883,7 @@
         {
           "classification": "exact_release_cutover_proof",
           "id": "docs.privacy.md.table-1",
-          "sha256": "1b1b0fc12b51ad4290a289a514ab556d2bae64f05dd63e409841efc5cf5f9103",
+          "sha256": "8172af414ba215d91f20799ada760f4078bf7b7b5811bead53dcace94ebbbe1b",
           "verification_id": "manual.release-cutover"
         }
       ]
@@ -2027,7 +1935,7 @@
         }
       ],
       "reader_action": "Configure fieldkit with YAML.",
-      "source_fingerprint": "sha256:dd6b9119e92c7d74139d0becc6cc767abff3440559d3102d5f2ac3ae9cbc2e19",
+      "source_fingerprint": "sha256:6d2ae4a521c8c3ba1d95811635f345a24dffd1f487081d952381732b67409eb9",
       "sources": [
         "src/fieldkit/config/__init__.py",
         "src/fieldkit/config/**/*.py"
@@ -2042,7 +1950,7 @@
         {
           "classification": "exact_release_cutover_proof",
           "id": "docs.reference.config.file.md.table-2",
-          "sha256": "ba9ca944ea6d952d2e890b88172e23dfeba41d4f23821289090608de3563cdbf",
+          "sha256": "c4176de1a7cb0389f2ae3d4a20b77d534179036197e1a4d0d33997154254acd9",
           "verification_id": "manual.release-cutover"
         },
         {
@@ -2072,7 +1980,7 @@
         }
       ],
       "reader_action": "Configure supported environment overrides.",
-      "source_fingerprint": "sha256:dd6b9119e92c7d74139d0becc6cc767abff3440559d3102d5f2ac3ae9cbc2e19",
+      "source_fingerprint": "sha256:6d2ae4a521c8c3ba1d95811635f345a24dffd1f487081d952381732b67409eb9",
       "sources": [
         "src/fieldkit/config/_loader.py",
         "src/fieldkit/config/**/*.py"
@@ -2099,7 +2007,7 @@
         {
           "classification": "exact_release_cutover_proof",
           "id": "docs.reference.environment.vars.md.table-4",
-          "sha256": "6df68e07a17347b513c1d360ffdf130598956183a369094d2029cc42380ef080",
+          "sha256": "472ccffe2643180c5ec2ee3014965aedebc08e30ebb525bf445f3de9cfea97df",
           "verification_id": "manual.release-cutover"
         }
       ]
@@ -2123,7 +2031,7 @@
         }
       ],
       "reader_action": "Interpret process exit status.",
-      "source_fingerprint": "sha256:c22c92e75762b3d0bf46b0fdd7cf9e15d2b32b51b0a370a4a9793b1cda23513c",
+      "source_fingerprint": "sha256:accfba59c111514e2df26434a384162fd86b0b900dbc17ea64093d286f0d5e2c",
       "sources": [
         "src/fieldkit/cli_exit.py",
         "src/fieldkit/__main__.py",
@@ -2191,7 +2099,7 @@
         }
       ],
       "reader_action": "Diagnose common failures safely.",
-      "source_fingerprint": "sha256:b11a8a65d576dd750df983b967bdfe5783f3a729f60f60dc7d980d21b19182eb",
+      "source_fingerprint": "sha256:1ab9a7308534b3df5ca379edbd0ce5519ee1e2f12fbec14cfe549410282bbdd4",
       "sources": [
         "src/fieldkit/commands/doctor/**/*.py",
         "src/fieldkit/config/**/*.py"
@@ -2241,7 +2149,7 @@
         }
       ],
       "reader_action": "Choose a supported fieldkit workflow.",
-      "source_fingerprint": "sha256:04db8a4355e90e1904d031a764c5d8c36a9121c2b16b9a5404efe5899f6b4c65",
+      "source_fingerprint": "sha256:c28d825d192f0ee827f948afc5b16f83e004d49a63be6cd296e26cff89c38309",
       "sources": [
         "src/fieldkit/__main__.py",
         "src/fieldkit/commands/**/*.py",

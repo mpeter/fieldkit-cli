@@ -3,7 +3,7 @@
 fieldkit combines a local workspace with optional external integrations. The command-line interface
 is the stable entry point; Markdown, YAML, JSON, and SQLite files provide inspectable local state.
 
-## Persistent roots and harness scratch
+## Persistent roots
 
 fieldkit keeps three persistent kinds of content separate:
 
@@ -13,11 +13,6 @@ fieldkit keeps three persistent kinds of content separate:
 
 Commands resolve these roots through configuration rather than assuming a particular username,
 checkout, organization, or workstation layout.
-
-Agent and health harnesses use a fourth, cache-class location for disposable source worktrees.
-`FIELDKIT_HARNESS_ROOT` overrides that location. Otherwise fieldkit uses
-`$XDG_CACHE_HOME/fieldkit` or `~/.cache/fieldkit`. The harness can regenerate this content from the
-source repository, so it does not belong in the workspace or runtime-data backup contract.
 
 ## Portable core and optional capabilities
 

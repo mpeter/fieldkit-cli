@@ -30,7 +30,6 @@ class _FieldkitConfig(BaseModel):
     email: str | None = None
     email_domain: str | None = None
     vertex_location: str | None = None
-    github_repo: str | None = None
     google_token_path: str | None = None
     gmail_token: str | None = None
     sf_org_url: str | None = None

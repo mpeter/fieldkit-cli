@@ -59,7 +59,7 @@ def emit_report(
     print(f"Skill integrity: {n_err} error{'s' if n_err != 1 else ''}, {n_warn} warning{'s' if n_warn != 1 else ''}")
 
     if n_err > 0:
-        print("Run /check-skill-integrity to auto-fix errors where possible.")
+        print("Fix the errors listed above, then re-run this check.")
 
     if report_path is not None:
         report: dict[str, object] = {

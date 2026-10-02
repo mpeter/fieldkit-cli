@@ -283,77 +283,7 @@ def _collect_features() -> dict[str, Any]:
             "sf_cookies": _probe_sf_cookies(),
             "chrome_debug": _probe_chrome_debug(),
         },
-        "issues": _probe_issues(),
     }
-
-
-def _probe_issues() -> dict[str, Any]:
-    """Count open issues via the GitHub Issues API.
-
-    Uses get_github_repo() from config to query gh CLI for open bug/enhancement
-    counts. Returns {"available": False, ...} when github_repo is not configured
-    or gh is unavailable.
-    """
-    import subprocess
-
-    from fieldkit.config import ConfigError, get_github_repo
-
-    try:
-        repo = get_github_repo()
-    except ConfigError as exc:
-        return {
-            "available": False,
-            "error": str(exc),
-            "open_bugs": 0,
-            "open_enhancements": 0,
-            "closed": 0,
-            "wontfix": 0,
-        }
-
-    def _count(label: str, state: str) -> int:
-        try:
-            result = subprocess.run(
-                [
-                    "gh",
-                    "issue",
-                    "list",
-                    "--repo",
-                    repo,
-                    "--state",
-                    state,
-                    "--label",
-                    label,
-                    "--limit",
-                    "1000",
-                    "--json",
-                    "number",
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=5,
-            )
-            if result.returncode != 0:
-                return 0
-            import json
-
-            return len(json.loads(result.stdout or "[]"))
-        except Exception:  # noqa: BLE001
-            return 0
-
-    return {
-        "available": True,
-        "repo": repo,
-        "open_bugs": _count("bug", "open"),
-        "open_enhancements": _count("enhancement", "open"),
-        "closed": _count("bug", "closed") + _count("enhancement", "closed"),
-        "wontfix": 0,  # wont-fix issues are closed with state_reason=not_planned; not separately labelable here
-    }
-
-
-# ---------------------------------------------------------------------------
-# Rendering
-# ---------------------------------------------------------------------------
 
 
 def _icon(ok: bool) -> str:
@@ -436,15 +366,6 @@ def _print_services(svcs: dict[str, Any]) -> None:
     click.echo(f"  {_icon(ch['available'])} chrome       {chrome_label}")
 
 
-def _print_issues(issues: dict[str, Any]) -> None:
-    if not issues:
-        return
-    click.echo("Issues:")
-    click.echo(f"  repo: {issues.get('repo', '(unknown)')}")
-    click.echo(f"  open: {issues.get('open_bugs', 0)} bug(s), {issues.get('open_enhancements', 0)} enhancement(s)")
-    click.echo(f"  closed: {issues.get('closed', 0)}")
-
-
 def _render_features_human(features: dict[str, Any]) -> None:
     cli = features["cli"]
     click.echo(f"fieldkit {cli['version']}  python {cli['python']}  {cli['platform']} {cli['arch']}")
@@ -453,7 +374,6 @@ def _render_features_human(features: dict[str, Any]) -> None:
     _print_skills(features["skills"])
     _print_config(features["config"])
     _print_services(features["services"])
-    _print_issues(features.get("issues", {}))
 
 
 def _render_version_human() -> None:

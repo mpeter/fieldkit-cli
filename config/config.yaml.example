@@ -7,7 +7,6 @@
 fieldkit_home: ~/fieldkit-workspace
 
 # Optional repository used by GitHub-backed issue and web PR commands.
-# github_repo: owner/repository
 
 # Your work email address (used by gmail commands to identify your messages)
 email: you@example.com

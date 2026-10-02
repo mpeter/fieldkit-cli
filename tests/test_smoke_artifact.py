@@ -52,10 +52,7 @@ def test_smoke_records_exact_digest_environment_and_all_contracts(
         if argv[-2:] == ["commands", "--json"]:
             return _completed(
                 argv,
-                stdout=(
-                    '[{"full_name": "auth google"}, {"full_name": "meeting link"}, '
-                    '{"full_name": "driver run"}, {"full_name": "web serve"}]'
-                ),
+                stdout=('[{"full_name": "auth google"}, {"full_name": "meeting link"}, {"full_name": "web serve"}]'),
             )
         if argv[-3:] == ["--features", "--json"] or argv[-3:] == ["version", "--features", "--json"]:
             return _completed(
@@ -176,10 +173,7 @@ def test_all_profile_installs_exact_artifact_extra_and_exercises_each_integratio
         if argv[-2:] == ["commands", "--json"]:
             return _completed(
                 argv,
-                stdout=(
-                    '[{"full_name":"auth google"},{"full_name":"meeting link"},'
-                    '{"full_name":"driver run"},{"full_name":"web serve"}]'
-                ),
+                stdout=('[{"full_name":"auth google"},{"full_name":"meeting link"},{"full_name":"web serve"}]'),
             )
         if argv[-3:] == ["version", "--features", "--json"]:
             return _completed(
