@@ -9,6 +9,7 @@ import json
 import re
 from datetime import UTC, datetime
 from pathlib import Path
+from shlex import quote
 
 import click
 
@@ -89,9 +90,12 @@ def _emit_created(target: Path, account: str, slug: str, as_json: bool) -> None:
     click.echo("     Or run a bulk sync (matches by name automatically):")
     click.echo(f"       fieldkit sf listview {account}")
     click.echo()
-    click.echo("  Note: pre-pipeline pursuits are excluded from 'fieldkit pursuit health'")
-    click.echo("  by default. Run 'fieldkit pursuit health --include-prospect' to verify")
-    click.echo("  this file appears, or advance the stage to 'prospect' or beyond.")
+    click.echo("  Note: health always excludes pre-pipeline pursuits, even with --include-prospect.")
+    click.echo("  To verify this file without changing its stage, inspect the Created path above or run:")
+    click.echo(f"       fieldkit pursuit audit --account {quote(account)} --json")
+    click.echo("  Audit is read-only in JSON mode and may report findings until details are filled in.")
+    click.echo("  After intentionally advancing to prospect, health requires --include-prospect:")
+    click.echo(f"       fieldkit pursuit health --account {quote(account)} --include-prospect")
 
 
 @declare_write("workspace")
