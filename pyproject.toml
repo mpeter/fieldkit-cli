@@ -269,7 +269,7 @@ release-build = [
 dev = [
     "gaze-py>=0.9.3",
     "mkdocs>=1.6,<2",
-    "mutmut>=3.6.0,<4.0.0",
+    "mutmut>=3.6.0,<3.8.0",
     "mypy>=2.3.0",
     "openpyxl>=3.1",
     "pip>=26.2,<27",
@@ -280,6 +280,10 @@ dev = [
     "ruff>=0.15",
     "tach>=0.35",
 ]
+
+[tool.uv]
+# Keep mutmut's transitive parser on the previously reviewed license baseline.
+constraint-dependencies = ["libcst<1.9.0"]
 
 [tool.coverage.run]
 omit = [

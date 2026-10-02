@@ -29,7 +29,7 @@
         }
       ],
       "reader_action": "Apply repository engineering constraints.",
-      "source_fingerprint": "sha256:a694f1bc9d99f8a09c97647daac42fc798354f5bd708b688575e9bdbc485e7c0",
+      "source_fingerprint": "sha256:ce02f25eaa9517a61e9aa74bedc64da7b450629d9442a123d022482f3e78728a",
       "sources": [
         "Makefile",
         "pyproject.toml",
@@ -55,7 +55,7 @@
         }
       ],
       "reader_action": "Prepare and submit a contribution.",
-      "source_fingerprint": "sha256:c2d5b3bdb95c190db00acc874fb0635c63051a450b97f98d275a7b360d2c511c",
+      "source_fingerprint": "sha256:a9449a58e906d89a4263ff6f8d9c512aede5c153a97dbfdae6248c3575d3cca6",
       "sources": [
         "Makefile",
         "pyproject.toml",
@@ -105,7 +105,7 @@
         }
       ],
       "reader_action": "Choose an installation or contribution path.",
-      "source_fingerprint": "sha256:e4f78fa03087d006826d4f667f9f7462c97e6dfcdcd681898921a7b44c77f8cb",
+      "source_fingerprint": "sha256:7d42c8ea887c2f6205206c074faaf5aa2280c666ce4d155e02cfa7ac0a53dc0e",
       "sources": [
         "pyproject.toml",
         "src/fieldkit/__main__.py",
@@ -172,7 +172,7 @@
       "content_type": "roadmap",
       "fenced_blocks": [],
       "reader_action": "Review planned work.",
-      "source_fingerprint": "sha256:475ff4213ab538e1b1eefb200dec421b873719cb7120cbe7d4c855569e1f5627",
+      "source_fingerprint": "sha256:fa5f131548a312722d13f5dae9503b4ac8e22b8b68d31827d16d08e601999491",
       "sources": [
         ".github/repository-settings.json",
         "pyproject.toml",
@@ -271,7 +271,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Add an integration without changing the base installation boundary.",
-      "source_fingerprint": "sha256:c454b08b23f28776a4240d560360b554edf8926ef233e751776f3ec1e843cc4a",
+      "source_fingerprint": "sha256:96076f528e0ab9bb2e6b4fb7783b60f19d85a02d03aebb3ed97b6c50e7c5cd29",
       "sources": [
         "pyproject.toml",
         "src/fieldkit/__main__.py"
@@ -1257,7 +1257,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Review dependency trust and update requirements.",
-      "source_fingerprint": "sha256:cc7f6dd54c24f2d37a054423cb21cf8728b27945b85c7294baa54c678213f445",
+      "source_fingerprint": "sha256:5420dacfa3612aecd6cbd8f3431b4c4fd76b18df57ba8231bf932607a7e5457d",
       "sources": [
         "docs/release-readiness/dependency-security-policy.json",
         "pyproject.toml",
@@ -1345,7 +1345,7 @@
         }
       ],
       "reader_action": "Install fieldkit and complete a credential-free first run.",
-      "source_fingerprint": "sha256:121b941b453f6a5310424710514b9ec6adb83eb79bcffff2dc8b5b224197ab6b",
+      "source_fingerprint": "sha256:ee5c7acb573763241aaa0183569685f8241085b0b1192327b3a83dbbb680504f",
       "sources": [
         "pyproject.toml",
         "scripts/check_compatibility_policy.py",
@@ -1826,7 +1826,7 @@
       "content_type": "overview",
       "fenced_blocks": [],
       "reader_action": "Choose the documentation path for a task.",
-      "source_fingerprint": "sha256:c2ec7168b4df1b258b52941316583a5cc7691485f8d703708c3ad524e0425895",
+      "source_fingerprint": "sha256:0210460cb8da2aabdab8a3249a20268ce35a2cfdc7ad53ed987ff179f97a17e8",
       "sources": [
         "mkdocs.yml",
         "pyproject.toml"
@@ -1851,7 +1851,7 @@
         }
       ],
       "reader_action": "Choose an optional integration profile.",
-      "source_fingerprint": "sha256:6ef66f4d6d467641617e7537d639ac28c2ce85cafccc3c5f26c9c56544247e1b",
+      "source_fingerprint": "sha256:e9c2148edbc6d25a99e0b48d16a90b24c72f101d40734bee9287517636ec3845",
       "sources": [
         "pyproject.toml",
         "src/fieldkit/config/optional_dependencies.py"
@@ -2122,7 +2122,7 @@
       "content_type": "reference",
       "fenced_blocks": [],
       "reader_action": "Find releases that have actually been published.",
-      "source_fingerprint": "sha256:9c73e4afa8f8108a89c1a4e9ad0e8588fe7fd3b7e0b3bd68fd4377493b7beba2",
+      "source_fingerprint": "sha256:f7aeea073334246ca32a9fcd777b81e9b8e9583d306de59127f6a5e3fe68f3df",
       "sources": [
         "pyproject.toml",
         "CHANGELOG.md"
