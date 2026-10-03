@@ -172,7 +172,8 @@ failed, and either state remains non-passing with retained evidence.
 Manual documentation and community rehearsals require a separate clean checkout
 of the public commit. The verifier rejects local changes, untracked files, a
 checkout at another revision, a non-public repository API response, or a review
-receipt that does not identify the exact successful Cutover verification run.
+receipt that does not identify a successful scheduled or dispatched Full
+enforcement run of that exact commit on `main`.
 Credentialed examples remain non-passing until their same-candidate transcripts
 and assertions are recorded against that checkout.
 

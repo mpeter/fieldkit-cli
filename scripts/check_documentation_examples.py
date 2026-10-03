@@ -93,13 +93,17 @@ _FINAL_REHEARSAL_ASSERTIONS = {
     "external-user-sdist-install": (("stdout", "Successfully installed"),),
     "external-user-wheel-install": (("stdout", "Successfully installed"),),
 }
+# A rehearsal binds to a successful full-gate run of the exact public commit on main.
+_REHEARSAL_WORKFLOW_NAME = "Full enforcement"
+_REHEARSAL_WORKFLOW_PATH = ".github/workflows/full-enforcement.yml"
+_REHEARSAL_WORKFLOW_EVENTS = frozenset({"schedule", "workflow_dispatch"})
 _MANUAL_PROOF_TYPES = {
     "manual.credentialed-integration": "credentialed-integration",
-    "manual.release-cutover": "release-cutover",
+    "manual.public-rehearsal": "public-rehearsal",
 }
 _MANUAL_PROOF_ACTORS = {
     "credentialed-integration": "maintainer",
-    "release-cutover": "operator",
+    "public-rehearsal": "operator",
 }
 
 
@@ -246,9 +250,9 @@ def _validate_public_rehearsal(subject: dict[str, object], public_repository: Pa
     if (
         not isinstance(run_id, int)
         or not isinstance(run_attempt, int)
-        or workflow_name != "Cutover verification"
-        or workflow_path != ".github/workflows/cutover.yml"
-        or workflow_event != "push"
+        or workflow_name != _REHEARSAL_WORKFLOW_NAME
+        or workflow_path != _REHEARSAL_WORKFLOW_PATH
+        or workflow_event not in _REHEARSAL_WORKFLOW_EVENTS
     ):
         raise ValueError("rehearsal evidence workflow identity is invalid")
     raw_run = _public_command(
@@ -267,6 +271,7 @@ def _validate_public_rehearsal(subject: dict[str, object], public_repository: Pa
         run.get("id") != run_id
         or run.get("run_attempt") != run_attempt
         or run.get("head_sha") != public_commit
+        or run.get("head_branch") != "main"
         or run.get("status") != "completed"
         or run.get("conclusion") != "success"
         or run.get("name") != workflow_name
@@ -274,7 +279,7 @@ def _validate_public_rehearsal(subject: dict[str, object], public_repository: Pa
         or not isinstance(run.get("path"), str)
         or run["path"].partition("@")[0] != workflow_path
     ):
-        raise ValueError("public cutover workflow run does not prove the retained public commit")
+        raise ValueError("public Full enforcement run does not prove the retained public commit")
 
 
 def _automated_verification_identifiers(documents: object) -> tuple[str, ...]:
@@ -364,7 +369,7 @@ def _validated_rehearsal_blocks(
     review = evidence.get("review")
     expected_review_url = f"https://github.com/mpeter/fieldkit-cli/actions/runs/{subject['workflow_run_id']}"
     if not isinstance(review, dict) or review.get("immutable_url") != expected_review_url:
-        raise ValueError("rehearsal evidence review receipt does not identify the cutover workflow run")
+        raise ValueError("rehearsal evidence review receipt does not identify the Full enforcement run")
     verified_blocks = evidence.get("verified_blocks")
     if not isinstance(verified_blocks, list) or not all(isinstance(block, str) for block in verified_blocks):
         raise ValueError("rehearsal evidence verified_blocks must be a string list")
@@ -419,7 +424,7 @@ def _validated_rehearsal_blocks(
         blocks = scenario.get("verified_blocks")
         if (
             blocks != []
-            or scenario.get("proof_type") != "release-cutover"
+            or scenario.get("proof_type") != "public-rehearsal"
             or scenario.get("documented_block_sha256") is not None
         ):
             raise ValueError(f"rehearsal scenario {identifier} has invalid block ownership")
