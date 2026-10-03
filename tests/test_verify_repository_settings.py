@@ -283,10 +283,10 @@ def test_collect_reads_environments_and_treats_absent_custom_policies_as_none(
 ) -> None:
     responses = {
         "environments?per_page=100": verifier.ApiObservation(
-            200, {"environments": [{"name": "pypi", "protection_rules": []}, {"name": "legacy"}]}
+            200, {"total_count": 2, "environments": [{"name": "pypi", "protection_rules": []}, {"name": "legacy"}]}
         ),
         "environments/pypi/deployment-branch-policies?per_page=100": verifier.ApiObservation(
-            200, {"branch_policies": [{"name": "v*.*.*", "type": "tag"}]}
+            200, {"total_count": 1, "branch_policies": [{"name": "v*.*.*", "type": "tag"}]}
         ),
         "environments/legacy/deployment-branch-policies?per_page=100": verifier.ApiObservation(404, None),
     }
@@ -311,12 +311,45 @@ def test_collect_reads_environments_and_treats_absent_custom_policies_as_none(
 
 def test_collect_fails_closed_on_an_unreadable_deployment_policy(monkeypatch: pytest.MonkeyPatch) -> None:
     responses = {
-        "environments?per_page=100": verifier.ApiObservation(200, {"environments": [{"name": "pypi"}]}),
+        "environments?per_page=100": verifier.ApiObservation(
+            200, {"total_count": 1, "environments": [{"name": "pypi"}]}
+        ),
         "environments/pypi/deployment-branch-policies?per_page=100": verifier.ApiObservation(403, None),
     }
     monkeypatch.setattr(verifier, "_api", lambda _repository, suffix: responses[suffix])
 
     with pytest.raises(RuntimeError, match="deployment policies returned HTTP 403"):
+        verifier._environments("example/project")
+
+
+@pytest.mark.parametrize(
+    ("suffix", "listing", "subject"),
+    [
+        ("environments?per_page=100", {"total_count": 101, "environments": [{"name": "pypi"}]}, "environment"),
+        (
+            "environments/pypi/deployment-branch-policies?per_page=100",
+            {"total_count": 101, "branch_policies": [{"name": "v*.*.*", "type": "tag"}]},
+            "deployment policy",
+        ),
+        ("environments?per_page=100", {"environments": [{"name": "pypi"}]}, "environment"),
+    ],
+    ids=["environments-beyond-one-page", "policies-beyond-one-page", "environments-without-count"],
+)
+def test_collect_fails_closed_on_a_listing_beyond_one_page(
+    monkeypatch: pytest.MonkeyPatch, suffix: str, listing: dict[str, Any], subject: str
+) -> None:
+    responses = {
+        "environments?per_page=100": verifier.ApiObservation(
+            200, {"total_count": 1, "environments": [{"name": "pypi"}]}
+        ),
+        "environments/pypi/deployment-branch-policies?per_page=100": verifier.ApiObservation(
+            200, {"total_count": 1, "branch_policies": [{"name": "v*.*.*", "type": "tag"}]}
+        ),
+    }
+    responses[suffix] = verifier.ApiObservation(200, listing)
+    monkeypatch.setattr(verifier, "_api", lambda _repository, requested: responses[requested])
+
+    with pytest.raises(RuntimeError, match=f"GitHub {subject} listing is incomplete"):
         verifier._environments("example/project")
 
 

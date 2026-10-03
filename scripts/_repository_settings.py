@@ -206,18 +206,26 @@ def collect(repository: str) -> EvidenceSnapshot:
     return EvidenceSnapshot(repository, collected_at, API_VERSION, branch_sha, observations)
 
 
+def _single_page(data: dict[str, Any], key: str, subject: str) -> list[object]:
+    """Return one listing page, failing closed when GitHub reports more items than it served."""
+    items = data.get(key, [])
+    if not isinstance(items, list) or data.get("total_count") != len(items):
+        raise RuntimeError(f"GitHub {subject} listing is incomplete or exceeds one page")
+    return items
+
+
 def _environments(repository: str) -> ApiObservation:
     """Read every deployment environment with its protection and deployment-ref policies."""
     listing = _api(repository, "environments?per_page=100")
     if listing.status != 200 or not isinstance(listing.data, dict):
         return listing
     environments: list[object] = []
-    for environment in listing.data.get("environments", []):
+    for environment in _single_page(listing.data, "environments", "environment"):
         if not isinstance(environment, dict) or not isinstance(environment.get("name"), str):
             raise RuntimeError("GitHub environment listing omitted an environment name")
         policies = _api(repository, f"environments/{environment['name']}/deployment-branch-policies?per_page=100")
         if policies.status == 200 and isinstance(policies.data, dict):
-            branch_policies = policies.data.get("branch_policies", [])
+            branch_policies = _single_page(policies.data, "branch_policies", "deployment policy")
         elif policies.status == 404:
             # GitHub serves no policy list unless custom deployment policies are enabled.
             branch_policies = []
