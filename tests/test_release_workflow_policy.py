@@ -230,7 +230,7 @@ def _workflow() -> dict[str, object]:
                     _sealed_distribution_step(),
                     {
                         "uses": _RECORDED["publish_pypi"],
-                        "with": {"packages-dir": "release-dist"},
+                        "with": {"packages-dir": "release-dist", "attestations": True},
                     },
                 ],
             },
@@ -246,7 +246,7 @@ def _workflow() -> dict[str, object]:
                     _sealed_distribution_step(),
                     {
                         "uses": _RECORDED["publish_pypi"],
-                        "with": {"packages-dir": "release-dist"},
+                        "with": {"packages-dir": "release-dist", "attestations": True},
                     },
                 ],
             },
@@ -601,6 +601,28 @@ def test_unreadable_recorded_actions_fail_the_policy(source: str) -> None:
         "publish_testpypi",
         "promotion_evidence",
     }
+
+
+@pytest.mark.parametrize("job_name", ["publish_testpypi", "publish_pypi"])
+@pytest.mark.parametrize("attestations", [None, False, "false"])
+def test_policy_requires_explicit_pep740_attestations(job_name: str, attestations: object) -> None:
+    workflow = _workflow()
+    jobs = workflow["jobs"]
+    assert isinstance(jobs, dict)
+    for step in jobs[job_name]["steps"]:
+        if isinstance(step.get("with"), dict) and "attestations" in step["with"]:
+            if attestations is None:
+                del step["with"]["attestations"]
+            else:
+                step["with"]["attestations"] = attestations
+
+    report = release_workflow_policy.validate_document(workflow)
+
+    assert report.findings == (
+        release_workflow_policy.Finding(
+            "RWF029", job_name, "package publication must explicitly attach PEP 740 attestations"
+        ),
+    )
 
 
 def test_checked_in_release_workflow_satisfies_policy() -> None:
