@@ -326,8 +326,14 @@ def _validate_authority_job(name: str, job: dict[str, Any], findings: list[Findi
         _mapping(step.get("with")).get("packages-dir") == "release-dist" for step in steps
     ):
         _add(findings, "RWF019", name, "package publication must receive only the sealed distribution directory")
-    if name in {"publish_testpypi", "publish_pypi"} and not any(
-        _is_true(_mapping(step.get("with")).get("attestations")) for step in steps
+    publisher_steps = tuple(
+        step
+        for step in steps
+        if isinstance(uses := step.get("uses"), str) and uses.partition("@")[0] == "pypa/gh-action-pypi-publish"
+    )
+    if name in {"publish_testpypi", "publish_pypi"} and (
+        not publisher_steps
+        or not all(_is_true(_mapping(step.get("with")).get("attestations")) for step in publisher_steps)
     ):
         _add(findings, "RWF029", name, "package publication must explicitly attach PEP 740 attestations")
     if name == "github_release" and not any(

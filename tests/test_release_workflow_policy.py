@@ -625,6 +625,27 @@ def test_policy_requires_explicit_pep740_attestations(job_name: str, attestation
     )
 
 
+@pytest.mark.parametrize("job_name", ["publish_testpypi", "publish_pypi"])
+def test_policy_requires_attestations_on_the_publisher_step_itself(job_name: str) -> None:
+    workflow = _workflow()
+    jobs = workflow["jobs"]
+    assert isinstance(jobs, dict)
+    for step in jobs[job_name]["steps"]:
+        uses = step.get("uses")
+        if isinstance(uses, str) and uses.startswith("pypa/gh-action-pypi-publish@"):
+            step["with"]["attestations"] = False
+        elif isinstance(uses, str) and uses.startswith("actions/download-artifact@"):
+            step["with"] = {"attestations": True}
+
+    report = release_workflow_policy.validate_document(workflow)
+
+    assert report.findings == (
+        release_workflow_policy.Finding(
+            "RWF029", job_name, "package publication must explicitly attach PEP 740 attestations"
+        ),
+    )
+
+
 def test_checked_in_release_workflow_satisfies_policy() -> None:
     report = release_workflow_policy.validate_repository(release_workflow_policy.REPO_ROOT)
 
