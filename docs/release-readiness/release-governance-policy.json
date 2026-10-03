@@ -3,7 +3,7 @@
   "candidate": {
     "repository": "mpeter/fieldkit-cli",
     "package": "fieldkit-cli",
-    "planned_tag": "v1.0.1"
+    "planned_tag": "v1.0.2"
   },
   "roles": {
     "preparer": "release-maintainer",

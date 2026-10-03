@@ -29,7 +29,7 @@
         }
       ],
       "reader_action": "Apply repository engineering constraints.",
-      "source_fingerprint": "sha256:ce02f25eaa9517a61e9aa74bedc64da7b450629d9442a123d022482f3e78728a",
+      "source_fingerprint": "sha256:64247a8cbe3c05ea96d259de4db6e43feb88502a6812e94881ed905e6a1cfb47",
       "sources": [
         "Makefile",
         "pyproject.toml",
@@ -55,7 +55,7 @@
         }
       ],
       "reader_action": "Prepare and submit a contribution.",
-      "source_fingerprint": "sha256:a9449a58e906d89a4263ff6f8d9c512aede5c153a97dbfdae6248c3575d3cca6",
+      "source_fingerprint": "sha256:b6831264a89d7c5bd35027e348d09d4717063ee1b9baaadbf3de3503a013a90e",
       "sources": [
         "Makefile",
         "pyproject.toml",
@@ -105,7 +105,7 @@
         }
       ],
       "reader_action": "Choose an installation or contribution path.",
-      "source_fingerprint": "sha256:7d42c8ea887c2f6205206c074faaf5aa2280c666ce4d155e02cfa7ac0a53dc0e",
+      "source_fingerprint": "sha256:c7db2399655833c6f40955749044547d667c3b6aa19e83169528fa98a4ae5b04",
       "sources": [
         "pyproject.toml",
         "src/fieldkit/__main__.py",
@@ -145,7 +145,7 @@
         }
       ],
       "reader_action": "Prepare, assess, and recover an operator-approved release candidate.",
-      "source_fingerprint": "sha256:bd3b406579f21fb7ef91a8daea9e5ffee64b533ca2170a8b45dcc486c18aff5a",
+      "source_fingerprint": "sha256:4ed145153913bd6a63fa41f2bb15d0f32d18138c94203b5a9f3239962d3565dd",
       "sources": [
         "Makefile",
         ".github/workflows/release.yml",
@@ -172,7 +172,7 @@
       "content_type": "roadmap",
       "fenced_blocks": [],
       "reader_action": "Review planned work.",
-      "source_fingerprint": "sha256:fa5f131548a312722d13f5dae9503b4ac8e22b8b68d31827d16d08e601999491",
+      "source_fingerprint": "sha256:28cf05310d8e2a4d715e3529ef2e9458528f163e6a0b60ee242827a2b1753f84",
       "sources": [
         ".github/repository-settings.json",
         "pyproject.toml",
@@ -271,7 +271,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Add an integration without changing the base installation boundary.",
-      "source_fingerprint": "sha256:96076f528e0ab9bb2e6b4fb7783b60f19d85a02d03aebb3ed97b6c50e7c5cd29",
+      "source_fingerprint": "sha256:8a54a17830be4c521a91298e8d685f51c99010ebc3d23925bcfb76c2caf557d4",
       "sources": [
         "pyproject.toml",
         "src/fieldkit/__main__.py"
@@ -1257,7 +1257,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Review dependency trust and update requirements.",
-      "source_fingerprint": "sha256:5420dacfa3612aecd6cbd8f3431b4c4fd76b18df57ba8231bf932607a7e5457d",
+      "source_fingerprint": "sha256:c3145a9d255a52cf742bb87bc5a41cab8a1fd68d0603e933fb3390701a7a60d5",
       "sources": [
         "docs/release-readiness/dependency-security-policy.json",
         "pyproject.toml",
@@ -1345,7 +1345,7 @@
         }
       ],
       "reader_action": "Install fieldkit and complete a credential-free first run.",
-      "source_fingerprint": "sha256:ee5c7acb573763241aaa0183569685f8241085b0b1192327b3a83dbbb680504f",
+      "source_fingerprint": "sha256:1e58e9f7e60ec664c1ac34c2df5bbe4c1aa819b3d72b11c445921d4cb79c1d25",
       "sources": [
         "pyproject.toml",
         "scripts/check_compatibility_policy.py",
@@ -1826,7 +1826,7 @@
       "content_type": "overview",
       "fenced_blocks": [],
       "reader_action": "Choose the documentation path for a task.",
-      "source_fingerprint": "sha256:0210460cb8da2aabdab8a3249a20268ce35a2cfdc7ad53ed987ff179f97a17e8",
+      "source_fingerprint": "sha256:b9909ba7d164e53e91f16dc9e82e1ae11cd71295f9c192670d79f2d59f4db664",
       "sources": [
         "mkdocs.yml",
         "pyproject.toml"
@@ -1851,7 +1851,7 @@
         }
       ],
       "reader_action": "Choose an optional integration profile.",
-      "source_fingerprint": "sha256:e9c2148edbc6d25a99e0b48d16a90b24c72f101d40734bee9287517636ec3845",
+      "source_fingerprint": "sha256:6f397843a4710b798f8b57164950748680ff50cdab961acfb63337f977e2ace0",
       "sources": [
         "pyproject.toml",
         "src/fieldkit/config/optional_dependencies.py"
@@ -2122,7 +2122,7 @@
       "content_type": "reference",
       "fenced_blocks": [],
       "reader_action": "Find releases that have actually been published.",
-      "source_fingerprint": "sha256:f7aeea073334246ca32a9fcd777b81e9b8e9583d306de59127f6a5e3fe68f3df",
+      "source_fingerprint": "sha256:510101de9879023a3bbe739d950e1060a2fb7dfca6569c7e1b232286b99738a9",
       "sources": [
         "pyproject.toml",
         "CHANGELOG.md"
