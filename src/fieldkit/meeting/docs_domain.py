@@ -16,6 +16,7 @@ import subprocess
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 from fieldkit.config import TIMEOUT_MCP_TOOL, get_mcp_gateway_url, get_user_email_from_env
 from fieldkit.pursuit import parse_frontmatter, write_frontmatter_raw
@@ -340,6 +341,38 @@ def open_doc(pursuit_file: Path) -> str:
     return _validated_doc_url(doc_id)
 
 
+def _docs_error_text(result: dict[str, Any]) -> str:
+    """Return the readable error carried by a failed Docs tool result."""
+    error = result.get("error") or result.get("content") or result.get("message")
+    if isinstance(error, dict):
+        error = error.get("message") or error.get("error")
+    if isinstance(error, list):
+        error = " ".join(str(item.get("text", "")) for item in error if isinstance(item, dict))
+    return _tool_error_text(str(error))
+
+
+def _created_tab_id(result_raw: str) -> str:
+    """Return the tab ID from a Docs tab-creation result, raising on any failure."""
+    if not result_raw or not result_raw.strip():
+        raise RuntimeError(
+            "Could not add meeting note: Drive API returned an empty response. "
+            "Check that the fieldkit-docs MCP group is connected."
+        )
+    try:
+        result = json.loads(result_raw)
+    except json.JSONDecodeError:
+        raise RuntimeError(f"Could not add meeting note: Docs tool error: {_tool_error_text(result_raw)}") from None
+    if not isinstance(result, dict):
+        raise RuntimeError("Could not add meeting note: Docs tool returned an invalid response")
+    if result.get("isError") or result.get("error") is not None:
+        raise RuntimeError(f"Could not add meeting note: Docs tool error: {_docs_error_text(result)}")
+    payload = result.get("result")
+    tab_id = payload.get("tab_id") if isinstance(payload, dict) else None
+    if not isinstance(tab_id, str) or not tab_id:
+        raise RuntimeError("Could not add meeting note: Docs tool did not return the new tab ID")
+    return tab_id
+
+
 def add_note(pursuit_file: Path, meeting_title: str, content: str) -> NoteResult:
     """Add a meeting note as a new tab in the Pursuit Workbook.
 
@@ -365,28 +398,7 @@ def add_note(pursuit_file: Path, meeting_title: str, content: str) -> NoteResult
             "index": index,
         },
     )
-    if not result_raw or not result_raw.strip():
-        raise RuntimeError(
-            "Could not add meeting note: Drive API returned an empty response. "
-            "Check that the fieldkit-docs MCP group is connected."
-        )
-    try:
-        result = json.loads(result_raw)
-    except json.JSONDecodeError:
-        raise RuntimeError(f"Could not add meeting note: Docs tool error: {_tool_error_text(result_raw)}") from None
-    if not isinstance(result, dict):
-        raise RuntimeError("Could not add meeting note: Docs tool returned an invalid response")
-    if result.get("isError") or result.get("error") is not None:
-        error = result.get("error") or result.get("content") or result.get("message")
-        if isinstance(error, dict):
-            error = error.get("message") or error.get("error")
-        if isinstance(error, list):
-            error = " ".join(str(item.get("text", "")) for item in error if isinstance(item, dict))
-        raise RuntimeError(f"Could not add meeting note: Docs tool error: {_tool_error_text(str(error))}")
-    payload = result.get("result")
-    tab_id = payload.get("tab_id") if isinstance(payload, dict) else None
-    if not isinstance(tab_id, str) or not tab_id:
-        raise RuntimeError("Could not add meeting note: Docs tool did not return the new tab ID")
+    tab_id = _created_tab_id(result_raw)
 
     # Populate the tab with meeting note content
     _mcpjungle(
