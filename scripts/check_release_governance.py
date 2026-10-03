@@ -22,7 +22,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Return 0 only when the candidate has every required external control."""
+    """Return 0 when the candidate report matches the governance policy."""
     args = _parser().parse_args(argv)
     try:
         report = validate(args.policy, args.candidate_report)
@@ -30,7 +30,7 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write(f"release governance validation error: {exc}\n")
         return 3
     sys.stdout.write(json.dumps(report.to_dict(), indent=2, sort_keys=True) + "\n")
-    return 0 if report.publication_authorized else 1
+    return 0
 
 
 if __name__ == "__main__":

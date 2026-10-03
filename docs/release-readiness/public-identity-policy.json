@@ -35,9 +35,6 @@
     "docs/release-readiness/public-tree-policy.schema.json",
     "docs/release-readiness/release-bundle-provenance.schema.json",
     "docs/release-readiness/release-consumer-evidence.schema.json",
-    "docs/release-readiness/cutover-record.schema.json",
-    "docs/release-readiness/release-evidence-record.schema.json",
-    "docs/release-readiness/release-manual-evidence.schema.json",
     "docs/release-readiness/release-promotion-evidence.schema.json",
     "docs/release-readiness/release-governance-policy.json",
     "docs/release-readiness/release-governance-policy.schema.json",
@@ -170,13 +167,6 @@
     },
     {
       "rule_id": "PUBID001",
-      "path": "docs/release-readiness/release-evidence-record.schema.json",
-      "pattern": "https://github\\.com/mpeter/fieldkit-cli/blob/main/docs/release-readiness/release-evidence-record\\.schema\\.json",
-      "classification": "public_project_identity",
-      "rationale": "The public evidence schema needs its canonical immutable identifier."
-    },
-    {
-      "rule_id": "PUBID001",
       "path": "docs/reference/troubleshooting.md",
       "pattern": "https://github\\.com/mpeter/fieldkit-cli/blob/main/(?:SECURITY|SUPPORT)\\.md",
       "classification": "public_project_identity",
@@ -211,8 +201,6 @@
         "docs/release-readiness/public-tree-policy.schema.json",
         "docs/release-readiness/release-bundle-provenance.schema.json",
         "docs/release-readiness/release-consumer-evidence.schema.json",
-        "docs/release-readiness/cutover-record.schema.json",
-        "docs/release-readiness/release-manual-evidence.schema.json",
         "docs/release-readiness/release-promotion-evidence.schema.json",
         "docs/release-readiness/release-governance-policy.schema.json"
       ],
@@ -254,23 +242,6 @@
       "pattern": "mpeter/fieldkit-cli",
       "classification": "public_project_identity",
       "rationale": "The final-rehearsal verifier accepts only the intended public repository and its CI evidence."
-    },
-    {
-      "rule_id": "PUBID001",
-      "paths": [
-        "scripts/cutover_record.py",
-        "tests/test_cutover_record.py"
-      ],
-      "pattern": "mpeter/fieldkit-cli",
-      "classification": "public_project_identity",
-      "rationale": "The cutover verifier and its fixtures resolve only the canonical public repository identity."
-    },
-    {
-      "rule_id": "PUBID001",
-      "path": "tests/test_release_check.py",
-      "pattern": "mpeter/fieldkit-cli",
-      "classification": "release_cutover_policy",
-      "rationale": "The release-evidence fixture proves candidate binding to the canonical public repository."
     },
     {
       "rule_id": "PUBID003",

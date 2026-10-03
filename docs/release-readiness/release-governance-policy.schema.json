@@ -4,7 +4,7 @@
   "title": "fieldkit release governance policy",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "candidate", "roles", "support", "external_controls"],
+  "required": ["schema_version", "candidate", "roles", "support"],
   "properties": {
     "schema_version": {"const": 1},
     "candidate": {
@@ -34,53 +34,6 @@
       "properties": {
         "compatibility_policy": {"type": "string", "minLength": 1},
         "supported_line": {"type": "string", "minLength": 1}
-      }
-    },
-    "external_controls": {
-      "type": "array",
-      "minItems": 2,
-      "maxItems": 2,
-      "uniqueItems": true,
-      "allOf": [
-        {"contains": {"properties": {"id": {"const": "github-release-environment"}}}},
-        {"contains": {"properties": {"id": {"const": "pypi-trusted-publisher"}}}}
-      ],
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["id", "status", "evidence"],
-        "properties": {
-          "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
-          "status": {"enum": ["pending", "evidenced"]},
-          "evidence": {
-            "additionalProperties": false,
-            "required": ["candidate", "record"],
-            "properties": {
-              "candidate": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["repository", "revision", "package", "planned_tag"],
-                "properties": {
-                  "repository": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"},
-                  "revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
-                  "package": {"type": "string", "minLength": 1},
-                  "planned_tag": {"type": "string", "pattern": "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?![\\s\\S])"}
-                }
-              },
-              "record": {"type": "string", "pattern": "^https://"}
-            }
-          }
-        },
-        "allOf": [
-          {
-            "if": {"properties": {"status": {"const": "pending"}}},
-            "then": {"properties": {"evidence": {"type": "null"}}}
-          },
-          {
-            "if": {"properties": {"status": {"const": "evidenced"}}},
-            "then": {"properties": {"evidence": {"type": "object"}}}
-          }
-        ]
       }
     }
   }

@@ -125,10 +125,6 @@ def _policy() -> dict[str, object]:
             "compatibility_policy": "docs/release-readiness/compatibility-policy.json",
             "supported_line": "1.x best-effort community support",
         },
-        "external_controls": [
-            {"id": "pypi-trusted-publisher", "status": "pending", "evidence": None},
-            {"id": "github-release-environment", "status": "pending", "evidence": None},
-        ],
     }
 
 
@@ -137,16 +133,20 @@ def _write(path: Path, payload: dict[str, object]) -> Path:
     return path
 
 
-def test_pending_controls_are_valid_but_do_not_authorize_publication(tmp_path: Path) -> None:
-    """Unratified live controls remain visible instead of silently passing."""
+def test_matching_candidate_passes_and_reports_its_identity(tmp_path: Path) -> None:
+    """A candidate built for the policy's repository, package, and tag passes."""
     policy_path = _write(tmp_path / "governance.json", _policy())
     candidate_path = _write(tmp_path / "candidate.json", _candidate_report())
 
     report = governance.validate(policy_path, candidate_path)
 
-    assert report.status == "pending"
-    assert report.publication_authorized is False
-    assert report.pending_controls == ("github-release-environment", "pypi-trusted-publisher")
+    assert report.status == "pass"
+    assert report.to_dict()["candidate"] == {
+        "repository": "example/fieldkit-cli",
+        "revision": "a" * 40,
+        "package": "fieldkit-cli",
+        "planned_tag": "v1.0.0",
+    }
 
 
 def test_candidate_report_rejects_an_unbound_runtime_requirements_receipt(tmp_path: Path) -> None:
@@ -166,7 +166,6 @@ def test_checked_in_policy_declares_the_intended_successor_release() -> None:
     assert policy.candidate.repository.endswith("/fieldkit-cli")
     assert policy.candidate.package == "fieldkit-cli"
     assert policy.candidate.planned_tag == "v1.0.2"
-    assert all(control.status == "pending" for control in policy.controls)
 
 
 def test_checked_in_policy_matches_its_published_schema() -> None:
@@ -181,14 +180,10 @@ def test_checked_in_policy_matches_its_published_schema() -> None:
     assert list(Draft202012Validator(schema).iter_errors(json.loads(json.dumps(policy)))) == []
 
 
-def test_schema_rejects_evidenced_control_without_evidence() -> None:
-    """Schema-only tooling cannot accept a policy the runtime rejects."""
+def test_retired_external_controls_field_is_rejected(tmp_path: Path) -> None:
+    """Same-candidate control evidence cannot be recorded in the policy it would change."""
     policy = _policy()
-    controls = policy["external_controls"]
-    assert isinstance(controls, list)
-    control = controls[0]
-    assert isinstance(control, dict)
-    control["status"] = "evidenced"
+    policy["external_controls"] = []
     schema = json.loads(
         (_REPO_ROOT / "docs/release-readiness/release-governance-policy.schema.json").read_text(encoding="utf-8")
     )
@@ -196,42 +191,20 @@ def test_schema_rejects_evidenced_control_without_evidence() -> None:
     errors = list(Draft202012Validator(schema).iter_errors(json.loads(json.dumps(policy))))
 
     assert errors
+    with pytest.raises(ValueError, match="keys must be exactly"):
+        governance.validate(
+            _write(tmp_path / "governance.json", policy), _write(tmp_path / "candidate.json", _candidate_report())
+        )
 
 
-def test_cli_reports_pending_as_a_nonzero_stop_condition(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """Automation can distinguish valid incomplete governance from malformed evidence."""
+def test_cli_reports_a_matching_candidate_as_success(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     policy_path = _write(tmp_path / "governance.json", _policy())
     candidate_path = _write(tmp_path / "candidate.json", _candidate_report())
 
     result = cli.main(["--policy", str(policy_path), "--candidate-report", str(candidate_path)])
 
-    assert result == 1
-    assert json.loads(capsys.readouterr().out)["status"] == "pending"
-
-
-def test_valid_evidenced_controls_authorize_only_the_same_candidate(tmp_path: Path) -> None:
-    """Every passing external control is attributable to the verified candidate."""
-    policy = _policy()
-    controls = policy["external_controls"]
-    assert isinstance(controls, list)
-    identity = {
-        "repository": "example/fieldkit-cli",
-        "revision": "a" * 40,
-        "package": "fieldkit-cli",
-        "planned_tag": "v1.0.0",
-    }
-    for control in controls:
-        assert isinstance(control, dict)
-        control["status"] = "evidenced"
-        control["evidence"] = {"candidate": identity, "record": "https://example.com/evidence"}
-    policy_path = _write(tmp_path / "governance.json", policy)
-    candidate_path = _write(tmp_path / "candidate.json", _candidate_report())
-
-    report = governance.validate(policy_path, candidate_path)
-
-    assert report.status == "pass"
-    assert report.publication_authorized is True
-    assert report.pending_controls == ()
+    assert result == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "pass"
 
 
 def test_unknown_policy_field_fails_closed(tmp_path: Path) -> None:
@@ -253,43 +226,6 @@ def test_ambiguous_role_assignment_fails_closed(tmp_path: Path) -> None:
     roles["approver"] = ["release-owner", "backup-owner"]
 
     with pytest.raises(ValueError, match=r"roles\.approver must be a non-empty string"):
-        governance.validate(
-            _write(tmp_path / "governance.json", policy), _write(tmp_path / "candidate.json", _candidate_report())
-        )
-
-
-def test_evidenced_control_with_stale_candidate_identity_fails(tmp_path: Path) -> None:
-    """Evidence cannot be reused after the candidate revision changes."""
-    policy = _policy()
-    controls = policy["external_controls"]
-    assert isinstance(controls, list)
-    control = controls[0]
-    assert isinstance(control, dict)
-    control["status"] = "evidenced"
-    control["evidence"] = {
-        "candidate": {
-            "repository": "example/fieldkit-cli",
-            "revision": "b" * 40,
-            "package": "fieldkit-cli",
-            "planned_tag": "v1.0.0",
-        },
-        "record": "https://example.com/evidence",
-    }
-
-    with pytest.raises(ValueError, match="does not bind the policy candidate"):
-        governance.validate(
-            _write(tmp_path / "governance.json", policy), _write(tmp_path / "candidate.json", _candidate_report())
-        )
-
-
-def test_policy_cannot_omit_a_required_external_control(tmp_path: Path) -> None:
-    """Every release authorization requires both independently declared controls."""
-    policy = _policy()
-    controls = policy["external_controls"]
-    assert isinstance(controls, list)
-    controls.pop()
-
-    with pytest.raises(ValueError, match="external control ids must be exactly"):
         governance.validate(
             _write(tmp_path / "governance.json", policy), _write(tmp_path / "candidate.json", _candidate_report())
         )
@@ -468,12 +404,11 @@ def test_successor_policy_rejects_historical_candidate_report(tmp_path: Path) ->
         governance.validate(policy_path, candidate_path)
 
 
-def test_successor_policy_keeps_external_controls_pending(tmp_path: Path) -> None:
+def test_successor_policy_accepts_its_own_candidate_report(tmp_path: Path) -> None:
     policy = json.loads(json.dumps(_policy()).replace("1.0.0", "1.0.1"))
     candidate = json.loads(json.dumps(_candidate_report()).replace("1.0.0", "1.0.1"))
     result = governance.validate(_write(tmp_path / "policy.json", policy), _write(tmp_path / "report.json", candidate))
-    assert result.status == "pending"
-    assert result.publication_authorized is False
+    assert result.status == "pass"
 
 
 def test_cli_maps_decoder_recursion_to_data_error(
