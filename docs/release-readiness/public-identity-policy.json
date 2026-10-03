@@ -247,35 +247,35 @@
       "rule_id": "PUBID003",
       "path": "hooks/pii_guard.py",
       "pattern": "(?i)(?:red[ -]?hat|redhat(?:crm|-internal)?)",
-      "classification": "release_cutover_policy",
+      "classification": "detection_control",
       "rationale": "The privacy detector contains compatibility markers that it is responsible for detecting or exempting."
     },
     {
       "rule_id": "PUBID003",
       "path": "scripts/audit_check.py",
       "pattern": "(?i)(?:red[ -]?hat|redhat(?:crm|-internal)?)",
-      "classification": "release_cutover_policy",
+      "classification": "detection_control",
       "rationale": "The audit detector retains a regression marker for the organization-default defect class."
     },
     {
       "rule_id": "PUBID003",
       "path": "scripts/check_public_docs.py",
       "pattern": "(?i)(?:red[ -]?hat|redhat(?:crm|-internal)?)",
-      "classification": "release_cutover_policy",
+      "classification": "detection_control",
       "rationale": "The rendered-document validator contains the private organization markers it is responsible for detecting."
     },
     {
       "rule_id": "PUBID001",
       "path": "tests/test_documentation_examples.py",
       "pattern": "mpeter/fieldkit-cli",
-      "classification": "release_cutover_policy",
+      "classification": "detection_control",
       "rationale": "The rehearsal-evidence test uses the canonical public repository identity as its schema-valid positive control."
     },
     {
       "rule_id": "PUBID002",
       "path": "tests/test_pii_patterns.py",
       "pattern": "/(?:home|Users)/[A-Za-z][A-Za-z0-9_.-]{1,30}/",
-      "classification": "release_cutover_policy",
+      "classification": "detection_control",
       "rationale": "The test provides a positive control for absolute-home-path detection."
     }
   ]

@@ -17,8 +17,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("repository", nargs="?", help="GitHub repository as OWNER/REPO")
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     parser.add_argument("--snapshot", type=Path, help="verify an offline API snapshot instead of calling GitHub")
-    parser.add_argument("--phase", choices=("pre-cutover", "post-cutover"), default="pre-cutover")
-    parser.add_argument("--expected-revision", help="exact public main-branch SHA required after cutover")
+    parser.add_argument("--expected-revision", required=True, help="exact main-branch SHA the settings must bind")
     args = parser.parse_args(argv)
 
     try:
@@ -26,12 +25,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.repository is None:
             raise ValueError("repository is required")
         snapshot = load_snapshot(args.snapshot, args.repository) if args.snapshot else collect(args.repository)
-        report = evaluate_snapshot(
-            manifest,
-            snapshot,
-            phase=args.phase,
-            expected_revision=args.expected_revision,
-        )
+        report = evaluate_snapshot(manifest, snapshot, expected_revision=args.expected_revision)
     except (KeyError, OSError, RuntimeError, TypeError, ValueError, json.JSONDecodeError) as exc:
         sys.stderr.write(f"repository settings verification error: {exc}\n")
         return 3

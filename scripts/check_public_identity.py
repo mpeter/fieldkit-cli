@@ -24,11 +24,11 @@ _MAX_TEXT_BYTES = 2 * 1024 * 1024
 _BINARY_SUFFIXES = frozenset({".gif", ".ico", ".jpeg", ".jpg", ".png", ".webp", ".woff", ".woff2"})
 _ALLOWANCE_CLASSIFICATIONS = frozenset(
     {
+        "detection_control",
         "fictional_fixture",
         "integration_specific",
         "public_project_identity",
         "public_vendor_protocol",
-        "release_cutover_policy",
     }
 )
 

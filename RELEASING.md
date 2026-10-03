@@ -124,7 +124,7 @@ tagging:
 ```console
 uv run python scripts/verify_repository_settings.py \
   "$(gh repo view --json nameWithOwner --jq .nameWithOwner)" \
-  --phase post-cutover --expected-revision "$(git rev-parse origin/main)"
+  --expected-revision "$(git rev-parse origin/main)"
 ```
 
 The verifier reads settings only. It fails when an environment can deploy from
