@@ -270,11 +270,6 @@ When you have signal that an opp's next step should change, follow the protocol 
 
 ## Route contract
 
-Use [tool routing](../tool-routing/SKILL.md) and the active harness configuration
-to select the configured account-intelligence route, when available and authorized.
-Use only its permitted read capabilities; tool names and aliases come from that
-configuration. If a source or required read is unavailable, note the gap and
-continue with authorized local and CLI sources. Do not substitute another group
-or identity. Google operations use the configured authorized identity; Google
-writes use `gws`, retain the workflow's approval boundary, and require read-back
-verification.
+Follow [tool routing](../tool-routing/SKILL.md) for configured account-intelligence
+reads. Report unavailable sources without switching the approved group or identity.
+Use `gws` for authorized Google writes and read back the stored result.

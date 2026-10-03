@@ -6,10 +6,10 @@
       "type": "contains_all",
       "patterns": [
         "tool-routing/SKILL.md",
-        "active harness configuration",
-        "when available and authorized",
-        "permitted read capabilities",
-        "note the gap"
+        "configured account-intelligence route",
+        "available and authorized",
+        "each required read is exposed",
+        "unavailable source"
       ],
       "message": "Must use configured authorized reads and report unavailable sources"
     },
@@ -17,9 +17,9 @@
       "id": "google_write_identity",
       "type": "contains_all",
       "patterns": [
-        "configured authorized identity",
-        "writes use `gws`",
-        "read-back"
+        "approved group or identity",
+        "Use `gws` for authorized Google writes",
+        "read back the stored result"
       ],
       "message": "Must retain authorized identity, CLI writes, and verification"
     },
