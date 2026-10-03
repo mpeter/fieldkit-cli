@@ -19,9 +19,13 @@ def test_distribution_command_and_import_identities_are_distinct() -> None:
 
 def test_distribution_build_backend_remains_compatible_with_the_publisher() -> None:
     metadata = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    # Hatchling 1.32.4 writes Metadata-Version 2.5, which the pinned publisher's
+    # twine 7.0.0 accepts. Before changing either pin, run `twine check --strict`
+    # on fresh artifacts with the publisher's bundled twine.
+    requires = metadata["build-system"]["requires"]
 
-    assert metadata["build-system"]["requires"] == ["hatchling==1.26.3"]
-    assert metadata["dependency-groups"]["release-build"] == ["hatchling==1.26.3"]
+    assert requires == ["hatchling==1.32.4"]
+    assert metadata["dependency-groups"]["release-build"] == requires
 
 
 def test_distribution_metadata_is_publication_complete() -> None:

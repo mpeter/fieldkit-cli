@@ -110,11 +110,17 @@ def test_valid_wheel_and_sdist_report_revision_digest_and_criteria(artifact_repo
     assert all(len(artifact["sha256"]) == 64 for artifact in payload["artifacts"])
 
 
-def test_core_metadata_23_uses_the_declared_legacy_license_field(artifact_repo: Path, tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("metadata_version", "license_field"),
+    [("2.3", "License"), ("2.5", "License-Expression")],
+)
+def test_core_metadata_version_selects_the_declared_license_field(
+    artifact_repo: Path, tmp_path: Path, metadata_version: str, license_field: str
+) -> None:
     project = checker.tomllib.loads((artifact_repo / "pyproject.toml").read_text(encoding="utf-8"))["project"]
     metadata = (
-        f"Metadata-Version: 2.3\nName: {project['name']}\nVersion: {project['version']}\n"
-        f"License: {project['license']}\nDescription-Content-Type: text/markdown\n\n# fieldkit\n"
+        f"Metadata-Version: {metadata_version}\nName: {project['name']}\nVersion: {project['version']}\n"
+        f"{license_field}: {project['license']}\nDescription-Content-Type: text/markdown\n\n# fieldkit\n"
     ).encode()
     wheel = tmp_path / "fieldkit_cli-1.0.0-py3-none-any.whl"
     with zipfile.ZipFile(wheel, mode="w") as archive:
