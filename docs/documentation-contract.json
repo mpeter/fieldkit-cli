@@ -29,7 +29,7 @@
         }
       ],
       "reader_action": "Apply repository engineering constraints.",
-      "source_fingerprint": "sha256:64247a8cbe3c05ea96d259de4db6e43feb88502a6812e94881ed905e6a1cfb47",
+      "source_fingerprint": "sha256:370bd1329ab5868fa031df2ce234f97d59dc3bf121662af78998470c1a3bade8",
       "sources": [
         "Makefile",
         "pyproject.toml",
@@ -55,7 +55,7 @@
         }
       ],
       "reader_action": "Prepare and submit a contribution.",
-      "source_fingerprint": "sha256:b6831264a89d7c5bd35027e348d09d4717063ee1b9baaadbf3de3503a013a90e",
+      "source_fingerprint": "sha256:883f86019cb3531ede5e1fc7cd3d94ddf24573bc9bdf272e80fe01fa4e30cda0",
       "sources": [
         "Makefile",
         "pyproject.toml",
@@ -145,7 +145,7 @@
         }
       ],
       "reader_action": "Prepare, assess, and recover an operator-approved release candidate.",
-      "source_fingerprint": "sha256:c43c96df64c9be0d1e87855b602ef36270bd6ee65e481a8097fccadde7b49a72",
+      "source_fingerprint": "sha256:c94d9dc2344d25fd3e049097eeffabd22b7a8b6c5b44392aae6f9f7db839546c",
       "sources": [
         "Makefile",
         ".github/workflows/release.yml",
