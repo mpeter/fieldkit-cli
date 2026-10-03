@@ -17,7 +17,6 @@ import click
 
 from fieldkit.cli_registry import declare_write
 from fieldkit.watch.draft_queue import (
-    _MCP_BASE,
     _MCP_TIMEOUT,
     _alerts_file,
     _extract_header,
@@ -32,7 +31,6 @@ from fieldkit.watch.draft_queue import (
 from fieldkit.watch.morning_brief_mcp import MCPSession
 
 __all__ = [
-    "_MCP_BASE",
     "_MCP_TIMEOUT",
     "MCPSession",
     "_alerts_file",

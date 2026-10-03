@@ -17,6 +17,7 @@ from fieldkit.config._integrations import get_google_token_path as get_google_to
 from fieldkit.config._integrations import get_integration_configuration_state as get_integration_configuration_state
 from fieldkit.config._integrations import get_mcp_gateway_base as get_mcp_gateway_base
 from fieldkit.config._integrations import get_mcp_gateway_url as get_mcp_gateway_url
+from fieldkit.config._integrations import get_mcp_work_group as get_mcp_work_group
 from fieldkit.config._integrations import get_sf_rest_base_url as get_sf_rest_base_url
 from fieldkit.config._integrations import get_sf_session_id as get_sf_session_id
 from fieldkit.config._loader import (
@@ -109,6 +110,7 @@ __all__ = [
     "get_llm_model",
     "get_mcp_gateway_base",
     "get_mcp_gateway_url",
+    "get_mcp_work_group",
     "get_pipeline_quota",
     "get_salesforce_org_url",
     "get_sf_rest_base_url",

@@ -10,9 +10,7 @@ Note: _run_draft_queue stays in commands/watch/draft_queue.py until slice 2.5
 (morning_brief_mcp.py migration) provides MCPSession in the domain layer.
 ``fieldkit.watch`` cannot depend on ``fieldkit.commands`` (tach boundary).
 
-Module-level constant _MCP_BASE is computed from get_mcp_gateway_base() at
-import time (frozen). Tests must mock get_mcp_gateway_base before importing
-this module, or patch _MCP_BASE directly.
+The MCP group is selected from configuration when the watcher runs.
 """
 
 import json
@@ -23,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from fieldkit.config import get_mcp_gateway_base as _get_mcp_gateway_base
-from fieldkit.config import get_user_email_from_env
+from fieldkit.config import get_mcp_work_group, get_user_email_from_env
 from fieldkit.config import get_watchers_dir as get_watchers_dir
 from fieldkit.watch.logging import watcher_logging
 from fieldkit.watch.status import WatcherOutcome, write_run_status
@@ -39,10 +37,9 @@ def _alerts_file() -> Path:
 
 
 # ---------------------------------------------------------------------------
-# MCP gateway constant (frozen at import time — see module docstring)
+# MCP gateway
 # ---------------------------------------------------------------------------
 
-_MCP_BASE = f"{_get_mcp_gateway_base()}/v0/groups/fieldkit-mail/mcp"
 _MCP_TIMEOUT = 30  # seconds per HTTP call
 
 log = logging.getLogger(__name__)
@@ -281,7 +278,23 @@ def _run_draft_queue(*, dry_run: bool, account: str | None = None, as_json: bool
             return 1
 
         # --- Open MCP session ---
-        session = MCPSession(_MCP_BASE)
+        group = get_mcp_work_group("mail")
+        if group is None:
+            log.error("mcp_mail_group is not configured; set it in fieldkit config to enable draft-queue")
+            elapsed = time.monotonic() - start
+            write_run_status(
+                watcher="draft-queue",
+                outcome="fatal",
+                records_checked=0,
+                alerts_generated=0,
+                failures=1,
+                elapsed_seconds=elapsed,
+                dry_run=False,
+            )
+            if as_json:
+                _emit_run_json(outcome="fatal", checked=0, alerts=0, failures=1, elapsed=elapsed, dry_run=False)
+            return 1
+        session = MCPSession(f"{_get_mcp_gateway_base()}/v0/groups/{group}/mcp")
         try:
             session.initialize()
         except RuntimeError as exc:
