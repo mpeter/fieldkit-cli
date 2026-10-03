@@ -161,9 +161,9 @@
     {
       "rule_id": "PUBID001",
       "path": "docs/releases.md",
-      "pattern": "https://github\\.com/mpeter/fieldkit-cli/blob/main/ROADMAP\\.md",
+      "pattern": "https://github\\.com/mpeter/fieldkit-cli/(?:blob/main/ROADMAP\\.md|(?:tree|blob|releases/tag)/v[0-9]+\\.[0-9]+\\.[0-9]+(?:/[^\\s\\)]*)?)",
       "classification": "public_project_identity",
-      "rationale": "Release history links to the canonical public roadmap."
+      "rationale": "Release history links to the canonical public roadmap and to each release's signed tag, GitHub release, and versioned notes."
     },
     {
       "rule_id": "PUBID001",
