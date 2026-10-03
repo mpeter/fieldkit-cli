@@ -140,7 +140,7 @@
           "classification": "credentialed_manual_integration",
           "id": "releasing.md.block-4",
           "language": "console",
-          "sha256": "3349741fda14dccca33338637280658cd1fec026b8c4eac53f7137f7ca47c0c1",
+          "sha256": "8fcbdd4c14f44af756eeb3730d7423ea10d2bf5d2b5a4cc5a7e8daef8c96d81d",
           "verification_id": "manual.credentialed-integration"
         },
         {
@@ -149,10 +149,17 @@
           "language": "console",
           "sha256": "50a2887392175a0bde98a73e4a63398f2644c0204a51eb514358d94235e9ded3",
           "verification_id": "manual.public-rehearsal"
+        },
+        {
+          "classification": "credentialed_manual_integration",
+          "id": "releasing.md.block-6",
+          "language": "console",
+          "sha256": "373d9afa98f987ceed9b9e18cadef83e182530a923851661fdfee3497a532fd8",
+          "verification_id": "manual.credentialed-integration"
         }
       ],
       "reader_action": "Prepare, assess, and recover an operator-approved release candidate.",
-      "source_fingerprint": "sha256:c94d9dc2344d25fd3e049097eeffabd22b7a8b6c5b44392aae6f9f7db839546c",
+      "source_fingerprint": "sha256:bcc0661c2d763fba8b526dd3c4bd0eb2895bbc5077ec49d1f286cf58027d2093",
       "sources": [
         "Makefile",
         ".github/workflows/release.yml",
@@ -2128,7 +2135,7 @@
       "content_type": "reference",
       "fenced_blocks": [],
       "reader_action": "Find releases that have actually been published.",
-      "source_fingerprint": "sha256:510101de9879023a3bbe739d950e1060a2fb7dfca6569c7e1b232286b99738a9",
+      "source_fingerprint": "sha256:18bed4c73fab7ad3c3f12def18083967ecf09057f729bf1f420e5c325f2ef2ec",
       "sources": [
         "pyproject.toml",
         "CHANGELOG.md"

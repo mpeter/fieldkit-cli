@@ -12,10 +12,10 @@ from typing import Any, Literal
 API_VERSION = "2026-03-10"
 API_TIMEOUT_SECONDS = 30
 MAX_SNAPSHOT_AGE_SECONDS = 900
+# Version 2 dropped the cutover-era phase and pending fields.
+REPORT_SCHEMA_VERSION = 2
 
-Phase = Literal["pre-cutover", "post-cutover"]
 _REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
-_PLAN_MESSAGE = "Upgrade to GitHub Pro or make this repository public to enable this feature."
 _REVISION = re.compile(r"[0-9a-f]{40}")
 _COLLECTED_AT = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
 _SURFACES = frozenset(
@@ -58,7 +58,7 @@ class EvidenceSnapshot:
 
 @dataclass(frozen=True, order=True)
 class Finding:
-    """One unmet or not-yet-applicable repository control."""
+    """One unmet repository control."""
 
     control: str
     message: str
@@ -69,18 +69,14 @@ class VerificationReport:
     """Machine-readable comparison result."""
 
     schema_version: int
-    phase: Phase
-    status: Literal["pass", "pending", "fail"]
+    status: Literal["pass", "fail"]
     failures: tuple[Finding, ...]
-    pending: tuple[Finding, ...]
 
     def to_dict(self) -> dict[str, object]:
         return {
             "schema_version": self.schema_version,
-            "phase": self.phase,
             "status": self.status,
             "failures": [asdict(finding) for finding in self.failures],
-            "pending": [asdict(finding) for finding in self.pending],
         }
 
 
@@ -269,13 +265,7 @@ def _environment_findings(name: str, expected: object, actual: dict[str, Any]) -
     return problems
 
 
-def _require_environments(
-    phase: Phase,
-    expected: object,
-    observation: ApiObservation,
-    failures: list[Finding],
-    pending: list[Finding],
-) -> None:
+def _require_environments(expected: object, observation: ApiObservation, failures: list[Finding]) -> None:
     if not isinstance(expected, dict) or not expected:
         raise ValueError("manifest environments must be a non-empty object")
     data = observation.data
@@ -288,14 +278,12 @@ def _require_environments(
     }
     for name in sorted(expected):
         if name not in actual_by_name:
-            _record_mismatch(phase, f"environments.{name}", "environment does not exist", failures, pending)
+            failures.append(Finding(f"environments.{name}", "environment does not exist"))
             continue
         for problem in _environment_findings(name, expected[name], actual_by_name[name]):
-            _record_mismatch(phase, f"environments.{name}", problem, failures, pending)
+            failures.append(Finding(f"environments.{name}", problem))
     for name in sorted(actual_by_name.keys() - expected.keys()):
-        _record_mismatch(
-            phase, f"environments.{name}", "environment is not declared in the manifest", failures, pending
-        )
+        failures.append(Finding(f"environments.{name}", "environment is not declared in the manifest"))
 
 
 def _branch_sha(observation: ApiObservation) -> str:
@@ -325,41 +313,14 @@ def _matches(expected: object, actual: object) -> bool:
     return expected == actual
 
 
-def _record_mismatch(
-    phase: Phase,
-    control: str,
-    message: str,
-    failures: list[Finding],
-    pending: list[Finding],
-) -> None:
-    target = pending if phase == "pre-cutover" else failures
-    target.append(Finding(control, message))
-
-
-def _require_match(
-    phase: Phase,
-    control: str,
-    expected: object,
-    observation: ApiObservation,
-    failures: list[Finding],
-    pending: list[Finding],
-) -> None:
+def _require_match(control: str, expected: object, observation: ApiObservation, failures: list[Finding]) -> None:
     if observation.status != 200:
-        if phase == "pre-cutover" and observation.status in {403, 404, 409}:
-            pending.append(Finding(control, f"target state is unavailable: HTTP {observation.status}"))
-        else:
-            failures.append(Finding(control, f"unexpected HTTP {observation.status}"))
+        failures.append(Finding(control, f"unexpected HTTP {observation.status}"))
     elif not _matches(expected, observation.data):
-        _record_mismatch(phase, control, "live state differs from manifest", failures, pending)
+        failures.append(Finding(control, "live state differs from manifest"))
 
 
-def _require_rulesets(
-    phase: Phase,
-    expected: object,
-    observation: ApiObservation,
-    failures: list[Finding],
-    pending: list[Finding],
-) -> None:
+def _require_rulesets(expected: object, observation: ApiObservation, failures: list[Finding]) -> None:
     if observation.status != 200 or not isinstance(observation.data, list):
         failures.append(Finding("rulesets", f"unexpected HTTP {observation.status}"))
         return
@@ -373,116 +334,61 @@ def _require_rulesets(
             raise ValueError("every manifest ruleset must have a name")
         name = ruleset["name"]
         if name not in actual_by_name or not _matches(ruleset, actual_by_name[name]):
-            _record_mismatch(phase, f"rulesets.{name}", "live state differs from manifest", failures, pending)
+            failures.append(Finding(f"rulesets.{name}", "live state differs from manifest"))
 
 
-def evaluate(
-    manifest: dict[str, Any],
-    observations: dict[str, ApiObservation],
-    *,
-    phase: Phase,
-) -> VerificationReport:
+def evaluate(manifest: dict[str, Any], observations: dict[str, ApiObservation]) -> VerificationReport:
     """Compare live or captured observations with the versioned contract."""
     missing = sorted(_SURFACES - observations.keys())
     if missing:
         raise ValueError(f"missing observation surfaces: {', '.join(missing)}")
     failures: list[Finding] = []
-    pending: list[Finding] = []
 
-    repository_expected = dict(manifest["repository"])
-    repository_observed = observations["repository"]
-    if phase == "pre-cutover":
-        repository_expected.pop("private", None)
-        repository_expected.pop("visibility", None)
-        if repository_observed.status != 200 or not isinstance(repository_observed.data, dict):
-            failures.append(Finding("repository", f"unexpected HTTP {repository_observed.status}"))
-        else:
-            if not _matches(repository_expected, repository_observed.data):
-                pending.append(Finding("repository", "live state differs from manifest"))
-            if repository_observed.data.get("private") is True:
-                pending.append(Finding("repository.visibility", "source repository remains private"))
-            else:
-                failures.append(Finding("repository.visibility", "pre-cutover verifier expected a private source"))
-    else:
-        _require_match(phase, "repository", repository_expected, repository_observed, failures, pending)
-
-    rulesets = observations["rulesets"]
-    message = rulesets.data.get("message") if isinstance(rulesets.data, dict) else None
-    if phase == "pre-cutover" and rulesets.status == 403 and message == _PLAN_MESSAGE:
-        pending.append(Finding("rulesets", "private plan does not expose repository rulesets"))
-    else:
-        _require_rulesets(phase, manifest["rulesets"], rulesets, failures, pending)
+    _require_match("repository", manifest["repository"], observations["repository"], failures)
+    _require_rulesets(manifest["rulesets"], observations["rulesets"], failures)
 
     actions = manifest["actions"]
+    _require_match("actions.permissions", actions["permissions"], observations["actions_permissions"], failures)
+    _require_match("actions.selected_actions", actions["selected_actions"], observations["actions_selected"], failures)
     _require_match(
-        phase, "actions.permissions", actions["permissions"], observations["actions_permissions"], failures, pending
-    )
-    _require_match(
-        phase,
-        "actions.selected_actions",
-        actions["selected_actions"],
-        observations["actions_selected"],
-        failures,
-        pending,
-    )
-    _require_match(
-        phase,
         "actions.workflow_permissions",
         actions["workflow_permissions"],
         observations["workflow_permissions"],
         failures,
-        pending,
     )
 
     security = manifest["security"]
-    alerts = observations["vulnerability_alerts"]
-    if alerts.status != 204:
-        _record_mismatch(phase, "security.vulnerability_alerts", "dependency alerts are not enabled", failures, pending)
+    if observations["vulnerability_alerts"].status != 204:
+        failures.append(Finding("security.vulnerability_alerts", "dependency alerts are not enabled"))
     fixes = observations["automated_security_fixes"]
     if fixes.status != 200 or not _matches({"enabled": True, "paused": False}, fixes.data):
-        _record_mismatch(
-            phase, "security.automated_security_fixes", "Dependabot security updates are not active", failures, pending
-        )
-
+        failures.append(Finding("security.automated_security_fixes", "Dependabot security updates are not active"))
     reporting = observations["private_vulnerability_reporting"]
-    if phase == "pre-cutover" and reporting.status == 404:
-        pending.append(Finding("security.private_vulnerability_reporting", "unavailable until repository is public"))
-    elif reporting.status != 200 or not _matches({"enabled": True}, reporting.data):
+    if reporting.status != 200 or not _matches({"enabled": True}, reporting.data):
         failures.append(Finding("security.private_vulnerability_reporting", "private reporting is not enabled"))
+    _require_match(
+        "security.security_and_analysis",
+        security["security_and_analysis"],
+        observations["security_and_analysis"],
+        failures,
+    )
 
-    analysis = observations["security_and_analysis"]
-    if phase == "pre-cutover" and analysis.status == 200 and analysis.data is None:
-        pending.append(Finding("security.security_and_analysis", "feature state is unavailable while private"))
-    else:
-        _require_match(
-            phase,
-            "security.security_and_analysis",
-            security["security_and_analysis"],
-            analysis,
-            failures,
-            pending,
-        )
+    _require_environments(manifest["environments"], observations["environments"], failures)
 
-    _require_environments(phase, manifest["environments"], observations["environments"], failures, pending)
-
-    status: Literal["pass", "pending", "fail"] = "fail" if failures else "pending" if pending else "pass"
-    return VerificationReport(1, phase, status, tuple(sorted(failures)), tuple(sorted(pending)))
+    return VerificationReport(REPORT_SCHEMA_VERSION, "fail" if failures else "pass", tuple(sorted(failures)))
 
 
 def evaluate_snapshot(
     manifest: dict[str, Any],
     snapshot: EvidenceSnapshot,
     *,
-    phase: Phase,
-    expected_revision: str | None = None,
+    expected_revision: str,
     now: datetime | None = None,
 ) -> VerificationReport:
-    """Evaluate settings evidence, binding final proof to a fresh public revision."""
-    report = evaluate(manifest, snapshot.observations, phase=phase)
-    if phase == "pre-cutover":
-        return report
-    if not isinstance(expected_revision, str) or _REVISION.fullmatch(expected_revision) is None:
-        raise ValueError("post-cutover verification requires an expected full lowercase Git SHA")
+    """Evaluate settings evidence, binding the proof to a fresh default-branch revision."""
+    if _REVISION.fullmatch(expected_revision) is None:
+        raise ValueError("verification requires an expected full lowercase Git SHA")
+    report = evaluate(manifest, snapshot.observations)
     observed_at = datetime.strptime(snapshot.collected_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
     current_time = now or datetime.now(tz=UTC)
     age_seconds = (current_time - observed_at).total_seconds()
@@ -498,13 +404,7 @@ def evaluate_snapshot(
                 f"settings evidence must be collected within {MAX_SNAPSHOT_AGE_SECONDS} seconds of verification",
             )
         )
-    return VerificationReport(
-        1,
-        phase,
-        "fail" if failures else report.status,
-        tuple(sorted(failures)),
-        report.pending,
-    )
+    return VerificationReport(REPORT_SCHEMA_VERSION, "fail" if failures else "pass", tuple(sorted(failures)))
 
 
 def load_manifest(path: Path) -> dict[str, Any]:

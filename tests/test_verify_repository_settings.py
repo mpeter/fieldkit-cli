@@ -61,15 +61,14 @@ def _with_environment(name: str, change: dict[str, Any]) -> dict[str, verifier.A
     return observations
 
 
-def test_post_cutover_matching_snapshot_passes() -> None:
-    report = verifier.evaluate(_manifest(), _public_observations(), phase="post-cutover")
+def test_matching_snapshot_passes() -> None:
+    report = verifier.evaluate(_manifest(), _public_observations())
 
     assert report.status == "pass"
-    assert report.failures == ()
-    assert report.pending == ()
+    assert report.to_dict() == {"schema_version": 2, "status": "pass", "failures": []}
 
 
-def test_post_cutover_snapshot_requires_the_exact_expected_revision() -> None:
+def test_snapshot_requires_the_exact_expected_revision() -> None:
     snapshot = verifier.EvidenceSnapshot(
         "example/fieldkit-cli",
         "2026-09-19T12:00:00Z",
@@ -81,7 +80,6 @@ def test_post_cutover_snapshot_requires_the_exact_expected_revision() -> None:
     report = verifier.evaluate_snapshot(
         _manifest(),
         snapshot,
-        phase="post-cutover",
         expected_revision="b" * 40,
         now=datetime(2026, 9, 19, 12, 1, tzinfo=UTC),
     )
@@ -90,7 +88,7 @@ def test_post_cutover_snapshot_requires_the_exact_expected_revision() -> None:
     assert any(finding.control == "repository.default_branch" for finding in report.failures)
 
 
-def test_post_cutover_snapshot_requires_fresh_evidence() -> None:
+def test_snapshot_requires_fresh_evidence() -> None:
     now = datetime(2026, 9, 19, 12, 30, tzinfo=UTC)
     snapshot = verifier.EvidenceSnapshot(
         "example/fieldkit-cli",
@@ -100,15 +98,13 @@ def test_post_cutover_snapshot_requires_fresh_evidence() -> None:
         _public_observations(),
     )
 
-    report = verifier.evaluate_snapshot(
-        _manifest(), snapshot, phase="post-cutover", expected_revision="a" * 40, now=now
-    )
+    report = verifier.evaluate_snapshot(_manifest(), snapshot, expected_revision="a" * 40, now=now)
 
     assert report.status == "fail"
     assert any(finding.control == "repository.evidence_freshness" for finding in report.failures)
 
 
-def test_post_cutover_snapshot_rejects_missing_expected_revision() -> None:
+def test_snapshot_rejects_a_malformed_expected_revision() -> None:
     snapshot = verifier.EvidenceSnapshot(
         "example/fieldkit-cli",
         "2026-09-19T12:00:00Z",
@@ -118,10 +114,10 @@ def test_post_cutover_snapshot_rejects_missing_expected_revision() -> None:
     )
 
     with pytest.raises(ValueError, match="expected full lowercase Git SHA"):
-        verifier.evaluate_snapshot(_manifest(), snapshot, phase="post-cutover")
+        verifier.evaluate_snapshot(_manifest(), snapshot, expected_revision="main")
 
 
-def test_post_cutover_missing_required_check_fails() -> None:
+def test_missing_required_check_fails() -> None:
     observations = _public_observations()
     rulesets = json.loads(json.dumps(observations["rulesets"].data))
     main = next(rule for rule in rulesets if rule["name"] == "protect-main")
@@ -129,43 +125,38 @@ def test_post_cutover_missing_required_check_fails() -> None:
     required["parameters"]["required_status_checks"] = [{"context": "Required checks"}]
     observations["rulesets"] = verifier.ApiObservation(200, rulesets)
 
-    report = verifier.evaluate(_manifest(), observations, phase="post-cutover")
+    report = verifier.evaluate(_manifest(), observations)
 
     assert report.status == "fail"
     assert any(finding.control == "rulesets.protect-main" for finding in report.failures)
 
 
-def test_post_cutover_disabled_private_reporting_fails() -> None:
+def test_disabled_private_reporting_fails() -> None:
     observations = _public_observations()
     observations["private_vulnerability_reporting"] = verifier.ApiObservation(404, {"message": "Not Found"})
 
-    report = verifier.evaluate(_manifest(), observations, phase="post-cutover")
+    report = verifier.evaluate(_manifest(), observations)
 
     assert report.status == "fail"
     assert any(finding.control == "security.private_vulnerability_reporting" for finding in report.failures)
 
 
-def test_pre_cutover_expected_plan_limits_remain_pending() -> None:
+def test_private_repository_and_plan_limited_surfaces_fail() -> None:
+    """There is no longer a pre-publication phase in which unmet controls are only pending."""
     observations = _public_observations()
     observations["repository"] = verifier.ApiObservation(200, {**observations["repository"].data, "private": True})
     observations["rulesets"] = verifier.ApiObservation(
         403,
         {"message": "Upgrade to GitHub Pro or make this repository public to enable this feature."},
     )
-    observations["private_vulnerability_reporting"] = verifier.ApiObservation(404, {"message": "Not Found"})
-    observations["actions_selected"] = verifier.ApiObservation(
-        409,
-        {"message": "Conflict", "status": 409},
-    )
+    observations["actions_selected"] = verifier.ApiObservation(409, {"message": "Conflict", "status": 409})
 
-    report = verifier.evaluate(_manifest(), observations, phase="pre-cutover")
+    report = verifier.evaluate(_manifest(), observations)
 
-    assert report.status == "pending"
-    assert report.failures == ()
-    assert {finding.control for finding in report.pending} >= {
-        "repository.visibility",
+    assert report.status == "fail"
+    assert {finding.control for finding in report.failures} == {
+        "repository",
         "rulesets",
-        "security.private_vulnerability_reporting",
         "actions.selected_actions",
     }
 
@@ -178,13 +169,11 @@ def test_pre_cutover_expected_plan_limits_remain_pending() -> None:
         (500, {"message": "Internal Server Error"}),
     ],
 )
-def test_pre_cutover_unexpected_ruleset_response_fails(status: int, payload: dict[str, str]) -> None:
+def test_unexpected_ruleset_response_fails(status: int, payload: dict[str, str]) -> None:
     observations = _public_observations()
-    observations["repository"] = verifier.ApiObservation(200, {**observations["repository"].data, "private": True})
     observations["rulesets"] = verifier.ApiObservation(status, payload)
-    observations["private_vulnerability_reporting"] = verifier.ApiObservation(404, {"message": "Not Found"})
 
-    report = verifier.evaluate(_manifest(), observations, phase="pre-cutover")
+    report = verifier.evaluate(_manifest(), observations)
 
     assert report.status == "fail"
     assert any(finding.control == "rulesets" for finding in report.failures)
@@ -258,7 +247,7 @@ def test_manifest_requires_one_approval_only_for_production() -> None:
     ],
 )
 def test_release_environment_drift_fails(name: str, change: dict[str, Any], message: str) -> None:
-    report = verifier.evaluate(_manifest(), _with_environment(name, change), phase="post-cutover")
+    report = verifier.evaluate(_manifest(), _with_environment(name, change))
 
     assert report.status == "fail"
     assert report.failures == (verifier.Finding(f"environments.{name}", message),)
@@ -270,7 +259,7 @@ def test_missing_and_undeclared_environments_fail() -> None:
     environments[:] = [item for item in environments if item["name"] != "testpypi"]
     environments.append({"name": "release-approval", "deployment_branch_policy": None, "protection_rules": []})
 
-    report = verifier.evaluate(_manifest(), observations, phase="post-cutover")
+    report = verifier.evaluate(_manifest(), observations)
 
     assert report.failures == (
         verifier.Finding("environments.release-approval", "environment is not declared in the manifest"),
@@ -432,7 +421,7 @@ def test_evaluate_rejects_missing_observation_surface() -> None:
     del observations["rulesets"]
 
     with pytest.raises(ValueError, match="missing observation surfaces: rulesets"):
-        verifier.evaluate(_manifest(), observations, phase="post-cutover")
+        verifier.evaluate(_manifest(), observations)
 
 
 def test_api_extracts_conflict_status_from_gh_stderr(monkeypatch: pytest.MonkeyPatch) -> None:

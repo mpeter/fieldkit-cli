@@ -124,7 +124,7 @@ tagging:
 ```console
 uv run python scripts/verify_repository_settings.py \
   "$(gh repo view --json nameWithOwner --jq .nameWithOwner)" \
-  --phase post-cutover --expected-revision "$(git rev-parse origin/main)"
+  --expected-revision "$(git rev-parse origin/main)"
 ```
 
 The verifier reads settings only. It fails when an environment can deploy from
@@ -191,6 +191,30 @@ an artifact with that name already exists in the run. If an index accepted some 
 finish against that bundle, the version is spent. Publish a successor version
 instead of repairing the release by uploading again. Retained artifacts expire
 after 90 days, so finish or abandon a release run within that window.
+
+A re-run uses the workflow file at the tagged commit, so it cannot pick up a
+workflow fix. If the run fails after PyPI accepted and verified the files, finish
+the GitHub release by hand from that run's candidate artifact. Set `RUN_ID` to
+the failed run and `TAG` to its tag, then download the candidate, check its
+checksums, compare the distribution digests with PyPI, and create the release:
+
+```console
+REPO="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"
+SHA="$(gh run view "$RUN_ID" --repo "$REPO" --json headSha --jq .headSha)"
+gh run download "$RUN_ID" --repo "$REPO" \
+  --name "release-candidate-$RUN_ID-$SHA" --dir build/recovered
+(cd build/recovered/candidate/bundle && sha256sum --strict --check SHA256SUMS)
+(cd build/recovered/candidate/bundle && sha256sum ./*.whl ./*.tar.gz)
+curl --fail --silent "https://pypi.org/pypi/fieldkit-cli/${TAG#v}/json" \
+  | jq -r '.urls[] | "\(.digests.sha256)  \(.filename)"'
+gh release create "$TAG" build/recovered/candidate/bundle/*.whl \
+  build/recovered/candidate/bundle/*.tar.gz \
+  --repo "$REPO" --verify-tag --generate-notes
+```
+
+Create the release only when every checksum reports `OK` and both digest lists
+name the same files with the same values. The run's promotion evidence still
+records the failure; that record is kept as part of the release history.
 
 For a defective published release, document the problem, yank it when
 appropriate, and release a corrected successor version through the same flow.

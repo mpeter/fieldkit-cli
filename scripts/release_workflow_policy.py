@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import ast
+import itertools
 import json
 import re
+import shlex
 import sys
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
@@ -334,6 +336,26 @@ def _validate_authority_job(name: str, job: dict[str, Any], findings: list[Findi
         "gh release create" in command and "release-dist/*" in command for command in commands
     ):
         _add(findings, "RWF020", name, "GitHub release must attach only sealed distributions")
+    if name == "github_release" and not any(_names_repository_and_requires_tag(command) for command in commands):
+        # The job has no checkout, so gh cannot infer the repository from a remote.
+        _add(findings, "RWF032", name, "GitHub release must name its repository and require the pushed tag")
+
+
+def _names_repository_and_requires_tag(command: str) -> bool:
+    """Accept a release command whose tokens pass the repository and a bare --verify-tag."""
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return False
+    if tokens[:3] != ["gh", "release", "create"]:
+        return False
+    # A bare flag only: gh also accepts --verify-tag=false, which disables the check.
+    if "--verify-tag" not in tokens or any(token.startswith("--verify-tag=") for token in tokens):
+        return False
+    return (
+        any(pair == ("--repo", "$GITHUB_REPOSITORY") for pair in itertools.pairwise(tokens))
+        or "--repo=$GITHUB_REPOSITORY" in tokens
+    )
 
 
 def _validates_build_manifest_output(job: dict[str, Any]) -> bool:
