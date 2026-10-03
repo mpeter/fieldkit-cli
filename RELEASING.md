@@ -107,6 +107,14 @@ acquires and revalidates that one retained approval artifact before it can
 attest or publish; it never rebuilds source after tagging. Record the actual
 remote settings before treating those controls as evidenced.
 
+Both publication jobs upload with `pypa/gh-action-pypi-publish` and set
+`attestations: true`, so every wheel and sdist on TestPyPI or PyPI carries a
+PEP 740 publish attestation signed for the release workflow's Trusted
+Publishing identity, in addition to the GitHub artifact attestation from the
+`attest` job. The action runs its prebuilt container image
+`ghcr.io/pypa/gh-action-pypi-publish`, pulled by a tag equal to the pinned
+action commit rather than by image digest.
+
 ## Verify a published candidate
 
 After an operator-approved publication, verify the exact retained candidate
