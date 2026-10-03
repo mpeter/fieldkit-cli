@@ -92,23 +92,30 @@ Validate the checked-in workflow contract locally before requesting review:
 make release-workflow-policy-check
 ```
 
-The workflow has three deliberately separate paths:
+The workflow has two paths:
 
 | Mode | Trigger | Result | Required approval |
 | --- | --- | --- | --- |
-| Dry run | Protected default branch dispatch | Builds and validates one retained candidate | Workflow dispatch approval |
-| TestPyPI | Protected default branch dispatch | Attests and publishes the retained candidate to TestPyPI | TestPyPI and operator approval |
-| Production | Verified signed `v<project-version>` tag | Attests, publishes, verifies consumers, then creates the GitHub release | Final operator approval |
+| Dry run | Workflow dispatch from the protected default branch | Runs compatibility, then builds and validates one retained candidate | None; it attests and publishes nothing |
+| Release | Verified signed `v<project-version>` tag on a default-branch commit | Builds one candidate, attests it, publishes and verifies it on TestPyPI, then publishes and verifies the same bytes on PyPI and creates the GitHub release | The `pypi` environment review |
+
+The signed tag authorizes building, rehearsing, and publishing the exact
+default-branch commit it names. The workflow checks GitHub's signature
+verification for the tag object and refuses a tag whose commit is not already
+on the default branch, so the required pull-request checks have run on it. One
+run then builds one sealed candidate, and every later job verifies and uses
+those bytes: TestPyPI and PyPI receive identical files, and the TestPyPI
+consumer check must pass before the production job can start. The `pypi`
+environment review is the single human approval; review the run's bundle digest
+and its TestPyPI consumer evidence before approving it.
 
 The authority jobs consume the retained bundle; they do not rebuild the package,
 check out source, use a package-index token, or overwrite an existing version.
-Configure the protected `release-approval` environment before a production tag,
-and separate protected publisher environments and OIDC Trusted Publishers before
-a TestPyPI or production run. A production tag must carry the protected
-approval run and manifest digest in its signed annotation. The workflow then
-acquires and revalidates that one retained approval artifact before it can
-attest or publish; it never rebuilds source after tagging. Record the actual
-remote settings before treating those controls as evidenced.
+Before the first tag, configure the `testpypi` and `pypi` environments with an
+OIDC Trusted Publisher for `release.yml`, restrict their deployment refs to
+`v*.*.*` tags, and require a reviewer on `pypi`. An environment limited to
+protected branches rejects a tag-triggered job. Record the actual remote
+settings before treating those controls as evidenced.
 
 Both publication jobs upload with `pypa/gh-action-pypi-publish` and set
 `attestations: true`, so every wheel and sdist on TestPyPI or PyPI carries a
@@ -156,8 +163,16 @@ and assertions are recorded against that checkout.
 
 Stop on any missing, stale, mismatched, failed, or pending evidence. Preserve
 the candidate report, closed bundle, checksums, SBOM, workflow run, consumer
-evidence, promotion evidence, and relevant approval record. Do not repair a
-release by rerunning publication for the same version.
+evidence, and promotion evidence.
+
+The candidate artifact name is fixed for the whole run, so use **Re-run failed
+jobs** to resume after a transient failure: the re-run reuses the same bundle,
+and a consumer check that timed out verifies again without uploading. **Re-run
+all jobs** cannot replace a candidate: its first run-scoped upload fails because
+an artifact with that name already exists in the run. If an index accepted some or all files and the run cannot
+finish against that bundle, the version is spent. Publish a successor version
+instead of repairing the release by uploading again. Retained artifacts expire
+after 90 days, so finish or abandon a release run within that window.
 
 For a defective published release, document the problem, yank it when
 appropriate, and release a corrected successor version through the same flow.
