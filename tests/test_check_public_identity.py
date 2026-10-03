@@ -292,7 +292,7 @@ def test_live_policy_does_not_allow_organization_identity_exceptions() -> None:
     policy = check_public_identity.load_policy(check_public_identity.REPO_ROOT)
 
     assert all(
-        allowance.classification == "release_cutover_policy"
+        allowance.classification == "detection_control"
         for allowance in policy.allowances
         if allowance.rule_id == "PUBID003"
     )
