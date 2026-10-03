@@ -122,7 +122,8 @@ including both environments, against `.github/repository-settings.json` before
 tagging:
 
 ```console
-uv run python scripts/verify_repository_settings.py mpeter/fieldkit-cli \
+uv run python scripts/verify_repository_settings.py \
+  "$(gh repo view --json nameWithOwner --jq .nameWithOwner)" \
   --phase post-cutover --expected-revision "$(git rev-parse origin/main)"
 ```
 
