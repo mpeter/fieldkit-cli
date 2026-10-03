@@ -105,7 +105,7 @@
         }
       ],
       "reader_action": "Choose an installation or contribution path.",
-      "source_fingerprint": "sha256:c7db2399655833c6f40955749044547d667c3b6aa19e83169528fa98a4ae5b04",
+      "source_fingerprint": "sha256:d8f72d6e68b0ee7bc75bbc675edbe00168e44cd653ca9083503b0608a29d4505",
       "sources": [
         "pyproject.toml",
         "src/fieldkit/__main__.py",
@@ -1161,7 +1161,7 @@
       "content_type": "reference",
       "fenced_blocks": [],
       "reader_action": "Check whether an environment is supported.",
-      "source_fingerprint": "sha256:9858e894be0e109ff47762e3658875fe78193bfee32bba0c3645d369e998a025",
+      "source_fingerprint": "sha256:6428be490c43f6050d40bdbe0ab6fcabd6ae1c8e8391b67494e597ff724e84ce",
       "sources": [
         "docs/release-readiness/compatibility-policy.json",
         ".github/workflows/compatibility.yml",
@@ -1351,7 +1351,7 @@
         }
       ],
       "reader_action": "Install fieldkit and complete a credential-free first run.",
-      "source_fingerprint": "sha256:1e58e9f7e60ec664c1ac34c2df5bbe4c1aa819b3d72b11c445921d4cb79c1d25",
+      "source_fingerprint": "sha256:b8f2b2f0e33829bb5a312a595459c7b60fc2f77b0c859754d1f4eff515024c6a",
       "sources": [
         "pyproject.toml",
         "scripts/check_compatibility_policy.py",
