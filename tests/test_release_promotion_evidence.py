@@ -42,10 +42,11 @@ def test_success_requires_every_production_boundary() -> None:
     assert list(Draft202012Validator(schema).iter_errors(report)) == []
 
 
+@pytest.mark.parametrize("boundary", ["publish_testpypi", "consumer_testpypi", "github_release"])
 @pytest.mark.parametrize("result", ["failure", "cancelled", "skipped", "missing"])
-def test_partial_or_cancelled_boundary_is_non_passing(result: str) -> None:
+def test_partial_or_cancelled_boundary_is_non_passing(boundary: str, result: str) -> None:
     outcomes = dict.fromkeys(release_promotion_evidence.PRODUCTION_BOUNDARIES, "success")
-    outcomes["github_release"] = result
+    outcomes[boundary] = result
 
     report = release_promotion_evidence.render(
         source_revision="b" * 40,
@@ -58,7 +59,7 @@ def test_partial_or_cancelled_boundary_is_non_passing(result: str) -> None:
     )
 
     assert report["status"] == "failed"
-    assert report["outcomes"]["github_release"] == result
+    assert report["outcomes"][boundary] == result
 
 
 def test_unknown_or_missing_boundary_is_rejected() -> None:

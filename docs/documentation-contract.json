@@ -145,11 +145,10 @@
         }
       ],
       "reader_action": "Prepare, assess, and recover an operator-approved release candidate.",
-      "source_fingerprint": "sha256:4ed145153913bd6a63fa41f2bb15d0f32d18138c94203b5a9f3239962d3565dd",
+      "source_fingerprint": "sha256:c43c96df64c9be0d1e87855b602ef36270bd6ee65e481a8097fccadde7b49a72",
       "sources": [
         "Makefile",
         ".github/workflows/release.yml",
-        ".github/workflows/release-approval.yml",
         "docs/release-readiness/release-policy.json",
         "docs/release-readiness/release-governance-policy.json",
         "scripts/check_release_consumer.py",
@@ -163,7 +162,7 @@
         {
           "classification": "exact_release_cutover_proof",
           "id": "releasing.md.table-1",
-          "sha256": "35b71f5d88f8708f9b28441eb64327f5daf6b64934f825403c2ba37a589d4bb4",
+          "sha256": "92352ab0835c6b69e1694898bbcf6db840c1638de360c1778004ce0ff2ec7ccb",
           "verification_id": "manual.release-cutover"
         }
       ]
