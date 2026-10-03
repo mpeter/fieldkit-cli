@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse hook: blocks calls to explicitly banned MCP tools by exact tool name.
+"""PreToolUse hook: blocks calls to explicitly banned MCP tools across groups.
 
 Converts CLAUDE.md prose rules into hard mechanical enforcement points.
 
@@ -23,21 +23,20 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from hooks._common import read_payload, tool_name  # noqa: E402
+from hooks._common import is_mcp_tool, read_payload, tool_name  # noqa: E402
 
-# Exact tool names to block, mapped to their block reason.
-# Format: "mcp__<group-name>__<tool-name>" — the full prefixed form Claude Code
-# uses in tool_name for MCP tool calls (observed from outbound_gate.py pattern).
+# Qualified tool names to block, mapped to their block reason. The group prefix
+# can change without changing the underlying tool or its policy.
 BANNED_TOOLS: dict[str, str] = {
     # Backstory opportunity-level tools — unreliable attribution per CLAUDE.md.
     # Opportunity tools misattribute communication signals to wrong deals.
     # Use account-level tools (find_account, get_account_status,
     # get_recent_account_activity, account_company_news) instead.
-    "mcp__fieldkit-sales__backstory__get_opportunity_status": (
+    "backstory__get_opportunity_status": (
         "opportunity-level Backstory tools have unreliable attribution "
         "(signals get misattributed across deals). Use account-level tools instead."
     ),
-    "mcp__fieldkit-sales__backstory__get_recent_opportunity_activity": (
+    "backstory__get_recent_opportunity_activity": (
         "opportunity-level Backstory tools have unreliable attribution "
         "(signals get misattributed across deals). Use account-level tools instead."
     ),
@@ -51,7 +50,7 @@ def main() -> int:
     if not name:
         return 0
 
-    reason = BANNED_TOOLS.get(name)
+    reason = next((reason for tool, reason in BANNED_TOOLS.items() if is_mcp_tool(name, tool)), None)
     if reason is None:
         return 0
 

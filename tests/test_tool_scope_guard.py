@@ -31,7 +31,7 @@ def _stdin(tool_name: str, tool_input: dict | None = None) -> io.StringIO:
 
 
 def test_banned_tools_blocks_get_opportunity_status(capsys: pytest.CaptureFixture[str]) -> None:
-    tool = "mcp__fieldkit-sales__backstory__get_opportunity_status"
+    tool = "mcp__work-sales__backstory__get_opportunity_status"
     with patch("sys.stdin", _stdin(tool)):
         result = tool_scope_guard.main()
     assert result == 2
@@ -41,7 +41,7 @@ def test_banned_tools_blocks_get_opportunity_status(capsys: pytest.CaptureFixtur
 
 
 def test_banned_tools_blocks_get_recent_opportunity_activity(capsys: pytest.CaptureFixture[str]) -> None:
-    tool = "mcp__fieldkit-sales__backstory__get_recent_opportunity_activity"
+    tool = "mcp__work-sales__backstory__get_recent_opportunity_activity"
     with patch("sys.stdin", _stdin(tool)):
         result = tool_scope_guard.main()
     assert result == 2
@@ -50,8 +50,16 @@ def test_banned_tools_blocks_get_recent_opportunity_activity(capsys: pytest.Capt
     assert tool in captured.err
 
 
+@pytest.mark.parametrize("group", ["work-sales", "future-work-sales", "mcpjungle"])
+def test_banned_tools_block_across_groups(group: str) -> None:
+    tool = f"mcp__{group}__backstory__get_opportunity_status"
+    with patch("sys.stdin", _stdin(tool)):
+        result = tool_scope_guard.main()
+    assert result == 2
+
+
 def test_banned_tools_block_message_includes_reason(capsys: pytest.CaptureFixture[str]) -> None:
-    tool = "mcp__fieldkit-sales__backstory__get_opportunity_status"
+    tool = "mcp__work-sales__backstory__get_opportunity_status"
     with patch("sys.stdin", _stdin(tool)):
         tool_scope_guard.main()
     captured = capsys.readouterr()
@@ -63,31 +71,31 @@ def test_banned_tools_block_message_includes_reason(capsys: pytest.CaptureFixtur
 
 
 def test_allowed_tools_allows_find_account() -> None:
-    with patch("sys.stdin", _stdin("mcp__fieldkit-sales__backstory__find_account")):
+    with patch("sys.stdin", _stdin("mcp__work-sales__backstory__find_account")):
         result = tool_scope_guard.main()
     assert result == 0
 
 
 def test_allowed_tools_allows_get_account_status() -> None:
-    with patch("sys.stdin", _stdin("mcp__fieldkit-sales__backstory__get_account_status")):
+    with patch("sys.stdin", _stdin("mcp__work-sales__backstory__get_account_status")):
         result = tool_scope_guard.main()
     assert result == 0
 
 
 def test_allowed_tools_allows_get_recent_account_activity() -> None:
-    with patch("sys.stdin", _stdin("mcp__fieldkit-sales__backstory__get_recent_account_activity")):
+    with patch("sys.stdin", _stdin("mcp__work-sales__backstory__get_recent_account_activity")):
         result = tool_scope_guard.main()
     assert result == 0
 
 
 def test_allowed_tools_allows_account_company_news() -> None:
-    with patch("sys.stdin", _stdin("mcp__fieldkit-sales__backstory__account_company_news")):
+    with patch("sys.stdin", _stdin("mcp__work-sales__backstory__account_company_news")):
         result = tool_scope_guard.main()
     assert result == 0
 
 
 def test_allowed_tools_allows_gmail_draft() -> None:
-    with patch("sys.stdin", _stdin("mcp__fieldkit-mail__google_workspace__draft_gmail_message")):
+    with patch("sys.stdin", _stdin("mcp__work-mail__google_workspace__draft_gmail_message")):
         result = tool_scope_guard.main()
     assert result == 0
 
@@ -109,6 +117,20 @@ def test_allowed_tools_allows_bash_tool() -> None:
 
 def test_edge_cases_invalid_json_exits_0() -> None:
     with patch("sys.stdin", io.StringIO("not json")):
+        result = tool_scope_guard.main()
+    assert result == 0
+
+
+def test_edge_cases_json_array_exits_0() -> None:
+    with patch("sys.stdin", io.StringIO("[]")):
+        result = tool_scope_guard.main()
+    assert result == 0
+
+
+def test_edge_cases_non_string_tool_name_exits_0() -> None:
+    with patch(
+        "sys.stdin", io.StringIO(json.dumps({"tool_name": ["mcp__work-sales__backstory__get_opportunity_status"]}))
+    ):
         result = tool_scope_guard.main()
     assert result == 0
 

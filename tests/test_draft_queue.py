@@ -28,6 +28,12 @@ from fieldkit.commands.watch import draft_queue as dq_cmd
 
 pytestmark = pytest.mark.unit
 
+
+@pytest.fixture(autouse=True)
+def _configured_mail_group(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(dq, "get_mcp_work_group", lambda _service: "work-mail")
+
+
 # ---------------------------------------------------------------------------
 # Helpers / fixtures
 # ---------------------------------------------------------------------------
@@ -331,7 +337,8 @@ def test_run_draft_queue_successful_fetch_writes_alerts_exit_0(tmp_path: Path) -
 
     with (
         patch.dict(os.environ, {"FIELDKIT_USER_EMAIL": "ae@example.com"}),  # pii-guard: ignore
-        patch("fieldkit.watch.morning_brief_mcp.MCPSession", return_value=mock_session),
+        patch("fieldkit.watch.morning_brief_mcp.MCPSession", return_value=mock_session) as session_cls,
+        patch.object(dq, "_get_mcp_gateway_base", return_value="http://127.0.0.1:8080"),
         patch.object(dq, "_alerts_file", return_value=alerts_path),
         patch.object(dq, "get_watchers_dir", return_value=watchers_dir),
         patch("fieldkit.watch.draft_queue.watcher_logging"),
@@ -340,6 +347,7 @@ def test_run_draft_queue_successful_fetch_writes_alerts_exit_0(tmp_path: Path) -
         result = dq._run_draft_queue(dry_run=False)
 
     assert result == 0
+    session_cls.assert_called_once_with("http://127.0.0.1:8080/v0/groups/work-mail/mcp")
     content = alerts_path.read_text(encoding="utf-8")
     assert "Follow up" in content
     assert "x@y.example.com" in content

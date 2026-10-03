@@ -4,7 +4,7 @@ Moved from ``commands/watch/backstory_health.py`` (watch-domain-migration,
 implementation change slice 2.7). No Click imports — pure business logic.
 
 Checks account engagement health for all configured accounts via the
-Backstory API (fieldkit-sales mcpjungle group). Detects drops below a
+Backstory API (the configured sales MCP group). Detects drops below a
 configurable threshold and appends dated alerts to
 fieldkit-data/watchers/backstory-alerts.md.
 
@@ -24,7 +24,7 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
-from fieldkit.config import get_accounts_config, get_fieldkit_home, get_watchers_dir
+from fieldkit.config import get_accounts_config, get_fieldkit_home, get_mcp_work_group, get_watchers_dir
 from fieldkit.config import get_mcp_gateway_base as _get_mcp_gateway_base
 from fieldkit.watch.dedup import alert_block_exists
 from fieldkit.watch.logging import watcher_logging
@@ -57,7 +57,6 @@ def _state_file() -> Path:
 # MCP gateway
 # ---------------------------------------------------------------------------
 
-_MCP_BASE = f"{_get_mcp_gateway_base()}/v0/groups/fieldkit-sales/mcp"
 _MCP_TIMEOUT = 30  # seconds per HTTP call
 _DEFAULT_THRESHOLD = 60  # engagement_level below this → alert
 
@@ -444,7 +443,11 @@ def _load_and_filter_accounts(
 
 def _open_mcp_session() -> MCPSession | None:
     """Initialize and return an MCP session, or None on failure."""
-    session = MCPSession(_MCP_BASE)
+    group = get_mcp_work_group("sales")
+    if group is None:
+        log.error("mcp_sales_group is not configured; set it in fieldkit config to enable backstory-health")
+        return None
+    session = MCPSession(f"{_get_mcp_gateway_base()}/v0/groups/{group}/mcp")
     try:
         session.initialize()
         return session
@@ -602,7 +605,6 @@ def _run_backstory_health(
 
 __all__ = [
     "_DEFAULT_THRESHOLD",
-    "_MCP_BASE",
     "_MCP_TIMEOUT",
     "_accounts_config",
     "_alerts_file",

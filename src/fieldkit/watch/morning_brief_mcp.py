@@ -7,9 +7,7 @@ Provides a stateful JSON-RPC 2.0 session against a single mcpjungle group
 endpoint. Extracted from morning_brief.py to keep the main module focused
 on orchestration.
 
-Note: ``_MCP_CALENDAR_BASE`` is computed from ``get_mcp_gateway_base()`` at
-import time (frozen constant). Tests must patch ``get_mcp_gateway_base``
-before importing this module, or patch ``_MCP_CALENDAR_BASE`` directly.
+The caller selects an authorized gateway group when collecting calendar events.
 """
 
 import json
@@ -19,12 +17,10 @@ from typing import Any
 import httpx
 
 from fieldkit.circuit_breaker import CircuitBreaker, CircuitOpenError
-from fieldkit.config import get_mcp_gateway_base as _get_mcp_gateway_base
 from fieldkit.config.retry import RETRY_TRANSIENT_STATUSES, transient_retry
 
 log = logging.getLogger(__name__)
 
-_MCP_CALENDAR_BASE = f"{_get_mcp_gateway_base()}/v0/groups/fieldkit-calendar/mcp"
 _MCP_TIMEOUT = 30  # seconds per HTTP call
 
 

@@ -20,7 +20,6 @@ import click
 from fieldkit.cli_registry import declare_write
 from fieldkit.watch.backstory_health import (
     _DEFAULT_THRESHOLD,
-    _MCP_BASE,
     _MCP_TIMEOUT,
     MCPSession,
     _accounts_config,
@@ -47,7 +46,6 @@ from fieldkit.watch.backstory_health import (
 
 __all__ = [
     "_DEFAULT_THRESHOLD",
-    "_MCP_BASE",
     "_MCP_TIMEOUT",
     "MCPSession",
     "_accounts_config",
