@@ -264,6 +264,43 @@ def test_uv_installer_targets_the_exact_artifact_and_created_environment(
     assert len(calls) == 2
 
 
+def test_uv_installer_uninstalls_without_pip_in_the_created_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A uv-created environment has no pip, so uninstall must also go through uv."""
+    artifact = tmp_path / "candidate.whl"
+    artifact.write_bytes(b"exact candidate")
+    calls: list[list[str]] = []
+
+    def fake_run(
+        argv: list[str], *, cwd: Path, env: dict[str, str], timeout: int = 60
+    ) -> subprocess.CompletedProcess[str]:
+        del cwd, env, timeout
+        calls.append(argv)
+        if argv[-1] == "--version":
+            return _completed(argv, stdout="fieldkit 1.0.0\n")
+        return _completed(argv)
+
+    monkeypatch.setattr(runner, "_run", fake_run)
+    monkeypatch.setattr(runner.shutil, "which", lambda command: "/usr/bin/uv" if command == "uv" else None)
+
+    report = runner.smoke(
+        artifact,
+        repo_root=_REPO_ROOT,
+        source_revision="a" * 40,
+        expected_version="1.0.0",
+        installer="uv",
+    )
+
+    uninstall = next(argv for argv in calls if "uninstall" in argv)
+    assert uninstall[:3] == ["/usr/bin/uv", "pip", "uninstall"]
+    assert uninstall[3] == "--python"
+    assert Path(uninstall[4]).parent.parent.name == "venv"
+    assert uninstall[-1] == "fieldkit-cli"
+    assert not any(argv[1:3] == ["-m", "pip"] for argv in calls)
+    assert next(c for c in report.criteria if c.criterion_id == "SMOKE116").status == "pass"
+
+
 def test_smoke_gives_fresh_environment_creation_a_bounded_setup_timeout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

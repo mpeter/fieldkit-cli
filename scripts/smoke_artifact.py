@@ -429,8 +429,14 @@ for roots in profiles.values():
             }
             for criterion_id, command in commands[profile]:
                 criteria.append(_criterion(criterion_id, _run([str(fieldkit), *command], cwd=run_dir, env=env)))
+        # A uv-created environment has no pip; uninstall with the tool that installed.
+        uninstall_argv = (
+            [uv, "pip", "uninstall", "--python", str(python), "fieldkit-cli"]
+            if uv is not None
+            else [str(python), "-m", "pip", "uninstall", "--yes", "fieldkit-cli"]
+        )
         uninstall = _run(
-            [str(python), "-m", "pip", "uninstall", "--yes", "fieldkit-cli"],
+            uninstall_argv,
             cwd=run_dir,
             env=env,
             timeout=INSTALL_TIMEOUT_SECONDS,
