@@ -33,7 +33,32 @@ def _public_observations() -> dict[str, verifier.ApiObservation]:
         "automated_security_fixes": verifier.ApiObservation(200, {"enabled": True, "paused": False}),
         "private_vulnerability_reporting": verifier.ApiObservation(200, {"enabled": True}),
         "security_and_analysis": verifier.ApiObservation(200, security["security_and_analysis"]),
+        "environments": verifier.ApiObservation(
+            200, {"environments": [_environment(name, spec) for name, spec in manifest["environments"].items()]}
+        ),
     }
+
+
+def _environment(name: str, spec: dict[str, Any]) -> dict[str, Any]:
+    """Render the GitHub environment shape that satisfies one manifest entry."""
+    rules: list[dict[str, Any]] = [{"type": "branch_policy"}]
+    if spec["required_reviewers"]:
+        rules.append({"type": "required_reviewers", "prevent_self_review": False, "reviewers": [{"type": "User"}]})
+    return {
+        "name": name,
+        "deployment_branch_policy": {"protected_branches": False, "custom_branch_policies": True},
+        "protection_rules": rules,
+        "deployment_branch_policies": [{"name": pattern, "type": "tag"} for pattern in spec["deployment_tag_patterns"]],
+    }
+
+
+def _with_environment(name: str, change: dict[str, Any]) -> dict[str, verifier.ApiObservation]:
+    observations = _public_observations()
+    environments = observations["environments"].data["environments"]
+    for environment in environments:
+        if environment["name"] == name:
+            environment.update(change)
+    return observations
 
 
 def test_post_cutover_matching_snapshot_passes() -> None:
@@ -190,6 +215,109 @@ def test_selected_action_policy_matches_current_workflows_exactly() -> None:
     assert selected["verified_allowed"] is False
     assert all(any(fnmatchcase(reference, pattern) for pattern in patterns) for reference in references)
     assert all(any(fnmatchcase(reference, pattern) for reference in references) for pattern in patterns)
+
+
+def test_manifest_requires_one_approval_only_for_production() -> None:
+    environments = _manifest()["environments"]
+
+    assert environments == {
+        "pypi": {"required_reviewers": True, "deployment_tag_patterns": ["v*.*.*"]},
+        "testpypi": {"required_reviewers": False, "deployment_tag_patterns": ["v*.*.*"]},
+    }
+
+
+@pytest.mark.parametrize(
+    ("name", "change", "message"),
+    [
+        (
+            "pypi",
+            {"deployment_branch_policy": {"protected_branches": True, "custom_branch_policies": False}},
+            "deployments are not limited to custom ref policies",
+        ),
+        (
+            "pypi",
+            {"deployment_branch_policies": [{"name": "v*.*.*", "type": "branch"}]},
+            "deployment ref policies are not exactly the declared tag patterns",
+        ),
+        (
+            "testpypi",
+            {"deployment_branch_policies": [{"name": "v*.*.*", "type": "tag"}, {"name": "main", "type": "branch"}]},
+            "deployment ref policies are not exactly the declared tag patterns",
+        ),
+        ("pypi", {"protection_rules": [{"type": "branch_policy"}]}, "a required reviewer is missing"),
+        (
+            "pypi",
+            {"protection_rules": [{"type": "required_reviewers", "prevent_self_review": True, "reviewers": [{}]}]},
+            "self-review prevention would block the sole maintainer",
+        ),
+        (
+            "testpypi",
+            {"protection_rules": [{"type": "required_reviewers", "prevent_self_review": False, "reviewers": [{}]}]},
+            "an undeclared required reviewer adds an approval",
+        ),
+    ],
+)
+def test_release_environment_drift_fails(name: str, change: dict[str, Any], message: str) -> None:
+    report = verifier.evaluate(_manifest(), _with_environment(name, change), phase="post-cutover")
+
+    assert report.status == "fail"
+    assert report.failures == (verifier.Finding(f"environments.{name}", message),)
+
+
+def test_missing_and_undeclared_environments_fail() -> None:
+    observations = _public_observations()
+    environments = observations["environments"].data["environments"]
+    environments[:] = [item for item in environments if item["name"] != "testpypi"]
+    environments.append({"name": "release-approval", "deployment_branch_policy": None, "protection_rules": []})
+
+    report = verifier.evaluate(_manifest(), observations, phase="post-cutover")
+
+    assert report.failures == (
+        verifier.Finding("environments.release-approval", "environment is not declared in the manifest"),
+        verifier.Finding("environments.testpypi", "environment does not exist"),
+    )
+
+
+def test_collect_reads_environments_and_treats_absent_custom_policies_as_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = {
+        "environments?per_page=100": verifier.ApiObservation(
+            200, {"environments": [{"name": "pypi", "protection_rules": []}, {"name": "legacy"}]}
+        ),
+        "environments/pypi/deployment-branch-policies?per_page=100": verifier.ApiObservation(
+            200, {"branch_policies": [{"name": "v*.*.*", "type": "tag"}]}
+        ),
+        "environments/legacy/deployment-branch-policies?per_page=100": verifier.ApiObservation(404, None),
+    }
+    monkeypatch.setattr(verifier, "_api", lambda _repository, suffix: responses[suffix])
+
+    observation = verifier._environments("example/project")
+
+    assert observation == verifier.ApiObservation(
+        200,
+        {
+            "environments": [
+                {
+                    "name": "pypi",
+                    "protection_rules": [],
+                    "deployment_branch_policies": [{"name": "v*.*.*", "type": "tag"}],
+                },
+                {"name": "legacy", "deployment_branch_policies": []},
+            ]
+        },
+    )
+
+
+def test_collect_fails_closed_on_an_unreadable_deployment_policy(monkeypatch: pytest.MonkeyPatch) -> None:
+    responses = {
+        "environments?per_page=100": verifier.ApiObservation(200, {"environments": [{"name": "pypi"}]}),
+        "environments/pypi/deployment-branch-policies?per_page=100": verifier.ApiObservation(403, None),
+    }
+    monkeypatch.setattr(verifier, "_api", lambda _repository, suffix: responses[suffix])
+
+    with pytest.raises(RuntimeError, match="deployment policies returned HTTP 403"):
+        verifier._environments("example/project")
 
 
 def test_snapshot_loader_rejects_missing_surface(tmp_path: Path) -> None:
