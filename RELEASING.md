@@ -117,8 +117,22 @@ check out source, use a package-index token, or overwrite an existing version.
 Before the first tag, configure the `testpypi` and `pypi` environments with an
 OIDC Trusted Publisher for `release.yml`, restrict their deployment refs to
 `v*.*.*` tags, and require a reviewer on `pypi`. An environment limited to
-protected branches rejects a tag-triggered job. Record the actual remote
-settings before treating those controls as evidenced.
+protected branches rejects a tag-triggered job. Verify the live settings,
+including both environments, against `.github/repository-settings.json` before
+tagging:
+
+```console
+uv run python scripts/verify_repository_settings.py \
+  "$(gh repo view --json nameWithOwner --jq .nameWithOwner)" \
+  --phase post-cutover --expected-revision "$(git rev-parse origin/main)"
+```
+
+The verifier reads settings only. It fails when an environment can deploy from
+branches, carries a tag pattern other than `v*.*.*`, adds a reviewer to
+`testpypi`, lacks one on `pypi`, enables self-review prevention, or when an
+undeclared environment exists. PyPI exposes no API for Trusted Publisher
+configuration; a wrong publisher fails the publish job before any upload, and
+**Re-run failed jobs** resumes after it is corrected.
 
 Both publication jobs upload with `pypa/gh-action-pypi-publish` and set
 `attestations: true`, so every wheel and sdist on TestPyPI or PyPI carries a

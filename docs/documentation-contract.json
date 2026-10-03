@@ -66,7 +66,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Understand current project authority.",
-      "source_fingerprint": "sha256:44c532390e75bb132e988170c278f86ddbaa25a7146b634eeccf932a4a225356",
+      "source_fingerprint": "sha256:980f4f96b663fcfb292d7b7e72f5c76427f936871f4c1019c95892e7eaae4ecd",
       "sources": [
         ".github/CODEOWNERS",
         ".github/repository-settings.json"
@@ -137,8 +137,15 @@
           "verification_id": "automated.release-workflow-policy"
         },
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "credentialed_manual_integration",
           "id": "releasing.md.block-4",
+          "language": "console",
+          "sha256": "3349741fda14dccca33338637280658cd1fec026b8c4eac53f7137f7ca47c0c1",
+          "verification_id": "manual.credentialed-integration"
+        },
+        {
+          "classification": "exact_release_cutover_proof",
+          "id": "releasing.md.block-5",
           "language": "console",
           "sha256": "50a2887392175a0bde98a73e4a63398f2644c0204a51eb514358d94235e9ded3",
           "verification_id": "manual.release-cutover"
@@ -171,7 +178,7 @@
       "content_type": "roadmap",
       "fenced_blocks": [],
       "reader_action": "Review planned work.",
-      "source_fingerprint": "sha256:28cf05310d8e2a4d715e3529ef2e9458528f163e6a0b60ee242827a2b1753f84",
+      "source_fingerprint": "sha256:0f26fba886013aed851ee104ba4f2078321574a04285c93db52f660d3d37dac2",
       "sources": [
         ".github/repository-settings.json",
         "pyproject.toml",
@@ -214,7 +221,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Report a vulnerability without public disclosure.",
-      "source_fingerprint": "sha256:a9d1fec419b6707cdddb333a79306d5bc848c6f1feee7bd097cd3b0b342e7c66",
+      "source_fingerprint": "sha256:2dc161c62661fdade69d6859013a4738018cf546ba0ec68a7bd356a5fc72b913",
       "sources": [
         ".github/repository-settings.json",
         ".github/ISSUE_TEMPLATE/config.yml"
