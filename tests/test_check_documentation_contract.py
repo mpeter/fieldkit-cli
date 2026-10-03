@@ -86,8 +86,8 @@ def _write_contract(repo: Path, *, fingerprint: str = "sha256:" + "0" * 64, excl
                 "evidence": "docs/release-readiness/rehearsal-evidence.schema.json",
                 "mode": "manual_evidence",
             },
-            "manual.release-cutover": {
-                "classification": "exact_release_cutover_proof",
+            "manual.public-rehearsal": {
+                "classification": "public_rehearsal_proof",
                 "evidence": "docs/release-readiness/rehearsal-evidence.schema.json",
                 "mode": "manual_evidence",
             },
