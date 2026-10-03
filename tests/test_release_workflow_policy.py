@@ -556,6 +556,22 @@ def test_policy_rejects_unavailable_candidate_evidence_with_a_stale_action_revis
     assert {(finding.code, finding.job) for finding in report.findings} == {("RWF028", "promotion_evidence")}
 
 
+def test_policy_rejects_unavailable_candidate_evidence_that_swaps_boundary_actions() -> None:
+    workflow = _workflow()
+    jobs = workflow["jobs"]
+    assert isinstance(jobs, dict)
+    steps = jobs["promotion_evidence"]["steps"]
+    assert isinstance(steps, list)
+    attest, publisher = _RECORDED["attest"], _RECORDED["publish_pypi"]
+    for step in steps:
+        if isinstance(step.get("run"), str) and attest in step["run"]:
+            step["run"] = step["run"].replace(attest, "SWAP").replace(publisher, attest).replace("SWAP", publisher)
+
+    report = release_workflow_policy.validate_recorded_actions(workflow, _RECORDED)
+
+    assert {(finding.code, finding.job) for finding in report.findings} == {("RWF028", "promotion_evidence")}
+
+
 def test_recorded_boundary_actions_reads_the_renderer_table_without_importing_it() -> None:
     source = "import missing_module\n_BOUNDARY_ACTIONS = {'publish_pypi': 'owner/action@" + "a" * 40 + "'}\n"
 

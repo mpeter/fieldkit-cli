@@ -607,8 +607,15 @@ def validate_recorded_actions(document: object, recorded: Mapping[str, str]) -> 
         for step in _steps(_mapping(jobs.get(_PROMOTION_EVIDENCE_JOB)))
         if isinstance(command := step.get("run"), str)
     )
-    pinned = {value for value in recorded.values() if _PINNED_ACTION_REFERENCE.fullmatch(value)}
-    if not pinned or set(_PINNED_ACTION_REFERENCE.findall(fallback)) != pinned:
+    pinned = {name: value for name, value in recorded.items() if _PINNED_ACTION_REFERENCE.fullmatch(value)}
+    if (
+        not pinned
+        or set(_PINNED_ACTION_REFERENCE.findall(fallback)) != set(pinned.values())
+        or not all(
+            re.search(rf"""["']{re.escape(name)}["']\s*:\s*["']{re.escape(value)}["']""", fallback)
+            for name, value in pinned.items()
+        )
+    ):
         _add(
             findings,
             "RWF028",
