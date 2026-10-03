@@ -11,7 +11,7 @@ generated_by: scripts/generate_dep_map.py
 
 > **Derived document — generated exhaust, not a system of record.** Verify facts against the sources listed in `derived_from`.
 
-> Auto-generated 2026-10-01 from live repo analysis. Do not edit manually.
+> Auto-generated 2026-10-03 from live repo analysis. Do not edit manually.
 > Re-generate: `uv run python scripts/generate_dep_map.py`
 
 ---
@@ -149,8 +149,8 @@ rg 'fieldkit <old-name>' docs/
 # What commands packages use fieldkit.pursuit?
 rg 'from fieldkit.pursuit import' src/fieldkit/commands/ hooks/ --type py
 
-# What skills reference the fieldkit-sales MCP group?
-rg 'fieldkit-sales' src/fieldkit/skills/ --type md -l
+# What skills reference account intelligence?
+rg 'account-intelligence' src/fieldkit/skills/ --type md -l
 
 # Verify no boundary violations
 uv run tach check

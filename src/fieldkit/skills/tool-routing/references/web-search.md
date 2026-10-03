@@ -12,7 +12,8 @@ tvly research run "<question>" --json
 
 Use `tvly <command> --help` before unfamiliar flags.
 
-The direct global `brave_search` MCP is an exception for Brave's independent
-index. Use it only when a second index is materially useful after Tavily, and
-call `brave_search__brave_web_search` or `brave_search__brave_llm_context`. It is
-not a gateway group or a fallback for a missing Tavily CLI credential.
+When an independent index such as Brave is needed, discover that capability in the
+active harness's configured authorized tools. Inspect the selected schema; no
+fixed alias or direct connection is guaranteed. Report a missing capability rather
+than inventing a route. Authentication failures do not authorize switching identity
+or transport; an alternative source must be explicitly labeled as such.

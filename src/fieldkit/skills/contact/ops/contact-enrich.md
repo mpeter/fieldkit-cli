@@ -49,18 +49,15 @@ For contacts missing email/LinkedIn/phone:
 
 **Success rate:** ~70% of contacts get LinkedIn URLs via web search
 
-### Phase 2b: Dataverse Rover Enrichment (optional — internal contacts only)
+### Phase 2b: Directory enrichment (optional)
 
-For each contact on your organization's domain, if your directory integration is available:
-
-1. Query Rover People data product for: title, manager, namespace, location
-2. Add to contact record as:
-   - `rover_title` — official job title from Rover
-   - `rover_manager` — manager's full name from Rover
-   - `directory_namespace` — organization username or namespace
-3. If `fieldkit-dataverse` is unavailable or contact not found in Rover: skip and leave fields absent (do not fail enrichment for external contacts).
-
-This step runs in parallel with web enrichment. Contacts outside the configured internal domains skip Rover entirely.
+For contacts on configured internal domains, use a directory source only when
+a route is configured and authorized for the required reads. Confirm its
+exposed capabilities before querying title, manager, namespace, or location.
+If unavailable or no contact is found, skip and leave optional fields absent;
+continue enrichment from other authorized sources. Follow the
+[tool routing contract](../../tool-routing/SKILL.md) without borrowing a group
+or identity.
 
 ### Phase 3: Validation & Enrichment
 

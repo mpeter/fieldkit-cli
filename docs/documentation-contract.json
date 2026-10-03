@@ -1215,12 +1215,12 @@
           "classification": "generated_reference",
           "id": "docs.dependency.map.md.block-5",
           "language": "bash",
-          "sha256": "10d02f6e1804a1c35ab5a8549c27a5e79555224271ce60d74168561b2616265a",
+          "sha256": "68a63f1b5e5ae45f569236ea7f5172630f9cd4904595be8144ed6cd2177c4fbb",
           "verification_id": "automated.generated-dependency-map"
         }
       ],
       "reader_action": "Inspect the generated module dependency graph.",
-      "source_fingerprint": "sha256:792257174ac8ddee1e6b461db86f29713106c8ab8e7ca42e843b7a677979bc91",
+      "source_fingerprint": "sha256:f588b11ca3234ca562957f72393404e32cd9a966d4597317c6b33853d23b4588",
       "sources": [
         "tach.toml",
         "src/fieldkit/**/*.py",
