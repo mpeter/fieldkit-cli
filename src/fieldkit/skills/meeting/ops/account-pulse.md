@@ -26,7 +26,7 @@ None required — runs across all active accounts (non-`internal: true` entries 
 
 Optional: "pulse on [account]" to focus on one.
 
-Groups needed: **fieldkit-sales** (Backstory). Account/project files are read directly from disk (native file reads).
+Optional account-intelligence route: **configured account-intelligence route** (Backstory). Account/project files are read directly from disk (native file reads).
 
 ## Execution
 
@@ -49,19 +49,19 @@ Then read directly from disk:
 
 ### Step 1: Pull Backstory signals for each account
 
-For each active account (or the one specified) via **fieldkit-sales** group:
+For each active account (or the one specified) via **configured account-intelligence route**:
 
 ```
-1. backstory__backstory__find_account(<account name>)
+1. find_account(<account name>)
    → get peopleai_account_id
 
-2. backstory__backstory__get_account_status(peopleai_account_id)
+2. get_account_status(peopleai_account_id)
    → health, risks, next steps, trending topics
 
-3. backstory__backstory__get_recent_account_activity(peopleai_account_id)
+3. get_recent_account_activity(peopleai_account_id)
    → what's been discussed in last 30 days
 
-4. backstory__backstory__account_company_news(peopleai_account_id)   [public companies only]
+4. account_company_news(peopleai_account_id)   [public companies only]
    → trigger events, industry pressures
 ```
 
@@ -197,3 +197,7 @@ Assign each account to one bucket based on signals:
 - The main `meeting` skill (this skill's root) — Deep prep for any specific meeting surfaced in the pulse
 - **grill** — Score any at-risk deal flagged in the pulse
 - **workstream-discover** — Dig deeper on any expansion signal that warrants follow-up
+
+Account-intelligence reads are conditional on a configured, authorized route
+and its exposed capabilities. If unavailable, note the gap and continue with
+other authorized sources. See [tool routing](../../tool-routing/SKILL.md).

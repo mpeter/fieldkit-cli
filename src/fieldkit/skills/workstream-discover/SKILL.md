@@ -32,9 +32,9 @@ A list of vendor products is not an expansion plan.
 
 ## Input Sources (use all available)
 
-Routes needed: **fieldkit-sales** (Backstory MCP exception), `gws gmail` (Gmail threads), `gws drive` (SOWs and delivery docs), and `tvly` (web research). Account/project files are read and edited directly on disk.
+Routes needed: **configured account-intelligence route** (optional authorized Backstory reads), `gws gmail` (Gmail threads), `gws drive` (SOWs and delivery docs), and `tvly` (web research). Account/project files are read and edited directly on disk.
 
-- Backstory (fieldkit-sales) — account activity, engagement signals, new stakeholder activity
+- Backstory (configured account-intelligence route) — account activity, engagement signals, new stakeholder activity
 - Slack — `slackcli search messages "<account name>"` — scope creep signals, delivery team concerns
 - Google Drive (`gws drive`) — SOWs, project status reports, delivery docs
 - Gmail (`gws gmail`) — recent threads for signals of new initiatives, pain, exec changes
@@ -158,3 +158,14 @@ Date: YYYY-MM-DD
 
 - `playbooks/expansion.md` — Read the expansion playbook before running this skill
 - `meeting`'s [stakeholder map](../meeting/ops/stakeholder-map.md) — Map stakeholders in the expansion area
+
+## Route contract
+
+Use [tool routing](../tool-routing/SKILL.md) and the active harness configuration
+to select the configured account-intelligence route, when available and authorized.
+Use only its permitted read capabilities; tool names and aliases come from that
+configuration. If a source or required read is unavailable, note the gap and
+continue with authorized local and CLI sources. Do not substitute another group
+or identity. Google operations use the configured authorized identity; Google
+writes use `gws`, retain the workflow's approval boundary, and require read-back
+verification.

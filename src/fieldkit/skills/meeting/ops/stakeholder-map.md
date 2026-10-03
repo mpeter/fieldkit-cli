@@ -18,11 +18,11 @@ leads to a next step.
 
 ## Data Sources (use all available)
 
-Routes needed: `gws gmail` (Gmail threads), **fieldkit-sales** (Backstory MCP exception), `gws calendar` (meeting attendees), and `tvly` (web research). Account files are read and edited directly on disk.
+Routes needed: `gws gmail` (Gmail threads), **configured account-intelligence route** (optional authorized Backstory reads), `gws calendar` (meeting attendees), and `tvly` (web research). Account files are read and edited directly on disk.
 
 1. **`account.md`** — read `accounts/<account>/account.md` — existing stakeholder info
 2. **Gmail threads** (`gws gmail`) — search for contacts at the account domain
-3. **Backstory** (fieldkit-sales) — relationship health scores, last contact, engagement depth
+3. **Backstory** (configured account-intelligence route) — relationship health scores, last contact, engagement depth
 4. **Google Calendar** (`gws calendar`) — past meeting attendees at the account
 5. **Slack** — `slackcli` search for account mentions
 6. **Web search** (`tvly search`) — LinkedIn profiles, org announcements, executive bios
@@ -164,3 +164,7 @@ After mapping all stakeholders, produce a gap summary:
    the frontmatter.
 2. For pursuit-specific maps, edit `accounts/<account>/pursuits/<opp>.md` directly.
 3. Flag any EB or Champion gap to the user immediately — these are deal blockers.
+
+Account-intelligence reads are conditional on a configured, authorized route
+and its exposed capabilities. If unavailable, note the gap and continue with
+other authorized sources. See [tool routing](../../tool-routing/SKILL.md).

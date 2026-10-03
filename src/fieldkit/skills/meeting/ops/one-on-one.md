@@ -19,7 +19,7 @@ Covers: what closed, wins, at-risk with asks, pipeline numbers, this week's focu
 - `--qbr-mode` — expand to quarterly summary (30-day window, add YTD numbers)
 - `--slack` — shorter Slack-paste version (bullets only, no section headers)
 
-Groups needed: **fieldkit-sales** (Backstory — positive signals and stage advances).
+Optional account-intelligence route: **configured account-intelligence route** (Backstory — positive signals and stage advances).
 Pursuit files, TASKS.md, and watcher alerts are read directly from disk (native file reads).
 
 ---
@@ -69,7 +69,7 @@ For each at-risk deal, auto-suggest the manager ask:
 ## Step 4: Wins and positive signals (7-day window)
 
 Check pursuit file `transition-history` for stage advances in the lookback window.
-Via **fieldkit-sales** group: `get_recent_account_activity` for positive signals (new contacts, meetings, engagement uptick).
+Via **configured account-intelligence route**: `get_recent_account_activity` for positive signals (new contacts, meetings, engagement uptick).
 
 ---
 
@@ -137,3 +137,7 @@ Compact version without headers, all bullets:
 🎯 Focus: [top 2 priorities]
 🤝 Ask: [if any]
 ```
+
+Account-intelligence reads are conditional on a configured, authorized route
+and its exposed capabilities. If unavailable, note the gap and continue with
+other authorized sources. See [tool routing](../../tool-routing/SKILL.md).
