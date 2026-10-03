@@ -192,6 +192,14 @@ finish against that bundle, the version is spent. Publish a successor version
 instead of repairing the release by uploading again. Retained artifacts expire
 after 90 days, so finish or abandon a release run within that window.
 
+A re-run uses the workflow file at the tagged commit, so it cannot pick up a
+workflow fix. If the run fails after PyPI accepted and verified the files, finish
+the GitHub release by hand from that run's candidate artifact. Download it, check
+`SHA256SUMS`, confirm that the distribution digests match the PyPI release, and
+then run the workflow's `gh release create` command with the same tag. The run's
+promotion evidence still records the failure; that record is kept as part of the
+release history.
+
 For a defective published release, document the problem, yank it when
 appropriate, and release a corrected successor version through the same flow.
 Do not delete a public release or rewrite its evidence as a substitute for a

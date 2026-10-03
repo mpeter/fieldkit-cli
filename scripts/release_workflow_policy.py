@@ -334,6 +334,12 @@ def _validate_authority_job(name: str, job: dict[str, Any], findings: list[Findi
         "gh release create" in command and "release-dist/*" in command for command in commands
     ):
         _add(findings, "RWF020", name, "GitHub release must attach only sealed distributions")
+    if name == "github_release" and not any(
+        "gh release create" in command and '--repo "$GITHUB_REPOSITORY"' in command and "--verify-tag" in command
+        for command in commands
+    ):
+        # The job has no checkout, so gh cannot infer the repository from a remote.
+        _add(findings, "RWF032", name, "GitHub release must name its repository and require the pushed tag")
 
 
 def _validates_build_manifest_output(job: dict[str, Any]) -> bool:

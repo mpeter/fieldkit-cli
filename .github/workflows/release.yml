@@ -348,7 +348,8 @@ jobs:
       - name: Publish the verified GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" release-dist/* --generate-notes
+        # No checkout here, so gh must be told the repository explicitly.
+        run: gh release create "$GITHUB_REF_NAME" release-dist/* --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes
 
   promotion_evidence:
     if: always() && github.event_name == 'push'
