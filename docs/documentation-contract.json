@@ -149,6 +149,13 @@
           "language": "console",
           "sha256": "50a2887392175a0bde98a73e4a63398f2644c0204a51eb514358d94235e9ded3",
           "verification_id": "manual.public-rehearsal"
+        },
+        {
+          "classification": "credentialed_manual_integration",
+          "id": "releasing.md.block-6",
+          "language": "console",
+          "sha256": "373d9afa98f987ceed9b9e18cadef83e182530a923851661fdfee3497a532fd8",
+          "verification_id": "manual.credentialed-integration"
         }
       ],
       "reader_action": "Prepare, assess, and recover an operator-approved release candidate.",

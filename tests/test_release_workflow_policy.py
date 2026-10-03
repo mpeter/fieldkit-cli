@@ -357,8 +357,11 @@ def test_policy_rejects_an_attempt_scoped_candidate_artifact(job_name: str, cand
         'gh release create "$GITHUB_REF_NAME" release-dist/* --generate-notes',
         'gh release create "$GITHUB_REF_NAME" release-dist/* --verify-tag --generate-notes',
         'gh release create "$GITHUB_REF_NAME" release-dist/* --repo "$GITHUB_REPOSITORY" --generate-notes',
+        'gh release create "$GITHUB_REF_NAME" release-dist/* --repo "$GITHUB_REPOSITORY" --verify-tag '
+        "--verify-tag=false --generate-notes",
+        'gh release create "$GITHUB_REF_NAME" release-dist/* --repo "$OTHER_REPOSITORY" --verify-tag --generate-notes',
     ],
-    ids=["no-repository-or-tag-check", "no-repository", "no-tag-check"],
+    ids=["no-repository-or-tag-check", "no-repository", "no-tag-check", "tag-check-disabled", "other-repository"],
 )
 def test_policy_requires_an_explicit_repository_for_the_checkout_free_release(command: str) -> None:
     workflow = _workflow()
