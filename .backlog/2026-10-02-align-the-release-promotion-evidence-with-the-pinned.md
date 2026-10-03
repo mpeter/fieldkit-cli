@@ -2,8 +2,10 @@
 title: Align the release promotion evidence with the pinned PyPI publish action
 type: bug
 severity: high
-status: open
+status: closed
 created: 2026-10-02
+closed: 2026-10-03
+resolution: done
 labels: []
 ---
 The release workflow publishes with `pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33` (v1.14.2, `.github/workflows/release.yml:275,301`, since #8 / d30c4963), but the promotion evidence still records the v1.9.0 publisher `pypa/gh-action-pypi-publish@ec4db0b4ddc65acdf4bff5fa45ac92d78b56bdf0` in three places on main 47504730:

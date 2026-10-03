@@ -145,7 +145,7 @@
         }
       ],
       "reader_action": "Prepare, assess, and recover an operator-approved release candidate.",
-      "source_fingerprint": "sha256:e7696dba9edfcd1a4c771d6d76f5c7d86c321367e7d85820cdb0da344893fbd9",
+      "source_fingerprint": "sha256:416b94a64089fd5e135f25ea6db8733d7e7074b48b38b2ef1b5cfa19d82870bd",
       "sources": [
         "Makefile",
         ".github/workflows/release.yml",

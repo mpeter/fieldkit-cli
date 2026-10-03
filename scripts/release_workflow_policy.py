@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import re
 import sys
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -20,6 +22,7 @@ else:
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW_PATH = Path(".github/workflows/release.yml")
 APPROVAL_WORKFLOW_PATH = Path(".github/workflows/release-approval.yml")
+EVIDENCE_PATH = Path("scripts/release_promotion_evidence.py")
 
 _AUTHORITY_JOBS = frozenset({"attest", "publish_testpypi", "publish_pypi", "github_release"})
 _APPROVAL_JOB = "approval"
@@ -82,6 +85,9 @@ _EXPECTED_ACTIONS = {
     "github_release": frozenset({"actions/download-artifact"}),
 }
 _FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
+# Authority job -> the promotion-evidence boundary whose recorded action it runs.
+_RECORDED_ACTION_JOBS = {"attest": "attest", "publish_testpypi": "publish_pypi", "publish_pypi": "publish_pypi"}
+_PINNED_ACTION_REFERENCE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@[0-9a-f]{40}")
 _FORBIDDEN_AUTHORITY_COMMAND = re.compile(r"(?:\b(?:uv|pip|python)\b|scripts/)")
 _SECRET_REFERENCE = re.compile(r"\$\{\{\s*secrets(?:\.|\[)")
 _CONSUMER_ACTIONS = frozenset({"actions/download-artifact", "actions/setup-python", "actions/upload-artifact"})
@@ -563,6 +569,62 @@ def validate_approval_document(document: object) -> Report:
     return Report(tuple(sorted(set(findings))))
 
 
+def recorded_boundary_actions(source: str) -> dict[str, str]:
+    """Read the boundary actions promotion evidence records, without importing the renderer."""
+    try:
+        body = ast.parse(source).body
+    except SyntaxError:
+        return {}
+    for node in body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "_BOUNDARY_ACTIONS" for target in node.targets
+        ):
+            try:
+                value = ast.literal_eval(node.value)
+            except ValueError:
+                return {}
+            if isinstance(value, dict) and all(isinstance(item, str) for item in (*value, *value.values())):
+                return value
+    return {}
+
+
+def validate_recorded_actions(document: object, recorded: Mapping[str, str]) -> Report:
+    """Require promotion evidence to name the exact action revisions the workflow runs."""
+    jobs = _mapping(_mapping(document).get("jobs"))
+    findings: list[Finding] = []
+    for name, boundary in sorted(_RECORDED_ACTION_JOBS.items()):
+        expected = recorded.get(boundary, "")
+        action = expected.partition("@")[0]
+        references = {
+            uses
+            for step in _steps(_mapping(jobs.get(name)))
+            if isinstance(uses := step.get("uses"), str) and uses.partition("@")[0] == action
+        }
+        if not _PINNED_ACTION_REFERENCE.fullmatch(expected) or references != {expected}:
+            _add(findings, "RWF028", name, f"job must run the action promotion evidence records for {boundary!r}")
+    fallback = "\n".join(
+        command
+        for step in _steps(_mapping(jobs.get(_PROMOTION_EVIDENCE_JOB)))
+        if isinstance(command := step.get("run"), str)
+    )
+    pinned = {name: value for name, value in recorded.items() if _PINNED_ACTION_REFERENCE.fullmatch(value)}
+    if (
+        not pinned
+        or set(_PINNED_ACTION_REFERENCE.findall(fallback)) != set(pinned.values())
+        or not all(
+            re.search(rf"""["']{re.escape(name)}["']\s*:\s*["']{re.escape(value)}["']""", fallback)
+            for name, value in pinned.items()
+        )
+    ):
+        _add(
+            findings,
+            "RWF028",
+            _PROMOTION_EVIDENCE_JOB,
+            "unavailable-candidate evidence must record the same action revisions",
+        )
+    return Report(tuple(sorted(set(findings))))
+
+
 def validate_document(document: object) -> Report:
     """Validate one parsed release workflow without evaluating workflow expressions."""
     workflow = _mapping(document)
@@ -611,7 +673,12 @@ def validate_repository(repo_root: Path) -> Report:
     approval_path = repo_root / APPROVAL_WORKFLOW_PATH
     document = yaml.load(workflow_path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
     approval_document = yaml.load(approval_path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
-    findings = {*validate_document(document).findings, *validate_approval_document(approval_document).findings}
+    recorded = recorded_boundary_actions((repo_root / EVIDENCE_PATH).read_text(encoding="utf-8"))
+    findings = {
+        *validate_document(document).findings,
+        *validate_recorded_actions(document, recorded).findings,
+        *validate_approval_document(approval_document).findings,
+    }
     return Report(tuple(sorted(findings)))
 
 
