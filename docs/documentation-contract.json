@@ -2128,7 +2128,7 @@
       "content_type": "reference",
       "fenced_blocks": [],
       "reader_action": "Find releases that have actually been published.",
-      "source_fingerprint": "sha256:510101de9879023a3bbe739d950e1060a2fb7dfca6569c7e1b232286b99738a9",
+      "source_fingerprint": "sha256:18bed4c73fab7ad3c3f12def18083967ecf09057f729bf1f420e5c325f2ef2ec",
       "sources": [
         "pyproject.toml",
         "CHANGELOG.md"
