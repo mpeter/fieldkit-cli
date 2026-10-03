@@ -3,6 +3,7 @@
 import json
 import signal
 import subprocess
+from collections.abc import Callable
 from hashlib import sha256
 from pathlib import Path
 
@@ -62,8 +63,8 @@ def _write_contract(repo: Path) -> None:
                 "evidence": "uv run pytest tests/test_documentation_configuration_examples.py -q",
                 "mode": "automated",
             },
-            "manual.release-cutover": {
-                "classification": "exact_release_cutover_proof",
+            "manual.public-rehearsal": {
+                "classification": "public_rehearsal_proof",
                 "evidence": "docs/release-readiness/rehearsal-evidence.schema.json",
                 "mode": "manual_evidence",
             },
@@ -79,7 +80,7 @@ def _write_contract(repo: Path) -> None:
                     {"id": "readme.configuration", "verification_id": "automated.configuration-example-contract"},
                     {
                         "id": "readme.release",
-                        "verification_id": "manual.release-cutover",
+                        "verification_id": "manual.public-rehearsal",
                         "sha256": "a" * 64,
                     },
                 ]
@@ -248,9 +249,9 @@ def _write_rehearsal_evidence(repo: Path, *, verified_blocks: list[str], contrac
             "clean_export_tree": "b" * 40,
             "repository": "mpeter/fieldkit-cli",
             "public_commit_sha": "c" * 40,
-            "workflow_name": "Cutover verification",
-            "workflow_path": ".github/workflows/cutover.yml",
-            "workflow_event": "push",
+            "workflow_name": "Full enforcement",
+            "workflow_path": ".github/workflows/full-enforcement.yml",
+            "workflow_event": "schedule",
             "workflow_run_id": 1,
             "workflow_run_attempt": 1,
         },
@@ -271,7 +272,7 @@ def _write_rehearsal_evidence(repo: Path, *, verified_blocks: list[str], contrac
             {
                 "id": identifier,
                 "actor": actor,
-                "proof_type": "release-cutover",
+                "proof_type": "public-rehearsal",
                 "documented_block_sha256": None,
                 "status": "pass",
                 "started_at": "2026-09-14T00:00:00Z",
@@ -383,7 +384,7 @@ def test_check_reports_manual_table_pending(tmp_path: Path, monkeypatch: pytest.
     contract_path = tmp_path / "docs/documentation-contract.json"
     contract = json.loads(contract_path.read_text(encoding="utf-8"))
     contract["documents"]["README.md"]["tables"] = [
-        {"id": "readme.table", "verification_id": "manual.release-cutover", "sha256": "b" * 64}
+        {"id": "readme.table", "verification_id": "manual.public-rehearsal", "sha256": "b" * 64}
     ]
     contract_path.write_text(json.dumps(contract), encoding="utf-8")
     monkeypatch.setattr(check_documentation_examples, "_run", _passing_run)
@@ -449,9 +450,9 @@ def test_public_rehearsal_rejects_a_public_commit_with_the_wrong_tree(
     subject = {
         "public_commit_sha": "c" * 40,
         "clean_export_tree": "b" * 40,
-        "workflow_name": "Cutover verification",
-        "workflow_path": ".github/workflows/cutover.yml",
-        "workflow_event": "push",
+        "workflow_name": "Full enforcement",
+        "workflow_path": ".github/workflows/full-enforcement.yml",
+        "workflow_event": "schedule",
         "workflow_run_id": 1,
         "workflow_run_attempt": 1,
     }
@@ -481,9 +482,9 @@ def test_public_rehearsal_rejects_a_dirty_checkout(tmp_path: Path, monkeypatch: 
     subject = {
         "public_commit_sha": "c" * 40,
         "clean_export_tree": "b" * 40,
-        "workflow_name": "Cutover verification",
-        "workflow_path": ".github/workflows/cutover.yml",
-        "workflow_event": "push",
+        "workflow_name": "Full enforcement",
+        "workflow_path": ".github/workflows/full-enforcement.yml",
+        "workflow_event": "schedule",
         "workflow_run_id": 1,
         "workflow_run_attempt": 1,
     }
@@ -503,58 +504,94 @@ def test_public_rehearsal_rejects_a_dirty_checkout(tmp_path: Path, monkeypatch: 
         check_documentation_examples._validate_public_rehearsal(subject, tmp_path)
 
 
-def test_public_rehearsal_rejects_a_workflow_for_another_commit(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A green CI run only counts when it ran at the asserted public commit."""
-    subject = {
-        "public_commit_sha": "c" * 40,
-        "clean_export_tree": "b" * 40,
-        "workflow_name": "Cutover verification",
-        "workflow_path": ".github/workflows/cutover.yml",
-        "workflow_event": "push",
-        "workflow_run_id": 1,
-        "workflow_run_attempt": 1,
-    }
+_ACCEPTED_REHEARSAL_RUN = {
+    "id": 1,
+    "run_attempt": 1,
+    "head_sha": "c" * 40,
+    "head_branch": "main",
+    "status": "completed",
+    "conclusion": "success",
+    "name": "Full enforcement",
+    "event": "schedule",
+    "path": ".github/workflows/full-enforcement.yml@refs/heads/main",
+}
 
-    def public_command(repository: Path, argv: tuple[str, ...]) -> str:
-        assert repository == tmp_path
+
+def _rehearsal_command(run: dict[str, object]) -> Callable[[Path, tuple[str, ...]], str]:
+    """Return a public-proof command stub for a clean public checkout and one workflow run."""
+
+    def public_command(_repository: Path, argv: tuple[str, ...]) -> str:
         if argv[:3] == ("git", "remote", "get-url"):
             return "https://github.com/mpeter/fieldkit-cli.git"
         if argv[:2] == ("git", "status"):
             return ""
-        if argv == ("git", "rev-parse", "HEAD"):
-            return "c" * 40
-        if "^{commit}" in argv[-1]:
+        if argv == ("git", "rev-parse", "HEAD") or "^{commit}" in argv[-1]:
             return "c" * 40
         if "^{tree}" in argv[-1]:
             return "b" * 40
         if argv == ("gh", "api", "repos/mpeter/fieldkit-cli"):
             return json.dumps({"full_name": "mpeter/fieldkit-cli", "private": False, "visibility": "public"})
-        return json.dumps(
-            {
-                "id": 1,
-                "run_attempt": 1,
-                "head_sha": "d" * 40,
-                "status": "completed",
-                "conclusion": "success",
-                "name": "Cutover verification",
-                "event": "push",
-                "path": ".github/workflows/cutover.yml@refs/heads/main",
-            }
-        )
+        return json.dumps(run)
 
-    monkeypatch.setattr(check_documentation_examples, "_public_command", public_command)
+    return public_command
+
+
+def _rehearsal_subject(event: str = "schedule") -> dict[str, object]:
+    return {
+        "public_commit_sha": "c" * 40,
+        "clean_export_tree": "b" * 40,
+        "workflow_name": "Full enforcement",
+        "workflow_path": ".github/workflows/full-enforcement.yml",
+        "workflow_event": event,
+        "workflow_run_id": 1,
+        "workflow_run_attempt": 1,
+    }
+
+
+@pytest.mark.parametrize("event", ["schedule", "workflow_dispatch"])
+def test_public_rehearsal_accepts_a_successful_full_enforcement_run_on_main(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, event: str
+) -> None:
+    """A scheduled or dispatched full gate at the public commit proves the rehearsal checkout."""
+    monkeypatch.setattr(
+        check_documentation_examples, "_public_command", _rehearsal_command({**_ACCEPTED_REHEARSAL_RUN, "event": event})
+    )
     (tmp_path / ".git").mkdir()
 
-    with pytest.raises(ValueError, match="public cutover workflow run"):
-        check_documentation_examples._validate_public_rehearsal(subject, tmp_path)
+    assert check_documentation_examples._validate_public_rehearsal(_rehearsal_subject(event), tmp_path) is None
 
 
-def test_complete_check_rejects_a_review_url_unrelated_to_the_cutover_run(
+@pytest.mark.parametrize(
+    "change",
+    [{"head_sha": "d" * 40}, {"head_branch": "feature"}, {"conclusion": "failure"}, {"name": "Cutover verification"}],
+    ids=["another-commit", "another-branch", "failed-run", "another-workflow"],
+)
+def test_public_rehearsal_rejects_a_run_that_does_not_prove_the_public_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: dict[str, object]
+) -> None:
+    """A run only counts when it is a successful full gate at the asserted commit on main."""
+    monkeypatch.setattr(
+        check_documentation_examples, "_public_command", _rehearsal_command({**_ACCEPTED_REHEARSAL_RUN, **change})
+    )
+    (tmp_path / ".git").mkdir()
+
+    with pytest.raises(ValueError, match="public Full enforcement run"):
+        check_documentation_examples._validate_public_rehearsal(_rehearsal_subject(), tmp_path)
+
+
+def test_public_rehearsal_rejects_a_push_triggered_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The retired root-push cutover identity no longer proves a rehearsal."""
+    monkeypatch.setattr(check_documentation_examples, "_public_command", _rehearsal_command(_ACCEPTED_REHEARSAL_RUN))
+    (tmp_path / ".git").mkdir()
+
+    with pytest.raises(ValueError, match="workflow identity is invalid"):
+        check_documentation_examples._validate_public_rehearsal(_rehearsal_subject("push"), tmp_path)
+
+
+def test_complete_check_rejects_a_review_url_unrelated_to_the_rehearsal_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """An arbitrary HTTPS URL cannot stand in for the immutable cutover receipt."""
+    """An arbitrary HTTPS URL cannot stand in for the immutable workflow-run receipt."""
     _write_contract(tmp_path)
     contract_sha256 = sha256((tmp_path / "docs/documentation-contract.json").read_bytes()).hexdigest()
     evidence_path = _write_rehearsal_evidence(
@@ -775,7 +812,7 @@ def test_complete_check_rejects_a_rehearsal_transcript_that_does_not_match_its_d
 def test_complete_check_rejects_a_manual_block_attached_to_a_generic_journey(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A cutover block cannot borrow proof from an unrelated contributor journey."""
+    """A rehearsal block cannot borrow proof from an unrelated contributor journey."""
     _write_contract(tmp_path)
     contract_sha256 = sha256((tmp_path / "docs/documentation-contract.json").read_bytes()).hexdigest()
     evidence_path = _write_rehearsal_evidence(
@@ -783,7 +820,7 @@ def test_complete_check_rejects_a_manual_block_attached_to_a_generic_journey(
     )
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
     evidence["scenarios"] = [
-        scenario for scenario in evidence["scenarios"] if scenario["id"] != "release-cutover:readme.release"
+        scenario for scenario in evidence["scenarios"] if scenario["id"] != "public-rehearsal:readme.release"
     ]
     evidence["scenarios"][0]["verified_blocks"] = ["readme.release"]
     evidence_path.write_text(json.dumps(evidence), encoding="utf-8")
