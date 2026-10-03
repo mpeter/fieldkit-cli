@@ -10,6 +10,11 @@ from scripts import release_workflow_policy
 
 pytestmark = pytest.mark.unit
 
+_RECORDED = release_workflow_policy.recorded_boundary_actions(
+    (release_workflow_policy.REPO_ROOT / release_workflow_policy.EVIDENCE_PATH).read_text(encoding="utf-8")
+)
+_STALE_REVISION = "0" * 40
+
 
 def _sealed_distribution_step() -> dict[str, object]:
     return {
@@ -185,6 +190,9 @@ def _workflow() -> dict[str, object]:
                     {"uses": "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97"},
                     {"run": "python -m scripts.release_promotion_evidence --candidate-unavailable"},
                     {
+                        "run": f"boundary_actions = {{'attest': '{_RECORDED['attest']}', 'publish_pypi': '{_RECORDED['publish_pypi']}'}}"
+                    },
+                    {
                         "if": "always()",
                         "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
                         "with": {
@@ -205,7 +213,7 @@ def _workflow() -> dict[str, object]:
                     {"uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"},
                     _sealed_distribution_step(),
                     {
-                        "uses": "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6",
+                        "uses": _RECORDED["attest"],
                         "with": {"subject-path": "release-dist"},
                     },
                 ],
@@ -221,7 +229,7 @@ def _workflow() -> dict[str, object]:
                     {"uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"},
                     _sealed_distribution_step(),
                     {
-                        "uses": "pypa/gh-action-pypi-publish@ec4db0b4ddc65acdf4bff5fa45ac92d78b56bdf0",
+                        "uses": _RECORDED["publish_pypi"],
                         "with": {"packages-dir": "release-dist"},
                     },
                 ],
@@ -237,7 +245,7 @@ def _workflow() -> dict[str, object]:
                     {"uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"},
                     _sealed_distribution_step(),
                     {
-                        "uses": "pypa/gh-action-pypi-publish@ec4db0b4ddc65acdf4bff5fa45ac92d78b56bdf0",
+                        "uses": _RECORDED["publish_pypi"],
                         "with": {"packages-dir": "release-dist"},
                     },
                 ],
@@ -497,10 +505,86 @@ def test_repository_validator_accepts_checked_in_yaml_shape(tmp_path: Path) -> N
         release_workflow_policy.REPO_ROOT / release_workflow_policy.APPROVAL_WORKFLOW_PATH,
         workflow_path.parent / "release-approval.yml",
     )
+    (tmp_path / "scripts").mkdir()
+    shutil.copy(
+        release_workflow_policy.REPO_ROOT / release_workflow_policy.EVIDENCE_PATH,
+        tmp_path / release_workflow_policy.EVIDENCE_PATH,
+    )
 
     report = release_workflow_policy.validate_repository(tmp_path)
 
     assert report.ok is True
+
+
+@pytest.mark.parametrize(
+    ("job_name", "boundary"),
+    [("attest", "attest"), ("publish_testpypi", "publish_pypi"), ("publish_pypi", "publish_pypi")],
+)
+def test_policy_rejects_an_action_revision_the_evidence_does_not_record(job_name: str, boundary: str) -> None:
+    workflow = _workflow()
+    jobs = workflow["jobs"]
+    assert isinstance(jobs, dict)
+    steps = jobs[job_name]["steps"]
+    assert isinstance(steps, list)
+    action = _RECORDED[boundary].partition("@")[0]
+    for step in steps:
+        if step.get("uses") == _RECORDED[boundary]:
+            step["uses"] = f"{action}@{_STALE_REVISION}"
+
+    report = release_workflow_policy.validate_recorded_actions(workflow, _RECORDED)
+
+    assert report.findings == (
+        release_workflow_policy.Finding(
+            "RWF028", job_name, f"job must run the action promotion evidence records for {boundary!r}"
+        ),
+    )
+
+
+def test_policy_rejects_unavailable_candidate_evidence_with_a_stale_action_revision() -> None:
+    workflow = _workflow()
+    jobs = workflow["jobs"]
+    assert isinstance(jobs, dict)
+    steps = jobs["promotion_evidence"]["steps"]
+    assert isinstance(steps, list)
+    publisher = _RECORDED["publish_pypi"]
+    for step in steps:
+        if isinstance(step.get("run"), str):
+            step["run"] = step["run"].replace(publisher, f"{publisher.partition('@')[0]}@{_STALE_REVISION}")
+
+    report = release_workflow_policy.validate_recorded_actions(workflow, _RECORDED)
+
+    assert {(finding.code, finding.job) for finding in report.findings} == {("RWF028", "promotion_evidence")}
+
+
+def test_recorded_boundary_actions_reads_the_renderer_table_without_importing_it() -> None:
+    source = "import missing_module\n_BOUNDARY_ACTIONS = {'publish_pypi': 'owner/action@" + "a" * 40 + "'}\n"
+
+    recorded = release_workflow_policy.recorded_boundary_actions(source)
+
+    assert recorded == {"publish_pypi": "owner/action@" + "a" * 40}
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "_OTHER = {}\n",
+        "_BOUNDARY_ACTIONS = dict(publish_pypi='owner/action@main')\n",
+        "_BOUNDARY_ACTIONS = {'publish_pypi': 1}\n",
+        "_BOUNDARY_ACTIONS = {\n",
+    ],
+)
+def test_unreadable_recorded_actions_fail_the_policy(source: str) -> None:
+    recorded = release_workflow_policy.recorded_boundary_actions(source)
+
+    report = release_workflow_policy.validate_recorded_actions(_workflow(), recorded)
+
+    assert recorded == {}
+    assert {finding.job for finding in report.findings} == {
+        "attest",
+        "publish_pypi",
+        "publish_testpypi",
+        "promotion_evidence",
+    }
 
 
 def test_checked_in_release_workflow_satisfies_policy() -> None:

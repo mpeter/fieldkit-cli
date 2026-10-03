@@ -29,7 +29,7 @@ _BOUNDARY_ACTIONS = {
     "build": "scripts/check_public_candidate.py",
     "validate": "scripts/release_bundle.py",
     "attest": "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6",
-    "publish_pypi": "pypa/gh-action-pypi-publish@ec4db0b4ddc65acdf4bff5fa45ac92d78b56bdf0",
+    "publish_pypi": "pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33",
     "consumer_pypi": "scripts/check_release_consumer.py",
     "github_release": "gh release create",
 }
