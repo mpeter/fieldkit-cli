@@ -4,10 +4,44 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Provide reviewable pull-request evidence.",
-      "source_fingerprint": "sha256:e7ba34798e453f2e4c435d634c8817c4ee908fc4bc9fbb24ae4d50efae880151",
+      "source_fingerprint": "sha256:115a1dc4d9bf0960ef24418a3178da63e6578d97d27f25c6f1c87e298461c09b",
       "sources": [
         "CONTRIBUTING.md",
         ".github/workflows/ci.yml"
+      ]
+    },
+    ".openshell/README.md": {
+      "content_type": "how-to",
+      "fenced_blocks": [
+        {
+          "classification": "credentialed_manual_integration",
+          "id": "openshell.readme.block-1",
+          "language": "console",
+          "sha256": "e835d6dcb501e59ef80f608051c635279dd07694b2973c6af363b750bce259e4",
+          "verification_id": "manual.credentialed-integration"
+        },
+        {
+          "classification": "credentialed_manual_integration",
+          "id": "openshell.readme.block-2",
+          "language": "console",
+          "sha256": "138ee13fe43d88177b7fc6487ede874e7409c7fe29e65338389b462fb5b3ad9d",
+          "verification_id": "manual.credentialed-integration"
+        },
+        {
+          "classification": "credentialed_manual_integration",
+          "id": "openshell.readme.block-3",
+          "language": "console",
+          "sha256": "0135ff5ad68514222b186fbf894272cfbb9931a50eb7de0e8e08aaa6dbd7afb6",
+          "verification_id": "manual.credentialed-integration"
+        }
+      ],
+      "reader_action": "Prepare the local runtime and run an explicit bounded task with reviewed inputs.",
+      "source_fingerprint": "sha256:3665609552971a2328419accf31806a3a450342905dd30ee70ea611b919f8358",
+      "sources": [
+        ".devcontainer/Dockerfile",
+        ".openshell/*.yaml",
+        ".openshell/workspace.json",
+        "scripts/openshell_workspace.py"
       ]
     },
     "AGENTS.md": {
@@ -304,6 +338,18 @@
       "sources": [
         "scripts/export_public_tree.py",
         "scripts/check_public_tree_safety.py"
+      ]
+    },
+    "docs/adr/0006-opt-in-openshell-workers.md": {
+      "content_type": "policy",
+      "fenced_blocks": [],
+      "reader_action": "Choose the shared tools image and project-owned runtime boundary for an explicit bounded task.",
+      "source_fingerprint": "sha256:3665609552971a2328419accf31806a3a450342905dd30ee70ea611b919f8358",
+      "sources": [
+        ".devcontainer/Dockerfile",
+        ".openshell/*.yaml",
+        ".openshell/workspace.json",
+        "scripts/openshell_workspace.py"
       ]
     },
     "docs/cli-reference.md": {
@@ -1826,7 +1872,7 @@
       "content_type": "overview",
       "fenced_blocks": [],
       "reader_action": "Choose the documentation path for a task.",
-      "source_fingerprint": "sha256:0210460cb8da2aabdab8a3249a20268ce35a2cfdc7ad53ed987ff179f97a17e8",
+      "source_fingerprint": "sha256:a98918b433f87924fc07c4050c4fe0304c65e213dc64d169da14b49f356a5b28",
       "sources": [
         "mkdocs.yml",
         "pyproject.toml"
@@ -2293,7 +2339,9 @@
         "docs/patterns/README.md",
         "docs/reference/troubleshooting.md",
         "docs/user-guide.md",
-        "THREAT_MODEL.md"
+        "THREAT_MODEL.md",
+        "docs/adr/0006-opt-in-openshell-workers.md",
+        ".openshell/README.md"
       ]
     }
   }

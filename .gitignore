@@ -120,3 +120,4 @@ mutants/
 # ...but the committed CRAP regression baseline is tracked (see `make gaze-baseline`).
 !.gaze/baseline.json
 .tach/
+.openshell/runs/

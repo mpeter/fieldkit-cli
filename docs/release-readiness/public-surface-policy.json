@@ -25,6 +25,7 @@
       "docs/adr/0003-thin-command-adapters.md",
       "docs/adr/0004-safe-persistence.md",
       "docs/adr/0005-verifiable-public-release.md",
+      "docs/adr/0006-opt-in-openshell-workers.md",
       "docs/design/local-first-cli.md",
       "docs/dependency-security.md",
       "docs/getting-started.md",
@@ -47,6 +48,7 @@
       "docs/user-guide.md"
     ],
     "public_repository_only": [
+      ".openshell/README.md",
       "docs/dependency-map.md",
       "docs/documentation-contract.json",
       "docs/release-readiness/artifact-policy.json",

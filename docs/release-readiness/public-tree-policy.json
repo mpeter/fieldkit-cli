@@ -29,6 +29,7 @@
         ".agentready-config.yaml",
         ".gaze.yaml",
         ".gitignore",
+        ".dockerignore",
         ".markdown-link-check.json",
         ".pre-commit-config.yaml",
         ".python-version",
@@ -46,7 +47,13 @@
       "id": "include-build-directories",
       "action": "include",
       "category": "build",
-      "patterns": [".devcontainer/**", ".gaze/**", "hooks/**"],
+      "patterns": [
+        ".devcontainer/**",
+        ".gaze/**",
+        "hooks/**",
+        ".openshell/policy.yaml",
+        ".openshell/workspace.json"
+      ],
       "rationale": "Contributor environment, frozen quality baseline, and versioned repository safeguards."
     },
     {
@@ -105,6 +112,8 @@
         "docs/adr/0003-thin-command-adapters.md",
         "docs/adr/0004-safe-persistence.md",
         "docs/adr/0005-verifiable-public-release.md",
+        "docs/adr/0006-opt-in-openshell-workers.md",
+        ".openshell/README.md",
         "docs/design/local-first-cli.md",
         "docs/dependency-map.md",
         "docs/dependency-security.md",
