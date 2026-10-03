@@ -8,6 +8,11 @@ updates:
     labels:
       - "dependencies"
       - "python:uv"
+    ignore:
+      # The build backend decides the core metadata version, which the pinned
+      # PyPI publisher must accept. Bump it deliberately with that check; see
+      # tests/test_distribution_metadata.py.
+      - dependency-name: "hatchling"
     groups:
       python-dependencies:
         patterns:
