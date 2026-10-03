@@ -65,9 +65,6 @@
       "docs/release-readiness/public-tree-scan-policy.json",
       "docs/release-readiness/release-bundle-provenance.schema.json",
       "docs/release-readiness/release-consumer-evidence.schema.json",
-      "docs/release-readiness/cutover-record.schema.json",
-      "docs/release-readiness/release-evidence-record.schema.json",
-      "docs/release-readiness/release-manual-evidence.schema.json",
       "docs/release-readiness/release-promotion-evidence.schema.json",
       "docs/release-readiness/rehearsal-evidence.schema.json"
     ],

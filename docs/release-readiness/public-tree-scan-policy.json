@@ -106,13 +106,6 @@
     },
     {
       "rule_id": "PII001",
-      "path": "scripts/cutover_record.py",
-      "pattern": "git@github[.]com",
-      "classification": "public_repository_transport",
-      "rationale": "The cutover verifier accepts Git's public SSH service account only in canonical upstream URLs."
-    },
-    {
-      "rule_id": "PII001",
       "path": "src/fieldkit/gmail/discover.py",
       "pattern": "gemini-notes@google[.]com",
       "classification": "public_system_sender",

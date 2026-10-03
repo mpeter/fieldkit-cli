@@ -225,19 +225,6 @@ def test_public_policy_classifies_git_service_account_only_in_rehearsal_verifier
     assert allowance.pattern.search("person" + "@github.com") is None
 
 
-def test_public_policy_classifies_git_service_account_in_cutover_verifier() -> None:
-    """Cutover accepts the same canonical Git SSH transport and no user address."""
-    policy = public_tree_scan._load_policy(
-        Path("docs/release-readiness/public-tree-scan-policy.json").read_bytes(), date.today()
-    )
-    allowance = next(
-        item for item in policy.text_allowances if item.rule_id == "PII001" and item.path == "scripts/cutover_record.py"
-    )
-
-    assert allowance.pattern.fullmatch("git" + "@github.com")
-    assert allowance.pattern.search("person" + "@github.com") is None
-
-
 def test_public_policy_rejects_private_tracker_identifiers_case_insensitively() -> None:
     policy = public_tree_scan._load_policy(
         (Path("docs/release-readiness/public-tree-scan-policy.json")).read_bytes(), date.today()
