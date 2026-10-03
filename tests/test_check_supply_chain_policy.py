@@ -8,6 +8,7 @@ from pathlib import Path
 import _supply_chain_policy as checker
 import check_supply_chain_policy as cli_checker
 import pytest
+import yaml
 
 pytestmark = pytest.mark.unit
 
@@ -742,3 +743,12 @@ def test_dependabot_has_separate_uv_and_action_update_entries() -> None:
     assert config.count("package-ecosystem:") == 2
     assert 'package-ecosystem: "uv"' in config
     assert 'package-ecosystem: "github-actions"' in config
+
+
+def test_dependabot_holds_hatchling_out_of_grouped_uv_updates() -> None:
+    """The build backend changes only through a deliberate, publisher-checked bump."""
+    config = yaml.safe_load((_REPO_ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8"))
+    updates = {entry["package-ecosystem"]: entry for entry in config["updates"]}
+
+    assert updates["uv"]["ignore"] == [{"dependency-name": "hatchling"}]
+    assert "ignore" not in updates["github-actions"]
