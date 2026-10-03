@@ -21,63 +21,79 @@ else:
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW_PATH = Path(".github/workflows/release.yml")
-APPROVAL_WORKFLOW_PATH = Path(".github/workflows/release-approval.yml")
 EVIDENCE_PATH = Path("scripts/release_promotion_evidence.py")
 
 _AUTHORITY_JOBS = frozenset({"attest", "publish_testpypi", "publish_pypi", "github_release"})
-_APPROVAL_JOB = "approval"
 _COMPATIBILITY_JOB = "compatibility"
-_CONSUMER_JOB = "consumer_pypi"
+# Consumer job -> (index endpoint prefix, the only download host it may trust).
+_CONSUMER_INDEXES = {
+    "consumer_testpypi": ("https://test.pypi.org/pypi/fieldkit-cli/", "test-files.pythonhosted.org"),
+    "consumer_pypi": ("https://pypi.org/pypi/fieldkit-cli/", "files.pythonhosted.org"),
+}
 _PROMOTION_EVIDENCE_JOB = "promotion_evidence"
 _REQUIRED_JOBS = frozenset(
     {
         "context",
-        _APPROVAL_JOB,
         _COMPATIBILITY_JOB,
         "build",
         "validate",
-        _CONSUMER_JOB,
+        *_CONSUMER_INDEXES,
         _PROMOTION_EVIDENCE_JOB,
         *_AUTHORITY_JOBS,
     }
 )
-_READ_ONLY_JOBS = frozenset({"context", _APPROVAL_JOB, "build", "validate", _CONSUMER_JOB, _PROMOTION_EVIDENCE_JOB})
+_READ_ONLY_JOBS = frozenset({"context", "build", "validate", *_CONSUMER_INDEXES, _PROMOTION_EVIDENCE_JOB})
 _EXPECTED_NEEDS = {
     "context": frozenset(),
-    _APPROVAL_JOB: frozenset({"context"}),
-    _COMPATIBILITY_JOB: frozenset({"context", _APPROVAL_JOB}),
-    "build": frozenset({"context", _APPROVAL_JOB, _COMPATIBILITY_JOB}),
+    _COMPATIBILITY_JOB: frozenset({"context"}),
+    "build": frozenset({"context", _COMPATIBILITY_JOB}),
     "validate": frozenset({"build"}),
-    _CONSUMER_JOB: frozenset({"context", "build", "validate", "publish_pypi"}),
-    _PROMOTION_EVIDENCE_JOB: frozenset(
-        {"build", "validate", "attest", "publish_pypi", "consumer_pypi", "github_release"}
-    ),
     "attest": frozenset({"build", "validate"}),
     "publish_testpypi": frozenset({"build", "validate", "attest"}),
-    "publish_pypi": frozenset({"build", "validate", "attest"}),
+    "consumer_testpypi": frozenset({"context", "build", "validate", "publish_testpypi"}),
+    "publish_pypi": frozenset({"build", "validate", "attest", "consumer_testpypi"}),
+    "consumer_pypi": frozenset({"context", "build", "validate", "publish_pypi"}),
     "github_release": frozenset({"build", "validate", "attest", "publish_pypi", "consumer_pypi"}),
+    _PROMOTION_EVIDENCE_JOB: frozenset(
+        {
+            "build",
+            "validate",
+            "attest",
+            "publish_testpypi",
+            "consumer_testpypi",
+            "publish_pypi",
+            "consumer_pypi",
+            "github_release",
+        }
+    ),
 }
 _EXPECTED_PERMISSIONS = {
     **{name: {"contents": "read"} for name in _READ_ONLY_JOBS},
-    "build": {"contents": "read", "actions": "read"},
     "attest": {"attestations": "write", "id-token": "write"},
     "publish_testpypi": {"id-token": "write"},
     "publish_pypi": {"id-token": "write"},
     "github_release": {"contents": "write"},
 }
-_EXPECTED_ENVIRONMENTS = {_APPROVAL_JOB: "release-approval", "publish_testpypi": "testpypi", "publish_pypi": "pypi"}
-_EXPECTED_CONDITIONS = {
-    _APPROVAL_JOB: "github.event_name == 'push'",
-    _COMPATIBILITY_JOB: "github.event_name == 'push'",
-    "build": "always() && ((github.event_name == 'push' && needs.approval.result == 'success' && needs.compatibility.result == 'success') || (github.event_name == 'workflow_dispatch' && needs.approval.result == 'skipped' && needs.compatibility.result == 'skipped'))",
-    "validate": "always() && needs.build.result == 'success'",
-    "attest": "always() && needs.build.result == 'success' && needs.validate.result == 'success' && (github.event_name == 'push' || inputs.mode == 'testpypi')",
-    "publish_testpypi": "always() && needs.build.result == 'success' && needs.validate.result == 'success' && needs.attest.result == 'success' && github.event_name == 'workflow_dispatch' && inputs.mode == 'testpypi'",
-    "publish_pypi": "always() && needs.build.result == 'success' && needs.validate.result == 'success' && needs.attest.result == 'success' && github.event_name == 'push'",
-    "github_release": "always() && needs.build.result == 'success' && needs.validate.result == 'success' && needs.attest.result == 'success' && needs.publish_pypi.result == 'success' && needs.consumer_pypi.result == 'success' && github.event_name == 'push'",
-    _CONSUMER_JOB: "always() && needs.context.result == 'success' && needs.build.result == 'success' && needs.validate.result == 'success' && needs.publish_pypi.result == 'success' && github.event_name == 'push'",
+_EXPECTED_ENVIRONMENTS = {"publish_testpypi": "testpypi", "publish_pypi": "pypi"}
+# None means the job must not declare a condition, so GitHub's implicit
+# success() requires every upstream job to have passed.
+_PUSH_ONLY = "github.event_name == 'push'"
+_EXPECTED_CONDITIONS: dict[str, str | None] = {
+    "context": None,
+    _COMPATIBILITY_JOB: None,
+    "build": None,
+    "validate": None,
+    "attest": _PUSH_ONLY,
+    "publish_testpypi": _PUSH_ONLY,
+    "consumer_testpypi": _PUSH_ONLY,
+    "publish_pypi": _PUSH_ONLY,
+    "consumer_pypi": _PUSH_ONLY,
+    "github_release": _PUSH_ONLY,
     _PROMOTION_EVIDENCE_JOB: "always() && github.event_name == 'push'",
 }
+# Fixed across run attempts: a partial re-run resumes against the same bundle,
+# and a full re-run fails to upload instead of replacing it.
+_CANDIDATE_ARTIFACT = "release-candidate-${{ github.run_id }}-${{ github.sha }}"
 _EXPECTED_ACTIONS = {
     "attest": frozenset({"actions/download-artifact", "actions/attest"}),
     "publish_testpypi": frozenset({"actions/download-artifact", "pypa/gh-action-pypi-publish"}),
@@ -86,7 +102,7 @@ _EXPECTED_ACTIONS = {
 }
 _FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 # Authority job -> the promotion-evidence boundary whose recorded action it runs.
-_RECORDED_ACTION_JOBS = {"attest": "attest", "publish_testpypi": "publish_pypi", "publish_pypi": "publish_pypi"}
+_RECORDED_ACTION_JOBS = {"attest": "attest", "publish_testpypi": "publish_testpypi", "publish_pypi": "publish_pypi"}
 _PINNED_ACTION_REFERENCE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@[0-9a-f]{40}")
 _FORBIDDEN_AUTHORITY_COMMAND = re.compile(r"(?:\b(?:uv|pip|python)\b|scripts/)")
 _SECRET_REFERENCE = re.compile(r"\$\{\{\s*secrets(?:\.|\[)")
@@ -207,18 +223,14 @@ def _add(findings: list[Finding], code: str, job: str, message: str) -> None:
 
 def _validate_top_level(document: dict[str, Any], findings: list[Finding]) -> None:
     triggers = _mapping(document.get("on"))
-    dispatch = _mapping(triggers.get("workflow_dispatch"))
-    inputs = _mapping(dispatch.get("inputs"))
-    mode = _mapping(inputs.get("mode"))
+    dispatch = triggers.get("workflow_dispatch")
     push = _mapping(triggers.get("push"))
     if (
         set(triggers) != {"workflow_dispatch", "push"}
-        or not _is_true(mode.get("required"))
-        or mode.get("type") != "choice"
-        or mode.get("options") != ["dry-run", "testpypi"]
+        or dispatch not in (None, "", "null", "~", {})
         or push.get("tags") != ["v*.*.*"]
     ):
-        _add(findings, "RWF001", "workflow", "release triggers must be protected dispatch and SemVer tags")
+        _add(findings, "RWF001", "workflow", "release triggers must be an input-free dry-run dispatch and SemVer tags")
     if document.get("permissions") != {}:
         _add(findings, "RWF002", "workflow", "top-level permissions must be empty")
     concurrency = _mapping(document.get("concurrency"))
@@ -249,9 +261,8 @@ def _validate_job_shape(name: str, job: dict[str, Any], findings: list[Finding])
     expected_environment = _EXPECTED_ENVIRONMENTS.get(name)
     if job.get("environment") != expected_environment:
         _add(findings, "RWF009", name, "job environment does not match its publication boundary")
-    expected_condition = _EXPECTED_CONDITIONS.get(name)
-    if expected_condition is not None and job.get("if") != expected_condition:
-        _add(findings, "RWF012", name, "authority job trigger does not match its publication boundary")
+    if job.get("if") != _EXPECTED_CONDITIONS[name]:
+        _add(findings, "RWF012", name, "job condition does not match its publication boundary")
 
 
 def _validates_signed_production_tag(job: dict[str, Any]) -> bool:
@@ -260,6 +271,12 @@ def _validates_signed_production_tag(job: dict[str, Any]) -> bool:
     command_text = "\n".join(commands)
     required = ("timeout 60s gh api", "verification.verified == true", "GITHUB_REF_NAME", "GITHUB_SHA")
     return all(fragment in command_text for fragment in required) and _all_gh_requests_are_bounded(command_text)
+
+
+def _requires_tag_on_main(job: dict[str, Any]) -> bool:
+    """Return whether a production tag must name a commit already on the protected branch."""
+    commands = tuple(command for step in _steps(job) if isinstance(command := step.get("run"), str))
+    return any('git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main' in command for command in commands)
 
 
 def _all_gh_requests_are_bounded(command_text: str) -> bool:
@@ -272,29 +289,6 @@ def _requires_main_for_dispatch(job: dict[str, Any]) -> bool:
     commands = tuple(command for step in _steps(job) if isinstance(command := step.get("run"), str))
     command_text = "\n".join(commands)
     required = ("GITHUB_EVENT_NAME", "workflow_dispatch", "GITHUB_REF", "refs/heads/main")
-    return all(fragment in command_text for fragment in required)
-
-
-def _validates_approval_tag_metadata(job: dict[str, Any]) -> bool:
-    """Require nonempty and unambiguous approval metadata from a production tag."""
-    outputs = _mapping(job.get("outputs"))
-    if (
-        outputs.get("approval_run") != "${{ steps.approval_metadata.outputs.run }}"
-        or outputs.get("approval_manifest_sha256") != "${{ steps.approval_metadata.outputs.sha256 }}"
-    ):
-        return False
-    commands = tuple(command for step in _steps(job) if isinstance(command := step.get("run"), str))
-    command_text = "\n".join(commands)
-    required = (
-        "Release-approval-run:",
-        "Release-approval-manifest-sha256:",
-        '[[ "$run" =~ ^[1-9][0-9]*$ ]]',
-        '[[ "$digest" =~ ^[0-9a-f]{64}$ ]]',
-        'wc -l <<< "$run"',
-        'wc -l <<< "$digest"',
-        'echo "run=$run" >> "$GITHUB_OUTPUT"',
-        'echo "sha256=$digest" >> "$GITHUB_OUTPUT"',
-    )
     return all(fragment in command_text for fragment in required)
 
 
@@ -367,40 +361,44 @@ def _validates_pinned_gitleaks_install(workflow: dict[str, Any], build: dict[str
     return all(fragment in "\n".join(commands) for fragment in _GITLEAKS_INSTALL_COMMANDS)
 
 
-def _validates_approved_input_acquisition(build: dict[str, Any]) -> bool:
-    """Require production to materialize only the tag-bound approval bundle."""
-    commands = tuple(command for step in _steps(build) if isinstance(command := step.get("run"), str))
-    command_text = "\n".join(commands)
-    required = (
-        "APPROVAL_RUN",
-        "APPROVAL_MANIFEST_SHA256",
-        "actions/runs/$APPROVAL_RUN",
-        ".github/workflows/release-approval.yml@",
-        "release-approval-input-${APPROVAL_RUN}-${approval_attempt}-${GITHUB_SHA}",
-        "timeout 60s gh api --paginate --slurp",
-        "jq -r --arg name",
-        "length == 1",
-        "actions/artifacts/$artifact_id/zip",
-        "scripts/release_approval_archive.py",
-        "scripts/release_approval_input.py",
-        "approved-artifact/approval-input/public-candidate/report.json",
-        "approved-artifact/approval-input/public-candidate/bundle",
-    )
+def _validates_unconditional_candidate_build(build: dict[str, Any]) -> bool:
+    """Require every run to scan and build its own candidate rather than acquire one."""
     steps = _steps(build)
     candidate_builds = [step for step in steps if step.get("name") == "Build the one retained public candidate"]
     scanner_installs = [step for step in steps if step.get("name") == "Install the pinned export secret scanner"]
     return (
-        all(fragment in command_text for fragment in required)
-        and _all_gh_requests_are_bounded(command_text)
-        and len(candidate_builds) == 1
-        and candidate_builds[0].get("if") == "github.event_name == 'workflow_dispatch'"
+        len(candidate_builds) == 1
+        and "if" not in candidate_builds[0]
+        and "scripts/check_public_candidate.py" in str(candidate_builds[0].get("run", ""))
         and len(scanner_installs) == 1
-        and scanner_installs[0].get("if") == "github.event_name == 'workflow_dispatch'"
+        and "if" not in scanner_installs[0]
     )
 
 
-def _validate_consumer_job(job: dict[str, Any], findings: list[Finding]) -> None:
-    """Require the post-publication verifier to consume only retained inputs."""
+def _validate_candidate_identity(jobs: dict[str, Any], findings: list[Finding]) -> None:
+    """Require one attempt-independent candidate artifact, uploaded once and never overwritten."""
+    for name in sorted(_REQUIRED_JOBS & set(jobs)):
+        for step in _steps(_mapping(jobs[name])):
+            uses = step.get("uses")
+            if not isinstance(uses, str) or not uses.startswith(
+                ("actions/upload-artifact@", "actions/download-artifact@")
+            ):
+                continue
+            artifact = str(_mapping(step.get("with")).get("name", ""))
+            if artifact.startswith("release-candidate-") and (
+                artifact != _CANDIDATE_ARTIFACT
+                or (
+                    uses.startswith("actions/upload-artifact@")
+                    and (name != "build" or "overwrite" in _mapping(step.get("with")))
+                )
+            ):
+                _add(
+                    findings, "RWF031", name, "the candidate artifact must keep one run-scoped identity across re-runs"
+                )
+
+
+def _validate_consumer_job(name: str, job: dict[str, Any], findings: list[Finding]) -> None:
+    """Require a post-publication verifier to consume only retained inputs from its own index."""
     steps = _steps(job)
     actions = frozenset(uses.partition("@")[0] for step in steps if isinstance(uses := step.get("uses"), str))
     commands = tuple(command for step in steps if isinstance(command := step.get("run"), str))
@@ -415,15 +413,19 @@ def _validate_consumer_job(job: dict[str, Any], findings: list[Finding]) -> None
         and uploads[0].get("if-no-files-found") == "error"
         and uploads[0].get("retention-days") == "90"
     )
+    endpoint, download_host = _CONSUMER_INDEXES[name]
+    verifiers = [command for command in commands if "python -m scripts.check_release_consumer" in command]
     if (
         actions != _CONSUMER_ACTIONS
         or any(action == "actions/checkout" or action.startswith("./") for action in actions)
-        or not any("python -m scripts.check_release_consumer" in command for command in commands)
+        or len(verifiers) != 1
+        or f'--index-endpoint "{endpoint}' not in verifiers[0]
+        or re.findall(r"--download-host (\S+)", verifiers[0]) != [download_host]
         or not valid_upload
         or not any(step.get("if") == "always()" for step in steps)
         or _contains_secret(job)
     ):
-        _add(findings, "RWF014", _CONSUMER_JOB, "consumer verifier must be artifact-only and retain evidence")
+        _add(findings, "RWF014", name, "consumer verifier must be artifact-only, index-bound, and retain evidence")
 
 
 def _validate_promotion_evidence_job(job: dict[str, Any], findings: list[Finding]) -> None:
@@ -477,8 +479,7 @@ def _validate_context_evidence_tools(job: dict[str, Any], findings: list[Finding
     )
     valid_upload = (
         len(uploads) == 1
-        and uploads[0].get("name")
-        == "release-evidence-tools-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}"
+        and uploads[0].get("name") == "release-evidence-tools-${{ github.run_id }}-${{ github.sha }}"
         and frozenset(str(uploads[0].get("path", "")).split()) == _CONTEXT_EVIDENCE_PATHS
         and uploads[0].get("if-no-files-found") == "error"
         and uploads[0].get("retention-days") == "90"
@@ -490,93 +491,6 @@ def _validate_context_evidence_tools(job: dict[str, Any], findings: list[Finding
             "context",
             "context must retain the exact promotion-evidence renderer closure",
         )
-
-
-def validate_approval_document(document: object) -> Report:
-    """Validate the sole workflow allowed to read the private approval-input source."""
-    workflow = _mapping(document)
-    findings: list[Finding] = []
-    triggers = _mapping(workflow.get("on"))
-    dispatch = _mapping(triggers.get("workflow_dispatch"))
-    source_run = _mapping(_mapping(dispatch.get("inputs")).get("source_run_id"))
-    if (
-        set(triggers) != {"workflow_dispatch"}
-        or not _is_true(source_run.get("required"))
-        or source_run.get("type") != "string"
-    ):
-        _add(findings, "RWA001", "workflow", "approval input selection must be one required source run ID")
-    if (
-        workflow.get("permissions") != {}
-        or _mapping(workflow.get("env")).get("RELEASE_INPUT_REPOSITORY") != "${{ vars.RELEASE_INPUT_REPOSITORY }}"
-    ):
-        _add(findings, "RWA002", "workflow", "approval workflow must fix the private source and empty token baseline")
-    jobs = _mapping(workflow.get("jobs"))
-    if set(jobs) != {"approve"}:
-        _add(findings, "RWA003", "workflow", "approval workflow must have exactly one protected reader job")
-        return Report(tuple(sorted(set(findings))))
-    job = _mapping(jobs["approve"])
-    if (
-        job.get("runs-on") != "ubuntu-24.04"
-        or _integer(job.get("timeout-minutes")) != 15
-        or job.get("environment") != "release-approval"
-        or job.get("permissions") != {"contents": "read"}
-    ):
-        _add(findings, "RWA004", "approve", "approval reader must use the protected read-only boundary")
-    steps = _steps(job)
-    actions = tuple(step.get("uses") for step in steps if isinstance(step.get("uses"), str))
-    required_actions = (
-        "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-        "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1",
-        "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
-    )
-    if actions != required_actions:
-        _add(findings, "RWA005", "approve", "approval reader must use only the pinned source and artifact actions")
-    token_steps = [step for step in steps if step.get("id") == "input_token"]
-    token = _mapping(token_steps[0].get("with")) if len(token_steps) == 1 else {}
-    if token != {
-        "client-id": "${{ vars.RELEASE_INPUT_APP_CLIENT_ID }}",
-        "private-key": "${{ secrets.RELEASE_INPUT_APP_PRIVATE_KEY }}",
-        "owner": "${{ github.repository_owner }}",
-        "repositories": "${{ vars.RELEASE_INPUT_REPOSITORY }}",
-        "permission-actions": "read",
-    }:
-        _add(findings, "RWA006", "approve", "private-input token must be App-scoped to Actions-read on one repository")
-    commands = "\n".join(command for step in steps if isinstance(command := step.get("run"), str))
-    required_commands = (
-        "SOURCE_RUN_ID",
-        '[[ "$SOURCE_RUN_ID" =~ ^[1-9][0-9]*$ ]]',
-        "actions/runs/$SOURCE_RUN_ID",
-        "release-approval-source-${SOURCE_RUN_ID}-${attempt}-${head_sha}",
-        "timeout 60s gh api --paginate --slurp",
-        "jq -r --arg name",
-        "length == 1",
-        "actions/artifacts/$artifact_id/zip",
-        "scripts/release_approval_archive.py",
-        "scripts/release_approval_input.py",
-    )
-    if (
-        not all(fragment in commands for fragment in required_commands)
-        or not _all_gh_requests_are_bounded(commands)
-        or any(forbidden in commands for forbidden in ("approval_input_url", "curl ", "tar --extract"))
-    ):
-        _add(
-            findings, "RWA007", "approve", "approval reader must derive and safely verify exactly one retained artifact"
-        )
-    upload = [
-        _mapping(step.get("with"))
-        for step in steps
-        if isinstance(step.get("uses"), str) and step["uses"].startswith("actions/upload-artifact@")
-    ]
-    if upload != [
-        {
-            "name": "release-approval-input-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}",
-            "path": "approval-artifact/",
-            "if-no-files-found": "error",
-            "retention-days": "90",
-        }
-    ]:
-        _add(findings, "RWA008", "approve", "approval reader must retain the verified input under a run-scoped name")
-    return Report(tuple(sorted(set(findings))))
 
 
 def recorded_boundary_actions(source: str) -> dict[str, str]:
@@ -648,9 +562,9 @@ def validate_document(document: object) -> Report:
         _validate_job_shape(name, job, findings)
         if name in _AUTHORITY_JOBS:
             _validate_authority_job(name, job, findings)
-    consumer = _mapping(jobs.get(_CONSUMER_JOB))
-    if consumer:
-        _validate_consumer_job(consumer, findings)
+    for name in sorted(_CONSUMER_INDEXES.keys() & jobs.keys()):
+        _validate_consumer_job(name, _mapping(jobs[name]), findings)
+    _validate_candidate_identity(jobs, findings)
     promotion_evidence = _mapping(jobs.get(_PROMOTION_EVIDENCE_JOB))
     if promotion_evidence:
         _validate_promotion_evidence_job(promotion_evidence, findings)
@@ -664,30 +578,25 @@ def validate_document(document: object) -> Report:
         _add(
             findings, "RWF022", "build", "build must install the pinned export secret scanner before candidate creation"
         )
-    if not _validates_approved_input_acquisition(build):
-        _add(
-            findings, "RWF026", "build", "production builds must acquire only the signed tag's verified approval input"
-        )
+    if not _validates_unconditional_candidate_build(build):
+        _add(findings, "RWF026", "build", "every run must scan and build its own single candidate")
     if not _validates_signed_production_tag(context):
         _add(findings, "RWF012", "context", "production tags must be verified through GitHub's signed-tag record")
     if not _requires_main_for_dispatch(context):
         _add(findings, "RWF013", "context", "manual release runs must start from the protected main ref")
-    if not _validates_approval_tag_metadata(context):
-        _add(findings, "RWF025", "context", "production tags must carry one nonempty approved-input identity")
+    if not _requires_tag_on_main(context):
+        _add(findings, "RWF030", "context", "production tags must name a commit on the protected main branch")
     return Report(tuple(sorted(set(findings))))
 
 
 def validate_repository(repo_root: Path) -> Report:
     """Validate the checked-in release workflow without evaluating expressions."""
     workflow_path = repo_root / WORKFLOW_PATH
-    approval_path = repo_root / APPROVAL_WORKFLOW_PATH
     document = yaml.load(workflow_path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
-    approval_document = yaml.load(approval_path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
     recorded = recorded_boundary_actions((repo_root / EVIDENCE_PATH).read_text(encoding="utf-8"))
     findings = {
         *validate_document(document).findings,
         *validate_recorded_actions(document, recorded).findings,
-        *validate_approval_document(approval_document).findings,
     }
     return Report(tuple(sorted(findings)))
 
