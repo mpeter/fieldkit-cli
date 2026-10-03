@@ -62,6 +62,30 @@ def test_partial_or_cancelled_boundary_is_non_passing(boundary: str, result: str
     assert report["outcomes"][boundary] == result
 
 
+@pytest.mark.parametrize("boundary", release_promotion_evidence.PRODUCTION_BOUNDARIES)
+def test_schema_rejects_success_with_any_non_passing_boundary(boundary: str) -> None:
+    report = release_promotion_evidence.render(
+        source_revision="d" * 40,
+        source_repository="example/fieldkit-cli",
+        source_ref="refs/tags/v1.0.0",
+        run_id=1,
+        run_attempt=1,
+        outcomes=dict.fromkeys(release_promotion_evidence.PRODUCTION_BOUNDARIES, "success"),
+        candidate=_candidate("d" * 40),
+    )
+    outcomes = report["outcomes"]
+    assert isinstance(outcomes, dict)
+    outcomes[boundary] = "failure"
+    schema = json.loads(
+        (Path("docs/release-readiness/release-promotion-evidence.schema.json")).read_text(encoding="utf-8")
+    )
+
+    errors = list(Draft202012Validator(schema).iter_errors(report))
+
+    assert report["status"] == "success"
+    assert errors != []
+
+
 def test_unknown_or_missing_boundary_is_rejected() -> None:
     with pytest.raises(ValueError, match="outcomes"):
         release_promotion_evidence.render(

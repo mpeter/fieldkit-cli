@@ -14,7 +14,8 @@
           "outcomes": {
             "properties": {
               "build": {"const": "success"}, "validate": {"const": "success"},
-              "attest": {"const": "success"}, "publish_pypi": {"const": "success"},
+              "attest": {"const": "success"}, "publish_testpypi": {"const": "success"},
+              "consumer_testpypi": {"const": "success"}, "publish_pypi": {"const": "success"},
               "consumer_pypi": {"const": "success"}, "github_release": {"const": "success"}
             }
           }
