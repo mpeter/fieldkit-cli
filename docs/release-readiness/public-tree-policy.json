@@ -197,6 +197,13 @@
       "rationale": "Archived and in-flight execution records; implemented contracts remain public."
     },
     {
+      "id": "exclude-backlog",
+      "action": "exclude",
+      "category": "private_execution_history",
+      "patterns": [".backlog/**"],
+      "rationale": "Maintainer follow-up items; shipped behavior is recorded in the changelog."
+    },
+    {
       "id": "exclude-private-documentation",
       "action": "exclude",
       "category": "private_history",
