@@ -215,7 +215,10 @@ def _workflow() -> dict[str, object]:
                 "steps": [
                     _download(),
                     _sealed_distribution_step(),
-                    {"run": "gh release create $GITHUB_REF_NAME release-dist/* --generate-notes"},
+                    {
+                        "run": 'gh release create "$GITHUB_REF_NAME" release-dist/* --repo "$GITHUB_REPOSITORY" '
+                        "--verify-tag --generate-notes"
+                    },
                 ],
             },
             "promotion_evidence": {
@@ -346,6 +349,29 @@ def test_policy_rejects_an_attempt_scoped_candidate_artifact(job_name: str, cand
     report = release_workflow_policy.validate_document(workflow)
 
     assert {(finding.code, finding.job) for finding in report.findings} == {("RWF031", job_name)}
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'gh release create "$GITHUB_REF_NAME" release-dist/* --generate-notes',
+        'gh release create "$GITHUB_REF_NAME" release-dist/* --verify-tag --generate-notes',
+        'gh release create "$GITHUB_REF_NAME" release-dist/* --repo "$GITHUB_REPOSITORY" --generate-notes',
+        'gh release create "$GITHUB_REF_NAME" release-dist/* --repo "$GITHUB_REPOSITORY" --verify-tag '
+        "--verify-tag=false --generate-notes",
+        'gh release create "$GITHUB_REF_NAME" release-dist/* --repo "$OTHER_REPOSITORY" --verify-tag --generate-notes',
+    ],
+    ids=["no-repository-or-tag-check", "no-repository", "no-tag-check", "tag-check-disabled", "other-repository"],
+)
+def test_policy_requires_an_explicit_repository_for_the_checkout_free_release(command: str) -> None:
+    workflow = _workflow()
+    steps = _job(workflow, "github_release")["steps"]
+    assert isinstance(steps, list)
+    steps[-1]["run"] = command
+
+    report = release_workflow_policy.validate_document(workflow)
+
+    assert {(finding.code, finding.job) for finding in report.findings} == {("RWF032", "github_release")}
 
 
 def test_policy_rejects_overwriting_the_candidate_artifact() -> None:
