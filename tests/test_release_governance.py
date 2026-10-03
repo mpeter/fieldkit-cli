@@ -165,7 +165,7 @@ def test_checked_in_policy_declares_the_intended_successor_release() -> None:
 
     assert policy.candidate.repository.endswith("/fieldkit-cli")
     assert policy.candidate.package == "fieldkit-cli"
-    assert policy.candidate.planned_tag == "v1.0.1"
+    assert policy.candidate.planned_tag == "v1.0.2"
     assert all(control.status == "pending" for control in policy.controls)
 
 

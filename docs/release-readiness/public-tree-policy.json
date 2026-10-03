@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "expected_repository": "mpeter/fieldkit-cli",
-  "planned_tag": "v1.0.1",
+  "planned_tag": "v1.0.2",
   "rules": [
     {
       "id": "include-product-source",
