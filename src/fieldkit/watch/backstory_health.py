@@ -449,7 +449,11 @@ def _open_mcp_session() -> MCPSession | None:
     group = get_mcp_work_group("sales")
     if group is None:
         raise ConfigError("mcp_sales_group is not configured; set it in fieldkit config to enable backstory-health")
-    session = MCPSession(f"{_get_mcp_gateway_base()}/v0/groups/{group}/mcp")
+    return _initialize_sales_session(MCPSession(f"{_get_mcp_gateway_base()}/v0/groups/{group}/mcp"))
+
+
+def _initialize_sales_session(session: MCPSession) -> MCPSession | None:
+    """Return a ready sales session, or None when the gateway is unreachable."""
     try:
         session.initialize()
         return session

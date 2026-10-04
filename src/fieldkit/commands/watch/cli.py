@@ -19,8 +19,8 @@ import logging
 import re
 import shutil
 import subprocess
-from collections.abc import Callable
-from contextlib import redirect_stderr, redirect_stdout
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 
@@ -354,10 +354,17 @@ def _run_all_exit_code(max_code: int, *, allow_partial: bool) -> int:
     return 0 if allow_partial and max_code == 1 else max_code
 
 
+@contextmanager
+def _silence_watcher_output() -> Iterator[None]:
+    """Keep individual watcher streams out of the aggregate summary."""
+    with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+        yield
+
+
 def _invoke_watcher(name: str, run: Callable[[], object]) -> int:
     """Run one watcher behind the aggregate command's output and error boundary."""
     try:
-        with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+        with _silence_watcher_output():
             result = run()
     except AuthError:
         raise
