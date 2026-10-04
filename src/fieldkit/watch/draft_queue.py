@@ -278,8 +278,12 @@ def _run_draft_queue(*, dry_run: bool, account: str | None = None, as_json: bool
             return 1
 
         # --- Open MCP session ---
-        group = get_mcp_work_group("mail")
-        if group is None:
+        try:
+            group = get_mcp_work_group("mail")
+            if group is None:
+                raise ConfigError("mcp_mail_group is not configured; set it in fieldkit config to enable draft-queue")
+        except ConfigError:
+            # A missing or malformed group is permanent configuration, not a retryable partial run.
             elapsed = time.monotonic() - start
             write_run_status(
                 watcher="draft-queue",
@@ -292,8 +296,7 @@ def _run_draft_queue(*, dry_run: bool, account: str | None = None, as_json: bool
             )
             if as_json:
                 _emit_run_json(outcome="fatal", checked=0, alerts=0, failures=1, elapsed=elapsed, dry_run=False)
-            # A missing group is permanent configuration, not a retryable partial run.
-            raise ConfigError("mcp_mail_group is not configured; set it in fieldkit config to enable draft-queue")
+            raise
         session = MCPSession(f"{_get_mcp_gateway_base()}/v0/groups/{group}/mcp")
         try:
             session.initialize()

@@ -304,7 +304,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Choose the canonical safe write mechanism for persistent state.",
-      "source_fingerprint": "sha256:ab944803bbedeeee48f2347e2ef3d8ef82a04741bc06058957ec2f3da75255b5",
+      "source_fingerprint": "sha256:9785deba9e9bf5c88e0e4d7431a3905ac949ba5930e9d2ccc7436aad5d796377",
       "sources": [
         "src/fieldkit/**/*.py"
       ]
@@ -1233,7 +1233,7 @@
         }
       ],
       "reader_action": "Inspect the generated module dependency graph.",
-      "source_fingerprint": "sha256:8b1078f4739bb94d5f9b9370e57b9e4bb1f2bbef355bfe46a7c0a36c6134ee54",
+      "source_fingerprint": "sha256:8dda2be370cdcfc437de926e2f6d807a87253edc0cb3cb8a47a5b72fe5a3e37d",
       "sources": [
         "tach.toml",
         "src/fieldkit/**/*.py",
@@ -1829,7 +1829,7 @@
         }
       ],
       "reader_action": "Run and interpret watchers.",
-      "source_fingerprint": "sha256:acc97f5910bcb9456608a1374d856da8e0f885d2bf1144e2dc0429608a2734b7",
+      "source_fingerprint": "sha256:8e29f5b33a2c58d9b1a6702ddff4b1a58642061ba1e03ea9c6071e0dd8908458",
       "sources": [
         "src/fieldkit/commands/watch/**/*.py",
         "src/fieldkit/watch/**/*.py"
@@ -1893,7 +1893,7 @@
       "content_type": "concept",
       "fenced_blocks": [],
       "reader_action": "Understand local storage and external data flows.",
-      "source_fingerprint": "sha256:ab944803bbedeeee48f2347e2ef3d8ef82a04741bc06058957ec2f3da75255b5",
+      "source_fingerprint": "sha256:9785deba9e9bf5c88e0e4d7431a3905ac949ba5930e9d2ccc7436aad5d796377",
       "sources": [
         "src/fieldkit/**/*.py"
       ],

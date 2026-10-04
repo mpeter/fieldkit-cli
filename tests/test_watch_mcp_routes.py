@@ -119,19 +119,28 @@ def test_backstory_health_records_fatal_run_for_unusable_group(
     assert json.loads(capsys.readouterr().out)["outcome"] == "fatal"
 
 
-def test_mail_session_is_not_opened_without_group() -> None:
+@pytest.mark.parametrize(
+    "group_error", [None, ConfigError("Config key 'mcp_mail_group' must be a valid MCP group name")]
+)
+def test_mail_session_is_not_opened_for_unusable_group(
+    group_error: ConfigError | None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import json
+
     from fieldkit.watch import draft_queue
 
+    lookup = {"side_effect": group_error} if group_error else {"return_value": None}
     with (
-        patch.object(draft_queue, "get_mcp_work_group", return_value=None),
+        patch.object(draft_queue, "get_mcp_work_group", **lookup),
         patch.object(draft_queue, "_resolve_user_email", return_value="user@example.com"),
         patch.object(draft_queue, "watcher_logging"),
         patch("fieldkit.watch.morning_brief_mcp.MCPSession") as session_class,
         patch.object(draft_queue, "write_run_status") as write_status,
         pytest.raises(ConfigError, match="mcp_mail_group"),
     ):
-        draft_queue._run_draft_queue(dry_run=False)
+        draft_queue._run_draft_queue(dry_run=False, as_json=True)
     assert write_status.call_args.kwargs["outcome"] == "fatal"
+    assert json.loads(capsys.readouterr().out)["outcome"] == "fatal"
     session_class.assert_not_called()
 
 
