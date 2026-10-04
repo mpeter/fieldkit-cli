@@ -38,3 +38,6 @@ class _FieldkitConfig(BaseModel):
     pipeline_quota: dict[str, object] | None = None
     territory_accounts: dict[str, str] | None = None
     mcp_gateway_url: str | None = None
+    mcp_calendar_group: str | None = None
+    mcp_mail_group: str | None = None
+    mcp_sales_group: str | None = None

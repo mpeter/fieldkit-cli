@@ -13,7 +13,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from fieldkit.publication_policy import evaluate_publication_command  # noqa: E402
-from hooks._common import block, read_payload, tool_input, tool_name  # noqa: E402
+from hooks._common import block, is_mcp_tool, read_payload, tool_input, tool_name  # noqa: E402
 
 
 def main() -> int:
@@ -25,20 +25,14 @@ def main() -> int:
     inputs = tool_input(payload)
 
     # Block Gmail send attempts (Google Workspace MCP should only draft, never send)
-    if name in (
-        "mcp__fieldkit-mail__google_workspace__send_gmail_message",
-        "mcp__mcpjungle__google_workspace__send_gmail_message",
-    ):
+    if is_mcp_tool(name, "google_workspace__send_gmail_message"):
         return block("Autonomous email sends are not allowed. Use draft_gmail_message instead.")
 
     # Block autonomous calendar invites: manage_event create/update/rsvp whenever
     # attendees would actually be notified. Creating an event with no attendees, or
     # with send_updates="none", never reaches anyone else and is fine; anything that
     # would notify an attendee needs the human to say so explicitly first.
-    if name in (
-        "mcp__fieldkit-calendar__google_workspace__manage_event",
-        "mcp__mcpjungle__google_workspace__manage_event",
-    ):
+    if is_mcp_tool(name, "google_workspace__manage_event"):
         action = inputs.get("action", "")
         attendees = inputs.get("attendees") or []
         send_updates = inputs.get("send_updates")

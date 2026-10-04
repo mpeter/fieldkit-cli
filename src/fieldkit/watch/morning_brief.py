@@ -20,7 +20,7 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
-from fieldkit.config import get_watchers_dir
+from fieldkit.config import ConfigError, get_mcp_gateway_base, get_mcp_work_group, get_watchers_dir
 from fieldkit.util.atomic import assert_nonzero_write
 from fieldkit.watch._morning_brief_types import SourceNotReady
 from fieldkit.watch.logging import watcher_logging
@@ -34,7 +34,7 @@ from fieldkit.watch.morning_brief_collect import (
     get_latest_pursuit_files,
     resolve_user_email,
 )
-from fieldkit.watch.morning_brief_mcp import _MCP_CALENDAR_BASE, MCPSession
+from fieldkit.watch.morning_brief_mcp import MCPSession
 from fieldkit.watch.morning_brief_render import (
     _collect_degraded_sources,
     _fmt_time,
@@ -141,7 +141,15 @@ def _collect_calendar_meetings(
     user_email: str,
 ) -> list[dict[str, Any]] | str:
     """Fetch external calendar meetings via MCP; return string on any failure."""
-    calendar_session = MCPSession(_MCP_CALENDAR_BASE)
+    try:
+        group = get_mcp_work_group("calendar")
+    except ConfigError:
+        log.warning("[Calendar] invalid fieldkit configuration; review config.yaml")
+        return "_Calendar unavailable (invalid MCP configuration) — check logs for details_"
+    if group is None:
+        log.warning("[Calendar] mcp_calendar_group is not configured")
+        return "_Calendar unavailable (mcp_calendar_group is not configured)_"
+    calendar_session = MCPSession(f"{get_mcp_gateway_base()}/v0/groups/{group}/mcp")
     try:
         calendar_session.initialize()
         meetings = fetch_external_meetings(calendar_session, target_date, internal_domains, user_email)
@@ -246,7 +254,6 @@ def _write_brief_to_disk(
 
 
 __all__ = [
-    "_MCP_CALENDAR_BASE",
     "MCPSession",
     "SourceNotReady",
     "_accounts_dir",
