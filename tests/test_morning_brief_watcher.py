@@ -328,6 +328,8 @@ def test_source_failure_calendar_log_level(caplog: pytest.LogCaptureFixture) -> 
     from fieldkit.watch.morning_brief import _collect_calendar_meetings
 
     with (
+        patch("fieldkit.watch.morning_brief.get_mcp_work_group", return_value="work-calendar"),
+        patch("fieldkit.watch.morning_brief.get_mcp_gateway_base", return_value="http://127.0.0.1:8080"),
         patch("fieldkit.watch.morning_brief.MCPSession") as mock_session_cls,
         caplog.at_level(logging.DEBUG, logger="fieldkit.watch"),
     ):
@@ -342,6 +344,7 @@ def test_source_failure_calendar_log_level(caplog: pytest.LogCaptureFixture) -> 
 
     # historic regression + Constitution VIII: return value shows exception type, NOT raw message.
     assert isinstance(result, str)
+    mock_session_cls.assert_called_once_with("http://127.0.0.1:8080/v0/groups/work-calendar/mcp")
     assert "RuntimeError" in result
     assert "Calendar unavailable" in result
     # Raw internal error text must NOT appear (Constitution VIII)

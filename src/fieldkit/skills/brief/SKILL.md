@@ -25,12 +25,11 @@ SF is truth — brief queries it live; local files are never deal-truth.
 
 Renamed from `pulse` (D1 skill taxonomy, Wave 2).
 
-Groups needed: none for the daily run itself (the pipeline is CLI-native). The
-on-demand ops do need them — **fieldkit-sales** (Backstory signals, used by
-[`ops/update.md`](ops/update.md) and [`ops/week-start.md`](ops/week-start.md)) and `gws tasks` (Google Tasks
-sync, used by [`ops/week-start.md`](ops/week-start.md) and [`ops/week-end.md`](ops/week-end.md)). Declared here because
-`docs/dependency-map.md` is generated from root `SKILL.md` files only, so an op's
-group need is invisible to it unless the root says so.
+The daily pipeline is CLI-native. On-demand ops can use optional Backstory
+reads through the configured account-intelligence route, when authorized
+([`ops/update.md`](ops/update.md), [`ops/week-start.md`](ops/week-start.md)).
+Google Tasks sync uses `gws tasks`
+([`ops/week-start.md`](ops/week-start.md), [`ops/week-end.md`](ops/week-end.md)).
 
 ## On-demand ops
 
@@ -178,3 +177,14 @@ or the other — never both, never neither.
   fails; a failed fetch is a RED flag, not a skip.
 - **Synthesize, don't dump** — whispers → Today → Slack threads → staleness
   flags, in that order.
+
+## Route contract
+
+Use [tool routing](../tool-routing/SKILL.md) and the active harness configuration
+to select the configured account-intelligence route, when available and authorized.
+Use only its permitted read capabilities; tool names and aliases come from that
+configuration. If a source or required read is unavailable, note the gap and
+continue with authorized local and CLI sources. Do not substitute another group
+or identity. Google operations use the configured authorized identity; Google
+writes use `gws`, retain the workflow's approval boundary, and require read-back
+verification.

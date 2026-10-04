@@ -5,7 +5,7 @@ battlecard. Not a feature matrix — a tool for winning conversations.
 
 ## Gotchas
 
-- **Backstory availability** — check `mcpjungle` only immediately before selecting the `fieldkit-sales` exception; public research uses `tvly`
+- **Backstory availability** — check the configured route only when selecting authorized Backstory reads; public research uses `tvly`
 - **Trigger overlap with similar skills** — check skill names carefully; e.g. this skill vs adjacent skills with similar names
 - **Missing context** — this skill relies on vault files being up to date; run `/brief` first if signals are stale
 
@@ -23,16 +23,16 @@ Optional: specific product/service area to focus comparison.
 
 ## Execution
 
-Routes needed: **fieldkit-sales** (Backstory) and `tvly search` (public web research). Account/pursuit files are read from disk and the battlecard is written directly (native file reads/writes).
+Routes needed: **configured account-intelligence route** (Backstory) and `tvly search` (public web research). Account/pursuit files are read from disk and the battlecard is written directly (native file reads/writes).
 
 ### Step 1: Gather context
 
 ```
 1. read accounts/<account>/pursuits/<opp>.md — competitive context
 2. read accounts/<account>/account.md — account priorities
-3. backstory__backstory__find_account(<account>) → get peopleai_account_id
-4. backstory__backstory__ask_sales_ai_about_account(peopleai_account_id,
-   "What competitive threats or mentions have come up for this account?")
+3. find_account(<account>) → get peopleai_account_id
+4. get_recent_account_activity(peopleai_account_id)
+   → identify source-attributed competitor mentions from authorized account reads
 ```
 
 ### Step 2: Research our position
@@ -84,3 +84,7 @@ and must not become a local score.
 
 - `meeting` — Feed competitive positioning into meeting briefs
 - `/grill` — Feeds Competition element scoring
+
+Account-intelligence reads are conditional on a configured, authorized route
+and its exposed capabilities. If unavailable, note the gap and continue with
+other authorized sources. See [tool routing](../../tool-routing/SKILL.md).

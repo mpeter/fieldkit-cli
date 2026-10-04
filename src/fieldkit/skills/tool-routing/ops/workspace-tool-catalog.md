@@ -82,8 +82,8 @@ Resolve the list ID with `gws tasks tasklists list`; never guess it.
 
 ```bash
 gws auth status
-gws auth login
 ```
 
-If scopes are missing, re-authenticate for the required service. Do not fall back
-to a Workspace MCP group.
+Verify the authenticated identity approved for the task; `userId=me` alone does
+not establish identity. If scopes are missing, report the managed setup dependency.
+Do not reset OAuth or switch identity or transport to bypass authentication failures.

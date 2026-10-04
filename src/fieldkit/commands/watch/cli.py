@@ -27,8 +27,8 @@ from pathlib import Path
 import click
 
 import fieldkit.watch.status as _watch_status
-from fieldkit.cli_exit import EXIT_PARTIAL
-from fieldkit.config import TIMEOUT_CRON
+from fieldkit.cli_exit import EXIT_DATA, EXIT_PARTIAL
+from fieldkit.config import TIMEOUT_CRON, ConfigError
 from fieldkit.errors import AuthError
 from fieldkit.watch.status import WatcherOutcome, get_last_run_outcome
 
@@ -361,6 +361,10 @@ def _invoke_watcher(name: str, run: Callable[[], object]) -> int:
             result = run()
     except AuthError:
         raise
+    except ConfigError as exc:
+        # Configuration needs a fix, not a retry, so --allow-partial must not mask it.
+        logging.error("watcher=%s configuration error: %s", name, exc)
+        return EXIT_DATA
     except Exception as exc:  # noqa: BLE001 -- one watcher must not stop the daily chain
         logging.error("watcher=%s raised unexpected exception: %s: %s", name, type(exc).__name__, exc)
         return 1

@@ -39,7 +39,7 @@ If absent or empty, fall through to reading the pursuit markdown file as before.
 
 ## Execution
 
-Routes needed: **fieldkit-sales** (Backstory MCP exception), `tvly` (web research), and `chrome-use` (optional intranet research). Account files are read directly and the QBR is written directly.
+Routes needed: **configured account-intelligence route** (optional authorized Backstory reads), `tvly` (web research), and `chrome-use` (optional intranet research). Account files are read directly and the QBR is written directly.
 
 ### Step 1: Load account context
 
@@ -58,24 +58,20 @@ Routes needed: **fieldkit-sales** (Backstory MCP exception), `tvly` (web researc
 ### Step 2: Pull Backstory signals
 
 ```
-1. backstory__backstory__find_account(<account name>)
+1. find_account(<account name>)
    → peopleai_account_id
 
-2. backstory__backstory__get_account_status(peopleai_account_id)
+2. get_account_status(peopleai_account_id)
    → health score, risks flagged, next steps, trending topics
 
-3. backstory__backstory__get_recent_account_activity(peopleai_account_id)
+3. get_recent_account_activity(peopleai_account_id)
    → what's been discussed in last 30 days across all contacts
 
-4. backstory__backstory__account_company_news(peopleai_account_id)   [public companies only]
+4. account_company_news(peopleai_account_id)   [public companies only]
    → business pressures, leadership changes, strategic shifts
 
-5. backstory__backstory__ask_sales_ai_about_account(
-     peopleai_account_id,
-     "What are the key themes, open risks, and expansion opportunities
-      I should address in this QBR?"
-   )
-   → AI synthesis of account health and whitespace
+5. Synthesize key themes, open risks, and expansion opportunities locally
+   from the authorized account reads; label source-attributed insights.
 ```
 
 ### Step 2b: Search Slack for account mentions
@@ -240,3 +236,7 @@ Frame each as: their problem → our capability → expected outcome.]
 - `ops/account-pulse.md` in this skill — Quick pre-QBR signal check (run this first if time is short)
 - The main `meeting` skill (this skill's root) — Use the QBR package as context to prep for the meeting itself
 - **grill** — Qualify any expansion opportunity surfaced during QBR prep
+
+Account-intelligence reads are conditional on a configured, authorized route
+and its exposed capabilities. If unavailable, note the gap and continue with
+other authorized sources. See [tool routing](../../tool-routing/SKILL.md).

@@ -1,10 +1,14 @@
 # Developer search routes
 
-Use project documentation first. Use `gh search code` or `gh api` for ordinary
-public GitHub code examples, the direct global `gh_grep` MCP for cross-repository
-code-pattern search, and `tvly` or the browser for official library docs.
+Use project or official documentation first. Use `gh search code` or `gh api` for
+ordinary public GitHub code examples, and `tvly` or an authorized browser for web
+documentation.
 
-The direct global `context7` MCP is an exception for Context7's curated library
-corpus. Use `context7__resolve-library-id` followed by `context7__query-docs` only
-when that curated corpus adds value beyond project and official docs. It is not
-a gateway group.
+A curated library corpus such as Context7 or a specialized public code-pattern
+index such as grep.app may add capability beyond those routes. Discover the
+configured authorized tools in the active harness, inspect their current schemas,
+and load only the selected capability. No direct server or fixed alias is implied.
+
+If the required tool is absent, report the missing capability. Offer official docs
+or ordinary code search as labeled alternatives only when useful; do not invent a
+connection or borrow another workspace's registration.

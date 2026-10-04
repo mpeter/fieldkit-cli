@@ -23,7 +23,7 @@ D4 fold mechanics — it is a brief cadence, so it lives with the brief.
 - **Never write to account or pursuit files without explicit confirmation**
 - **Always surface generated output for review before any external send**
 
-Groups needed: **fieldkit-sales** (Backstory signals). Pursuit files and contact memory are enumerated and read directly from disk (glob + native file reads).
+Optional account-intelligence route: **configured account-intelligence route** (Backstory signals). Pursuit files and contact memory are enumerated and read directly from disk (glob + native file reads).
 
 ## Default Mode
 
@@ -287,3 +287,7 @@ For detailed scan logic and examples, read
 
 When you have signal that an opp's next step should change, follow the protocol in
 `src/fieldkit/skills/brief/references/sf-next-steps-protocol.md`.
+
+Account-intelligence reads are conditional on a configured, authorized route
+and its exposed capabilities. If unavailable, note the gap and continue with
+other authorized sources. See [tool routing](../../tool-routing/SKILL.md).

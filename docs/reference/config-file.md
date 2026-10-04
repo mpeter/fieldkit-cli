@@ -55,6 +55,9 @@ fieldkit init --minimal ./fieldkit-workspace
 | `vertex_location` | Vertex AI workflows | Provider region |
 | `ingest_provider_failure_threshold` | Ingest batches | Positive integer of consecutive retryable LLM failures before stopping new sources; default `3`, overridden by `FIELDKIT_INGEST_PROVIDER_FAILURE_THRESHOLD` |
 | `mcp_gateway_url` | MCP-backed workflows | Base URL of a gateway you operate or are authorized to use |
+| `mcp_calendar_group` | Morning brief calendar source | Gateway group authorized for calendar access; required to enable this source |
+| `mcp_mail_group` | Draft-queue watcher | Gateway group authorized for mail access; required to run this watcher |
+| `mcp_sales_group` | Backstory-health watcher | Gateway group authorized for sales access; required to run this watcher |
 | `companion.tier` | Companion workflows | `read` (default), `propose`, or `act`; invalid values fail closed to `read` |
 | `companion.act_allowlist` | Companion workflows at `act` tier | Exact argument vectors the companion may execute; empty by default |
 
@@ -63,6 +66,12 @@ older configuration; new configurations must use `fieldkit_home`.
 
 Installing an optional profile does not populate any of these keys or grant
 service access. See [Integrations and profiles](../integrations.md).
+
+MCP group values may contain letters, digits, hyphens, and underscores, and
+must begin with a letter or digit. Set each key to a group whose credentials
+are authorized for that workflow. Without a group, the calendar source reports
+unavailable and the mail or sales watcher cannot run. A gateway URL alone does
+not select an identity.
 
 ## Pipeline quota
 

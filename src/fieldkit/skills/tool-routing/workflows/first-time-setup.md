@@ -1,32 +1,23 @@
-# First-time authentication
+# Check authentication and setup
 
-## Google Workspace CLI
+Before a call, check the selected CLI's status and authenticated identity:
 
 ```bash
 gws auth status
-gws auth login
+gh auth status
 ```
 
-Use `gws auth setup` only when OAuth client configuration itself is absent. After
-login, retry a read-only operation for the required service before any authorized
-write.
+Use other CLIs' installed auth/status help as needed. Never print tokens or decrypted
+credentials into diagnostics. Verify the identity approved for the task; `userId=me`
+is only an API selector.
 
-## Other CLIs
+If credentials, OAuth configuration, or scopes are missing, report the exact setup
+dependency and follow the managed configuration's repair process. Do not reset
+OAuth or change a shared registration from an unrelated task session. An authorized
+repair should end with a read-only probe of the required service before a write.
 
-Use the CLI's own auth/status flow (`gh auth status`, `tvly auth`, or the relevant
-`slackcli auth` command). Never print tokens or decrypted credentials into logs.
-
-## MCP-only exceptions
-
-First confirm that the capability matches one of the five exceptions. For
-`fieldkit-sales` or `fieldkit-dataverse`, check the gateway and group registration:
-
-```bash
-systemctl --user status mcpjungle
-mcpjungle list groups
-```
-
-For direct global `gh_grep`, `brave_search`, or `context7`, confirm that the client
-loaded the named server; do not look for a mcpjungle group. Follow the managed
-configuration's secret source for a missing route. Do not copy secrets into the
-skill, shell history, issue, or PR.
+For MCP, discover the selected authorized route from the active harness's
+configuration and loaded tools. Inspect gateway registration only if the selected
+route uses a gateway. A running gateway does not prove upstream access. Do not
+assume fixed aliases, create direct connections, borrow another workspace's route,
+or run bulk registration to recover one missing capability.

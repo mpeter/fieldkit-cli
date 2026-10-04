@@ -2,43 +2,38 @@
 
 ## CLI is absent
 
-Stop and name the missing executable. Do not silently change data sources. For a
-Google Workspace operation, `gws` is the required route; an MCP group is not a
-fallback.
+Name the missing executable and setup dependency. Do not silently substitute a
+different source. Inspect a configured authorized alternative only when it covers
+the exact capability and its use is permitted for this task.
 
-## CLI authentication fails
+## Authentication or identity fails
 
-Run the CLI's status/help command, report the failing service, and give the
-specific re-authentication step. Authentication failure does not grant authority
-to perform a write through another transport.
+Inspect the selected route's status and report the failing service or missing
+approved identity without exposing credentials. Do not reset OAuth, switch to a
+personal identity, borrow another workspace's registration, or run bulk registration
+from the task session. Managed authentication repair needs its own authorization.
 
-## Google Workspace write fails
+## Write fails
 
-Keep the exact API error and exit code. Do not claim partial success without a
-read-back. If the API reports a validation error, inspect the exact method schema
-with `gws schema <service.resource.method> --resolve-refs` before retrying.
+Keep the exact API error and exit code. Read back the affected resource before
+claiming success. For validation errors, inspect the exact method schema before
+retrying. Partial writes must be reported explicitly. Do not widen a read-only MCP
+group or change transport to bypass missing write authority.
 
 ## Browser profile is ambiguous
 
-Run `chrome-use browsers`, select the authorized profile explicitly, and keep all
-subsequent commands pinned to it.
+Run `chrome-use browsers` and pin subsequent actions to the authorized profile.
+If that identity cannot be established, report it as unavailable.
 
-## MCP gateway exception group is unavailable
+## Configured MCP route is unavailable
 
-Confirm that the request matches the `fieldkit-sales` or `fieldkit-dataverse`
-`MCP-NECESSITY` boundary. Then check `systemctl --user status mcpjungle` and
-`mcpjungle list groups`. If the required group remains unavailable, stop and report
-it. Do not substitute a different service and call the result equivalent.
-
-## Direct global MCP is unavailable
-
-Confirm that the request matches the `gh_grep`, `brave_search`, or `context7`
-`MCP-NECESSITY` boundary, then inspect whether the client loaded that exact server.
-Do not look for it in mcpjungle. If the server is absent or its call fails, stop and
-report the exact unavailable route; do not silently select another data source.
+Inspect the selected route's configuration, loaded tools, and upstream status.
+Check gateway registration only when that route uses a gateway; a running gateway
+does not prove a tool is available or authenticated. Report the missing capability
+and setup dependency. Do not invent direct connections or revive retired aliases.
 
 ## Retired vault graph request
 
-State that backlink, outlink, orphan, and connection-path graph operations have
-no maintained backend. Offer native exact search or `qmd` retrieval only when it
-answers the user's underlying question; do not recreate the removed vault group.
+Backlink, outlink, orphan, and connection-path graph operations have no maintained
+route. Offer native exact search or `qmd` retrieval as labeled alternatives only
+when they answer the underlying question; do not recreate a removed vault endpoint.

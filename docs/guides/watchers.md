@@ -37,6 +37,8 @@ fieldkit watch run pursuit-stalls --dry-run
 
 Then run without `--dry-run` when the reported scope is correct. Use only
 watchers whose workspace fields and external services you have configured.
+MCP-backed watchers also need gateway groups mapped in the
+[configuration file](../reference/config-file.md#optional-integration-keys).
 
 ## Preview or run the configured set
 

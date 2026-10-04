@@ -30,7 +30,7 @@ Read on demand: [`ops/qbr-prep.md`](ops/qbr-prep.md), [`ops/account-snapshot.md`
 - **Never write to account files without explicit confirmation**
 - **Always surface generated output for review before any external send**
 
-Routes needed: **fieldkit-sales** (Backstory MCP exception), `gws gmail` (recent emails), `gws calendar` (calendar event), `tvly` (web search), **fieldkit-dataverse** (optional Rover MCP exception), and `chrome-use` (optional intranet research). Account and meeting files are read directly from disk.
+Routes needed: **configured account-intelligence route** (optional authorized Backstory reads), `gws gmail` (recent emails), `gws calendar` (calendar event), `tvly` (web search), and `chrome-use` (optional intranet research). Account and meeting files are read directly from disk.
 
 ## Step: Check for GDocs meeting log
 
@@ -56,7 +56,7 @@ contract history, key contacts, and strategic priorities already captured there.
 - **Account file** — read `accounts/<account>/account.md`
 - **Recent meeting notes** — 3 most recent under `accounts/<account>/meetings/` (`ls -t accounts/<account>/meetings/*.md | head -3`)
 - **Recent email threads** — `gws gmail users messages list` — last 5–10 emails with these contacts
-- **Backstory** — fieldkit-sales group — engagement scores, last interactions, health
+- **Backstory** — configured account-intelligence route — engagement scores, last interactions, health
 - **Slack search** — `slackcli search messages "<account name>"` and contact names
 - **Web search** — `tvly search` — recent news, earnings, exec announcements
 - **Pursuit frontmatter** — read the pursuit file for `sf_stage`, `sf_close_date`
@@ -70,20 +70,21 @@ Resolve any unknown Slack users with `slackcli search people "<name or email>"`.
 
 ## Step 0: Gather Backstory Intelligence
 
-**Always run this before generating any brief content.** This fulfills the CLAUDE.md
-rule: "Always invoke Backstory before: meeting."
+Gather Backstory signals before drafting when the configured account-intelligence
+route is available and authorized. Confirm that each required read is exposed;
+otherwise note the unavailable source and continue with the remaining inputs.
 
 ```
-1. backstory__backstory__find_account(<account name>)
+1. find_account(<account name>)
    → peopleai_account_id
 
-2. backstory__backstory__get_account_status(peopleai_account_id)
+2. get_account_status(peopleai_account_id)
    → health score, risks flagged, next steps, trending topics
 
-3. backstory__backstory__get_recent_account_activity(peopleai_account_id)
+3. get_recent_account_activity(peopleai_account_id)
    → what's been discussed in last 30 days across all contacts
 
-4. backstory__backstory__account_company_news(peopleai_account_id)   [public companies only]
+4. account_company_news(peopleai_account_id)   [public companies only]
    → business pressures, leadership changes, strategic shifts
 ```
 
@@ -93,16 +94,12 @@ Do NOT write Backstory data into pursuit frontmatter or account.md — brief onl
 
 ---
 
-## Dataverse Rover Enrichment (optional)
+## Directory enrichment (optional)
 
-For each attendee on your organization's domain, if your directory integration is available:
-
-1. Query Rover People for: title, manager, location, department
-2. Add a **From Dataverse** subsection in the attendee block:
-   ```
-   **[Name]** (Rover): Senior Principal Architect → reports to [Manager], based in [City]
-   ```
-3. If `fieldkit-dataverse` is unavailable or returns an error: note "Dataverse unavailable — org context not enriched" and continue.
+For attendees on configured internal domains, use only a configured, authorized
+directory route that exposes the required reads. Add source-attributed title,
+manager, location, and department context when available. Otherwise note
+"Directory unavailable — org context not enriched" and continue.
 
 ## The Source Research (optional)
 
@@ -270,3 +267,9 @@ Every event must appear in the table. Continue processing on per-event errors �
 
 When you have signal that an opp's next step should change, follow the protocol in:
 [`references/sf-next-steps-protocol.md`](references/sf-next-steps-protocol.md)
+
+## Route contract
+
+Follow [tool routing](../tool-routing/SKILL.md) for configured account-intelligence
+reads. Report unavailable sources without switching the approved group or identity.
+Use `gws` for authorized Google writes and read back the stored result.

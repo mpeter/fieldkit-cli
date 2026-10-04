@@ -150,8 +150,8 @@ rg 'fieldkit <old-name>' docs/
 # What commands packages use fieldkit.pursuit?
 rg 'from fieldkit.pursuit import' src/fieldkit/commands/ hooks/ --type py
 
-# What skills reference the fieldkit-sales MCP group?
-rg 'fieldkit-sales' src/fieldkit/skills/ --type md -l
+# What skills reference account intelligence?
+rg 'account-intelligence' src/fieldkit/skills/ --type md -l
 
 # Verify no boundary violations
 uv run tach check

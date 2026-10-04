@@ -463,7 +463,10 @@ def test_calendar_error_surfaced_calendar_error_shows_exception_type():
         raise ConnectionRefusedError("localhost:8080 refused")
 
     # Use a monkeypatched session to trigger the except branch
-    with patch.object(MCPSession, "initialize", _bad_init):
+    with (
+        patch("fieldkit.watch.morning_brief.get_mcp_work_group", return_value="work-calendar"),
+        patch.object(MCPSession, "initialize", _bad_init),
+    ):
         result = _collect_calendar_meetings(
             datetime.date(2026, 6, 7),
             internal_domains={"your-org.com"},
@@ -486,6 +489,7 @@ def test_calendar_error_surfaced_collect_calendar_meetings_includes_exception_ty
     def _bad_init(self):
         raise RuntimeError("Connection refused to internal host")
 
+    monkeypatch.setattr("fieldkit.watch.morning_brief.get_mcp_work_group", lambda service: "work-calendar")
     monkeypatch.setattr(MCPSession, "initialize", _bad_init)
 
     result = _collect_calendar_meetings(

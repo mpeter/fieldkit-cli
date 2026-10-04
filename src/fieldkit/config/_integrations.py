@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Literal, TypeAlias
 from urllib.parse import urlsplit
@@ -131,6 +132,18 @@ def get_sf_session_id() -> str | None:
 
 
 _MCP_GATEWAY_DEFAULT_BASE = "http://127.0.0.1:8080"
+
+
+def get_mcp_work_group(service: Literal["calendar", "mail", "sales"]) -> str | None:
+    """Return the configured MCP group, or None when the watcher is not configured."""
+    data = _load_mcp_gateway_config(strict=True)
+    key = f"mcp_{service}_group"
+    value = data.get(key) if data is not None else None
+    if value is None:
+        return None
+    if not isinstance(value, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", value) is None:
+        raise _loader.ConfigError(f"Config key '{key}' must be a valid MCP group name")
+    return value
 
 
 def _load_mcp_gateway_config(*, strict: bool) -> dict[str, object] | None:

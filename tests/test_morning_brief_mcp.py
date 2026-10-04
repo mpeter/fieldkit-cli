@@ -18,7 +18,7 @@ from fieldkit.watch.morning_brief_mcp import MCPSession
 
 pytestmark = pytest.mark.unit
 
-_BASE_URL = "http://127.0.0.1:8080/v0/groups/fieldkit-calendar/mcp"
+_BASE_URL = "http://127.0.0.1:8080/v0/groups/calendar/mcp"
 _SESSION_ID = "test-session-id-abc123"
 
 
