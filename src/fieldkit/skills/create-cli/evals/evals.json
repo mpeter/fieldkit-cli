@@ -14,6 +14,16 @@
       "message": "Must use canonical exit semantics"
     },
     {
+      "id": "code_checkout_contract",
+      "type": "contains_all",
+      "patterns": [
+        "fieldkit code checkout",
+        "get_fieldkit_root()",
+        "missing code checkout"
+      ],
+      "message": "Installed skill must read contract documents from the code checkout and report a missing one"
+    },
+    {
       "id": "option_plumbing",
       "type": "contains",
       "pattern": "end-to-end plumbing",
