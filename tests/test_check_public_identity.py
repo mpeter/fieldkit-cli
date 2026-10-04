@@ -3,6 +3,7 @@
 import json
 import subprocess
 import tarfile
+import tomllib
 import zipfile
 from io import BytesIO
 from pathlib import Path
@@ -11,6 +12,38 @@ import check_public_identity
 import pytest
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.mark.parametrize(
+    ("path", "target"),
+    [
+        ("src/fieldkit/commands/gmail/README.md", "docs/guides/gmail.md"),
+        ("src/fieldkit/skills/contact/ops/contact-enrich.md", "src/fieldkit/skills/meeting/ops/stakeholder-map.md"),
+    ],
+)
+def test_packaged_guide_allowance_accepts_only_canonical_links(path: str, target: str) -> None:
+    """Canonical links are allowed; the same owner's unrelated repository is rejected."""
+    repo = Path(__file__).parents[1]
+    policy = check_public_identity.load_policy(repo)
+    metadata = tomllib.loads((repo / "pyproject.toml").read_text(encoding="utf-8"))
+    canonical = metadata["project"]["urls"]["Repository"] + "/blob/main/" + target
+    narrowed = check_public_identity.Policy(
+        schema_version=policy.schema_version,
+        scope=policy.scope,
+        rules=tuple(rule for rule in policy.rules if rule.rule_id == "PUBID001"),
+        allowances=tuple(allowance for allowance in policy.allowances if allowance.path == path),
+    )
+    report = check_public_identity.scan_documents(
+        narrowed, (check_public_identity.Document(path, path, canonical),), frozenset({path})
+    )
+    assert report.ok is True
+    assert report.classified_matches == 1
+    unrelated = canonical.replace("/fieldkit-cli/", "/unrelated-repository/")
+    report = check_public_identity.scan_documents(
+        narrowed, (check_public_identity.Document(path, path, canonical + "\n" + unrelated),), frozenset({path})
+    )
+    assert report.ok is False
+    assert report.findings == (check_public_identity.Finding("PUBID001", "operator_identity", path, 2),)
 
 
 def _write_policy(root: Path, *, allowances: list[dict[str, object]] | None = None) -> None:
