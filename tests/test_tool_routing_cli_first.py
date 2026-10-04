@@ -44,7 +44,9 @@ _STALE_ROUTES = (
     "MCP gateway must be running",
     "Do not call external services without first checking gateway status",
 )
-_DIRECT_ROUTE_PATTERN = re.compile(r"\bdirect(?: global\s+`[a-z][a-z0-9_-]*`|\s+`(?:context7|gh_grep|brave_search)`)")
+_DIRECT_ROUTE_PATTERN = re.compile(r"\bdirect(?:\s+global)?\s+`([A-Za-z][A-Za-z0-9_-]*)`", re.IGNORECASE)
+# Direct use of a primary-route CLI is CLI-first routing, not an assumed MCP server.
+_PRIMARY_CLIS = frozenset({"fieldkit", "gws", "chrome-use", "tvly", "slackcli", "gh", "git", "qmd", "ctx", "rg"})
 _BACKSTORY_ACCOUNT_TOOLS = frozenset(
     {
         "find_account",
@@ -68,7 +70,7 @@ def _assert_route_inventory(instruction_text: dict[Path, str]) -> None:
     routed_text = "\n".join(instruction_text.values())
     stale_routes = {route for route in _STALE_ROUTES if route in routed_text}
     assert not stale_routes, f"stale MCP routes remain: {sorted(stale_routes)}"
-    direct_routes = set(_DIRECT_ROUTE_PATTERN.findall(routed_text))
+    direct_routes = {name for name in _DIRECT_ROUTE_PATTERN.findall(routed_text) if name.lower() not in _PRIMARY_CLIS}
     assert not direct_routes, f"assumed direct MCP routes remain: {sorted(direct_routes)}"
     backstory_tools = set(re.findall(r"\bbackstory__(\w+)", routed_text))
     bare_opportunity_calls = set(
@@ -141,6 +143,8 @@ def test_shipped_instruction_tree_has_no_stale_routes_or_opportunity_calls() -> 
         ("Use fieldkit-dataverse.", "stale MCP routes remain"),
         ("Use direct global `unknown_search`.", "assumed direct MCP routes remain"),
         ("Use direct `context7`.", "assumed direct MCP routes remain"),
+        ("Use direct `unknown_search`.", "assumed direct MCP routes remain"),
+        ("Use Direct Global `Brave_Search`.", "assumed direct MCP routes remain"),
         ("Call backstory__get_opportunity_status.", "unsupported Backstory calls remain"),
         ("Call backstory__find_opportunity.", "unsupported Backstory calls remain"),
         ("Call get_opportunity_status(<account>).", "unsupported Backstory calls remain"),
