@@ -49,10 +49,10 @@ The current public-tree and governance policies must select the same canonical
 The active candidate is `v1.0.2`; the historical `first_public_version` stays
 `1.0.0`, and prior policies and evidence remain in their original Git history.
 Version `1.0.1` was never published to PyPI: its TestPyPI version was consumed
-by a rehearsal of an earlier commit, so no `1.0.1` candidate can carry
-same-candidate TestPyPI evidence.
-Do not relabel a previous report or bundle as a successor. Each successor needs
-new same-candidate source, artifact, scan, governance and consumer evidence.
+by a rehearsal of an earlier commit, so a `1.0.1` release run would stop at its
+TestPyPI upload.
+Do not relabel a previous report or bundle as a successor; every release run
+builds and verifies its own candidate.
 An export is a content snapshot; it does not publish or rewrite Git history.
 
 The sealed candidate command reads committed Git objects. Builds and tests from
@@ -68,10 +68,13 @@ make release-check
 The command builds and retains one wheel and source-distribution pair, compares
 a second controlled build for reproducibility, validates the clean public
 export, creates the closed bundle and its checksums, records a
-runtime SBOM and dependency receipt, and writes a JSON report beside the output
-directory. A nonzero result is expected until every manual gate has
-same-candidate evidence: package-name reservation, repository controls,
-TestPyPI rehearsal, public contributor and user journeys, and cutover approval.
+runtime SBOM and dependency receipt, checks the report against the
+release-governance policy, and writes a JSON result beside the output
+directory. Exit 0 means the candidate builds, exports, and matches the policy;
+exit 2 means it does not, and the result names the first failure. This is a
+local preparation check: the release workflow builds and verifies its own
+candidate from the tag, and the TestPyPI rehearsal and consumer checks run
+inside that workflow.
 
 Validate the policy interpretation of that same report:
 
@@ -80,9 +83,9 @@ uv run python scripts/check_release_governance.py \
   --candidate-report build/public-candidate/report.json
 ```
 
-Exit 0 means the policy evidence is complete. Exit 1 means one or more
-operator-owned controls are pending. Exit 2 or 3 means the candidate or policy
-record is invalid. No exit status publishes anything.
+Exit 0 means the report was built for the policy's repository, package, and
+planned tag. Exit 3 means the candidate report or the policy is invalid. No exit
+status publishes anything.
 
 ## Verify the workflow before review
 
@@ -92,23 +95,44 @@ Validate the checked-in workflow contract locally before requesting review:
 make release-workflow-policy-check
 ```
 
-The workflow has three deliberately separate paths:
+The workflow has two paths:
 
 | Mode | Trigger | Result | Required approval |
 | --- | --- | --- | --- |
-| Dry run | Protected default branch dispatch | Builds and validates one retained candidate | Workflow dispatch approval |
-| TestPyPI | Protected default branch dispatch | Attests and publishes the retained candidate to TestPyPI | TestPyPI and operator approval |
-| Production | Verified signed `v<project-version>` tag | Attests, publishes, verifies consumers, then creates the GitHub release | Final operator approval |
+| Dry run | Workflow dispatch from the protected default branch | Runs compatibility, then builds and validates one retained candidate | None; it attests and publishes nothing |
+| Release | Verified signed `v<project-version>` tag on a default-branch commit | Builds one candidate, attests it, publishes and verifies it on TestPyPI, then publishes and verifies the same bytes on PyPI and creates the GitHub release | The `pypi` environment review |
+
+The signed tag authorizes building, rehearsing, and publishing the exact
+default-branch commit it names. The workflow checks GitHub's signature
+verification for the tag object and refuses a tag whose commit is not already
+on the default branch, so the required pull-request checks have run on it. One
+run then builds one sealed candidate, and every later job verifies and uses
+those bytes: TestPyPI and PyPI receive identical files, and the TestPyPI
+consumer check must pass before the production job can start. The `pypi`
+environment review is the single human approval; review the run's bundle digest
+and its TestPyPI consumer evidence before approving it.
 
 The authority jobs consume the retained bundle; they do not rebuild the package,
 check out source, use a package-index token, or overwrite an existing version.
-Configure the protected `release-approval` environment before a production tag,
-and separate protected publisher environments and OIDC Trusted Publishers before
-a TestPyPI or production run. A production tag must carry the protected
-approval run and manifest digest in its signed annotation. The workflow then
-acquires and revalidates that one retained approval artifact before it can
-attest or publish; it never rebuilds source after tagging. Record the actual
-remote settings before treating those controls as evidenced.
+Before the first tag, configure the `testpypi` and `pypi` environments with an
+OIDC Trusted Publisher for `release.yml`, restrict their deployment refs to
+`v*.*.*` tags, and require a reviewer on `pypi`. An environment limited to
+protected branches rejects a tag-triggered job. Verify the live settings,
+including both environments, against `.github/repository-settings.json` before
+tagging:
+
+```console
+uv run python scripts/verify_repository_settings.py \
+  "$(gh repo view --json nameWithOwner --jq .nameWithOwner)" \
+  --expected-revision "$(git rev-parse origin/main)"
+```
+
+The verifier reads settings only. It fails when an environment can deploy from
+branches, carries a tag pattern other than `v*.*.*`, adds a reviewer to
+`testpypi`, lacks one on `pypi`, enables self-review prevention, or when an
+undeclared environment exists. PyPI exposes no API for Trusted Publisher
+configuration; a wrong publisher fails the publish job before any upload, and
+**Re-run failed jobs** resumes after it is corrected.
 
 Both publication jobs upload with `pypa/gh-action-pypi-publish` and set
 `attestations: true`, so every wheel and sdist on TestPyPI or PyPI carries a
@@ -148,7 +172,8 @@ failed, and either state remains non-passing with retained evidence.
 Manual documentation and community rehearsals require a separate clean checkout
 of the public commit. The verifier rejects local changes, untracked files, a
 checkout at another revision, a non-public repository API response, or a review
-receipt that does not identify the exact successful Cutover verification run.
+receipt that does not identify a successful scheduled or dispatched Full
+enforcement run of that exact commit on `main`.
 Credentialed examples remain non-passing until their same-candidate transcripts
 and assertions are recorded against that checkout.
 
@@ -156,8 +181,40 @@ and assertions are recorded against that checkout.
 
 Stop on any missing, stale, mismatched, failed, or pending evidence. Preserve
 the candidate report, closed bundle, checksums, SBOM, workflow run, consumer
-evidence, promotion evidence, and relevant approval record. Do not repair a
-release by rerunning publication for the same version.
+evidence, and promotion evidence.
+
+The candidate artifact name is fixed for the whole run, so use **Re-run failed
+jobs** to resume after a transient failure: the re-run reuses the same bundle,
+and a consumer check that timed out verifies again without uploading. **Re-run
+all jobs** cannot replace a candidate: its first run-scoped upload fails because
+an artifact with that name already exists in the run. If an index accepted some or all files and the run cannot
+finish against that bundle, the version is spent. Publish a successor version
+instead of repairing the release by uploading again. Retained artifacts expire
+after 90 days, so finish or abandon a release run within that window.
+
+A re-run uses the workflow file at the tagged commit, so it cannot pick up a
+workflow fix. If the run fails after PyPI accepted and verified the files, finish
+the GitHub release by hand from that run's candidate artifact. Set `RUN_ID` to
+the failed run and `TAG` to its tag, then download the candidate, check its
+checksums, compare the distribution digests with PyPI, and create the release:
+
+```console
+REPO="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"
+SHA="$(gh run view "$RUN_ID" --repo "$REPO" --json headSha --jq .headSha)"
+gh run download "$RUN_ID" --repo "$REPO" \
+  --name "release-candidate-$RUN_ID-$SHA" --dir build/recovered
+(cd build/recovered/candidate/bundle && sha256sum --strict --check SHA256SUMS)
+(cd build/recovered/candidate/bundle && sha256sum ./*.whl ./*.tar.gz)
+curl --fail --silent "https://pypi.org/pypi/fieldkit-cli/${TAG#v}/json" \
+  | jq -r '.urls[] | "\(.digests.sha256)  \(.filename)"'
+gh release create "$TAG" build/recovered/candidate/bundle/*.whl \
+  build/recovered/candidate/bundle/*.tar.gz \
+  --repo "$REPO" --verify-tag --generate-notes
+```
+
+Create the release only when every checksum reports `OK` and both digest lists
+name the same files with the same values. The run's promotion evidence still
+records the failure; that record is kept as part of the release history.
 
 For a defective published release, document the problem, yank it when
 appropriate, and release a corrected successor version through the same flow.
@@ -166,4 +223,6 @@ recovery record.
 
 The checked-in [release-governance policy](docs/release-readiness/release-governance-policy.json)
 is the machine-readable source of truth for candidate identity, roles, and
-external-control evidence.
+support commitments. Environment protection and Trusted Publishing are enforced
+by GitHub and PyPI when the release workflow runs; configure them as described
+above before the first tag.

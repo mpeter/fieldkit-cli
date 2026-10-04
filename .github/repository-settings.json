@@ -106,7 +106,6 @@
         "actions/attest@*",
         "actions/cache@*",
         "actions/checkout@*",
-        "actions/create-github-app-token@*",
         "actions/dependency-review-action@*",
         "actions/download-artifact@*",
         "actions/setup-python@*",
@@ -141,6 +140,20 @@
       "CodeQL / analyze (actions)",
       "OpenSSF Scorecard"
     ]
+  },
+  "environments": {
+    "pypi": {
+      "required_reviewers": true,
+      "deployment_tag_patterns": [
+        "v*.*.*"
+      ]
+    },
+    "testpypi": {
+      "required_reviewers": false,
+      "deployment_tag_patterns": [
+        "v*.*.*"
+      ]
+    }
   },
   "governance": {
     "code_owner_review": {

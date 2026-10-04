@@ -15,18 +15,13 @@ if TYPE_CHECKING or __package__:
 else:
     import _release_identity
 
-_POLICY_KEYS = {"schema_version", "candidate", "roles", "support", "external_controls"}
+_POLICY_KEYS = {"schema_version", "candidate", "roles", "support"}
 _PLANNED_CANDIDATE_KEYS = {"repository", "package", "planned_tag"}
-_EVIDENCE_CANDIDATE_KEYS = {"repository", "revision", "package", "planned_tag"}
 _ROLE_KEYS = {"preparer", "approver", "incident"}
 _SUPPORT_KEYS = {"compatibility_policy", "supported_line"}
-_CONTROL_KEYS = {"id", "status", "evidence"}
-_EVIDENCE_KEYS = {"candidate", "record"}
 _REVISION = re.compile(r"[0-9a-f]{40}")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
-_CONTROL_ID = re.compile(r"[a-z0-9][a-z0-9-]*")
-_REQUIRED_CONTROL_IDS = frozenset({"github-release-environment", "pypi-trusted-publisher"})
 _CANDIDATE_REPORT_KEYS = {
     "schema_version",
     "status",
@@ -119,15 +114,6 @@ class CandidateIdentity:
 
 
 @dataclass(frozen=True)
-class ExternalControl:
-    """One control whose evidence is scoped to exactly one candidate."""
-
-    identifier: str
-    status: Literal["pending", "evidenced"]
-    evidence: CandidateIdentity | None
-
-
-@dataclass(frozen=True)
 class GovernancePolicy:
     """Versioned governance commitments for one release candidate."""
 
@@ -135,7 +121,6 @@ class GovernancePolicy:
     roles: dict[str, str]
     compatibility_policy: str
     supported_line: str
-    controls: tuple[ExternalControl, ...]
 
 
 @dataclass(frozen=True)
@@ -143,17 +128,20 @@ class GovernanceReport:
     """A deterministic release-governance decision."""
 
     schema_version: int
-    status: Literal["pass", "pending"]
-    publication_authorized: bool
-    pending_controls: tuple[str, ...]
+    status: Literal["pass"]
+    candidate: CandidateIdentity
 
     def to_dict(self) -> dict[str, object]:
         """Render the result for a maintainer or automation boundary."""
         return {
             "schema_version": self.schema_version,
             "status": self.status,
-            "publication_authorized": self.publication_authorized,
-            "pending_controls": list(self.pending_controls),
+            "candidate": {
+                "repository": self.candidate.repository,
+                "revision": self.candidate.revision,
+                "package": self.candidate.package,
+                "planned_tag": self.candidate.planned_tag,
+            },
         }
 
 
@@ -210,21 +198,6 @@ def _planned_candidate(value: object, subject: str) -> PlannedCandidate:
         raise ValueError(f"{subject}.repository must use literal OWNER/REPO form")
     _release_identity.tag_version(raw["planned_tag"])
     return PlannedCandidate(repository, package, planned_tag)
-
-
-def _evidence_candidate(value: object, subject: str) -> CandidateIdentity:
-    raw = _object(value, subject)
-    _exact_keys(raw, _EVIDENCE_CANDIDATE_KEYS, subject)
-    repository = _string(raw["repository"], f"{subject}.repository")
-    package = _string(raw["package"], f"{subject}.package")
-    planned_tag = _string(raw["planned_tag"], f"{subject}.planned_tag")
-    revision = _string(raw["revision"], f"{subject}.revision")
-    if _REPOSITORY.fullmatch(repository) is None:
-        raise ValueError(f"{subject}.repository must use literal OWNER/REPO form")
-    if _REVISION.fullmatch(revision) is None:
-        raise ValueError(f"{subject}.revision must be a full lowercase Git SHA")
-    _release_identity.tag_version(raw["planned_tag"])
-    return CandidateIdentity(repository, revision, package, planned_tag)
 
 
 def _artifact_identities(value: object, subject: str, *, validation: bool) -> frozenset[tuple[str, str, str]]:
@@ -432,46 +405,10 @@ def load_policy(path: Path) -> GovernancePolicy:
     compatibility_policy = _string(support["compatibility_policy"], "support.compatibility_policy")
     supported_line = _string(support["supported_line"], "support.supported_line")
 
-    raw_controls = raw["external_controls"]
-    if not isinstance(raw_controls, list) or not raw_controls:
-        raise ValueError("external_controls must be a non-empty list")
-    controls: list[ExternalControl] = []
-    for index, raw_control in enumerate(raw_controls):
-        subject = f"external_controls[{index}]"
-        control = _object(raw_control, subject)
-        _exact_keys(control, _CONTROL_KEYS, subject)
-        identifier = _string(control["id"], f"{subject}.id")
-        if _CONTROL_ID.fullmatch(identifier) is None:
-            raise ValueError(f"{subject}.id must be lowercase kebab-case")
-        status = control["status"]
-        evidence_candidate: CandidateIdentity | None = None
-        if status == "pending":
-            if control["evidence"] is not None:
-                raise ValueError(f"{subject}.pending control must not include evidence")
-        elif status == "evidenced":
-            evidence = _object(control["evidence"], f"{subject}.evidence")
-            _exact_keys(evidence, _EVIDENCE_KEYS, f"{subject}.evidence")
-            evidence_candidate = _evidence_candidate(evidence["candidate"], f"{subject}.evidence.candidate")
-            record = _string(evidence["record"], f"{subject}.evidence.record")
-            if not record.startswith("https://"):
-                raise ValueError(f"{subject}.evidence.record must use https")
-        else:
-            raise ValueError(f"{subject}.status must be pending or evidenced")
-        controls.append(ExternalControl(identifier, status, evidence_candidate))
-    identifiers = tuple(control.identifier for control in controls)
-    if len(identifiers) != len(set(identifiers)):
-        raise ValueError("external control ids must be unique")
-    if frozenset(identifiers) != _REQUIRED_CONTROL_IDS:
-        raise ValueError(f"external control ids must be exactly {sorted(_REQUIRED_CONTROL_IDS)}")
-    return GovernancePolicy(candidate, roles, compatibility_policy, supported_line, tuple(controls))
+    return GovernancePolicy(candidate, roles, compatibility_policy, supported_line)
 
 
 def validate(policy_path: Path, candidate_report_path: Path) -> GovernanceReport:
     """Validate policy and candidate evidence without contacting external services."""
     policy = load_policy(policy_path)
-    candidate = _candidate_report(candidate_report_path, policy.candidate)
-    for control in policy.controls:
-        if control.status == "evidenced" and control.evidence != candidate:
-            raise ValueError(f"external control {control.identifier} evidence does not bind the policy candidate")
-    pending = tuple(sorted(control.identifier for control in policy.controls if control.status == "pending"))
-    return GovernanceReport(1, "pending" if pending else "pass", not pending, pending)
+    return GovernanceReport(1, "pass", _candidate_report(candidate_report_path, policy.candidate))

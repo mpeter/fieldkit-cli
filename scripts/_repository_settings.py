@@ -12,10 +12,10 @@ from typing import Any, Literal
 API_VERSION = "2026-03-10"
 API_TIMEOUT_SECONDS = 30
 MAX_SNAPSHOT_AGE_SECONDS = 900
+# Version 2 dropped the cutover-era phase and pending fields.
+REPORT_SCHEMA_VERSION = 2
 
-Phase = Literal["pre-cutover", "post-cutover"]
 _REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
-_PLAN_MESSAGE = "Upgrade to GitHub Pro or make this repository public to enable this feature."
 _REVISION = re.compile(r"[0-9a-f]{40}")
 _COLLECTED_AT = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
 _SURFACES = frozenset(
@@ -29,8 +29,12 @@ _SURFACES = frozenset(
         "automated_security_fixes",
         "private_vulnerability_reporting",
         "security_and_analysis",
+        "environments",
     }
 )
+# Release environments deploy only from SemVer tags: a branch-protection
+# policy would reject the tag-triggered release jobs.
+_TAG_ONLY_DEPLOYMENTS = {"protected_branches": False, "custom_branch_policies": True}
 
 
 @dataclass(frozen=True)
@@ -54,7 +58,7 @@ class EvidenceSnapshot:
 
 @dataclass(frozen=True, order=True)
 class Finding:
-    """One unmet or not-yet-applicable repository control."""
+    """One unmet repository control."""
 
     control: str
     message: str
@@ -65,18 +69,14 @@ class VerificationReport:
     """Machine-readable comparison result."""
 
     schema_version: int
-    phase: Phase
-    status: Literal["pass", "pending", "fail"]
+    status: Literal["pass", "fail"]
     failures: tuple[Finding, ...]
-    pending: tuple[Finding, ...]
 
     def to_dict(self) -> dict[str, object]:
         return {
             "schema_version": self.schema_version,
-            "phase": self.phase,
             "status": self.status,
             "failures": [asdict(finding) for finding in self.failures],
-            "pending": [asdict(finding) for finding in self.pending],
         }
 
 
@@ -195,10 +195,95 @@ def collect(repository: str) -> EvidenceSnapshot:
         "private_vulnerability_reporting": _api(repository, "private-vulnerability-reporting"),
         "security_and_analysis": ApiObservation(repo.status, security_data),
     }
+    observations["environments"] = _environments(repository)
     if _branch_sha(_api(repository, "branches/main")) != branch_sha:
         raise RuntimeError("GitHub default branch changed during settings collection")
     collected_at = datetime.now(tz=UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     return EvidenceSnapshot(repository, collected_at, API_VERSION, branch_sha, observations)
+
+
+def _single_page(data: dict[str, Any], key: str, subject: str) -> list[object]:
+    """Return one listing page, failing closed when GitHub reports more items than it served."""
+    items = data.get(key, [])
+    if not isinstance(items, list) or data.get("total_count") != len(items):
+        raise RuntimeError(f"GitHub {subject} listing is incomplete or exceeds one page")
+    return items
+
+
+def _environments(repository: str) -> ApiObservation:
+    """Read every deployment environment with its protection and deployment-ref policies."""
+    listing = _api(repository, "environments?per_page=100")
+    if listing.status != 200 or not isinstance(listing.data, dict):
+        return listing
+    environments: list[object] = []
+    for environment in _single_page(listing.data, "environments", "environment"):
+        if not isinstance(environment, dict) or not isinstance(environment.get("name"), str):
+            raise RuntimeError("GitHub environment listing omitted an environment name")
+        policies = _api(repository, f"environments/{environment['name']}/deployment-branch-policies?per_page=100")
+        if policies.status == 200 and isinstance(policies.data, dict):
+            branch_policies = _single_page(policies.data, "branch_policies", "deployment policy")
+        elif policies.status == 404:
+            # GitHub serves no policy list unless custom deployment policies are enabled.
+            branch_policies = []
+        else:
+            raise RuntimeError(f"GitHub deployment policies returned HTTP {policies.status}")
+        environments.append({**environment, "deployment_branch_policies": branch_policies})
+    return ApiObservation(200, {"environments": environments})
+
+
+def _environment_findings(name: str, expected: object, actual: dict[str, Any]) -> list[str]:
+    """Return why one release environment does not match its declared protection."""
+    if not isinstance(expected, dict) or not isinstance(expected.get("required_reviewers"), bool):
+        raise ValueError(f"manifest environment {name} must declare required_reviewers")
+    patterns = expected.get("deployment_tag_patterns")
+    if not isinstance(patterns, list) or not patterns or not all(isinstance(item, str) for item in patterns):
+        raise ValueError(f"manifest environment {name} must declare deployment_tag_patterns")
+    problems: list[str] = []
+    if actual.get("deployment_branch_policy") != _TAG_ONLY_DEPLOYMENTS:
+        problems.append("deployments are not limited to custom ref policies")
+    policies = actual.get("deployment_branch_policies")
+    observed = {
+        (item.get("name"), item.get("type"))
+        for item in (policies if isinstance(policies, list) else [])
+        if isinstance(item, dict)
+    }
+    if observed != {(pattern, "tag") for pattern in patterns}:
+        problems.append("deployment ref policies are not exactly the declared tag patterns")
+    rules = actual.get("protection_rules")
+    reviewer_rules = [
+        rule
+        for rule in (rules if isinstance(rules, list) else [])
+        if isinstance(rule, dict) and rule.get("type") == "required_reviewers"
+    ]
+    if expected["required_reviewers"]:
+        if len(reviewer_rules) != 1 or not reviewer_rules[0].get("reviewers"):
+            problems.append("a required reviewer is missing")
+        elif reviewer_rules[0].get("prevent_self_review") is not False:
+            problems.append("self-review prevention would block the sole maintainer")
+    elif reviewer_rules:
+        problems.append("an undeclared required reviewer adds an approval")
+    return problems
+
+
+def _require_environments(expected: object, observation: ApiObservation, failures: list[Finding]) -> None:
+    if not isinstance(expected, dict) or not expected:
+        raise ValueError("manifest environments must be a non-empty object")
+    data = observation.data
+    listed = data.get("environments") if observation.status == 200 and isinstance(data, dict) else None
+    if not isinstance(listed, list):
+        failures.append(Finding("environments", f"unexpected HTTP {observation.status}"))
+        return
+    actual_by_name = {
+        item["name"]: item for item in listed if isinstance(item, dict) and isinstance(item.get("name"), str)
+    }
+    for name in sorted(expected):
+        if name not in actual_by_name:
+            failures.append(Finding(f"environments.{name}", "environment does not exist"))
+            continue
+        for problem in _environment_findings(name, expected[name], actual_by_name[name]):
+            failures.append(Finding(f"environments.{name}", problem))
+    for name in sorted(actual_by_name.keys() - expected.keys()):
+        failures.append(Finding(f"environments.{name}", "environment is not declared in the manifest"))
 
 
 def _branch_sha(observation: ApiObservation) -> str:
@@ -228,41 +313,14 @@ def _matches(expected: object, actual: object) -> bool:
     return expected == actual
 
 
-def _record_mismatch(
-    phase: Phase,
-    control: str,
-    message: str,
-    failures: list[Finding],
-    pending: list[Finding],
-) -> None:
-    target = pending if phase == "pre-cutover" else failures
-    target.append(Finding(control, message))
-
-
-def _require_match(
-    phase: Phase,
-    control: str,
-    expected: object,
-    observation: ApiObservation,
-    failures: list[Finding],
-    pending: list[Finding],
-) -> None:
+def _require_match(control: str, expected: object, observation: ApiObservation, failures: list[Finding]) -> None:
     if observation.status != 200:
-        if phase == "pre-cutover" and observation.status in {403, 404, 409}:
-            pending.append(Finding(control, f"target state is unavailable: HTTP {observation.status}"))
-        else:
-            failures.append(Finding(control, f"unexpected HTTP {observation.status}"))
+        failures.append(Finding(control, f"unexpected HTTP {observation.status}"))
     elif not _matches(expected, observation.data):
-        _record_mismatch(phase, control, "live state differs from manifest", failures, pending)
+        failures.append(Finding(control, "live state differs from manifest"))
 
 
-def _require_rulesets(
-    phase: Phase,
-    expected: object,
-    observation: ApiObservation,
-    failures: list[Finding],
-    pending: list[Finding],
-) -> None:
+def _require_rulesets(expected: object, observation: ApiObservation, failures: list[Finding]) -> None:
     if observation.status != 200 or not isinstance(observation.data, list):
         failures.append(Finding("rulesets", f"unexpected HTTP {observation.status}"))
         return
@@ -276,114 +334,61 @@ def _require_rulesets(
             raise ValueError("every manifest ruleset must have a name")
         name = ruleset["name"]
         if name not in actual_by_name or not _matches(ruleset, actual_by_name[name]):
-            _record_mismatch(phase, f"rulesets.{name}", "live state differs from manifest", failures, pending)
+            failures.append(Finding(f"rulesets.{name}", "live state differs from manifest"))
 
 
-def evaluate(
-    manifest: dict[str, Any],
-    observations: dict[str, ApiObservation],
-    *,
-    phase: Phase,
-) -> VerificationReport:
+def evaluate(manifest: dict[str, Any], observations: dict[str, ApiObservation]) -> VerificationReport:
     """Compare live or captured observations with the versioned contract."""
     missing = sorted(_SURFACES - observations.keys())
     if missing:
         raise ValueError(f"missing observation surfaces: {', '.join(missing)}")
     failures: list[Finding] = []
-    pending: list[Finding] = []
 
-    repository_expected = dict(manifest["repository"])
-    repository_observed = observations["repository"]
-    if phase == "pre-cutover":
-        repository_expected.pop("private", None)
-        repository_expected.pop("visibility", None)
-        if repository_observed.status != 200 or not isinstance(repository_observed.data, dict):
-            failures.append(Finding("repository", f"unexpected HTTP {repository_observed.status}"))
-        else:
-            if not _matches(repository_expected, repository_observed.data):
-                pending.append(Finding("repository", "live state differs from manifest"))
-            if repository_observed.data.get("private") is True:
-                pending.append(Finding("repository.visibility", "source repository remains private"))
-            else:
-                failures.append(Finding("repository.visibility", "pre-cutover verifier expected a private source"))
-    else:
-        _require_match(phase, "repository", repository_expected, repository_observed, failures, pending)
-
-    rulesets = observations["rulesets"]
-    message = rulesets.data.get("message") if isinstance(rulesets.data, dict) else None
-    if phase == "pre-cutover" and rulesets.status == 403 and message == _PLAN_MESSAGE:
-        pending.append(Finding("rulesets", "private plan does not expose repository rulesets"))
-    else:
-        _require_rulesets(phase, manifest["rulesets"], rulesets, failures, pending)
+    _require_match("repository", manifest["repository"], observations["repository"], failures)
+    _require_rulesets(manifest["rulesets"], observations["rulesets"], failures)
 
     actions = manifest["actions"]
+    _require_match("actions.permissions", actions["permissions"], observations["actions_permissions"], failures)
+    _require_match("actions.selected_actions", actions["selected_actions"], observations["actions_selected"], failures)
     _require_match(
-        phase, "actions.permissions", actions["permissions"], observations["actions_permissions"], failures, pending
-    )
-    _require_match(
-        phase,
-        "actions.selected_actions",
-        actions["selected_actions"],
-        observations["actions_selected"],
-        failures,
-        pending,
-    )
-    _require_match(
-        phase,
         "actions.workflow_permissions",
         actions["workflow_permissions"],
         observations["workflow_permissions"],
         failures,
-        pending,
     )
 
     security = manifest["security"]
-    alerts = observations["vulnerability_alerts"]
-    if alerts.status != 204:
-        _record_mismatch(phase, "security.vulnerability_alerts", "dependency alerts are not enabled", failures, pending)
+    if observations["vulnerability_alerts"].status != 204:
+        failures.append(Finding("security.vulnerability_alerts", "dependency alerts are not enabled"))
     fixes = observations["automated_security_fixes"]
     if fixes.status != 200 or not _matches({"enabled": True, "paused": False}, fixes.data):
-        _record_mismatch(
-            phase, "security.automated_security_fixes", "Dependabot security updates are not active", failures, pending
-        )
-
+        failures.append(Finding("security.automated_security_fixes", "Dependabot security updates are not active"))
     reporting = observations["private_vulnerability_reporting"]
-    if phase == "pre-cutover" and reporting.status == 404:
-        pending.append(Finding("security.private_vulnerability_reporting", "unavailable until repository is public"))
-    elif reporting.status != 200 or not _matches({"enabled": True}, reporting.data):
+    if reporting.status != 200 or not _matches({"enabled": True}, reporting.data):
         failures.append(Finding("security.private_vulnerability_reporting", "private reporting is not enabled"))
+    _require_match(
+        "security.security_and_analysis",
+        security["security_and_analysis"],
+        observations["security_and_analysis"],
+        failures,
+    )
 
-    analysis = observations["security_and_analysis"]
-    if phase == "pre-cutover" and analysis.status == 200 and analysis.data is None:
-        pending.append(Finding("security.security_and_analysis", "feature state is unavailable while private"))
-    else:
-        _require_match(
-            phase,
-            "security.security_and_analysis",
-            security["security_and_analysis"],
-            analysis,
-            failures,
-            pending,
-        )
+    _require_environments(manifest["environments"], observations["environments"], failures)
 
-    status: Literal["pass", "pending", "fail"] = "fail" if failures else "pending" if pending else "pass"
-    return VerificationReport(1, phase, status, tuple(sorted(failures)), tuple(sorted(pending)))
+    return VerificationReport(REPORT_SCHEMA_VERSION, "fail" if failures else "pass", tuple(sorted(failures)))
 
 
 def evaluate_snapshot(
     manifest: dict[str, Any],
     snapshot: EvidenceSnapshot,
     *,
-    phase: Phase,
-    expected_revision: str | None = None,
+    expected_revision: str,
     now: datetime | None = None,
 ) -> VerificationReport:
-    """Evaluate settings evidence, binding final proof to a fresh public revision."""
-    report = evaluate(manifest, snapshot.observations, phase=phase)
-    if phase == "pre-cutover":
-        return report
-    if not isinstance(expected_revision, str) or _REVISION.fullmatch(expected_revision) is None:
-        raise ValueError("post-cutover verification requires an expected full lowercase Git SHA")
+    """Evaluate settings evidence, binding the proof to a fresh default-branch revision."""
+    if _REVISION.fullmatch(expected_revision) is None:
+        raise ValueError("verification requires an expected full lowercase Git SHA")
+    report = evaluate(manifest, snapshot.observations)
     observed_at = datetime.strptime(snapshot.collected_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
     current_time = now or datetime.now(tz=UTC)
     age_seconds = (current_time - observed_at).total_seconds()
@@ -399,13 +404,7 @@ def evaluate_snapshot(
                 f"settings evidence must be collected within {MAX_SNAPSHOT_AGE_SECONDS} seconds of verification",
             )
         )
-    return VerificationReport(
-        1,
-        phase,
-        "fail" if failures else report.status,
-        tuple(sorted(failures)),
-        report.pending,
-    )
+    return VerificationReport(REPORT_SCHEMA_VERSION, "fail" if failures else "pass", tuple(sorted(failures)))
 
 
 def load_manifest(path: Path) -> dict[str, Any]:

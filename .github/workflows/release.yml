@@ -1,15 +1,9 @@
 name: Release
 
 on:
+  # A dispatch from main is a dry run: it builds and validates one candidate
+  # without attesting or publishing. Only a signed SemVer tag publishes.
   workflow_dispatch:
-    inputs:
-      mode:
-        description: Build a retained candidate or publish it to TestPyPI
-        required: true
-        type: choice
-        options:
-          - dry-run
-          - testpypi
   push:
     tags:
       - "v*.*.*"
@@ -33,8 +27,6 @@ jobs:
     outputs:
       release_tag: ${{ steps.release_plan.outputs.tag }}
       release_version: ${{ steps.release_plan.outputs.version }}
-      approval_run: ${{ steps.approval_metadata.outputs.run }}
-      approval_manifest_sha256: ${{ steps.approval_metadata.outputs.sha256 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -63,24 +55,13 @@ jobs:
             jq -e --arg tag "$GITHUB_REF_NAME" --arg sha "$GITHUB_SHA" \
               '.tag == $tag and .object.sha == $sha and .verification.verified == true' \
               <<< "$tag_object" > /dev/null
+            # Required pull-request checks only ran on commits that reached main.
+            git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main
           fi
-      - name: Read required approval metadata from a production tag
-        id: approval_metadata
-        if: github.event_name == 'push'
-        run: |
-          annotation="$(git for-each-ref --format='%(contents)' "refs/tags/$GITHUB_REF_NAME")"
-          run="$(sed -n 's/^Release-approval-run: \([1-9][0-9]*\)$/\1/p' <<< "$annotation")"
-          digest="$(sed -n 's/^Release-approval-manifest-sha256: \([0-9a-f]\{64\}\)$/\1/p' <<< "$annotation")"
-          [[ "$run" =~ ^[1-9][0-9]*$ ]]
-          [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
-          test "$(wc -l <<< "$run")" -eq 1
-          test "$(wc -l <<< "$digest")" -eq 1
-          echo "run=$run" >> "$GITHUB_OUTPUT"
-          echo "sha256=$digest" >> "$GITHUB_OUTPUT"
       - name: Retain the evidence renderer for partial-run reporting
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-evidence-tools-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          name: release-evidence-tools-${{ github.run_id }}-${{ github.sha }}
           path: |
             scripts/release_promotion_evidence.py
             scripts/_release_identity.py
@@ -92,17 +73,16 @@ jobs:
           retention-days: 90
 
   build:
-    # A dispatch builds one candidate; a production tag may only acquire the
-    # signed tag's protected approval artifact. It never rebuilds source.
-    if: always() && ((github.event_name == 'push' && needs.approval.result == 'success' && needs.compatibility.result == 'success') || (github.event_name == 'workflow_dispatch' && needs.approval.result == 'skipped' && needs.compatibility.result == 'skipped'))
-    needs: [context, approval, compatibility]
+    # Every run builds exactly one candidate. Its artifact name omits the run
+    # attempt: "Re-run failed jobs" downloads the original bundle from the earlier
+    # attempt, and a full re-run fails on the duplicate name instead of replacing it.
+    needs: [context, compatibility]
     outputs:
       bundle_manifest_sha256: ${{ steps.bundle_manifest.outputs.sha256 }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: read
-      actions: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -112,33 +92,7 @@ jobs:
         with:
           version: "0.12.5"
           enable-cache: false
-      - name: Acquire the exact approval artifact named by the signed tag
-        if: github.event_name == 'push'
-        env:
-          APPROVAL_RUN: ${{ needs.context.outputs.approval_run }}
-          APPROVAL_MANIFEST_SHA256: ${{ needs.context.outputs.approval_manifest_sha256 }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          [[ "$APPROVAL_RUN" =~ ^[1-9][0-9]*$ ]]
-          [[ "$APPROVAL_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]]
-          approval_run="$(timeout 60s gh api "repos/$GITHUB_REPOSITORY/actions/runs/$APPROVAL_RUN")"
-          jq -e --arg sha "$GITHUB_SHA" \
-            '.status == "completed" and .conclusion == "success" and .event == "workflow_dispatch" and .head_sha == $sha and (.path | startswith(".github/workflows/release-approval.yml@")) and (.run_attempt | type == "number")' \
-            <<< "$approval_run" > /dev/null
-          approval_attempt="$(jq -r '.run_attempt' <<< "$approval_run")"
-          expected_name="release-approval-input-${APPROVAL_RUN}-${approval_attempt}-${GITHUB_SHA}"
-          artifacts="$(timeout 60s gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/runs/$APPROVAL_RUN/artifacts?per_page=100")"
-          artifact_id="$(jq -r --arg name "$expected_name" '[.[].artifacts[] | select(.name == $name and .expired == false)] | if length == 1 then .[0].id else empty end' <<< "$artifacts")"
-          [[ "$artifact_id" =~ ^[1-9][0-9]*$ ]]
-          timeout 60s gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" > approved-input.zip
-          python scripts/release_approval_archive.py --archive approved-input.zip --destination approved-artifact
-          test "$(sha256sum approved-artifact/approval-input/approval-manifest.json | cut -d' ' -f1)" = "$APPROVAL_MANIFEST_SHA256"
-          uv run python scripts/release_approval_input.py --input approved-artifact/approval-input --repo-root .
-          mkdir candidate
-          cp approved-artifact/approval-input/public-candidate/report.json candidate/report.json
-          cp -R approved-artifact/approval-input/public-candidate/bundle candidate/bundle
       - name: Install the pinned export secret scanner
-        if: github.event_name == 'workflow_dispatch'
         run: |
           archive="$RUNNER_TEMP/gitleaks.tar.gz"
           scanner_root="$RUNNER_TEMP/gitleaks-extract"
@@ -153,7 +107,6 @@ jobs:
           "$scanner_binary" version
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
       - name: Build the one retained public candidate
-        if: github.event_name == 'workflow_dispatch'
         run: |
           uv run python scripts/check_public_candidate.py \
             --repo . \
@@ -165,7 +118,7 @@ jobs:
       - name: Retain the sealed candidate bundle
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-candidate-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          name: release-candidate-${{ github.run_id }}-${{ github.sha }}
           path: |
             candidate/
             scripts/check_release_consumer.py
@@ -181,27 +134,13 @@ jobs:
         id: bundle_manifest
         run: echo "sha256=$(sha256sum candidate/bundle/SHA256SUMS | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
-  approval:
-    if: github.event_name == 'push'
-    needs: context
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    environment: release-approval
-    permissions:
-      contents: read
-    steps:
-      - name: Require the protected production approval boundary
-        run: test "$GITHUB_EVENT_NAME" = "push"
-
   compatibility:
-    if: github.event_name == 'push'
-    needs: [context, approval]
+    needs: context
     uses: ./.github/workflows/compatibility.yml
     permissions:
       contents: read
 
   validate:
-    if: always() && needs.build.result == 'success'
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -213,7 +152,7 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: release-candidate-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          name: release-candidate-${{ github.run_id }}-${{ github.sha }}
           path: .
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
@@ -227,7 +166,7 @@ jobs:
             --json
 
   attest:
-    if: always() && needs.build.result == 'success' && needs.validate.result == 'success' && (github.event_name == 'push' || inputs.mode == 'testpypi')
+    if: github.event_name == 'push'
     needs: [build, validate]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -237,7 +176,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: release-candidate-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          name: release-candidate-${{ github.run_id }}-${{ github.sha }}
           path: .
       - name: Verify sealed distributions without project code
         env:
@@ -252,7 +191,7 @@ jobs:
           subject-path: release-dist
 
   publish_testpypi:
-    if: always() && needs.build.result == 'success' && needs.validate.result == 'success' && needs.attest.result == 'success' && github.event_name == 'workflow_dispatch' && inputs.mode == 'testpypi'
+    if: github.event_name == 'push'
     needs: [build, validate, attest]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -262,7 +201,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: release-candidate-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          name: release-candidate-${{ github.run_id }}-${{ github.sha }}
           path: .
       - name: Verify sealed distributions without project code
         env:
@@ -278,9 +217,51 @@ jobs:
           repository-url: https://test.pypi.org/legacy/
           attestations: true
 
+  consumer_testpypi:
+    if: github.event_name == 'push'
+    needs: [context, build, validate, publish_testpypi]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-candidate-${{ github.run_id }}-${{ github.sha }}
+          path: release-inputs
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Verify the published candidate as a fresh consumer
+        env:
+          PYTHONPATH: release-inputs
+        run: |
+          python -m scripts.check_release_consumer \
+            --bundle release-inputs/candidate/bundle \
+            --candidate-report release-inputs/candidate/report.json \
+            --index-endpoint "https://test.pypi.org/pypi/fieldkit-cli/${{ needs.context.outputs.release_version }}/json" \
+            --download-host test-files.pythonhosted.org \
+            --download-dir consumer-downloads \
+            --verify-downloads \
+            --verify-install \
+            --max-attempts 6 \
+            --poll-interval-seconds 10 \
+            --output consumer-evidence.json \
+            --allow-live-index
+      - name: Retain consumer evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: testpypi-consumer-evidence-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          path: consumer-evidence.json
+          if-no-files-found: error
+          retention-days: 90
+
   publish_pypi:
-    if: always() && needs.build.result == 'success' && needs.validate.result == 'success' && needs.attest.result == 'success' && github.event_name == 'push'
-    needs: [build, validate, attest]
+    # The pypi environment's required review is the one human approval. The
+    # reviewer sees the bundle digest and the passing TestPyPI consumer run.
+    if: github.event_name == 'push'
+    needs: [build, validate, attest, consumer_testpypi]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     environment: pypi
@@ -289,7 +270,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: release-candidate-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          name: release-candidate-${{ github.run_id }}-${{ github.sha }}
           path: .
       - name: Verify sealed distributions without project code
         env:
@@ -305,7 +286,7 @@ jobs:
           attestations: true
 
   consumer_pypi:
-    if: always() && needs.context.result == 'success' && needs.build.result == 'success' && needs.validate.result == 'success' && needs.publish_pypi.result == 'success' && github.event_name == 'push'
+    if: github.event_name == 'push'
     needs: [context, build, validate, publish_pypi]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -314,7 +295,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: release-candidate-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          name: release-candidate-${{ github.run_id }}-${{ github.sha }}
           path: release-inputs
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -339,13 +320,13 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: consumer-evidence-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          name: pypi-consumer-evidence-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
           path: consumer-evidence.json
           if-no-files-found: error
           retention-days: 90
 
   github_release:
-    if: always() && needs.build.result == 'success' && needs.validate.result == 'success' && needs.attest.result == 'success' && needs.publish_pypi.result == 'success' && needs.consumer_pypi.result == 'success' && github.event_name == 'push'
+    if: github.event_name == 'push'
     needs: [build, validate, attest, publish_pypi, consumer_pypi]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -354,7 +335,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: release-candidate-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          name: release-candidate-${{ github.run_id }}-${{ github.sha }}
           path: .
       - name: Verify sealed distributions without project code
         env:
@@ -367,11 +348,12 @@ jobs:
       - name: Publish the verified GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" release-dist/* --generate-notes
+        # No checkout here, so gh must be told the repository explicitly.
+        run: gh release create "$GITHUB_REF_NAME" release-dist/* --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes
 
   promotion_evidence:
     if: always() && github.event_name == 'push'
-    needs: [build, validate, attest, publish_pypi, consumer_pypi, github_release]
+    needs: [build, validate, attest, publish_testpypi, consumer_testpypi, publish_pypi, consumer_pypi, github_release]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -382,13 +364,13 @@ jobs:
         continue-on-error: true
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: release-evidence-tools-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          name: release-evidence-tools-${{ github.run_id }}-${{ github.sha }}
           path: release-inputs
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         id: candidate
         continue-on-error: true
         with:
-          name: release-candidate-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          name: release-candidate-${{ github.run_id }}-${{ github.sha }}
           path: release-inputs
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -400,6 +382,8 @@ jobs:
           BUILD: ${{ needs.build.result }}
           VALIDATE: ${{ needs.validate.result }}
           ATTEST: ${{ needs.attest.result }}
+          PUBLISH_TESTPYPI: ${{ needs.publish_testpypi.result }}
+          CONSUMER_TESTPYPI: ${{ needs.consumer_testpypi.result }}
           PUBLISH_PYPI: ${{ needs.publish_pypi.result }}
           CONSUMER_PYPI: ${{ needs.consumer_pypi.result }}
           GITHUB_RELEASE: ${{ needs.github_release.result }}
@@ -415,6 +399,8 @@ jobs:
             --outcome "build=$BUILD" \
             --outcome "validate=$VALIDATE" \
             --outcome "attest=$ATTEST" \
+            --outcome "publish_testpypi=$PUBLISH_TESTPYPI" \
+            --outcome "consumer_testpypi=$CONSUMER_TESTPYPI" \
             --outcome "publish_pypi=$PUBLISH_PYPI" \
             --outcome "consumer_pypi=$CONSUMER_PYPI" \
             --outcome "github_release=$GITHUB_RELEASE" \
@@ -426,6 +412,8 @@ jobs:
           BUILD: ${{ needs.build.result }}
           VALIDATE: ${{ needs.validate.result }}
           ATTEST: ${{ needs.attest.result }}
+          PUBLISH_TESTPYPI: ${{ needs.publish_testpypi.result }}
+          CONSUMER_TESTPYPI: ${{ needs.consumer_testpypi.result }}
           PUBLISH_PYPI: ${{ needs.publish_pypi.result }}
           CONSUMER_PYPI: ${{ needs.consumer_pypi.result }}
           GITHUB_RELEASE: ${{ needs.github_release.result }}
@@ -439,6 +427,8 @@ jobs:
             --outcome "build=$BUILD" \
             --outcome "validate=$VALIDATE" \
             --outcome "attest=$ATTEST" \
+            --outcome "publish_testpypi=$PUBLISH_TESTPYPI" \
+            --outcome "consumer_testpypi=$CONSUMER_TESTPYPI" \
             --outcome "publish_pypi=$PUBLISH_PYPI" \
             --outcome "consumer_pypi=$CONSUMER_PYPI" \
             --outcome "github_release=$GITHUB_RELEASE" \
@@ -450,6 +440,8 @@ jobs:
           BUILD: ${{ needs.build.result }}
           VALIDATE: ${{ needs.validate.result }}
           ATTEST: ${{ needs.attest.result }}
+          PUBLISH_TESTPYPI: ${{ needs.publish_testpypi.result }}
+          CONSUMER_TESTPYPI: ${{ needs.consumer_testpypi.result }}
           PUBLISH_PYPI: ${{ needs.publish_pypi.result }}
           CONSUMER_PYPI: ${{ needs.consumer_pypi.result }}
           GITHUB_RELEASE: ${{ needs.github_release.result }}
@@ -461,12 +453,15 @@ jobs:
 
           outcomes = {
               "build": os.environ["BUILD"], "validate": os.environ["VALIDATE"],
-              "attest": os.environ["ATTEST"], "publish_pypi": os.environ["PUBLISH_PYPI"],
+              "attest": os.environ["ATTEST"], "publish_testpypi": os.environ["PUBLISH_TESTPYPI"],
+              "consumer_testpypi": os.environ["CONSUMER_TESTPYPI"], "publish_pypi": os.environ["PUBLISH_PYPI"],
               "consumer_pypi": os.environ["CONSUMER_PYPI"], "github_release": os.environ["GITHUB_RELEASE"],
           }
           boundary_actions = {
               "build": "scripts/check_public_candidate.py", "validate": "scripts/release_bundle.py",
               "attest": "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6",
+              "publish_testpypi": "pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33",
+              "consumer_testpypi": "scripts/check_release_consumer.py",
               "publish_pypi": "pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33",
               "consumer_pypi": "scripts/check_release_consumer.py", "github_release": "gh release create",
           }
