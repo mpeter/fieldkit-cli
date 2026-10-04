@@ -17,10 +17,17 @@ and specific to the requested command.
 
 ## Establish the local contract
 
-Read the repository [agent guide](../../../../AGENTS.md) and
-[exit codes](../../../../docs/reference/exit-codes.md). Inspect the live Click tree and adjacent
-commands. Those public sources override generic CLI advice. In particular, fieldkit's
-top-level handler maps Click usage errors to data error status 3.
+Read the contract in the fieldkit code checkout, not beside this installed
+skill: an installed skill lives in a workspace, apart from the code. Use the
+current directory when it contains `src/fieldkit/` and `AGENTS.md`; otherwise
+resolve the configured checkout with `fieldkit.config.get_fieldkit_root()` in
+the active fieldkit environment.
+
+From that checkout, read `AGENTS.md` and `docs/reference/exit-codes.md`, then
+inspect its live Click tree and adjacent commands. If the checkout or either
+document is missing, report the missing code checkout before drafting a
+contract. Those public sources override generic CLI advice. In particular,
+fieldkit's top-level handler maps Click usage errors to data error status 3.
 
 Clarify only decisions that would change the interface. Infer the rest from
 adjacent commands and state assumptions explicitly.
