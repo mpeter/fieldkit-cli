@@ -27,6 +27,16 @@ Load only the schemas needed for the selected capability.
 | Library documentation and code examples | project or official docs, `gh`; see [developer search](references/developer-search.md) for specialized capabilities |
 | Proprietary account intelligence or enterprise data | configured authorized MCP capability, when available; see [account intelligence](references/account-intelligence.md) and [enterprise data](references/enterprise-data.md) |
 
+## MCP exceptions
+
+Only these capabilities justify MCP, and only through a configured authorized route:
+
+- MCP-NECESSITY account-intelligence: Backstory and Product Pages have no installed CLI or public API route. See [account intelligence](references/account-intelligence.md).
+- MCP-NECESSITY enterprise-data: Rover, Snowflake, and authenticated Jira data have no installed CLI. See [enterprise data](references/enterprise-data.md).
+- MCP-NECESSITY code-pattern-index: grep.app's cross-repository pattern index differs from `gh search code`. See [developer search](references/developer-search.md).
+- MCP-NECESSITY curated-library-docs: Context7's curated corpus adds coverage beyond project and official docs. See [developer search](references/developer-search.md).
+- MCP-NECESSITY independent-search-index: Brave is an independent index when `tvly` results need another source. See [web search](references/web-search.md).
+
 ## Select a capability
 
 1. Identify the exact operation, data source, workspace, identity, and whether it

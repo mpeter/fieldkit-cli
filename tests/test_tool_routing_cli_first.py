@@ -2,6 +2,7 @@
 
 import json
 import re
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,16 @@ pytestmark = pytest.mark.unit
 
 _SKILLS_ROOT = Path(__file__).parents[1] / "src" / "fieldkit" / "skills"
 _TOOL_ROUTING_ROOT = _SKILLS_ROOT / "tool-routing"
+_ROOT_SKILL = _TOOL_ROUTING_ROOT / "SKILL.md"
+# The approved MCP exception set: each capability and the file that scopes it.
+_APPROVED_MCP_EXCEPTIONS = {
+    "account-intelligence": "references/account-intelligence.md",
+    "enterprise-data": "references/enterprise-data.md",
+    "code-pattern-index": "references/developer-search.md",
+    "curated-library-docs": "references/developer-search.md",
+    "independent-search-index": "references/web-search.md",
+}
+_MARKER_PATTERN = re.compile(r"^- MCP-NECESSITY ([a-z][a-z-]*): (.+)$", re.MULTILINE)
 _STALE_ROUTES = (
     "fieldkit-sales",
     "fieldkit-dataverse",
@@ -65,6 +76,57 @@ def _assert_route_inventory(instruction_text: dict[Path, str]) -> None:
     )
     unsupported_tools = (backstory_tools - _BACKSTORY_ACCOUNT_TOOLS) | bare_opportunity_calls
     assert not unsupported_tools, f"unsupported Backstory calls remain: {sorted(unsupported_tools)}"
+
+
+def _assert_mcp_exceptions(instruction_text: dict[Path, str]) -> None:
+    markers = _MARKER_PATTERN.findall(instruction_text.get(_ROOT_SKILL, ""))
+    names = [name for name, _ in markers]
+    duplicates = sorted({name for name in names if names.count(name) > 1})
+    assert not duplicates, f"duplicate MCP-NECESSITY markers: {duplicates}"
+    unexpected = sorted(set(names) ^ set(_APPROVED_MCP_EXCEPTIONS))
+    assert not unexpected, f"MCP exception inventory differs from the approved set: {unexpected}"
+    for name, rationale in markers:
+        assert f"]({_APPROVED_MCP_EXCEPTIONS[name]})" in rationale, (
+            f"MCP-NECESSITY {name} must link its capability file"
+        )
+    stray = sorted(
+        path.name for path, text in instruction_text.items() if path != _ROOT_SKILL and "MCP-NECESSITY" in text
+    )
+    assert not stray, f"MCP-NECESSITY markers outside the root skill: {stray}"
+
+
+def test_shipped_mcp_exceptions_match_the_approved_set() -> None:
+    _assert_mcp_exceptions(_load_instruction_text())
+
+
+def _root_markers() -> str:
+    return "\n".join(line for line in _ROOT_SKILL.read_text(encoding="utf-8").splitlines() if "MCP-NECESSITY" in line)
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expected_error"),
+    [
+        (lambda text: text.split("\n", 1)[1], "inventory differs"),
+        (lambda text: text + "\n" + text.split("\n", 1)[0], "duplicate MCP-NECESSITY"),
+        (lambda text: text + "\n- MCP-NECESSITY calendar: Use MCP. See [x](references/x.md).", "inventory differs"),
+        (
+            lambda text: text.replace("references/web-search.md", "references/non-mcp-tools.md"),
+            "must link its capability file",
+        ),
+    ],
+)
+def test_mcp_exception_inventory_rejects_drift(mutate: Callable[[str], str], expected_error: str) -> None:
+    with pytest.raises(AssertionError, match=expected_error):
+        _assert_mcp_exceptions({_ROOT_SKILL: mutate(_root_markers())})
+
+
+def test_mcp_exception_markers_stay_in_the_root_skill() -> None:
+    instruction_text = {
+        _ROOT_SKILL: _root_markers(),
+        _TOOL_ROUTING_ROOT / "references" / "web-search.md": "- MCP-NECESSITY independent-search-index: Brave.",
+    }
+    with pytest.raises(AssertionError, match="outside the root skill"):
+        _assert_mcp_exceptions(instruction_text)
 
 
 def test_shipped_instruction_tree_has_no_stale_routes_or_opportunity_calls() -> None:
