@@ -58,7 +58,7 @@ Stop here — no need to re-bootstrap.
 
 ### 4. Load Account Context (First Run Only)
 
-Groups needed for this step: **fieldkit-sales** (Backstory in Step 6). Account and pursuit files are read directly from disk (native file reads).
+Optional account-intelligence route for this step: **configured account-intelligence route** (Backstory in Step 6). Account and pursuit files are read directly from disk (native file reads).
 
 Read config files directly (YAML):
 1. `config/identity.yaml` — operator identity, role, company, engagement motions
@@ -95,9 +95,12 @@ Skip terms already covered in account.md files, stakeholder maps, or accounts.ya
 
 ### 6. Enrich from Live Sources
 
-Pull live context from available tools. This is not optional — it's how the system gets current.
+Pull live context from available, authorized tools; note unavailable sources so
+the operator can distinguish current context from gaps.
 
-**Backstory (People.ai):** For each account in `config/accounts.yaml`:
+**Backstory (People.ai):** When the configured account-intelligence route is
+available and authorized, use its exposed reads for each account in
+`config/accounts.yaml`:
 - `find_account` → get `peopleai_account_id`
 - `get_account_status` → risks, next steps, trending topics
 - `get_recent_account_activity` → last 30 days of engagement
@@ -149,3 +152,14 @@ For comprehensive scan workflow and detailed bootstrap steps:
 ```
 Read skills/start/bootstrap-details.md
 ```
+
+## Route contract
+
+Use [tool routing](../tool-routing/SKILL.md) and the active harness configuration
+to select the configured account-intelligence route, when available and authorized.
+Use only its permitted read capabilities; tool names and aliases come from that
+configuration. If a source or required read is unavailable, note the gap and
+continue with authorized local and CLI sources. Do not substitute another group
+or identity. Google operations use the configured authorized identity; Google
+writes use `gws`, retain the workflow's approval boundary, and require read-back
+verification.

@@ -28,29 +28,33 @@ with live CLI parity and SHALL NOT require mcpjungle for those operations.
 
 - **WHEN** an agent needs grep.app's cross-repository pattern index rather than an
   ordinary GitHub operation or code search
-- **THEN** the guidance may select direct global `gh_grep`
-- **AND** does not require an mcpjungle preflight
+- **THEN** the guidance may select the configured authorized `code-pattern-index`
+  capability
+- **AND** does not assume a direct server or fixed alias
 
 ### Requirement: MCP-only routes carry a necessity boundary
 
-Every retained MCP route SHALL identify the exact capability unavailable through the
-installed CLI set and SHALL scope MCP use to that capability.
+Every retained MCP exception SHALL identify the exact capability unavailable through
+the installed CLI set and SHALL scope MCP use to that capability. Exceptions name
+capabilities, not gateway groups or servers: the route is whichever configured,
+authorized route the active harness exposes for that capability.
 
-Each retained route SHALL use a machine-checkable `MCP-NECESSITY` marker. Source
-tests SHALL reject missing or duplicate markers, root-skill routes outside the
-approved exception set, blanket gateway prerequisites, retained routes outside
-their approved capability files, or CLI-covered MCP instructions anywhere in the
-shipped skill tree.
+Each retained exception SHALL use a machine-checkable `MCP-NECESSITY` marker in
+the root skill that links its approved capability file. Source tests SHALL reject
+missing or duplicate markers, exceptions outside the approved set, markers outside
+the root skill, markers that do not link their capability file, retired fixed
+routes, blanket gateway prerequisites, or CLI-covered MCP instructions anywhere in
+the shipped skill tree.
 
 #### Scenario: Gateway and direct routes
 
 - **WHEN** an agent needs Backstory/Product Pages, Rover/Snowflake analytics,
   authenticated Jira data, Brave's independent index, Context7's curated corpus, or
   grep.app's cross-repository code-pattern index
-- **THEN** the guidance names the relevant gateway group or direct global MCP
+- **THEN** the guidance names the matching `MCP-NECESSITY` capability
 - **AND** states why the available CLI routes are not equivalent
-- **AND** requires mcpjungle preflight only for `fieldkit-sales` and
-  `fieldkit-dataverse`
+- **AND** directs the agent to verify a configured authorized route for that
+  capability, reporting a missing capability when none exists
 
 #### Scenario: Retired vault graph query
 
@@ -76,10 +80,12 @@ exceptions.
 
 #### Scenario: MCP exception inventory validation
 
-- **WHEN** the root skill adds, removes, or renames a retained MCP route
-- **THEN** the source test compares gateway groups and direct global servers to the
-  approved five-route exception set
-- **AND** requires exactly one matching `MCP-NECESSITY` marker for every route
+- **WHEN** the root skill adds, removes, or renames a retained MCP exception
+- **THEN** the source test compares its `MCP-NECESSITY` markers to the approved
+  five-capability set: `account-intelligence`, `enterprise-data`,
+  `code-pattern-index`, `curated-library-docs`, and `independent-search-index`
+- **AND** requires exactly one marker for every capability, linked to its
+  capability file
 
 #### Scenario: Linked instruction-tree validation
 

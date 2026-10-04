@@ -1228,12 +1228,12 @@
           "classification": "generated_reference",
           "id": "docs.dependency.map.md.block-5",
           "language": "bash",
-          "sha256": "10d02f6e1804a1c35ab5a8549c27a5e79555224271ce60d74168561b2616265a",
+          "sha256": "68a63f1b5e5ae45f569236ea7f5172630f9cd4904595be8144ed6cd2177c4fbb",
           "verification_id": "automated.generated-dependency-map"
         }
       ],
       "reader_action": "Inspect the generated module dependency graph.",
-      "source_fingerprint": "sha256:8dda2be370cdcfc437de926e2f6d807a87253edc0cb3cb8a47a5b72fe5a3e37d",
+      "source_fingerprint": "sha256:1522d38210b0b4bbb79a81212ece4c76abcc5ddf67ee8bef7da274bd0f91e30c",
       "sources": [
         "tach.toml",
         "src/fieldkit/**/*.py",

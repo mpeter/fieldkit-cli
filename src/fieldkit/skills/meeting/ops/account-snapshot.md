@@ -21,7 +21,7 @@ Answers: what are my projects doing, where are my deals, what's the email signal
 - `--since YYYY-MM-DD` — custom email lookback window (default: 14 days)
 - `--no-backstory` — skip Backstory API calls (offline/fast mode)
 
-Groups needed: **fieldkit-sales** (Backstory — skipped with --no-backstory).
+Optional account-intelligence route: **configured account-intelligence route** (Backstory — skipped with --no-backstory).
 Project + pursuit files and watcher alerts are read directly from disk (native file reads).
 
 ---
@@ -69,11 +69,11 @@ Surface any contacts in COLD or cooling range who are named in active pursuits.
 
 ### 4. Backstory signal (skip if --no-backstory)
 
-Via **fieldkit-sales** group:
+Via **configured account-intelligence route**:
 ```
-backstory__backstory__find_account(<account name>)
-backstory__backstory__get_account_status(peopleai_account_id)
-backstory__backstory__get_recent_account_activity(peopleai_account_id)
+find_account(<account name>)
+get_account_status(peopleai_account_id)
+get_recent_account_activity(peopleai_account_id)
 ```
 
 Extract: engagement score, recent topics, risks flagged by Backstory.
@@ -138,3 +138,7 @@ Account    Projects  Pursuits  Backstory  Alerts
 <account-slug>       3 active  2 deals   72/100     2 stalls
 <account-slug>  1 active  1 deal    45/100     1 zombie
 ```
+
+Account-intelligence reads are conditional on a configured, authorized route
+and its exposed capabilities. If unavailable, note the gap and continue with
+other authorized sources. See [tool routing](../../tool-routing/SKILL.md).

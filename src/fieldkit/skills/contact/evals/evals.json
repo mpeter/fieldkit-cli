@@ -2,6 +2,28 @@
   "skill_name": "contact",
   "static_checks": [
     {
+      "id": "configured_route_contract",
+      "type": "contains_all",
+      "patterns": [
+        "tool-routing/SKILL.md",
+        "active harness configuration",
+        "when available and authorized",
+        "permitted read capabilities",
+        "note the gap"
+      ],
+      "message": "Must use configured authorized reads and report unavailable sources"
+    },
+    {
+      "id": "google_write_identity",
+      "type": "contains_all",
+      "patterns": [
+        "configured authorized identity",
+        "writes use `gws`",
+        "read-back"
+      ],
+      "message": "Must retain authorized identity, CLI writes, and verification"
+    },
+    {
       "id": "command_correct",
       "type": "contains",
       "pattern": "fieldkit contact find",
@@ -39,10 +61,10 @@
       "id": "research_groups",
       "type": "contains_all",
       "patterns": [
-        "fieldkit-sales",
+        "configured account-intelligence route",
         "tvly search"
       ],
-      "message": "Must use the Backstory MCP exception and tvly CLI"
+      "message": "Must use the optional authorized Backstory reads and tvly CLI"
     },
     {
       "id": "slackcli",
@@ -128,7 +150,7 @@
       "expected_behavior": "Pulls account context, searches Backstory and web for VMware intel, produces battlecard saved to the account artifacts folder",
       "assertions": [
         "Reads the {{primary_account}} account.md directly from disk (the account named in the prompt)",
-        "Queries Backstory for competitor mentions via fieldkit-sales",
+        "Queries Backstory for competitor mentions via the configured account-intelligence route when available and authorized",
         "Uses `tvly search` for VMware competitive intelligence",
         "Runs slackcli search for VMware field intel",
         "Outputs a structured battlecard",
@@ -161,6 +183,18 @@
         "Runs all pipeline stages: discover, contacts --full, apply-web, enrich, generate-report",
         "Uses the `tvly search` CLI for web enrichment",
         "References data_root/contact-enrich/ for output files, not fieldkit/enrich/"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Run /contact for the configured account. The account-intelligence and directory routes are unavailable; use the available local and CLI sources.",
+      "expected_behavior": "Reports unavailable sources and continues with authorized local and CLI inputs while preserving identity and write approval boundaries",
+      "assertions": [
+        "Checks active configuration before selecting an account-intelligence route",
+        "Reports account-intelligence or directory reads as unavailable rather than inventing data",
+        "Continues with available authorized local and CLI sources",
+        "Does not borrow another group or identity or enable a new integration",
+        "Retains approval boundaries and reads back any authorized Google write through gws"
       ]
     }
   ]

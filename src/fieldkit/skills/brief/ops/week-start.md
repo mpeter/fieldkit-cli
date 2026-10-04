@@ -26,7 +26,7 @@ per the D4 fold mechanics — it is a brief cadence, so it lives with the brief.
 - `--skip-snapshots` — skip per-account snapshot generation (faster; skip if already done)
 - `--account NAME` — run account snapshot for one account only instead of all
 
-Routes needed: **fieldkit-sales** (Backstory MCP exception) and `gws tasks` (Tasks sync).
+Routes needed: **configured account-intelligence route** (optional authorized Backstory reads) and `gws tasks` (Tasks sync).
 Vault markdown files are read directly from disk (native file reads).
 
 ---
@@ -139,3 +139,7 @@ Commit (negotiate+): $N | Weighted: $N | Deals closing this month: N
 4. [priority]
 5. [priority]
 ```
+
+Account-intelligence reads are conditional on a configured, authorized route
+and its exposed capabilities. If unavailable, note the gap and continue with
+other authorized sources. See [tool routing](../../tool-routing/SKILL.md).

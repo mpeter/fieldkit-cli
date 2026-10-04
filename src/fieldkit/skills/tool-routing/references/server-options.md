@@ -1,24 +1,20 @@
-# MCP exception routes
+# Discover configured MCP capabilities
 
-MCP is available only for five capabilities that lack CLI parity:
+Select the operation before loading MCP schemas. Inspect the active harness
+configuration and exposed tool descriptions for a route authorized in the current
+workspace. Alias names, service registration, read allowlists, and identity vary
+by installation; this skill does not guarantee a group inventory or direct server.
 
-| Route | Narrow purpose |
-|---|---|
-| `fieldkit-sales` | Proprietary Backstory and Product Pages data |
-| `fieldkit-dataverse` | Rover, Snowflake, and authenticated Jira data |
-| direct global `gh_grep` | Cross-repository public code-pattern search |
-| direct global `brave_search` | Brave independent-index search after Tavily |
-| direct global `context7` | Context7 curated library corpus |
+If the selected route uses MCPJungle, inspect that gateway's registered groups and
+the selected group's tools through its installed CLI help. If the harness loads a
+server directly, inspect the tools actually exposed in that client. Gateway health,
+configuration declarations, loaded schemas, and upstream authentication are
+separate checks; none proves the others.
 
-Select the capability first. Check the gateway only for a `fieldkit-*` route:
+Confirm the selected capability's data source, allowed operations, and authenticated
+identity before use. Do not borrow another workspace's registration or widen a
+read-only group for a write. When the capability is absent, report the missing route
+and managed setup dependency instead of creating a new connection.
 
-```bash
-systemctl --user status mcpjungle
-mcpjungle list groups
-```
-
-A running gateway does not prove that a group is registered or authenticated.
-For a direct global route, inspect the server loaded by the client instead.
-If the required group is missing, stop with the relevant dependency. Do not use
-MCP for Google Workspace, browser automation, Tavily, Slack, GitHub, public code
-search already covered by `gh`, or ordinary vault work.
+Backstory account evidence can supplement Salesforce; Salesforce remains the deal
+system of record. See [account intelligence](account-intelligence.md).

@@ -16,9 +16,9 @@ read-back or direct result check.
 ## GitHub
 
 Use `gh` for issues, pull requests, releases, workflow state, API calls, and
-ordinary public code search. Use Git for local history and changes. Use the
-direct global `gh_grep` MCP only when a cross-repository code-pattern search is
-materially better suited to grep.app's index; it is not a gateway group.
+ordinary public code search. Use Git for local history and changes. For specialized
+code-pattern indexes, discover a configured authorized capability as described in
+[developer search](developer-search.md).
 
 ```bash
 gh issue list
