@@ -1,8 +1,9 @@
-"""Shipped skills must keep working links after installation.
+"""Shipped skill links must not leave the skills tree.
 
-`fieldkit skill install` copies each skill directory into a workspace beside the
-other skills and nothing else, so a link that leaves the skills tree points at a
-file the install never carries.
+`fieldkit skill install` carries skills and nothing else, so a link that leaves
+the skills tree points at a file no install layout provides. This guards only
+that boundary: links between sibling skills are a separate, layout-dependent
+contract (flat targets do not rewrite them).
 """
 
 import re
