@@ -141,6 +141,14 @@ def _collect_calendar_meetings(
     user_email: str,
 ) -> list[dict[str, Any]] | str:
     """Fetch external calendar meetings via MCP; return string on any failure."""
+    calendar_session = _configured_calendar_session()
+    if isinstance(calendar_session, str):
+        return calendar_session
+    return _fetch_calendar_meetings(calendar_session, target_date, internal_domains, user_email)
+
+
+def _configured_calendar_session() -> MCPSession | str:
+    """Resolve the runtime calendar group, or return its user-facing configuration error."""
     try:
         group = get_mcp_work_group("calendar")
     except ConfigError:
@@ -149,7 +157,16 @@ def _collect_calendar_meetings(
     if group is None:
         log.warning("[Calendar] mcp_calendar_group is not configured")
         return "_Calendar unavailable (mcp_calendar_group is not configured)_"
-    calendar_session = MCPSession(f"{get_mcp_gateway_base()}/v0/groups/{group}/mcp")
+    return MCPSession(f"{get_mcp_gateway_base()}/v0/groups/{group}/mcp")
+
+
+def _fetch_calendar_meetings(
+    calendar_session: MCPSession,
+    target_date: date,
+    internal_domains: set[str],
+    user_email: str,
+) -> list[dict[str, Any]] | str:
+    """Fetch meetings and close the session on success or collection failure."""
     try:
         calendar_session.initialize()
         meetings = fetch_external_meetings(calendar_session, target_date, internal_domains, user_email)

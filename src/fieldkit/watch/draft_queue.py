@@ -223,6 +223,21 @@ def _emit_run_json(
     )
 
 
+def _record_fatal_run(*, elapsed: float, as_json: bool) -> None:
+    """Persist a failed startup and optionally emit the same outcome as JSON."""
+    write_run_status(
+        watcher="draft-queue",
+        outcome="fatal",
+        records_checked=0,
+        alerts_generated=0,
+        failures=1,
+        elapsed_seconds=elapsed,
+        dry_run=False,
+    )
+    if as_json:
+        _emit_run_json(outcome="fatal", checked=0, alerts=0, failures=1, elapsed=elapsed, dry_run=False)
+
+
 def _run_draft_queue(*, dry_run: bool, account: str | None = None, as_json: bool = False) -> int:
     """Core watcher logic; returns POSIX exit code.
 
@@ -263,18 +278,7 @@ def _run_draft_queue(*, dry_run: bool, account: str | None = None, as_json: bool
                 "Cannot determine user_google_email for MCP call. "
                 "Set FIELDKIT_USER_EMAIL to your Google Workspace email address."
             )
-            elapsed = time.monotonic() - start
-            write_run_status(
-                watcher="draft-queue",
-                outcome="fatal",
-                records_checked=0,
-                alerts_generated=0,
-                failures=1,
-                elapsed_seconds=elapsed,
-                dry_run=False,
-            )
-            if as_json:
-                _emit_run_json(outcome="fatal", checked=0, alerts=0, failures=1, elapsed=elapsed, dry_run=False)
+            _record_fatal_run(elapsed=time.monotonic() - start, as_json=as_json)
             return 1
 
         # --- Open MCP session ---
@@ -284,18 +288,7 @@ def _run_draft_queue(*, dry_run: bool, account: str | None = None, as_json: bool
                 raise ConfigError("mcp_mail_group is not configured; set it in fieldkit config to enable draft-queue")
         except ConfigError:
             # A missing or malformed group is permanent configuration, not a retryable partial run.
-            elapsed = time.monotonic() - start
-            write_run_status(
-                watcher="draft-queue",
-                outcome="fatal",
-                records_checked=0,
-                alerts_generated=0,
-                failures=1,
-                elapsed_seconds=elapsed,
-                dry_run=False,
-            )
-            if as_json:
-                _emit_run_json(outcome="fatal", checked=0, alerts=0, failures=1, elapsed=elapsed, dry_run=False)
+            _record_fatal_run(elapsed=time.monotonic() - start, as_json=as_json)
             raise
         session = MCPSession(f"{_get_mcp_gateway_base()}/v0/groups/{group}/mcp")
         try:
@@ -306,18 +299,7 @@ def _run_draft_queue(*, dry_run: bool, account: str | None = None, as_json: bool
                 "Verify the configured MCP gateway endpoint is available.",
                 exc,
             )
-            elapsed = time.monotonic() - start
-            write_run_status(
-                watcher="draft-queue",
-                outcome="fatal",
-                records_checked=0,
-                alerts_generated=0,
-                failures=1,
-                elapsed_seconds=elapsed,
-                dry_run=False,
-            )
-            if as_json:
-                _emit_run_json(outcome="fatal", checked=0, alerts=0, failures=1, elapsed=elapsed, dry_run=False)
+            _record_fatal_run(elapsed=time.monotonic() - start, as_json=as_json)
             return 1
 
         # --- Search stale drafts ---
