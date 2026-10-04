@@ -2,16 +2,13 @@
 
 import json
 import logging
-import math
 import sqlite3
 import threading
-from collections.abc import Iterator
-from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
-from contextvars import copy_context
-from dataclasses import dataclass, field
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 import click
 
@@ -20,6 +17,8 @@ from fieldkit.commands.ingest._output import BatchOutcomes, human_echo, json_out
 from fieldkit.config import ConfigError, get_ingest_provider_failure_threshold
 from fieldkit.config.optional_dependencies import GOOGLE_IMPORT_ROOTS, require_optional_profile
 from fieldkit.errors import AuthError, FieldkitError, LLMError
+from fieldkit.ingest import batch as ingest_batch
+from fieldkit.ingest.batch import SourceStatus, WorkerContext
 from fieldkit.ingest.constants import (
     AMBIENT_TRANSCRIPT_PIPELINE,
     GEMINI_TRANSCRIPT_PIPELINE,
@@ -53,21 +52,6 @@ class _ProcessResult:
     completed: bool
     degraded: bool
 
-
-# ---------------------------------------------------------------------------
-# Concurrency constants
-# ---------------------------------------------------------------------------
-
-# Maximum workers: keeps Vertex AI LLM calls well under the 60 RPM limit.
-# Each transcript makes 2 sequential LLM calls; 8 workers = 16 concurrent
-# calls in flight at peak, leaving headroom for retries and bursts.
-_MAX_WORKERS = 8
-
-# Target wall-clock minutes for a full queue run (used to auto-size workers).
-_TARGET_MINUTES = 15
-
-# Estimated minutes per transcript (two LLM calls, Drive fetch, file I/O).
-_MINUTES_PER_TRANSCRIPT = 3.0
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -595,23 +579,6 @@ def _run_transcript_ingest(
         conn.close()
 
 
-def _dynamic_worker_count(queue_size: int) -> int:
-    """Compute worker count based on queue depth and target wall-clock time.
-
-    Targets _TARGET_MINUTES total run time given _MINUTES_PER_TRANSCRIPT per
-    item, capped at _MAX_WORKERS to stay under Vertex AI rate limits.
-
-    Examples (with defaults TARGET=15, PER=3, MAX=8):
-      1-5   items →  1 worker  (already fast)
-      6-10  items →  2 workers
-      11-15 items →  3 workers
-      26-30 items →  6 workers
-      40+   items →  8 workers (cap)
-    """
-    needed = math.ceil(queue_size * _MINUTES_PER_TRANSCRIPT / _TARGET_MINUTES)
-    return max(1, min(_MAX_WORKERS, needed))
-
-
 def _batch_stopped(batch: BatchProviderFailures | None) -> bool:
     return batch is not None and batch.stopped
 
@@ -681,42 +648,6 @@ def _run_interactive_loop(
     return n_processed, n_degraded, n_skipped, n_errors
 
 
-_SourceStatus = Literal["pending", "skipped", "failed", "completed", "degraded"]
-
-
-@dataclass(frozen=True)
-class _WorkerContext:
-    data_root: Path
-    db_path: Path | None
-    pipeline_version: str
-    file_lock: "threading.Lock"
-    batch: BatchProviderFailures
-
-
-@dataclass
-class _ParallelState:
-    statuses: dict[str, _SourceStatus] = field(default_factory=dict)
-    fatal: FieldkitError | None = None
-    interrupted: bool = False
-
-    def collect(self, future: Future[tuple[str, _SourceStatus]], src: SourceRecord) -> None:
-        if future.cancelled():
-            return
-        try:
-            source_id, status = _completed_source(future, src.source_id)
-            self.statuses[source_id] = status
-        except FieldkitError as exc:
-            self.fatal = _preferred_fatal(self.fatal, exc)
-
-
-def _preferred_fatal(current: FieldkitError | None, candidate: FieldkitError) -> FieldkitError:
-    if current is None or isinstance(candidate, AuthError):
-        return candidate
-    if isinstance(candidate, LLMError) and candidate.category == "auth":
-        return candidate
-    return current
-
-
 def _authenticated_docs_service() -> object:
     from fieldkit.ingest.docs import get_docs_service
 
@@ -736,8 +667,8 @@ def _restore_source_error(conn: sqlite3.Connection, source_id: str, error: Excep
 
 
 def _claimed_source(
-    src: SourceRecord, conn: sqlite3.Connection, service: object, context: _WorkerContext
-) -> _SourceStatus:
+    src: SourceRecord, conn: sqlite3.Connection, service: object, context: WorkerContext
+) -> SourceStatus:
     from fieldkit.ingest.sources import claim_pending_source
 
     if not claim_pending_source(conn, src.source_id):
@@ -761,11 +692,9 @@ def _claimed_source(
     return "degraded" if result.degraded else "completed"
 
 
-def _source_worker(src: SourceRecord, context: _WorkerContext) -> tuple[str, _SourceStatus]:
+def _source_worker(src: SourceRecord, context: WorkerContext) -> tuple[str, SourceStatus]:
     from fieldkit.ingest.db import get_db
 
-    if context.batch.stopped:
-        return src.source_id, "pending"
     service = _authenticated_docs_service()
     conn = get_db(context.db_path)
     try:
@@ -783,63 +712,20 @@ def _report_llm_source_error(source_id: str, error: LLMError) -> None:
         raise error
 
 
-def _completed_source(future: Future[tuple[str, _SourceStatus]], source_id: str) -> tuple[str, _SourceStatus]:
-    try:
-        return future.result()
-    except LLMError as exc:
-        _report_llm_source_error(source_id, exc)
-    except FieldkitError:
-        raise
-    except Exception:  # noqa: BLE001 — retain per-source failure isolation
+def _report_source_error(source_id: str, error: Exception) -> None:
+    if isinstance(error, LLMError):
+        _report_llm_source_error(source_id, error)
+    else:
         human_echo(f"  Error processing {source_id}.", err=True)
-    return source_id, "failed"
 
 
-def _cancel_unstarted(futures: dict[Future[tuple[str, _SourceStatus]], SourceRecord]) -> None:
-    for future in futures:
-        future.cancel()
-
-
-def _drain_sources(pending: list[SourceRecord], workers: int, context: _WorkerContext) -> _ParallelState:
-    state = _ParallelState()
-    remaining = iter(pending)
-    with track_provider_failures(context.batch), ThreadPoolExecutor(max_workers=workers) as pool:
-        futures: dict[Future[tuple[str, _SourceStatus]], SourceRecord] = {}
-        _fill_workers(pool, futures, remaining, workers, context)
-        while futures:
-            try:
-                done, _ = wait(futures, return_when=FIRST_COMPLETED)
-            except KeyboardInterrupt:
-                state.interrupted = True
-                human_echo("\nInterrupted. Pending sources remain in pipeline.db for resume.", err=True)
-                _cancel_unstarted(futures)
-                continue
-            for future in done:
-                state.collect(future, futures.pop(future))
-            if context.batch.stopped or state.fatal is not None or state.interrupted:
-                _cancel_unstarted(futures)
-            else:
-                _fill_workers(pool, futures, remaining, workers, context)
-    return state
-
-
-def _fill_workers(
-    pool: ThreadPoolExecutor,
-    futures: dict[Future[tuple[str, _SourceStatus]], SourceRecord],
-    remaining: Iterator[SourceRecord],
-    workers: int,
-    context: _WorkerContext,
-) -> None:
-    for _ in range(workers - len(futures)):
-        src = next(remaining, None)
-        if src is None:
-            break
-        futures[pool.submit(copy_context().run, _source_worker, src, context)] = src
+def _report_batch_interrupt() -> None:
+    human_echo("\nInterrupted. Pending sources remain in pipeline.db for resume.", err=True)
 
 
 def _ordered_parallel_outcomes(
     pending: list[SourceRecord],
-    statuses: dict[str, _SourceStatus],
+    statuses: dict[str, SourceStatus],
     outcomes: BatchOutcomes,
 ) -> None:
     destinations = {
@@ -856,7 +742,7 @@ def _ordered_parallel_outcomes(
             outcomes.degraded.append(src.source_id)
 
 
-def _parallel_counts(statuses: dict[str, _SourceStatus]) -> tuple[int, int, int, int]:
+def _parallel_counts(statuses: dict[str, SourceStatus]) -> tuple[int, int, int, int]:
     counts = {
         status: list(statuses.values()).count(status) for status in ("completed", "degraded", "skipped", "failed")
     }
@@ -876,13 +762,22 @@ def _run_parallel_loop(
 
     Returns (n_processed, n_degraded, n_skipped, n_errors).
     """
-    workers = _dynamic_worker_count(len(pending))
+    workers = ingest_batch.dynamic_worker_count(len(pending))
     if workers > 1:
-        human_echo(f"Using {workers} workers for {len(pending)} pending sources (target ≤{_TARGET_MINUTES} min).")
+        human_echo(
+            f"Using {workers} workers for {len(pending)} pending sources (target ≤{ingest_batch.TARGET_MINUTES} min)."
+        )
 
     batch = batch or BatchProviderFailures(get_ingest_provider_failure_threshold())
-    context = _WorkerContext(data_root, db_path, pipeline_version, threading.Lock(), batch)
-    state = _drain_sources(pending, workers, context)
+    context = WorkerContext(data_root, db_path, pipeline_version, threading.Lock(), batch)
+    state = ingest_batch.drain_sources(
+        pending,
+        workers,
+        context,
+        worker=_source_worker,
+        report_error=_report_source_error,
+        report_interrupt=_report_batch_interrupt,
+    )
     if state.fatal is not None:
         raise state.fatal
     if outcomes is not None:
@@ -964,7 +859,7 @@ def _finish_batch(
     human_echo(f"\nSummary: {n_processed} processed ({n_degraded} degraded), {n_skipped} skipped, {n_errors} error(s).")
     if as_json:
         outcomes.emit(pipeline=GEMINI_TRANSCRIPT_PIPELINE, dry_run=False, include_degraded=True)
-    return 1 if batch.had_retryable_failure or (as_json and n_errors) else 0
+    return 1 if batch.had_retryable_failure or n_errors else 0
 
 
 def _emit_provider_stop(batch: BatchProviderFailures, pipeline: str) -> None:

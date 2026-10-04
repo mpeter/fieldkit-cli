@@ -10,10 +10,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from fieldkit.commands.ingest.run import (
-    _dynamic_worker_count,
-    _ProcessResult,
-)
+from fieldkit.commands.ingest.run import _ProcessResult
+from fieldkit.ingest.batch import dynamic_worker_count
 from fieldkit.ingest.pipeline import infer_meeting_date
 from fieldkit.ingest.sources import SourceRecord
 from fieldkit.ingest.writeback import (
@@ -150,7 +148,7 @@ def test_infer_meeting_date_returns_none_when_absent(title: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# _dynamic_worker_count
+# dynamic_worker_count
 # ---------------------------------------------------------------------------
 
 
@@ -158,26 +156,26 @@ def test_infer_meeting_date_returns_none_when_absent(title: str) -> None:
 
 
 def test_dynamic_worker_count_small_queue_one_worker() -> None:
-    assert _dynamic_worker_count(1) == 1
+    assert dynamic_worker_count(1) == 1
 
 
 def test_dynamic_worker_count_five_items_one_worker() -> None:
-    assert _dynamic_worker_count(5) == 1
+    assert dynamic_worker_count(5) == 1
 
 
 def test_dynamic_worker_count_six_items_two_workers() -> None:
     # 6 * 3 / 15 = 1.2, ceil = 2
-    assert _dynamic_worker_count(6) == 2
+    assert dynamic_worker_count(6) == 2
 
 
 def test_dynamic_worker_count_capped_at_max() -> None:
     # Very large queue — should be capped at 8
-    assert _dynamic_worker_count(1000) == 8
+    assert dynamic_worker_count(1000) == 8
 
 
 def test_dynamic_worker_count_zero_items() -> None:
     # 0 items — should return 1 (minimum)
-    assert _dynamic_worker_count(0) == 1
+    assert dynamic_worker_count(0) == 1
 
 
 # ---------------------------------------------------------------------------

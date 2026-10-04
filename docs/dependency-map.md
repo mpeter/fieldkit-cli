@@ -11,7 +11,7 @@ generated_by: scripts/generate_dep_map.py
 
 > **Derived document — generated exhaust, not a system of record.** Verify facts against the sources listed in `derived_from`.
 
-> Auto-generated 2026-10-01 from live repo analysis. Do not edit manually.
+> Auto-generated 2026-10-04 from live repo analysis. Do not edit manually.
 > Re-generate: `uv run python scripts/generate_dep_map.py`
 
 ---
@@ -61,22 +61,22 @@ hooks/                     ← Claude Code hooks + git pre-commit
 Which `fieldkit.commands.*` packages import which domain modules.
 ✓ = imported, · = not used.
 
-| Package | config | pursuit | watch | cli exit | llm |
-| --- | --- | --- | --- | --- | --- |
-| `gmail` | ✓ | · | · | ✓ | · |
-| `sf` | ✓ | · | · | ✓ | · |
-| `brief` | ✓ | ✓ | · | ✓ | ✓ |
-| `pipeline` | ✓ | ✓ | · | ✓ | ✓ |
-| `watch` | ✓ | · | ✓ | ✓ | · |
-| `ingest` | ✓ | · | · | ✓ | · |
-| `contact` | ✓ | · | · | ✓ | · |
-| `pursuit` | ✓ | ✓ | · | ✓ | · |
-| `meeting` | ✓ | · | · | ✓ | · |
-| `shadowbot` | ✓ | · | · | ✓ | · |
-| `init` | ✓ | · | · | ✓ | · |
-| `skill` | ✓ | · | · | · | · |
-| `datasync` | ✓ | · | · | ✓ | · |
-| `version` | ✓ | · | · | · | · |
+| Package | config | pursuit | watch | cli exit | llm | ingest |
+| --- | --- | --- | --- | --- | --- | --- |
+| `gmail` | ✓ | · | · | ✓ | · | · |
+| `sf` | ✓ | · | · | ✓ | · | · |
+| `brief` | ✓ | ✓ | · | ✓ | ✓ | · |
+| `pipeline` | ✓ | ✓ | · | ✓ | ✓ | · |
+| `watch` | ✓ | · | ✓ | ✓ | · | · |
+| `ingest` | ✓ | · | · | ✓ | · | ✓ |
+| `contact` | ✓ | · | · | ✓ | · | · |
+| `pursuit` | ✓ | ✓ | · | ✓ | · | · |
+| `meeting` | ✓ | · | · | ✓ | · | · |
+| `shadowbot` | ✓ | · | · | ✓ | · | · |
+| `init` | ✓ | · | · | ✓ | · | · |
+| `skill` | ✓ | · | · | · | · | · |
+| `datasync` | ✓ | · | · | ✓ | · | · |
+| `version` | ✓ | · | · | · | · | · |
 
 ---
 
@@ -89,6 +89,7 @@ Which `fieldkit.commands.*` packages import which domain modules.
 | `fieldkit.pursuit/` | 5 | Frontmatter models, io, MEDDPICC helpers — used by many subpackages |
 | `fieldkit.llm/` | 3 | Vertex AI synthesis — used by AI-driven watchers and morning brief |
 | `fieldkit.watch/` | 1 | Watcher status, logging, dedup — used by all watch daemons |
+| `fieldkit.ingest/` | 1 | Ingest pipeline domain — used by commands/ingest |
 
 ---
 

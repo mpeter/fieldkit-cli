@@ -18,6 +18,7 @@ from fieldkit.commands.ingest._output import BatchOutcomes
 from fieldkit.commands.ingest.registry import PIPELINES
 from fieldkit.config import ConfigError, get_ingest_provider_failure_threshold
 from fieldkit.errors import LLMError
+from fieldkit.ingest import batch as ingest_batch
 from fieldkit.ingest.db import init_db
 from fieldkit.ingest.docs import GeminiDocContent
 from fieldkit.ingest.provider_failures import BatchProviderFailures
@@ -42,7 +43,7 @@ def batch_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[sqlite
     monkeypatch.setattr("fieldkit.ingest.db.get_db_path", lambda: path)
     monkeypatch.setattr("fieldkit.ingest.docs.get_docs_service", MagicMock)
     monkeypatch.setattr("fieldkit.gmail.discover.scan_gemini_candidates", lambda *_args, **_kwargs: [])
-    monkeypatch.setattr(run, "_dynamic_worker_count", lambda _count: 1)
+    monkeypatch.setattr(ingest_batch, "dynamic_worker_count", lambda _count: 1)
     monkeypatch.setattr(
         run,
         "_fetch_doc_for_run",
@@ -295,18 +296,49 @@ def test_interactive_source_input_rejection_continues_to_healthy_sources(
         pipeline_version="0.1.0",
         interactive=True,
     )
-    assert result == 0
+    assert result == 1
     assert calls.call_count == 11
     assert batch_db.execute("SELECT COUNT(*) FROM sources WHERE status = 'processed'").fetchone()[0] == 5
     assert batch_db.execute("SELECT status FROM sources WHERE source_id = 'source-1'").fetchone()[0] == "failed"
     assert batch_db.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0] == 5
 
 
+@pytest.mark.parametrize("as_json", [False, True])
+@pytest.mark.parametrize("all_failed", [False, True])
+def test_source_rejection_returns_partial_in_each_output_format(
+    batch_db: sqlite3.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+    as_json: bool,
+    all_failed: bool,
+) -> None:
+    error = LLMError("fictional invalid source body", scope="source")
+    calls = MagicMock(side_effect=error if all_failed else [error, *['{"confidence":"high"}'] * 10])
+    monkeypatch.setattr("fieldkit.ingest.pipeline.synthesize", calls)
+    args = ["--pipeline", "transcript-ingest"] + (["--json"] if as_json else [])
+    result = CliRunner().invoke(run.cli, args)
+    assert result.exit_code == 1
+    expected_failed = [f"source-{index}" for index in range(6)] if all_failed else ["source-0"]
+    assert batch_db.execute("SELECT COUNT(*) FROM sources WHERE status = 'failed'").fetchone()[0] == len(
+        expected_failed
+    )
+    assert batch_db.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0] == 6 - len(expected_failed)
+    assert "fictional invalid source body" not in result.output
+    assert "Stopped after" not in result.output
+    if as_json:
+        payload = json.loads(result.stdout)
+        assert payload["failed"] == expected_failed
+        assert len(payload["completed"]) == 6 - len(expected_failed)
+        assert payload["pending"] == []
+        assert "stop_reason" not in payload
+    else:
+        assert f"{len(expected_failed)} error(s)" in result.output
+
+
 def test_queued_source_never_becomes_failed(
     batch_db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(run, "_dynamic_worker_count", lambda _count: 2)
-    monkeypatch.setattr(run, "ThreadPoolExecutor", lambda **_kwargs: ThreadPoolExecutor(max_workers=1))
+    monkeypatch.setattr(ingest_batch, "dynamic_worker_count", lambda _count: 2)
+    monkeypatch.setattr(ingest_batch, "ThreadPoolExecutor", lambda **_kwargs: ThreadPoolExecutor(max_workers=1))
     calls = MagicMock(side_effect=outage())
     monkeypatch.setattr("fieldkit.ingest.pipeline.synthesize", calls)
     outcomes = BatchOutcomes()
@@ -328,7 +360,7 @@ def test_queued_source_never_becomes_failed(
 def test_running_source_finishes_and_resume_keeps_artifact(
     batch_db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(run, "_dynamic_worker_count", lambda _count: 2)
+    monkeypatch.setattr(ingest_batch, "dynamic_worker_count", lambda _count: 2)
     running = threading.Event()
     stopped = threading.Event()
     batch = BatchProviderFailures(1)

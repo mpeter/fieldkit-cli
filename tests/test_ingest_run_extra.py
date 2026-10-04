@@ -92,10 +92,9 @@ def test_run_parallel_loop_single_source_success() -> None:
     assert rc == 0
 
 
-def test_run_parallel_loop_single_source_error_preserves_human_exit() -> None:
-    """Human mode preserves its historical zero exit after reporting errors."""
+def test_run_parallel_loop_single_source_error_returns_partial() -> None:
     rc = _run_loop([_make_src()], process_result=False)
-    assert rc == 0
+    assert rc == 1
 
 
 def test_run_parallel_loop_source_with_no_meeting_date() -> None:
@@ -207,9 +206,9 @@ def test_run_parallel_interrupt_preserves_retry_boundary() -> None:
 
     outcomes = BatchOutcomes()
     with (
-        patch("fieldkit.commands.ingest.run.ThreadPoolExecutor", return_value=pool),
+        patch("fieldkit.ingest.batch.ThreadPoolExecutor", return_value=pool),
         patch(
-            "fieldkit.commands.ingest.run.wait",
+            "fieldkit.ingest.batch.wait",
             side_effect=[KeyboardInterrupt, ({first_future}, set())],
         ),
         patch("fieldkit.ingest.docs.get_docs_service", return_value=MagicMock()),
@@ -250,7 +249,7 @@ def test_run_parallel_loop_worker_exception_counted_not_raised() -> None:
     ):
         rc = _run_processing_loop([src], conn=mock_conn, pipeline_version="0.2.0", interactive=False)
 
-    assert rc == 0
+    assert rc == 1
 
 
 def test_run_parallel_loop_many_workers_capped() -> None:
@@ -307,7 +306,7 @@ def test_run_processing_loop_interactive_yes_failure_counted() -> None:
     ):
         rc = _run_processing_loop([src], conn=mock_conn, pipeline_version="0.1.0", interactive=True)
 
-    assert rc == 0
+    assert rc == 1
 
 
 def test_run_processing_loop_interactive_quit_after_one_skip() -> None:

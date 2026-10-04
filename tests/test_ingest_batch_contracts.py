@@ -14,6 +14,7 @@ from fieldkit.commands.ingest._output import BatchOutcomes, provider_stop_metada
 from fieldkit.commands.ingest.registry import PIPELINES
 from fieldkit.config import ConfigError
 from fieldkit.errors import AuthError, LLMError, LLMErrorCategory, LLMErrorScope, _normalize_llm_policy
+from fieldkit.ingest import batch
 from fieldkit.ingest.db import init_db
 from fieldkit.ingest.docs import DocAccessDeniedError, DocNotFoundError, GeminiDocContent
 from fieldkit.ingest.pipeline import Stage1Result, TranscriptMeta
@@ -227,10 +228,10 @@ def test_clean_and_extract_transcript_propagates_domain_errors(monkeypatch: pyte
 
 
 @pytest.mark.parametrize("status", ["completed", "degraded", "failed", "skipped", "pending"])
-def test_completed_source_returns_worker_status(status: run._SourceStatus) -> None:
-    future: Future[tuple[str, run._SourceStatus]] = Future()
+def test_completed_source_returns_worker_status(status: batch.SourceStatus) -> None:
+    future: Future[batch.WorkerResult] = Future()
     future.set_result(("example", status))
-    result = run._completed_source(future, "example")
+    result = batch.completed_source(future, "example", run._report_source_error)
     assert result == ("example", status)
 
 
@@ -238,23 +239,23 @@ def test_completed_source_returns_worker_status(status: run._SourceStatus) -> No
     "error", [LLMError("outage", retryable=True), LLMError("source", scope="source"), RuntimeError("ordinary")]
 )
 def test_completed_source_isolates_recoverable_errors(error: Exception) -> None:
-    future: Future[tuple[str, run._SourceStatus]] = Future()
+    future: Future[batch.WorkerResult] = Future()
     future.set_exception(error)
-    result = run._completed_source(future, "example")
+    result = batch.completed_source(future, "example", run._report_source_error)
     assert result == ("example", "failed")
 
 
 @pytest.mark.parametrize("error", [LLMError("auth", category="auth"), ConfigError("config"), AuthError("auth")])
 def test_completed_source_propagates_fatal_errors(error: Exception) -> None:
-    future: Future[tuple[str, run._SourceStatus]] = Future()
+    future: Future[batch.WorkerResult] = Future()
     future.set_exception(error)
     with pytest.raises(type(error), match=r"auth|config") as captured:
-        run._completed_source(future, "example")
+        batch.completed_source(future, "example", run._report_source_error)
     assert captured.value is error
 
 
 def test_parallel_counts_and_ordered_outcomes() -> None:
-    statuses: dict[str, run._SourceStatus] = {"a": "degraded", "b": "completed", "c": "failed", "d": "skipped"}
+    statuses: dict[str, batch.SourceStatus] = {"a": "degraded", "b": "completed", "c": "failed", "d": "skipped"}
     result = run._parallel_counts(statuses)
     assert result == (2, 1, 1, 1)
     outcomes = BatchOutcomes()
@@ -265,15 +266,15 @@ def test_parallel_counts_and_ordered_outcomes() -> None:
 
 @pytest.mark.parametrize("auth", [AuthError("auth"), LLMError("auth", category="auth")])
 def test_parallel_state_preserves_auth_precedence(auth: AuthError | LLMError) -> None:
-    state = run._ParallelState()
+    state = batch.ParallelState()
     state.fatal = ConfigError("config")
-    future: Future[tuple[str, run._SourceStatus]] = Future()
+    future: Future[batch.WorkerResult] = Future()
     future.set_exception(auth)
-    assert state.collect(future, source()) is None
+    assert state.collect(future, source(), run._report_source_error) is None
     assert state.fatal is auth
-    second: Future[tuple[str, run._SourceStatus]] = Future()
+    second: Future[batch.WorkerResult] = Future()
     second.set_exception(ConfigError("later config"))
-    assert state.collect(second, source()) is None
+    assert state.collect(second, source(), run._report_source_error) is None
     assert state.fatal is auth
 
 
@@ -286,7 +287,7 @@ def test_claimed_source_skips_without_processing_output(
     monkeypatch.setattr("fieldkit.ingest.sources.claim_pending_source", MagicMock(return_value=False))
     process = MagicMock()
     monkeypatch.setattr(run, "_process_one_source", process)
-    context = run._WorkerContext(tmp_path, tmp_path / "pipeline.db", "1.0", threading.Lock(), BatchProviderFailures(3))
+    context = batch.WorkerContext(tmp_path, tmp_path / "pipeline.db", "1.0", threading.Lock(), BatchProviderFailures(3))
     result = run._claimed_source(source(), conn, object(), context)
     assert result == "skipped"
     process.assert_not_called()
@@ -295,9 +296,9 @@ def test_claimed_source_skips_without_processing_output(
 
 
 def test_parallel_state_cancelled_source_remains_unstarted() -> None:
-    state = run._ParallelState()
-    future: Future[tuple[str, run._SourceStatus]] = Future()
+    state = batch.ParallelState()
+    future: Future[batch.WorkerResult] = Future()
     assert future.cancel() is True
-    assert state.collect(future, source()) is None
+    assert state.collect(future, source(), run._report_source_error) is None
     assert state.statuses == {}
     assert state.fatal is None
