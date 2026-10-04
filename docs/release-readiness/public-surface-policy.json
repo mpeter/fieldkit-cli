@@ -47,6 +47,8 @@
       "docs/user-guide.md"
     ],
     "public_repository_only": [
+      "src/fieldkit/commands/gmail/README.md",
+      "src/fieldkit/skills/contact/ops/contact-enrich.md",
       "docs/dependency-map.md",
       "docs/documentation-contract.json",
       "docs/release-readiness/artifact-policy.json",

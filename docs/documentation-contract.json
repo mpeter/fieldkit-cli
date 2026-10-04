@@ -256,7 +256,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Assess the supported security boundary before enabling an integration or reporting a vulnerability.",
-      "source_fingerprint": "sha256:5ea9f89e013595ace8eb6763253b4f357785e186f9f0acd07bddb88a10190c8e",
+      "source_fingerprint": "sha256:10066e7f12dfee5942be073f1598c3b7ded3bfbf4e4371f389dbbc5542b16c4c",
       "sources": [
         "SECURITY.md",
         "docs/privacy.md",
@@ -1456,10 +1456,12 @@
         }
       ],
       "reader_action": "Configure and use Gmail workflows.",
-      "source_fingerprint": "sha256:dabd968e1d97dba4b5e8cc83a22486e37fcf98a8ce16c0ca34a2dfa1fa425f79",
+      "source_fingerprint": "sha256:3759abbf85d7152bb31a7116a0005f3ed82cf1a45f3cc1cb443d25998b3d079b",
       "sources": [
         "src/fieldkit/commands/gmail/**/*.py",
-        "src/fieldkit/gmail/**/*.py"
+        "src/fieldkit/gmail/**/*.py",
+        "src/fieldkit/config/_integrations.py",
+        "src/fieldkit/config/_paths.py"
       ]
     },
     "docs/guides/init.md": {
@@ -2173,6 +2175,61 @@
         "src/fieldkit/commands/**/*.py",
         "src/fieldkit/config/**/*.py"
       ]
+    },
+    "src/fieldkit/commands/gmail/README.md": {
+      "content_type": "reference",
+      "fenced_blocks": [],
+      "reader_action": "Find the current Gmail setup and command documentation.",
+      "source_fingerprint": "sha256:374983e4863123ae91845c1b1bc8d45ff7de7836d50659a74cd5d596c28dc0b9",
+      "sources": [
+        "docs/guides/gmail.md",
+        "pyproject.toml"
+      ]
+    },
+    "src/fieldkit/skills/contact/ops/contact-enrich.md": {
+      "content_type": "how-to",
+      "fenced_blocks": [
+        {
+          "classification": "credentialed_manual_integration",
+          "id": "contact.enrichment.block-1",
+          "language": "bash",
+          "sha256": "ade69eb55a2868b9f1c26568eee0c6eb4bb6d9d3019787a8b5d1eadb66fb1dc3",
+          "verification_id": "manual.credentialed-integration"
+        },
+        {
+          "classification": "structural_assertion",
+          "id": "contact.enrichment.block-2",
+          "language": "json",
+          "sha256": "8be6bb894006458b65e5802be222e7f95dce5768990d3fbed4584b33d2de5188",
+          "verification_id": "automated.configuration-example-contract"
+        },
+        {
+          "classification": "credentialed_manual_integration",
+          "id": "contact.enrichment.block-3",
+          "language": "bash",
+          "sha256": "223c4bce8462e6ff53e49908178fde032d48d699d2c821b187db26fc9261b6b0",
+          "verification_id": "manual.credentialed-integration"
+        }
+      ],
+      "reader_action": "Discover contacts and apply reviewed enrichment results.",
+      "source_fingerprint": "sha256:7a25768c02078d37c21f98f537a07cfb0b403ffdab566f8337ee814bb49d784c",
+      "sources": [
+        "src/fieldkit/commands/contact/enrich_cmd.py",
+        "src/fieldkit/commands/contact/report_cmd.py",
+        "src/fieldkit/contact/enrich.py",
+        "src/fieldkit/contact/_enrich_helpers.py",
+        "src/fieldkit/contact/report.py",
+        "src/fieldkit/enrich/**/*.py",
+        "src/fieldkit/config/_paths.py"
+      ],
+      "tables": [
+        {
+          "classification": "structural_assertion",
+          "id": "contact.enrichment.table-1",
+          "sha256": "efeec3ec31644a91c7991aea1e7e03d020440492071377c8af370f5470c25d87",
+          "verification_id": "automated.configuration-example-contract"
+        }
+      ]
     }
   },
   "example_verifications": {
@@ -2306,7 +2363,9 @@
         "docs/patterns/README.md",
         "docs/reference/troubleshooting.md",
         "docs/user-guide.md",
-        "THREAT_MODEL.md"
+        "THREAT_MODEL.md",
+        "src/fieldkit/commands/gmail/README.md",
+        "src/fieldkit/skills/contact/ops/contact-enrich.md"
       ]
     }
   }
