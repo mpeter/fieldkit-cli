@@ -154,15 +154,24 @@ def test_outbound_gate_json_array_instead_of_object_returns_0() -> None:
     assert _run_outbound("[1, 2, 3]") == 0
 
 
+@pytest.mark.parametrize("value", [1, ["mcp__work-mail__google_workspace__send_gmail_message"], {"name": "Send"}])
+def test_outbound_gate_non_string_tool_name_returns_0(value: object) -> None:
+    assert _run_outbound(json.dumps({"tool_name": value})) == 0
+
+
 def test_outbound_gate_gmail_send_blocked() -> None:
     """Gmail send tool must be blocked (exit 2)."""
     payload = json.dumps(
         {
-            "tool_name": "mcp__fieldkit-mail__google_workspace__send_gmail_message",
+            "tool_name": "mcp__work-mail__google_workspace__send_gmail_message",
             "tool_input": {},
         }
     )
     assert _run_outbound(payload) == 2
+
+
+def test_outbound_gate_gmail_send_renamed_group_blocked() -> None:
+    assert _run_outbound(json.dumps({"tool_name": "mcp__future-work-mail__google_workspace__send_gmail_message"})) == 2
 
 
 def test_outbound_gate_gmail_send_mcpjungle_blocked() -> None:
@@ -278,7 +287,7 @@ def test_outbound_gate_unknown_tool_allowed() -> None:
 # 3. outbound_gate — calendar invite guard
 # ===========================================================================
 
-_CAL_FIELDKIT = "mcp__fieldkit-calendar__google_workspace__manage_event"
+_CAL_WORK = "mcp__work-calendar__google_workspace__manage_event"
 _CAL_JUNGLE = "mcp__mcpjungle__google_workspace__manage_event"
 _ATTENDEES = ["person@example.com"]
 
@@ -297,9 +306,14 @@ def _cal_payload(
     return json.dumps({"tool_name": tool, "tool_input": tool_input})
 
 
-def test_calendar_create_with_attendees_fieldkit_blocked() -> None:
-    """fieldkit-calendar manage_event create + attendees → blocked."""
-    assert _run_outbound(_cal_payload(_CAL_FIELDKIT, "create", _ATTENDEES)) == 2
+def test_calendar_create_with_attendees_work_group_blocked() -> None:
+    """Configured calendar group manage_event create + attendees → blocked."""
+    assert _run_outbound(_cal_payload(_CAL_WORK, "create", _ATTENDEES)) == 2
+
+
+def test_calendar_create_with_attendees_renamed_group_blocked() -> None:
+    tool = "mcp__future-work-calendar__google_workspace__manage_event"
+    assert _run_outbound(_cal_payload(tool, "create", _ATTENDEES)) == 2
 
 
 def test_calendar_create_with_attendees_mcpjungle_blocked() -> None:
@@ -309,27 +323,27 @@ def test_calendar_create_with_attendees_mcpjungle_blocked() -> None:
 
 def test_calendar_create_with_attendees_send_updates_none_allowed() -> None:
     """manage_event create + attendees + send_updates=none → allowed (no notification)."""
-    assert _run_outbound(_cal_payload(_CAL_FIELDKIT, "create", _ATTENDEES, "none")) == 0
+    assert _run_outbound(_cal_payload(_CAL_WORK, "create", _ATTENDEES, "none")) == 0
 
 
 def test_calendar_create_with_attendees_send_updates_none_uppercase_allowed() -> None:
     """send_updates='None' (capital N) must also be treated as no-notification."""
-    assert _run_outbound(_cal_payload(_CAL_FIELDKIT, "create", _ATTENDEES, "None")) == 0
+    assert _run_outbound(_cal_payload(_CAL_WORK, "create", _ATTENDEES, "None")) == 0
 
 
 def test_calendar_create_no_attendees_allowed() -> None:
     """manage_event create with no attendees → allowed (nobody to notify)."""
-    assert _run_outbound(_cal_payload(_CAL_FIELDKIT, "create", [])) == 0
+    assert _run_outbound(_cal_payload(_CAL_WORK, "create", [])) == 0
 
 
 def test_calendar_delete_action_allowed() -> None:
     """manage_event delete is not in the blocked action set → allowed."""
-    assert _run_outbound(_cal_payload(_CAL_FIELDKIT, "delete", _ATTENDEES)) == 0
+    assert _run_outbound(_cal_payload(_CAL_WORK, "delete", _ATTENDEES)) == 0
 
 
 def test_calendar_update_with_attendees_blocked() -> None:
     """manage_event update + attendees → blocked."""
-    assert _run_outbound(_cal_payload(_CAL_FIELDKIT, "update", _ATTENDEES)) == 2
+    assert _run_outbound(_cal_payload(_CAL_WORK, "update", _ATTENDEES)) == 2
 
 
 def test_calendar_rsvp_with_attendees_blocked() -> None:
@@ -533,7 +547,7 @@ def test_hook_runs_as_real_script_entry_point(hook_relpath: str) -> None:
 def test_outbound_gate_subprocess_blocks_calendar_invite() -> None:
     """End-to-end: the calendar-invite guard actually blocks via the real entry point."""
     payload = {
-        "tool_name": "mcp__fieldkit-calendar__google_workspace__manage_event",
+        "tool_name": "mcp__work-calendar__google_workspace__manage_event",
         "tool_input": {"action": "create", "attendees": ["a@b.example.com"]},
     }
     result = _run_hook_subprocess("hooks/outbound_gate.py", payload)
@@ -545,7 +559,7 @@ def test_outbound_gate_send_updates_non_string_does_not_crash() -> None:
     """A non-string send_updates value (e.g. a dict from a malformed/adversarial
     payload) must not crash the guard with an unhandled AttributeError."""
     payload = {
-        "tool_name": "mcp__fieldkit-calendar__google_workspace__manage_event",
+        "tool_name": "mcp__work-calendar__google_workspace__manage_event",
         "tool_input": {"action": "create", "attendees": ["a@b.example.com"], "send_updates": {"weird": "dict"}},
     }
     assert _run_outbound(json.dumps(payload)) == 2

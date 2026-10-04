@@ -493,6 +493,7 @@ def test_enh475_draft_queue_account_filter_excludes_other_account_draft(tmp_path
             return_value="user@internal.example.com",  # pii-guard: ignore
         ),
         patch("fieldkit.watch.morning_brief_mcp.MCPSession") as mock_mcp,
+        patch("fieldkit.watch.draft_queue.get_mcp_work_group", return_value="work-mail"),
         patch("fieldkit.watch.draft_queue.parse_drafts", return_value=[draft_acme, draft_global]),
         patch("fieldkit.watch.draft_queue.write_alerts", side_effect=_fake_write_alerts),
         patch("fieldkit.watch.draft_queue.write_run_status"),
@@ -533,6 +534,7 @@ def test_enh475_draft_queue_unfiltered_includes_all_drafts(tmp_path: Path) -> No
             return_value="user@internal.example.com",  # pii-guard: ignore
         ),
         patch("fieldkit.watch.morning_brief_mcp.MCPSession") as mock_mcp,
+        patch("fieldkit.watch.draft_queue.get_mcp_work_group", return_value="work-mail"),
         patch("fieldkit.watch.draft_queue.parse_drafts", return_value=[draft_acme, draft_global]),
         patch("fieldkit.watch.draft_queue.write_alerts", side_effect=_fake_write_alerts),
         patch("fieldkit.watch.draft_queue.write_run_status"),
@@ -686,6 +688,7 @@ def test_enh475_draft_queue_rfc5322_displayname_to_header_matches(tmp_path: Path
             return_value="user@internal.example.com",  # pii-guard: ignore
         ),
         patch("fieldkit.watch.morning_brief_mcp.MCPSession") as mock_mcp,
+        patch("fieldkit.watch.draft_queue.get_mcp_work_group", return_value="work-mail"),
         patch("fieldkit.watch.draft_queue.parse_drafts", return_value=[draft_displayname, draft_other]),
         patch("fieldkit.watch.draft_queue.write_alerts", side_effect=_fake_write_alerts),
         patch("fieldkit.watch.draft_queue.write_run_status"),

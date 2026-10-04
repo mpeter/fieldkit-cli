@@ -33,6 +33,11 @@ from fieldkit.commands.watch.backstory_health import cli  # noqa: E402
 pytestmark = pytest.mark.unit
 
 
+@pytest.fixture(autouse=True)
+def _configured_sales_group(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(wbh, "get_mcp_work_group", lambda _service: "work-sales")
+
+
 def test_state_paths_use_the_configured_roots(tmp_path: Path) -> None:
     """Path helpers keep all health-watcher artifacts under their canonical roots."""
     with (

@@ -25,15 +25,23 @@ def read_payload() -> dict:  # type: ignore[type-arg]
         return {}
 
 
-def tool_name(payload: dict) -> str:  # type: ignore[type-arg]
+def tool_name(payload: object) -> str:
     """Return the tool_name field, guaranteed non-None string."""
-    return payload.get("tool_name", "") or ""
+    if not isinstance(payload, dict):
+        return ""
+    value = payload.get("tool_name")
+    return value if isinstance(value, str) else ""
 
 
 def tool_input(payload: dict) -> dict:  # type: ignore[type-arg]
     """Return the tool_input field, guaranteed dict."""
     value = payload.get("tool_input")
     return value if isinstance(value, dict) else {}
+
+
+def is_mcp_tool(name: str, qualified_tool: str) -> bool:
+    """Match an MCP tool regardless of its configured group name."""
+    return name.startswith("mcp__") and name.endswith(f"__{qualified_tool}")
 
 
 def block(msg: str) -> int:
