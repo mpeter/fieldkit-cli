@@ -199,18 +199,19 @@ def test_run_parallel_interrupt_preserves_retry_boundary() -> None:
     sources = [_make_src("src-0"), _make_src("src-1"), _make_src("src-2")]
     first_future = MagicMock()
     first_future.result.return_value = ("src-0", "completed")
+    first_future.cancel.return_value = False
+    first_future.cancelled.return_value = False
     submitted = iter([first_future, MagicMock(), MagicMock()])
     pool = MagicMock()
     pool.__enter__.return_value.submit.side_effect = lambda *args: next(submitted)
 
-    def interrupted(futures: object) -> object:
-        yield first_future
-        raise KeyboardInterrupt
-
     outcomes = BatchOutcomes()
     with (
         patch("fieldkit.commands.ingest.run.ThreadPoolExecutor", return_value=pool),
-        patch("fieldkit.commands.ingest.run.as_completed", side_effect=interrupted),
+        patch(
+            "fieldkit.commands.ingest.run.wait",
+            side_effect=[KeyboardInterrupt, ({first_future}, set())],
+        ),
         patch("fieldkit.ingest.docs.get_docs_service", return_value=MagicMock()),
     ):
         processed, degraded, skipped, errors = _run_parallel_loop(

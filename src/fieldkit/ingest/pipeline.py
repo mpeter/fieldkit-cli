@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Literal, NamedTuple, cast
 
 from fieldkit.ingest.docs import GeminiDocContent
+from fieldkit.ingest.provider_failures import tracked_synthesis
 from fieldkit.ingest.router import RouteResult
 from fieldkit.llm.core import _NO_LLM_STUB, synthesize
 from fieldkit.llm.sanitize import UNTRUSTED_DATA_PREAMBLE, wrap_user_data
@@ -132,7 +133,7 @@ def stage1_clean(raw_transcript: str) -> Stage1Result:
         preamble=UNTRUSTED_DATA_PREAMBLE,
         raw_transcript_safe=wrap_user_data(raw_text, "raw_transcript"),
     )
-    result = synthesize(prompt)
+    result = tracked_synthesis(prompt, synthesize)
 
     # Detect NO_LLM stub → return input unchanged (not a bypass — stub is intentional)
     if result == _NO_LLM_STUB:
@@ -220,7 +221,7 @@ def stage2_extract(stage1_result: Stage1Result | str) -> TranscriptMeta:
         preamble=UNTRUSTED_DATA_PREAMBLE,
         cleaned_text_safe=wrap_user_data(cleaned_text, "cleaned_text"),
     )
-    result = synthesize(prompt)
+    result = tracked_synthesis(prompt, synthesize)
 
     # NO_LLM stub path
     if result == _NO_LLM_STUB:

@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
-from fieldkit.errors import LLMError
+from fieldkit.errors import FieldkitError, LLMError
 from fieldkit.ingest.ambient import AmbientSourceError, get_ambient_root, load_ambient_snapshot
 from fieldkit.ingest.constants import AMBIENT_TRANSCRIPT_PIPELINE
 from fieldkit.ingest.pipeline import compute_vault_path, stage1_clean, stage2_extract
@@ -161,6 +161,16 @@ def _render_note(
     )
 
 
+def _ambient_domain_failure(conn: sqlite3.Connection, source_id: str, error: FieldkitError) -> AmbientOutcome:
+    if isinstance(error, LLMError) and error.scope == "source":
+        _set_source_status(conn, source_id, "failed")
+        return AmbientOutcome(source_id, "failed", reason="LLM input rejected for this source")
+    _set_source_status(conn, source_id, "pending")
+    if isinstance(error, LLMError) and error.retryable:
+        return AmbientOutcome(source_id, "deferred", reason="Retryable LLM provider failure; retry after recovery")
+    raise error
+
+
 def process_ambient_source(
     conn: sqlite3.Connection,
     *,
@@ -234,15 +244,8 @@ def process_ambient_source(
         )
         _set_source_status(conn, source_id, "processed")
         return AmbientOutcome(source_id, "processed", content_path=str(path))
-    except LLMError as exc:
-        if exc.category == "auth":
-            _set_source_status(conn, source_id, "pending")
-            raise
-        if exc.category == "rate-limit":
-            _set_source_status(conn, source_id, "pending")
-            return AmbientOutcome(source_id, "deferred", reason=str(exc))
-        _set_source_status(conn, source_id, "failed")
-        return AmbientOutcome(source_id, "failed", reason=str(exc))
+    except FieldkitError as exc:
+        return _ambient_domain_failure(conn, source_id, exc)
     except (AmbientSourceError, OSError, sqlite3.Error, ValueError, RuntimeError) as exc:
         _set_source_status(conn, source_id, "failed")
         return AmbientOutcome(source_id, "failed", reason=str(exc))

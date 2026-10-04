@@ -5,19 +5,21 @@ import logging
 import math
 import sqlite3
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections.abc import Iterator
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextvars import copy_context
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import click
 
 from fieldkit.cli_registry import declare_write
-from fieldkit.commands.ingest._output import BatchOutcomes, human_echo, json_output
-from fieldkit.config import ConfigError
+from fieldkit.commands.ingest._output import BatchOutcomes, human_echo, json_output, provider_stop_metadata
+from fieldkit.config import ConfigError, get_ingest_provider_failure_threshold
 from fieldkit.config.optional_dependencies import GOOGLE_IMPORT_ROOTS, require_optional_profile
+from fieldkit.errors import AuthError, FieldkitError, LLMError
 from fieldkit.ingest.constants import (
     AMBIENT_TRANSCRIPT_PIPELINE,
     GEMINI_TRANSCRIPT_PIPELINE,
@@ -27,6 +29,7 @@ from fieldkit.ingest.constants import (
 )
 from fieldkit.ingest.docs import GeminiDocContent
 from fieldkit.ingest.pipeline import TranscriptMeta, primary_account
+from fieldkit.ingest.provider_failures import BatchProviderFailures, track_provider_failures
 from fieldkit.ingest.router import RouteResult
 from fieldkit.ingest.sources import SourceRecord, insert_vault_note_artifact, mark_source_status
 from fieldkit.ingest.writeback import MeetingWriteback, apply_meeting_writebacks
@@ -35,6 +38,7 @@ logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from fieldkit.ingest.ambient_pipeline import AmbientOutcome
+    from fieldkit.ingest.pipeline import Stage1Result
 
 
 @dataclass(frozen=True)
@@ -177,7 +181,6 @@ def _run_ambient_transcript_ingest(
     """Process registered ambient sources in discovery order."""
     from fieldkit.commands.ingest.registry import PIPELINES
     from fieldkit.config import get_fieldkit_home
-    from fieldkit.ingest.ambient_pipeline import process_ambient_source
     from fieldkit.ingest.db import get_db_path, init_db
 
     if interactive:
@@ -194,22 +197,52 @@ def _run_ambient_transcript_ingest(
                 BatchOutcomes(pending=source_ids).emit(pipeline=AMBIENT_TRANSCRIPT_PIPELINE, dry_run=True)
             return 0
 
-        outcomes = BatchOutcomes()
-        for source_id in source_ids:
-            result = process_ambient_source(
-                conn,
-                source_id=source_id,
-                fieldkit_home=get_fieldkit_home(),
-                pipeline_version=str(getattr(spec, "version", "0.1.0")),
-            )
-            getattr(outcomes, result.status if result.status != "processed" else "completed").append(source_id)
-            _emit_ambient_outcome(result, as_json=as_json)
+        batch = BatchProviderFailures(get_ingest_provider_failure_threshold())
+        outcomes = _process_ambient_batch(
+            conn,
+            source_ids,
+            get_fieldkit_home(),
+            str(getattr(spec, "version", "0.1.0")),
+            batch,
+            as_json,
+        )
+        if batch.stopped:
+            _emit_provider_stop(batch, AMBIENT_TRANSCRIPT_PIPELINE)
 
         if as_json:
             _emit_ambient_json(outcomes)
         return 1 if outcomes.failed or outcomes.deferred else 0
     finally:
         conn.close()
+
+
+def _process_ambient_batch(
+    conn: sqlite3.Connection,
+    source_ids: list[str],
+    home: Path,
+    pipeline_version: str,
+    batch: BatchProviderFailures,
+    as_json: bool,
+) -> BatchOutcomes:
+    from fieldkit.ingest.ambient_pipeline import process_ambient_source
+
+    outcomes = BatchOutcomes()
+    with track_provider_failures(batch):
+        for index, source_id in enumerate(source_ids):
+            if batch.stopped:
+                outcomes.pending.extend(source_ids[index:])
+                break
+            result = process_ambient_source(
+                conn,
+                source_id=source_id,
+                fieldkit_home=home,
+                pipeline_version=pipeline_version,
+            )
+            getattr(outcomes, result.status if result.status != "processed" else "completed").append(source_id)
+            _emit_ambient_outcome(result, as_json=as_json)
+    if batch.stopped:
+        outcomes.provider_failure_threshold = batch.threshold
+    return outcomes
 
 
 def _ambient_pending_ids(conn: sqlite3.Connection, limit: int | None) -> list[str]:
@@ -235,6 +268,7 @@ def _emit_ambient_json(outcomes: BatchOutcomes) -> None:
     click.echo(
         json.dumps(
             {
+                **provider_stop_metadata(AMBIENT_TRANSCRIPT_PIPELINE, outcomes.provider_failure_threshold),
                 "deferred": outcomes.deferred,
                 "dry_run": False,
                 "failed": outcomes.failed,
@@ -304,6 +338,8 @@ def _fetch_doc_for_run(service: object, source_id: str, conn: sqlite3.Connection
         human_echo(f"  Error: doc {source_id} access denied (403); marking failed.", err=True)
         mark_source_status(conn, source_id, SOURCE_STATUS_FAILED)
         return None
+    except FieldkitError:
+        raise
     except Exception as exc:  # noqa: BLE001 — pipeline must not abort on single-item failure
         human_echo(f"  Error fetching {source_id}: {exc}", err=True)
         mark_source_status(conn, source_id, SOURCE_STATUS_PENDING)
@@ -356,29 +392,37 @@ def _clean_and_extract_transcript(source_id: str, doc_content: GeminiDocContent)
 
     Returns (cleaned_text, TranscriptMeta).
     """
-    from fieldkit.ingest.pipeline import Stage1Result, stage1_clean, stage2_extract
+    from fieldkit.ingest.pipeline import Stage1Result
 
     raw_text = doc_content.transcript_text or doc_content.notes_text
-    stage1_result: Stage1Result | str
-    used_fallback = False
-    try:
-        stage1_result = stage1_clean(raw_text)
-    except Exception as exc:  # noqa: BLE001
-        human_echo(f"  Warning: stage1_clean failed for {source_id}: {exc}", err=True)
-        stage1_result = raw_text  # fallback: plain str (backwards compat path)
-        used_fallback = True
-
-    # Extract cleaned text for vault note body (Stage1Result.text or plain str).
+    stage1_result, stage1_fallback = _clean_source_text(source_id, raw_text)
     cleaned = stage1_result.text if isinstance(stage1_result, Stage1Result) else stage1_result
+    meta, stage2_fallback = _extract_source_metadata(source_id, stage1_result)
+    return _CleanResult(cleaned=cleaned, meta=meta, used_fallback=stage1_fallback or stage2_fallback)
+
+
+def _clean_source_text(source_id: str, raw_text: str) -> tuple["Stage1Result | str", bool]:
+    from fieldkit.ingest.pipeline import stage1_clean
 
     try:
-        meta = stage2_extract(stage1_result)
-    except Exception as exc:  # noqa: BLE001
-        human_echo(f"  Warning: stage2_extract failed for {source_id}: {exc}", err=True)
-        meta = TranscriptMeta(confidence="low")
-        used_fallback = True
+        return stage1_clean(raw_text), False
+    except FieldkitError:
+        raise
+    except Exception:  # noqa: BLE001 — ordinary failures retain deterministic source text
+        human_echo(f"  Warning: stage1_clean failed for {source_id}; using source text.", err=True)
+        return raw_text, True
 
-    return _CleanResult(cleaned=cleaned, meta=meta, used_fallback=used_fallback)
+
+def _extract_source_metadata(source_id: str, cleaned: "Stage1Result | str") -> tuple[TranscriptMeta, bool]:
+    from fieldkit.ingest.pipeline import stage2_extract
+
+    try:
+        return stage2_extract(cleaned), False
+    except FieldkitError:
+        raise
+    except Exception:  # noqa: BLE001 — ordinary validation errors degrade one source
+        human_echo(f"  Warning: stage2_extract failed for {source_id}; using empty metadata.", err=True)
+        return TranscriptMeta(confidence="low"), True
 
 
 def _process_one_source(
@@ -568,6 +612,36 @@ def _dynamic_worker_count(queue_size: int) -> int:
     return max(1, min(_MAX_WORKERS, needed))
 
 
+def _batch_stopped(batch: BatchProviderFailures | None) -> bool:
+    return batch is not None and batch.stopped
+
+
+def _source_label(src: SourceRecord) -> tuple[str, str]:
+    date_str = src.meeting_date.strftime("%Y-%m-%d") if src.meeting_date else "unknown date"
+    return date_str, src.meeting_title or src.source_id
+
+
+def _accepted_source(
+    src: SourceRecord,
+    service: object,
+    conn: sqlite3.Connection,
+    data_root: Path,
+    pipeline_version: str,
+) -> _ProcessResult:
+    try:
+        return _process_one_source(
+            src=src,
+            service=service,
+            conn=conn,
+            data_root=data_root,
+            pipeline_version=pipeline_version,
+        )
+    except LLMError as exc:
+        _restore_source_error(conn, src.source_id, exc)
+        _report_llm_source_error(src.source_id, exc)
+        return _ProcessResult(completed=False, degraded=False)
+
+
 def _run_interactive_loop(
     pending: list[SourceRecord],
     *,
@@ -575,6 +649,7 @@ def _run_interactive_loop(
     conn: sqlite3.Connection,
     data_root: Path,
     pipeline_version: str,
+    batch: BatchProviderFailures | None = None,
 ) -> tuple[int, int, int, int]:
     """Process pending sources interactively (single-threaded).
 
@@ -583,8 +658,9 @@ def _run_interactive_loop(
     n_processed = n_degraded = n_skipped = n_errors = 0
     try:
         for src in pending:
-            date_str = src.meeting_date.strftime("%Y-%m-%d") if src.meeting_date else "unknown date"
-            title = src.meeting_title or src.source_id
+            if _batch_stopped(batch):
+                break
+            date_str, title = _source_label(src)
             choice = _prompt_process_choice(date_str, title, src.source_id)
             if choice == "q":
                 human_echo("Stopping. Pending sources remain in pipeline.db for resume.")
@@ -594,13 +670,7 @@ def _run_interactive_loop(
                 n_skipped += 1
                 continue
             human_echo(f"Processing [{date_str}] {title} ({src.source_id}) …")
-            result = _process_one_source(
-                src=src,
-                service=service,
-                conn=conn,
-                data_root=data_root,
-                pipeline_version=pipeline_version,
-            )
+            result = _accepted_source(src, service, conn, data_root, pipeline_version)
             if result.completed:
                 n_processed += 1
                 n_degraded += int(result.degraded)
@@ -611,6 +681,188 @@ def _run_interactive_loop(
     return n_processed, n_degraded, n_skipped, n_errors
 
 
+_SourceStatus = Literal["pending", "skipped", "failed", "completed", "degraded"]
+
+
+@dataclass(frozen=True)
+class _WorkerContext:
+    data_root: Path
+    db_path: Path | None
+    pipeline_version: str
+    file_lock: "threading.Lock"
+    batch: BatchProviderFailures
+
+
+@dataclass
+class _ParallelState:
+    statuses: dict[str, _SourceStatus] = field(default_factory=dict)
+    fatal: FieldkitError | None = None
+    interrupted: bool = False
+
+    def collect(self, future: Future[tuple[str, _SourceStatus]], src: SourceRecord) -> None:
+        if future.cancelled():
+            return
+        try:
+            source_id, status = _completed_source(future, src.source_id)
+            self.statuses[source_id] = status
+        except FieldkitError as exc:
+            self.fatal = _preferred_fatal(self.fatal, exc)
+
+
+def _preferred_fatal(current: FieldkitError | None, candidate: FieldkitError) -> FieldkitError:
+    if current is None or isinstance(candidate, AuthError):
+        return candidate
+    if isinstance(candidate, LLMError) and candidate.category == "auth":
+        return candidate
+    return current
+
+
+def _authenticated_docs_service() -> object:
+    from fieldkit.ingest.docs import get_docs_service
+
+    try:
+        return get_docs_service()
+    except FileNotFoundError as exc:
+        raise AuthError("Google Workspace credentials are missing. Run the Google Workspace auth flow.") from exc
+
+
+def _restore_source_error(conn: sqlite3.Connection, source_id: str, error: Exception) -> None:
+    status = SOURCE_STATUS_FAILED
+    if isinstance(error, FieldkitError):
+        status = SOURCE_STATUS_PENDING
+    if isinstance(error, LLMError) and error.scope == "source":
+        status = SOURCE_STATUS_FAILED
+    mark_source_status(conn, source_id, status)
+
+
+def _claimed_source(
+    src: SourceRecord, conn: sqlite3.Connection, service: object, context: _WorkerContext
+) -> _SourceStatus:
+    from fieldkit.ingest.sources import claim_pending_source
+
+    if not claim_pending_source(conn, src.source_id):
+        return "skipped"
+    date_str, title = _source_label(src)
+    human_echo(f"Processing [{date_str}] {title} ({src.source_id}) …")
+    try:
+        result = _process_one_source(
+            src=src,
+            service=service,
+            conn=conn,
+            data_root=context.data_root,
+            pipeline_version=context.pipeline_version,
+            file_lock=context.file_lock,
+        )
+    except Exception as exc:
+        _restore_source_error(conn, src.source_id, exc)
+        raise
+    if not result.completed:
+        return "failed"
+    return "degraded" if result.degraded else "completed"
+
+
+def _source_worker(src: SourceRecord, context: _WorkerContext) -> tuple[str, _SourceStatus]:
+    from fieldkit.ingest.db import get_db
+
+    if context.batch.stopped:
+        return src.source_id, "pending"
+    service = _authenticated_docs_service()
+    conn = get_db(context.db_path)
+    try:
+        return src.source_id, _claimed_source(src, conn, service, context)
+    finally:
+        conn.close()
+
+
+def _report_llm_source_error(source_id: str, error: LLMError) -> None:
+    if error.scope == "source":
+        human_echo(f"  LLM input rejected for {source_id}; marking source failed.", err=True)
+    elif error.retryable:
+        human_echo(f"  Retryable LLM provider failure for {source_id}; source remains pending.", err=True)
+    else:
+        raise error
+
+
+def _completed_source(future: Future[tuple[str, _SourceStatus]], source_id: str) -> tuple[str, _SourceStatus]:
+    try:
+        return future.result()
+    except LLMError as exc:
+        _report_llm_source_error(source_id, exc)
+    except FieldkitError:
+        raise
+    except Exception:  # noqa: BLE001 — retain per-source failure isolation
+        human_echo(f"  Error processing {source_id}.", err=True)
+    return source_id, "failed"
+
+
+def _cancel_unstarted(futures: dict[Future[tuple[str, _SourceStatus]], SourceRecord]) -> None:
+    for future in futures:
+        future.cancel()
+
+
+def _drain_sources(pending: list[SourceRecord], workers: int, context: _WorkerContext) -> _ParallelState:
+    state = _ParallelState()
+    remaining = iter(pending)
+    with track_provider_failures(context.batch), ThreadPoolExecutor(max_workers=workers) as pool:
+        futures: dict[Future[tuple[str, _SourceStatus]], SourceRecord] = {}
+        _fill_workers(pool, futures, remaining, workers, context)
+        while futures:
+            try:
+                done, _ = wait(futures, return_when=FIRST_COMPLETED)
+            except KeyboardInterrupt:
+                state.interrupted = True
+                human_echo("\nInterrupted. Pending sources remain in pipeline.db for resume.", err=True)
+                _cancel_unstarted(futures)
+                continue
+            for future in done:
+                state.collect(future, futures.pop(future))
+            if context.batch.stopped or state.fatal is not None or state.interrupted:
+                _cancel_unstarted(futures)
+            else:
+                _fill_workers(pool, futures, remaining, workers, context)
+    return state
+
+
+def _fill_workers(
+    pool: ThreadPoolExecutor,
+    futures: dict[Future[tuple[str, _SourceStatus]], SourceRecord],
+    remaining: Iterator[SourceRecord],
+    workers: int,
+    context: _WorkerContext,
+) -> None:
+    for _ in range(workers - len(futures)):
+        src = next(remaining, None)
+        if src is None:
+            break
+        futures[pool.submit(copy_context().run, _source_worker, src, context)] = src
+
+
+def _ordered_parallel_outcomes(
+    pending: list[SourceRecord],
+    statuses: dict[str, _SourceStatus],
+    outcomes: BatchOutcomes,
+) -> None:
+    destinations = {
+        "completed": outcomes.completed,
+        "degraded": outcomes.completed,
+        "skipped": outcomes.skipped,
+        "failed": outcomes.failed,
+        "pending": outcomes.pending,
+    }
+    for src in pending:
+        status = statuses.get(src.source_id, "pending")
+        destinations[status].append(src.source_id)
+        if status == "degraded":
+            outcomes.degraded.append(src.source_id)
+
+
+def _parallel_counts(statuses: dict[str, _SourceStatus]) -> tuple[int, int, int, int]:
+    counts = {
+        status: list(statuses.values()).count(status) for status in ("completed", "degraded", "skipped", "failed")
+    }
+    return counts["completed"] + counts["degraded"], counts["degraded"], counts["skipped"], counts["failed"]
+
+
 def _run_parallel_loop(
     pending: list[SourceRecord],
     *,
@@ -618,85 +870,26 @@ def _run_parallel_loop(
     db_path: Path | None,
     pipeline_version: str,
     outcomes: BatchOutcomes | None = None,
+    batch: BatchProviderFailures | None = None,
 ) -> tuple[int, int, int, int]:
     """Process pending sources in parallel using a thread pool.
 
     Returns (n_processed, n_degraded, n_skipped, n_errors).
     """
-    from fieldkit.ingest.db import get_db
-    from fieldkit.ingest.docs import get_docs_service
-
     workers = _dynamic_worker_count(len(pending))
     if workers > 1:
         human_echo(f"Using {workers} workers for {len(pending)} pending sources (target ≤{_TARGET_MINUTES} min).")
 
-    file_lock = threading.Lock()
-
-    def _worker(src: SourceRecord) -> tuple[str, str]:
-        """Process one source in a worker thread. Returns (source_id, ok)."""
-        from fieldkit.ingest.sources import claim_pending_source as _claim
-
-        date_str = src.meeting_date.strftime("%Y-%m-%d") if src.meeting_date else "unknown date"
-        title = src.meeting_title or src.source_id
-        worker_service = get_docs_service()
-        worker_conn = get_db(db_path)
-        try:
-            # implementation note: atomically claim the source before processing to prevent
-            # two concurrent workers from both processing the same source.
-            if not _claim(worker_conn, src.source_id):
-                return src.source_id, "skipped"
-            human_echo(f"Processing [{date_str}] {title} ({src.source_id}) …")
-            result = _process_one_source(
-                src=src,
-                service=worker_service,
-                conn=worker_conn,
-                data_root=data_root,
-                pipeline_version=pipeline_version,
-                file_lock=file_lock,
-            )
-        finally:
-            worker_conn.close()
-        if not result.completed:
-            return src.source_id, "failed"
-        return src.source_id, "degraded" if result.degraded else "completed"
-
-    n_processed = n_degraded = n_errors = 0
-    statuses: dict[str, str] = {}
-    try:
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = {pool.submit(copy_context().run, _worker, src): src for src in pending}
-            for fut in as_completed(futures):
-                try:
-                    source_id, status = fut.result()
-                    statuses[source_id] = status
-                    if status in {"completed", "degraded"}:
-                        n_processed += 1
-                        n_degraded += int(status == "degraded")
-                    elif status == "failed":
-                        n_errors += 1
-                except Exception as exc:  # noqa: BLE001
-                    src = futures[fut]
-                    statuses[src.source_id] = "failed"
-                    human_echo(f"  Error processing {src.source_id}: {exc}", err=True)
-                    n_errors += 1
-    except KeyboardInterrupt:
-        human_echo("\nInterrupted. Pending sources remain in pipeline.db for resume.", err=True)
-
-    n_skipped = sum(status == "skipped" for status in statuses.values())
+    batch = batch or BatchProviderFailures(get_ingest_provider_failure_threshold())
+    context = _WorkerContext(data_root, db_path, pipeline_version, threading.Lock(), batch)
+    state = _drain_sources(pending, workers, context)
+    if state.fatal is not None:
+        raise state.fatal
     if outcomes is not None:
-        for src in pending:
-            ordered_status = statuses.get(src.source_id)
-            if ordered_status in {"completed", "degraded"}:
-                outcomes.completed.append(src.source_id)
-                if ordered_status == "degraded":
-                    outcomes.degraded.append(src.source_id)
-            elif ordered_status == "skipped":
-                outcomes.skipped.append(src.source_id)
-            elif ordered_status == "failed":
-                outcomes.failed.append(src.source_id)
-            else:
-                outcomes.pending.append(src.source_id)
-    return n_processed, n_degraded, n_skipped, n_errors
+        _ordered_parallel_outcomes(pending, state.statuses, outcomes)
+        if batch.stopped:
+            outcomes.provider_failure_threshold = batch.threshold
+    return _parallel_counts(state.statuses)
 
 
 def _run_processing_loop(
@@ -720,28 +913,23 @@ def _run_processing_loop(
     from fieldkit.ingest.db import get_db_path
 
     require_optional_profile("ingest run --pipeline transcript-ingest", "google", GOOGLE_IMPORT_ROOTS)
-    from fieldkit.ingest.docs import get_docs_service
-
     data_root = _get_fieldkit_home()
     db_path = get_db_path()
+    batch = BatchProviderFailures(get_ingest_provider_failure_threshold())
 
-    # Validate Google auth before spawning workers
-    try:
-        _probe_service = get_docs_service()
-    except FileNotFoundError as exc:
-        human_echo(f"Error: {exc}", err=True)
-        human_echo("Run the Google Workspace auth flow to generate the OAuth token.", err=True)
-        return 1
+    _probe_service = _authenticated_docs_service()
 
     outcomes = BatchOutcomes()
     if interactive:
-        n_processed, n_degraded, n_skipped, n_errors = _run_interactive_loop(
-            pending,
-            service=_probe_service,
-            conn=conn,
-            data_root=data_root,
-            pipeline_version=pipeline_version,
-        )
+        with track_provider_failures(batch):
+            n_processed, n_degraded, n_skipped, n_errors = _run_interactive_loop(
+                pending,
+                service=_probe_service,
+                conn=conn,
+                data_root=data_root,
+                pipeline_version=pipeline_version,
+                batch=batch,
+            )
     else:
         n_processed, n_degraded, n_skipped, n_errors = _run_parallel_loop(
             pending,
@@ -749,9 +937,40 @@ def _run_processing_loop(
             db_path=db_path,
             pipeline_version=pipeline_version,
             outcomes=outcomes,
+            batch=batch,
         )
 
+    return _finish_batch(
+        batch,
+        outcomes,
+        len(pending),
+        (n_processed, n_degraded, n_skipped, n_errors),
+        as_json,
+    )
+
+
+def _finish_batch(
+    batch: BatchProviderFailures,
+    outcomes: BatchOutcomes,
+    queue_size: int,
+    counts: tuple[int, int, int, int],
+    as_json: bool,
+) -> int:
+    n_processed, n_degraded, n_skipped, n_errors = counts
+    if batch.stopped:
+        outcomes.provider_failure_threshold = batch.threshold
+        _emit_provider_stop(batch, GEMINI_TRANSCRIPT_PIPELINE)
+        human_echo(f"Unstarted sources: {queue_size - n_processed - n_skipped - n_errors} pending.")
     human_echo(f"\nSummary: {n_processed} processed ({n_degraded} degraded), {n_skipped} skipped, {n_errors} error(s).")
     if as_json:
         outcomes.emit(pipeline=GEMINI_TRANSCRIPT_PIPELINE, dry_run=False, include_degraded=True)
-    return 1 if as_json and n_errors else 0
+    return 1 if batch.had_retryable_failure or (as_json and n_errors) else 0
+
+
+def _emit_provider_stop(batch: BatchProviderFailures, pipeline: str) -> None:
+    human_echo(
+        f"Stopped after {batch.threshold} consecutive retryable LLM provider failures "
+        f"(threshold {batch.threshold}). Unstarted sources remain pending. "
+        f"After provider recovery, resume with: fieldkit ingest run --pipeline {pipeline}",
+        err=True,
+    )

@@ -63,6 +63,37 @@ These are fixed operational ceilings, not estimates calculated from file or
 account counts. If a real workload needs a different ceiling, review its
 measured behavior before changing the central policy.
 
+### Resume ingest after a provider outage
+
+Run `fieldkit ingest run --pipeline transcript-ingest` again after the LLM provider recovers.
+Completed notes remain available and completed sources are not processed again.
+For ambient sessions, use `--pipeline ambient-transcript-ingest` instead.
+
+Ingest stops starting sources after **3 consecutive retryable provider failures** by default.
+Each failure counts only after the LLM wrapper exhausts its bounded retries.
+Rate limits, connection failures, timeouts, and service-unavailable errors count.
+A successful provider call resets the count before output validation.
+Invalid source content and malformed extraction output do not increment the count.
+Concurrent calls count in the order that the batch observes their results.
+
+Running sources finish at their normal persistence boundary.
+Queued work is cancelled, and unstarted sources remain pending rather than failed.
+A source attempted during an outage is reported as failed or deferred but remains pending for retry.
+The run exits 1 for a retryable provider failure, even before the stop threshold is reached.
+Authentication failures retain exit 2. Configuration and nonretryable provider-wide LLM errors propagate rather than becoming partial success.
+Known source-input rejections, including oversized prompts, fail only that source and do not cancel healthy work.
+
+Set `ingest_provider_failure_threshold` to a positive integer in `config.yaml` to change the threshold.
+The per-run `FIELDKIT_INGEST_PROVIDER_FAILURE_THRESHOLD` environment variable takes precedence.
+Invalid thresholds produce a configuration error before processing starts.
+`FIELDKIT_NO_LLM=1` retains the deterministic processing path without provider calls.
+
+Human output reports the stop threshold and resume command.
+JSON output adds `stop_reason`, `provider_failure_threshold`, and `resume_command` to the ordered batch results.
+`degraded` is a subset of `completed`. `pending` lists unstarted sources, separate from attempted failures.
+Stop diagnostics, provider retry logs, and fatal provider diagnostics do not include response bodies or credentials.
+LLM audit records store the exception type rather than its raw message.
+
 ### Import ambient transcripts
 
 Completed ambience-companion sessions under `scratch/ambient/` can enter the

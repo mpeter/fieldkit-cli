@@ -87,20 +87,44 @@ class FrontmatterStalenessError(FieldkitError):
 # ---------------------------------------------------------------------------
 
 LLMErrorCategory = Literal["auth", "rate-limit", "general"]
+LLMErrorScope = Literal["provider", "source"]
+
+
+def _normalize_llm_policy(
+    category: LLMErrorCategory,
+    retryable: bool,
+    scope: LLMErrorScope,
+) -> tuple[bool, LLMErrorScope]:
+    retryable = category == "rate-limit" or (category == "general" and retryable)
+    normalized_scope: LLMErrorScope = "provider"
+    if category == "general" and not retryable:
+        normalized_scope = scope
+    return retryable, normalized_scope
 
 
 class LLMError(FieldkitError):
-    """Uniform error wrapper for all LLM provider failures.
+    """Uniform error wrapper for LLM provider failures and input rejections.
 
     Attributes:
         category: one of "auth", "rate-limit", "general"
         original: the underlying exception, if any
+        retryable: whether bounded provider retries were exhausted, never true for auth
+        scope: source for known nonretryable input errors, provider otherwise
     """
 
-    def __init__(self, message: str, category: LLMErrorCategory = "general", original: Exception | None = None):
+    def __init__(
+        self,
+        message: str,
+        category: LLMErrorCategory = "general",
+        original: Exception | None = None,
+        *,
+        retryable: bool = False,
+        scope: LLMErrorScope = "provider",
+    ):
         super().__init__(message)
         self.category: LLMErrorCategory = category
         self.original = original
+        self.retryable, self.scope = _normalize_llm_policy(category, retryable, scope)
 
     def __str__(self) -> str:
         return f"[LLMError/{self.category}] {super().__str__()}"

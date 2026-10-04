@@ -41,6 +41,7 @@ consent in an interactive terminal.
 | Variable | Fallback alias | Purpose |
 | --- | --- | --- |
 | `FIELDKIT_LLM_MODEL` | `LLM_MODEL` | Supported LiteLLM model override |
+| `FIELDKIT_INGEST_PROVIDER_FAILURE_THRESHOLD` | None | Positive integer override for the ingest batch stop threshold; default `3` |
 | `FIELDKIT_NO_LLM` | `NO_LLM` | Disable provider calls and select documented deterministic no-AI behavior |
 | `FIELDKIT_TRANSCRIBE_MODEL` | `TRANSCRIBE_MODEL` | Explicit transcription model; no provider is selected by default |
 | `FIELDKIT_VERTEX_LOCATION` | `CLOUD_ML_REGION`, `VERTEX_LOCATION`, `GOOGLE_CLOUD_REGION` | Vertex AI region override |

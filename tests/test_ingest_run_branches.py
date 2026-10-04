@@ -525,9 +525,10 @@ def test_sync_action_items_to_tasks_display_override_applied(tmp_path: Path) -> 
 # ── TestRunProcessingLoop (flattened) ───────────────────────────────────────
 
 
-def test_run_processing_loop_auth_error_returns_1(tmp_path: Path) -> None:
-    """FileNotFoundError from get_docs_service returns exit code 1."""
+def test_run_processing_loop_missing_credentials_requires_auth(tmp_path: Path) -> None:
+    """Missing credentials propagate through the authentication-required path."""
     from fieldkit.commands.ingest.run import _run_processing_loop
+    from fieldkit.errors import AuthError
 
     with (
         patch("fieldkit.config.get_fieldkit_home", return_value=tmp_path),
@@ -535,13 +536,13 @@ def test_run_processing_loop_auth_error_returns_1(tmp_path: Path) -> None:
         patch("fieldkit.ingest.docs.get_docs_service", side_effect=FileNotFoundError("token not found")),
     ):
         src = _make_source("abc123", "Test", dated=False)
-        rc = _run_processing_loop(
-            [src],
-            conn=MagicMock(),
-            pipeline_version="0.1.0",
-            interactive=False,
-        )
-    assert rc == 1
+        with pytest.raises(AuthError, match="credentials are missing"):
+            _run_processing_loop(
+                [src],
+                conn=MagicMock(),
+                pipeline_version="0.1.0",
+                interactive=False,
+            )
 
 
 def test_run_processing_loop_interactive_quit_stops_loop(tmp_path: Path) -> None:
