@@ -90,5 +90,5 @@ discovery, web-result merging, enrichment orchestration, and reporting live in
 ## Related workflows
 
 - [Contact lookup](contact-lookup.md)
-- [Stakeholder mapping](../../meeting/ops/stakeholder-map.md)
+- [Stakeholder mapping](https://github.com/mpeter/fieldkit-cli/blob/main/src/fieldkit/skills/meeting/ops/stakeholder-map.md)
 - [Gmail setup and sync](https://github.com/mpeter/fieldkit-cli/blob/main/docs/guides/gmail.md)
