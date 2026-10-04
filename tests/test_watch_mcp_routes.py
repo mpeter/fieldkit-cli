@@ -89,10 +89,34 @@ def test_sales_session_is_not_opened_without_group() -> None:
     with (
         patch.object(backstory_health, "get_mcp_work_group", return_value=None),
         patch.object(backstory_health, "MCPSession") as session_class,
+        pytest.raises(ConfigError, match="mcp_sales_group"),
     ):
-        result = backstory_health._open_mcp_session()
-    assert result is None
+        backstory_health._open_mcp_session()
     session_class.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "group_error", [None, ConfigError("Config key 'mcp_sales_group' must be a valid MCP group name")]
+)
+def test_backstory_health_records_fatal_run_for_unusable_group(
+    group_error: ConfigError | None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import json
+
+    from fieldkit.watch import backstory_health
+
+    lookup = {"side_effect": group_error} if group_error else {"return_value": None}
+    with (
+        patch.object(backstory_health, "get_mcp_work_group", **lookup),
+        patch.object(backstory_health, "_load_and_filter_accounts", return_value={"acme": {}}),
+        patch.object(backstory_health, "load_state", return_value={}),
+        patch.object(backstory_health, "watcher_logging"),
+        patch.object(backstory_health, "write_run_status") as write_status,
+        pytest.raises(ConfigError, match="mcp_sales_group"),
+    ):
+        backstory_health._run_backstory_health(threshold=50, account=None, dry_run=False, as_json=True)
+    assert write_status.call_args.kwargs["outcome"] == "fatal"
+    assert json.loads(capsys.readouterr().out)["outcome"] == "fatal"
 
 
 def test_mail_session_is_not_opened_without_group() -> None:
@@ -102,12 +126,25 @@ def test_mail_session_is_not_opened_without_group() -> None:
         patch.object(draft_queue, "get_mcp_work_group", return_value=None),
         patch.object(draft_queue, "_resolve_user_email", return_value="user@example.com"),
         patch.object(draft_queue, "watcher_logging"),
-        patch.object(draft_queue, "write_run_status"),
         patch("fieldkit.watch.morning_brief_mcp.MCPSession") as session_class,
+        patch.object(draft_queue, "write_run_status") as write_status,
+        pytest.raises(ConfigError, match="mcp_mail_group"),
     ):
-        result = draft_queue._run_draft_queue(dry_run=False)
-    assert result == 1
+        draft_queue._run_draft_queue(dry_run=False)
+    assert write_status.call_args.kwargs["outcome"] == "fatal"
     session_class.assert_not_called()
+
+
+def test_run_all_keeps_watcher_config_errors_as_data_errors() -> None:
+    from fieldkit.cli_exit import EXIT_DATA
+    from fieldkit.commands.watch import cli as watch_cli
+
+    def unusable_group() -> int:
+        raise ConfigError("Config key 'mcp_mail_group' must be a valid MCP group name")
+
+    rc = watch_cli._invoke_watcher("draft-queue", unusable_group)
+    assert rc == EXIT_DATA
+    assert watch_cli._run_all_exit_code(rc, allow_partial=True) == EXIT_DATA
 
 
 def test_calendar_session_is_not_opened_without_group() -> None:

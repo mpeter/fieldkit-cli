@@ -20,8 +20,8 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
+from fieldkit.config import ConfigError, get_mcp_work_group, get_user_email_from_env
 from fieldkit.config import get_mcp_gateway_base as _get_mcp_gateway_base
-from fieldkit.config import get_mcp_work_group, get_user_email_from_env
 from fieldkit.config import get_watchers_dir as get_watchers_dir
 from fieldkit.watch.logging import watcher_logging
 from fieldkit.watch.status import WatcherOutcome, write_run_status
@@ -280,7 +280,6 @@ def _run_draft_queue(*, dry_run: bool, account: str | None = None, as_json: bool
         # --- Open MCP session ---
         group = get_mcp_work_group("mail")
         if group is None:
-            log.error("mcp_mail_group is not configured; set it in fieldkit config to enable draft-queue")
             elapsed = time.monotonic() - start
             write_run_status(
                 watcher="draft-queue",
@@ -293,7 +292,8 @@ def _run_draft_queue(*, dry_run: bool, account: str | None = None, as_json: bool
             )
             if as_json:
                 _emit_run_json(outcome="fatal", checked=0, alerts=0, failures=1, elapsed=elapsed, dry_run=False)
-            return 1
+            # A missing group is permanent configuration, not a retryable partial run.
+            raise ConfigError("mcp_mail_group is not configured; set it in fieldkit config to enable draft-queue")
         session = MCPSession(f"{_get_mcp_gateway_base()}/v0/groups/{group}/mcp")
         try:
             session.initialize()

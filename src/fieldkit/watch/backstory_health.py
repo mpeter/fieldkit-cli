@@ -24,7 +24,7 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
-from fieldkit.config import get_accounts_config, get_fieldkit_home, get_mcp_work_group, get_watchers_dir
+from fieldkit.config import ConfigError, get_accounts_config, get_fieldkit_home, get_mcp_work_group, get_watchers_dir
 from fieldkit.config import get_mcp_gateway_base as _get_mcp_gateway_base
 from fieldkit.watch.dedup import alert_block_exists
 from fieldkit.watch.logging import watcher_logging
@@ -442,11 +442,13 @@ def _load_and_filter_accounts(
 
 
 def _open_mcp_session() -> MCPSession | None:
-    """Initialize and return an MCP session, or None on failure."""
+    """Initialize and return an MCP session, or None when the gateway is unreachable.
+
+    Raises ConfigError when the sales group is missing or malformed.
+    """
     group = get_mcp_work_group("sales")
     if group is None:
-        log.error("mcp_sales_group is not configured; set it in fieldkit config to enable backstory-health")
-        return None
+        raise ConfigError("mcp_sales_group is not configured; set it in fieldkit config to enable backstory-health")
     session = MCPSession(f"{_get_mcp_gateway_base()}/v0/groups/{group}/mcp")
     try:
         session.initialize()
@@ -511,6 +513,34 @@ def _check_all_accounts(
     return accounts_checked, alerts_generated, api_failures, updated_state
 
 
+def _record_fatal_run(*, elapsed: float, dry_run: bool, as_json: bool) -> None:
+    """Persist and, for --json, emit a fatal outcome so no stale status survives the run."""
+    write_run_status(
+        watcher="backstory-health",
+        outcome="fatal",
+        records_checked=0,
+        alerts_generated=0,
+        failures=1,
+        elapsed_seconds=elapsed,
+        dry_run=dry_run,
+    )
+    if as_json:
+        print(
+            json.dumps(
+                {
+                    "watcher": "backstory-health",
+                    "outcome": "fatal",
+                    "records_checked": 0,
+                    "alerts_generated": 0,
+                    "failures": 1,
+                    "elapsed_seconds": round(elapsed, 1),
+                    "dry_run": dry_run,
+                },
+                indent=2,
+            )
+        )
+
+
 def _run_backstory_health(
     *,
     threshold: int,
@@ -533,7 +563,11 @@ def _run_backstory_health(
 
         state = load_state()
 
-        session = _open_mcp_session()
+        try:
+            session = _open_mcp_session()
+        except ConfigError:
+            _record_fatal_run(elapsed=time.monotonic() - start, dry_run=dry_run, as_json=as_json)
+            raise
         if session is None:
             return 1
 
