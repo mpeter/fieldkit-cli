@@ -14,22 +14,22 @@
       "content_type": "policy",
       "fenced_blocks": [
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "agents.md.block-1",
           "language": "bash",
           "sha256": "833432688a9e6d230c4d7ca18587178b5cbeef9548e178cc9ae48a9a7c0afa92",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         },
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "agents.md.block-2",
           "language": "bash",
           "sha256": "d6e181be67af40bfe717caf4622d78864f6a9b7b5c1c9537be93cf4093b4e60b",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         }
       ],
       "reader_action": "Apply repository engineering constraints.",
-      "source_fingerprint": "sha256:64247a8cbe3c05ea96d259de4db6e43feb88502a6812e94881ed905e6a1cfb47",
+      "source_fingerprint": "sha256:370bd1329ab5868fa031df2ce234f97d59dc3bf121662af78998470c1a3bade8",
       "sources": [
         "Makefile",
         "pyproject.toml",
@@ -40,22 +40,22 @@
       "content_type": "how-to",
       "fenced_blocks": [
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "contributing.md.block-1",
           "language": "console",
           "sha256": "7769f7deff0e0af7477e292816063efb24722c38e8b10f29f0d2baae99ebaca5",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         },
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "contributing.md.block-2",
           "language": "console",
           "sha256": "de37eb43fbe796870e17f158c0696c72908d2332014bee4185e55349cf0da82d",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         }
       ],
       "reader_action": "Prepare and submit a contribution.",
-      "source_fingerprint": "sha256:b6831264a89d7c5bd35027e348d09d4717063ee1b9baaadbf3de3503a013a90e",
+      "source_fingerprint": "sha256:883f86019cb3531ede5e1fc7cd3d94ddf24573bc9bdf272e80fe01fa4e30cda0",
       "sources": [
         "Makefile",
         "pyproject.toml",
@@ -66,7 +66,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Understand current project authority.",
-      "source_fingerprint": "sha256:44c532390e75bb132e988170c278f86ddbaa25a7146b634eeccf932a4a225356",
+      "source_fingerprint": "sha256:980f4f96b663fcfb292d7b7e72f5c76427f936871f4c1019c95892e7eaae4ecd",
       "sources": [
         ".github/CODEOWNERS",
         ".github/repository-settings.json"
@@ -76,11 +76,11 @@
       "content_type": "overview",
       "fenced_blocks": [
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "readme.md.block-1",
           "language": "console",
           "sha256": "4fb449ef8f276bdd57515b4076d4987460537f112469df56b26cc4275780a87d",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         },
         {
           "classification": "safe_automated_command",
@@ -90,22 +90,22 @@
           "verification_id": "automated.installed-base-artifact"
         },
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "readme.md.block-3",
           "language": "console",
           "sha256": "b6b9bd4f55fa4c0266c5b7a3625f02c7d3923128371089f3f8211529da305af7",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         },
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "readme.md.block-4",
           "language": "console",
           "sha256": "92cee7cfe332837c7bca8da6569042da6f9586496bc30ba694be157f9122fdf6",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         }
       ],
       "reader_action": "Choose an installation or contribution path.",
-      "source_fingerprint": "sha256:c7db2399655833c6f40955749044547d667c3b6aa19e83169528fa98a4ae5b04",
+      "source_fingerprint": "sha256:d8f72d6e68b0ee7bc75bbc675edbe00168e44cd653ca9083503b0608a29d4505",
       "sources": [
         "pyproject.toml",
         "src/fieldkit/__main__.py",
@@ -116,18 +116,18 @@
       "content_type": "how-to",
       "fenced_blocks": [
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "releasing.md.block-1",
           "language": "console",
           "sha256": "0a6138b5aff5ec91e22d1c67ff41ed9b9d8cbca1d2edc1d615fd9568e009d9e7",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         },
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "releasing.md.block-2",
           "language": "console",
           "sha256": "91d306195af669a48193a600aca9ba56e75563c75c04369c8266cea18fb67f13",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         },
         {
           "classification": "safe_automated_command",
@@ -137,19 +137,32 @@
           "verification_id": "automated.release-workflow-policy"
         },
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "credentialed_manual_integration",
           "id": "releasing.md.block-4",
           "language": "console",
+          "sha256": "8fcbdd4c14f44af756eeb3730d7423ea10d2bf5d2b5a4cc5a7e8daef8c96d81d",
+          "verification_id": "manual.credentialed-integration"
+        },
+        {
+          "classification": "public_rehearsal_proof",
+          "id": "releasing.md.block-5",
+          "language": "console",
           "sha256": "50a2887392175a0bde98a73e4a63398f2644c0204a51eb514358d94235e9ded3",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
+        },
+        {
+          "classification": "credentialed_manual_integration",
+          "id": "releasing.md.block-6",
+          "language": "console",
+          "sha256": "373d9afa98f987ceed9b9e18cadef83e182530a923851661fdfee3497a532fd8",
+          "verification_id": "manual.credentialed-integration"
         }
       ],
       "reader_action": "Prepare, assess, and recover an operator-approved release candidate.",
-      "source_fingerprint": "sha256:4ed145153913bd6a63fa41f2bb15d0f32d18138c94203b5a9f3239962d3565dd",
+      "source_fingerprint": "sha256:bcc0661c2d763fba8b526dd3c4bd0eb2895bbc5077ec49d1f286cf58027d2093",
       "sources": [
         "Makefile",
         ".github/workflows/release.yml",
-        ".github/workflows/release-approval.yml",
         "docs/release-readiness/release-policy.json",
         "docs/release-readiness/release-governance-policy.json",
         "scripts/check_release_consumer.py",
@@ -161,10 +174,10 @@
       ],
       "tables": [
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "releasing.md.table-1",
-          "sha256": "35b71f5d88f8708f9b28441eb64327f5daf6b64934f825403c2ba37a589d4bb4",
-          "verification_id": "manual.release-cutover"
+          "sha256": "92352ab0835c6b69e1694898bbcf6db840c1638de360c1778004ce0ff2ec7ccb",
+          "verification_id": "manual.public-rehearsal"
         }
       ]
     },
@@ -172,7 +185,7 @@
       "content_type": "roadmap",
       "fenced_blocks": [],
       "reader_action": "Review planned work.",
-      "source_fingerprint": "sha256:28cf05310d8e2a4d715e3529ef2e9458528f163e6a0b60ee242827a2b1753f84",
+      "source_fingerprint": "sha256:0f26fba886013aed851ee104ba4f2078321574a04285c93db52f660d3d37dac2",
       "sources": [
         ".github/repository-settings.json",
         "pyproject.toml",
@@ -215,17 +228,17 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Report a vulnerability without public disclosure.",
-      "source_fingerprint": "sha256:a9d1fec419b6707cdddb333a79306d5bc848c6f1feee7bd097cd3b0b342e7c66",
+      "source_fingerprint": "sha256:2dc161c62661fdade69d6859013a4738018cf546ba0ec68a7bd356a5fc72b913",
       "sources": [
         ".github/repository-settings.json",
         ".github/ISSUE_TEMPLATE/config.yml"
       ],
       "tables": [
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "security.md.table-1",
           "sha256": "391f708f84cd3f835cb09dddc1bf5b5f6d9a29ac232e5fefa2f8a8f983d11ed8",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         }
       ]
     },
@@ -291,7 +304,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Choose the canonical safe write mechanism for persistent state.",
-      "source_fingerprint": "sha256:cff087f8283268dabdc0bde0214f8427f22231637797123af2a709b8a3460a95",
+      "source_fingerprint": "sha256:008fc902603a341d56b1bdd74da491d05f9af4ead75485af3c788628dd777be4",
       "sources": [
         "src/fieldkit/**/*.py"
       ]
@@ -1137,7 +1150,7 @@
         }
       ],
       "reader_action": "Look up command syntax and options.",
-      "source_fingerprint": "sha256:a324b4f780a87082748b1d544850d32377a02c1a534036fe5be44acb08810fca",
+      "source_fingerprint": "sha256:752c1638ba0a9987aa59263d079e9e5f0810baf62228ec9c5f490bd1d6695f50",
       "sources": [
         "src/fieldkit/commands/**/*.py",
         "src/fieldkit/__main__.py"
@@ -1155,7 +1168,7 @@
       "content_type": "reference",
       "fenced_blocks": [],
       "reader_action": "Check whether an environment is supported.",
-      "source_fingerprint": "sha256:9858e894be0e109ff47762e3658875fe78193bfee32bba0c3645d369e998a025",
+      "source_fingerprint": "sha256:6428be490c43f6050d40bdbe0ab6fcabd6ae1c8e8391b67494e597ff724e84ce",
       "sources": [
         "docs/release-readiness/compatibility-policy.json",
         ".github/workflows/compatibility.yml",
@@ -1220,7 +1233,7 @@
         }
       ],
       "reader_action": "Inspect the generated module dependency graph.",
-      "source_fingerprint": "sha256:f588b11ca3234ca562957f72393404e32cd9a966d4597317c6b33853d23b4588",
+      "source_fingerprint": "sha256:61e5122eb3e4cb35d05553d810910727d13ebb8e45a23d544420978eeb249591",
       "sources": [
         "tach.toml",
         "src/fieldkit/**/*.py",
@@ -1281,18 +1294,18 @@
       "content_type": "tutorial",
       "fenced_blocks": [
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "docs.getting.started.md.block-1",
           "language": "console",
           "sha256": "20b482f6b211296d01f9552ef5fb15bad46b9efa043db45d34c49eaee0c2c0ad",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         },
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "docs.getting.started.md.block-2",
           "language": "console",
           "sha256": "4fb449ef8f276bdd57515b4076d4987460537f112469df56b26cc4275780a87d",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         },
         {
           "classification": "safe_automated_command",
@@ -1302,11 +1315,11 @@
           "verification_id": "automated.installed-base-artifact"
         },
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "docs.getting.started.md.block-4",
           "language": "console",
           "sha256": "0f5b8d004a4899dccfbceffeb778d12eb62c8c46430287335a569e6e271f4335",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         },
         {
           "classification": "safe_automated_command",
@@ -1337,15 +1350,15 @@
           "verification_id": "automated.installed-base-artifact"
         },
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "docs.getting.started.md.block-9",
           "language": "console",
           "sha256": "26b3fbfe69cbb7a056b9c83638c983a1cfe4142e2bc79c706877e0d41e41d778",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         }
       ],
       "reader_action": "Install fieldkit and complete a credential-free first run.",
-      "source_fingerprint": "sha256:1e58e9f7e60ec664c1ac34c2df5bbe4c1aa819b3d72b11c445921d4cb79c1d25",
+      "source_fingerprint": "sha256:b8f2b2f0e33829bb5a312a595459c7b60fc2f77b0c859754d1f4eff515024c6a",
       "sources": [
         "pyproject.toml",
         "scripts/check_compatibility_policy.py",
@@ -1393,11 +1406,11 @@
           "verification_id": "manual.credentialed-integration"
         },
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "docs.guides.gmail.md.block-6",
           "language": "",
           "sha256": "e2ba67c5affaef253d3c951246388ff3f1e48b4cac59e1504b207af28ef48e71",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         },
         {
           "classification": "credentialed_manual_integration",
@@ -1407,11 +1420,11 @@
           "verification_id": "manual.credentialed-integration"
         },
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "docs.guides.gmail.md.block-8",
           "language": "",
           "sha256": "8575cc5985c79e1799d6a9597f1cf2470f98fc76c94784ed01ceb788aea81f83",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         },
         {
           "classification": "credentialed_manual_integration",
@@ -1492,11 +1505,11 @@
           "verification_id": "automated.installed-base-artifact"
         },
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "docs.guides.morning.brief.md.block-2",
           "language": "console",
           "sha256": "31ec3d8f86e6b1ed1214754e950ba70d40f8b020a2700ead19554ac3fe92d64c",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         },
         {
           "classification": "safe_automated_command",
@@ -1513,11 +1526,11 @@
           "verification_id": "manual.credentialed-integration"
         },
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "docs.guides.morning.brief.md.block-5",
           "language": "console",
           "sha256": "48a1b18f708bf071fe88479bb13d0bf565a69ca7a309d588b071471554594de5",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         }
       ],
       "reader_action": "Generate and interpret a morning brief.",
@@ -1545,60 +1558,60 @@
           "verification_id": "manual.credentialed-integration"
         },
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "docs.guides.pipeline.workflow.md.block-3",
           "language": "",
           "sha256": "7fa7f730c679e598a80d20328918d6a995377fab065301812ddc43dfe2c83deb",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         },
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "docs.guides.pipeline.workflow.md.block-4",
           "language": "",
           "sha256": "9df9e41f50f2a1c11150eb9e1eab8be7af6e86524f95312f8e8e1ebe9a9ba6ce",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         },
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "docs.guides.pipeline.workflow.md.block-5",
           "language": "",
           "sha256": "de3d21bab48be5180dbfaf368ba0352b6995ebeb07f21b09785f7339be4d1c01",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         },
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "docs.guides.pipeline.workflow.md.block-6",
           "language": "",
           "sha256": "686217dada4360e863a63ddd30744f973a4c058c8261572a3df534e2923a77a4",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         },
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "docs.guides.pipeline.workflow.md.block-7",
           "language": "",
           "sha256": "0da042be94078fe7ea3c44489bc9d4da1d454451d1dae9bebbe8371db5818574",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         },
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "docs.guides.pipeline.workflow.md.block-8",
           "language": "",
           "sha256": "e02e7bba5bbde11298f25668c5e9576d75aa7d93ea1dc0fe9b8e10d15318020d",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         },
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "docs.guides.pipeline.workflow.md.block-9",
           "language": "",
           "sha256": "1eae78c86214c82b36707c16dca0fdfa8e7e83f5cfbe75a61d369fd5df793df6",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         },
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "docs.guides.pipeline.workflow.md.block-10",
           "language": "yaml",
           "sha256": "be560372b9af60a3cbef8e26dd9a2d5a12cc379a2053500e5fca615d56aea6cd",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         },
         {
           "classification": "credentialed_manual_integration",
@@ -1644,7 +1657,7 @@
         }
       ],
       "reader_action": "Run supported pipeline workflows.",
-      "source_fingerprint": "sha256:a59d50263ce9d4683a5e37d7d5ee618c3027745cb0774ac91bd95a499a606050",
+      "source_fingerprint": "sha256:60c13a44c575f0717d0214e88918356756df899e4571b313d32bea640f252c46",
       "sources": [
         "src/fieldkit/commands/pipeline/**/*.py",
         "src/fieldkit/commands/datasync/**/*.py",
@@ -1655,10 +1668,10 @@
       ],
       "tables": [
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "docs.guides.pipeline.workflow.md.table-1",
           "sha256": "03538ca4f46a37e3c8a9b16a6550617520bf4f09db0dc961671a05db70dd44a9",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         }
       ]
     },
@@ -1673,11 +1686,11 @@
           "verification_id": "manual.credentialed-integration"
         },
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "docs.guides.salesforce.auth.md.block-2",
           "language": "",
           "sha256": "5acb48c5dd157e256d8d3fbd764fc5b310adb83829d5d23ceeb11cb03add26a9",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         },
         {
           "classification": "credentialed_manual_integration",
@@ -1687,11 +1700,11 @@
           "verification_id": "manual.credentialed-integration"
         },
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "docs.guides.salesforce.auth.md.block-4",
           "language": "",
           "sha256": "ee99f5dec8f12ef16c53974119774b22628bcffbce9d875d44775e737b39d861",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         },
         {
           "classification": "credentialed_manual_integration",
@@ -1701,25 +1714,25 @@
           "verification_id": "manual.credentialed-integration"
         },
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "docs.guides.salesforce.auth.md.block-5",
           "language": "",
           "sha256": "3488bca7e1ded135a61c61eaaf8e67830527105394b6b60a4662e7e6c2ce2026",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         },
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "docs.guides.salesforce.auth.md.block-6",
           "language": "",
           "sha256": "30466b6428d53a3e5eb566e74efa997557d60704a30562d904e132c9a7800159",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         },
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "docs.guides.salesforce.auth.md.block-7",
           "language": "",
           "sha256": "dcea69a07175dec14a4ace3d799e76680a53ad106aac9e59bacdfb8975948e38",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         }
       ],
       "reader_action": "Configure and verify Salesforce authentication.",
@@ -1748,11 +1761,11 @@
           "verification_id": "manual.credentialed-integration"
         },
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "docs.guides.shadowbot.auth.md.block-3",
           "language": "console",
           "sha256": "78c2a9d40f9c2929a1431e4dab24f9d32fb7a6c562270879429a747621ac4916",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         },
         {
           "classification": "credentialed_manual_integration",
@@ -1787,11 +1800,11 @@
           "verification_id": "automated.installed-base-artifact"
         },
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "docs.guides.watchers.md.block-3",
           "language": "console",
           "sha256": "b64aee2591a80558193c7901ed719eaeb8ed873fcdbca385dc208f8cbdc18312",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         },
         {
           "classification": "credentialed_manual_integration",
@@ -1801,11 +1814,11 @@
           "verification_id": "manual.credentialed-integration"
         },
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "docs.guides.watchers.md.block-5",
           "language": "console",
           "sha256": "908ce14096e075dc758016e8c7ea9f78e2f3777301fe10ac7372c1fc5a54f3b1",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         },
         {
           "classification": "credentialed_manual_integration",
@@ -1858,10 +1871,10 @@
       ],
       "tables": [
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "docs.integrations.md.table-1",
           "sha256": "afa31baba5d239aa996d197de8652b5290b41528cfd77e053d113732c1587b34",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         }
       ]
     },
@@ -1880,16 +1893,16 @@
       "content_type": "concept",
       "fenced_blocks": [],
       "reader_action": "Understand local storage and external data flows.",
-      "source_fingerprint": "sha256:cff087f8283268dabdc0bde0214f8427f22231637797123af2a709b8a3460a95",
+      "source_fingerprint": "sha256:008fc902603a341d56b1bdd74da491d05f9af4ead75485af3c788628dd777be4",
       "sources": [
         "src/fieldkit/**/*.py"
       ],
       "tables": [
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "docs.privacy.md.table-1",
           "sha256": "8172af414ba215d91f20799ada760f4078bf7b7b5811bead53dcace94ebbbe1b",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         }
       ]
     },
@@ -1897,11 +1910,11 @@
       "content_type": "reference",
       "fenced_blocks": [
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "docs.reference.config.file.md.block-1",
           "language": "text",
           "sha256": "6711ff07d3d121a6d9248610e5103e237090a66be6fe5051397ddfe5c23d95e6",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         },
         {
           "classification": "safe_automated_command",
@@ -1947,22 +1960,22 @@
       ],
       "tables": [
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "docs.reference.config.file.md.table-1",
           "sha256": "277ff906e94ec406da9a8c0b18cd8571c9252a20e8147e4af513fdb112a1f828",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         },
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "docs.reference.config.file.md.table-2",
           "sha256": "c4176de1a7cb0389f2ae3d4a20b77d534179036197e1a4d0d33997154254acd9",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         },
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "docs.reference.config.file.md.table-3",
           "sha256": "e6fd0b6a8edc3c4d846e0fb3f1b63102ec9416a69c1150ebd5172111b914493a",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         }
       ]
     },
@@ -1970,18 +1983,18 @@
       "content_type": "reference",
       "fenced_blocks": [
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "docs.reference.environment.vars.md.block-1",
           "language": "console",
           "sha256": "51e63cd7cdd4110ee379958ef48782f44f9c0aeb86b56d02ae016ff7bd2a3314",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         },
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "docs.reference.environment.vars.md.block-2",
           "language": "console",
           "sha256": "b7d3a82ace52b6d1ae973cd9dab5c2e99fe2478f7658dde7a844c4156fda5144",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         }
       ],
       "reader_action": "Configure supported environment overrides.",
@@ -1992,28 +2005,28 @@
       ],
       "tables": [
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "docs.reference.environment.vars.md.table-1",
           "sha256": "c91a0c06879fb3c7de4b20bc2a32c643281c8766f0465e597cb69410910113c5",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         },
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "docs.reference.environment.vars.md.table-2",
           "sha256": "1575a2cb1291b46b7acdbb6ad27045c12ca8d6a6ddc90b6bfe8fddb3b8e15257",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         },
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "docs.reference.environment.vars.md.table-3",
           "sha256": "0d33b875f2133c94a249343c5cce7161f0cc831026c58cfba14904a3913e7a64",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         },
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "docs.reference.environment.vars.md.table-4",
           "sha256": "472ccffe2643180c5ec2ee3014965aedebc08e30ebb525bf445f3de9cfea97df",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         }
       ]
     },
@@ -2036,7 +2049,7 @@
         }
       ],
       "reader_action": "Interpret process exit status.",
-      "source_fingerprint": "sha256:5bc80fa3bf563abd323687e16e781adfe48078afc1bebb8578d63ef64ec0560b",
+      "source_fingerprint": "sha256:7e60c07a46f4f5f932f73e9145bfeb12bec2d73fac1f7c923547194db0695128",
       "sources": [
         "src/fieldkit/cli_exit.py",
         "src/fieldkit/__main__.py",
@@ -2068,11 +2081,11 @@
           "verification_id": "automated.installed-base-artifact"
         },
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "docs.reference.troubleshooting.md.block-2",
           "language": "console",
           "sha256": "fbc5a608cf484ec5fb7adde645b6c07a8779845be187d80c93d35e0fa7e7093c",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         },
         {
           "classification": "credentialed_manual_integration",
@@ -2089,18 +2102,18 @@
           "verification_id": "manual.credentialed-integration"
         },
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "docs.reference.troubleshooting.md.block-5",
           "language": "console",
           "sha256": "b7ffbdf2228c235cfbb55eeca4654e5d3c6a07c20a13a453ba184db4f51f32a7",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         },
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "docs.reference.troubleshooting.md.block-6",
           "language": "console",
           "sha256": "bd76af344e70be9c360ccbf406f0be7b562787280be0f76581aef4e058882ff5",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         }
       ],
       "reader_action": "Diagnose common failures safely.",
@@ -2111,10 +2124,10 @@
       ],
       "tables": [
         {
-          "classification": "exact_release_cutover_proof",
+          "classification": "public_rehearsal_proof",
           "id": "docs.reference.troubleshooting.md.table-1",
           "sha256": "69fe6c602f894ea52c8ff33f38b77b3332dee92f9a9c836b8897a4a5ca899e59",
-          "verification_id": "manual.release-cutover"
+          "verification_id": "manual.public-rehearsal"
         }
       ]
     },
@@ -2122,7 +2135,7 @@
       "content_type": "reference",
       "fenced_blocks": [],
       "reader_action": "Find releases that have actually been published.",
-      "source_fingerprint": "sha256:510101de9879023a3bbe739d950e1060a2fb7dfca6569c7e1b232286b99738a9",
+      "source_fingerprint": "sha256:18bed4c73fab7ad3c3f12def18083967ecf09057f729bf1f420e5c325f2ef2ec",
       "sources": [
         "pyproject.toml",
         "CHANGELOG.md"
@@ -2154,7 +2167,7 @@
         }
       ],
       "reader_action": "Choose a supported fieldkit workflow.",
-      "source_fingerprint": "sha256:0281ee32b78bba1a0c93013766065f19f0e142ba42e79a98c96c509874c90d93",
+      "source_fingerprint": "sha256:89ddd5827561c422958a9f3d3f9aea60d20de49fb299f86397de80a8fd7af8e7",
       "sources": [
         "src/fieldkit/__main__.py",
         "src/fieldkit/commands/**/*.py",
@@ -2213,8 +2226,8 @@
       "evidence": "docs/release-readiness/rehearsal-evidence.schema.json",
       "mode": "manual_evidence"
     },
-    "manual.release-cutover": {
-      "classification": "exact_release_cutover_proof",
+    "manual.public-rehearsal": {
+      "classification": "public_rehearsal_proof",
       "evidence": "docs/release-readiness/rehearsal-evidence.schema.json",
       "mode": "manual_evidence"
     }

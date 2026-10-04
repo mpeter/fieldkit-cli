@@ -34,7 +34,7 @@ _VERIFICATION_EVIDENCE = {
     "source_contract": "uv run python scripts/check_documentation_contract.py",
 }
 _AUTOMATED_EXAMPLE_CLASSES = frozenset({"generated_reference", "safe_automated_command", "structural_assertion"})
-_MANUAL_EXAMPLE_CLASSES = frozenset({"credentialed_manual_integration", "exact_release_cutover_proof"})
+_MANUAL_EXAMPLE_CLASSES = frozenset({"credentialed_manual_integration", "public_rehearsal_proof"})
 _EXAMPLE_VERIFICATION_EVIDENCE = {
     "automated.roadmap-contract": (
         "structural_assertion",
@@ -96,8 +96,8 @@ _EXAMPLE_VERIFICATION_EVIDENCE = {
         "docs/release-readiness/rehearsal-evidence.schema.json",
         ("docs/release-readiness/rehearsal-evidence.schema.json",),
     ),
-    "manual.release-cutover": (
-        "exact_release_cutover_proof",
+    "manual.public-rehearsal": (
+        "public_rehearsal_proof",
         "manual_evidence",
         "docs/release-readiness/rehearsal-evidence.schema.json",
         ("docs/release-readiness/rehearsal-evidence.schema.json",),

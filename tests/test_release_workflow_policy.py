@@ -28,20 +28,51 @@ def _sealed_distribution_step() -> dict[str, object]:
     }
 
 
+_CANDIDATE = "release-candidate-${{ github.run_id }}-${{ github.sha }}"
+_PUSH_ONLY = "github.event_name == 'push'"
+
+
+def _download(path: str = ".") -> dict[str, object]:
+    return {
+        "uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+        "with": {"name": _CANDIDATE, "path": path},
+    }
+
+
+def _consumer(needs: list[str], endpoint: str, host: str) -> dict[str, object]:
+    return {
+        "if": _PUSH_ONLY,
+        "needs": needs,
+        "runs-on": "ubuntu-24.04",
+        "timeout-minutes": 30,
+        "permissions": {"contents": "read"},
+        "steps": [
+            _download("release-inputs"),
+            {"uses": "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97"},
+            {
+                "run": (
+                    "python -m scripts.check_release_consumer \\\n"
+                    f'  --index-endpoint "{endpoint}$VERSION/json" \\\n'
+                    f"  --download-host {host} \\\n"
+                    "  --allow-live-index"
+                )
+            },
+            {
+                "if": "always()",
+                "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+                "with": {
+                    "path": "consumer-evidence.json",
+                    "if-no-files-found": "error",
+                    "retention-days": "90",
+                },
+            },
+        ],
+    }
+
+
 def _workflow() -> dict[str, object]:
     return {
-        "on": {
-            "workflow_dispatch": {
-                "inputs": {
-                    "mode": {
-                        "required": True,
-                        "type": "choice",
-                        "options": ["dry-run", "testpypi"],
-                    }
-                }
-            },
-            "push": {"tags": ["v*.*.*"]},
-        },
+        "on": {"workflow_dispatch": None, "push": {"tags": ["v*.*.*"]}},
         "permissions": {},
         "env": {
             "GITLEAKS_VERSION": release_workflow_policy.GITLEAKS_VERSION,
@@ -53,35 +84,20 @@ def _workflow() -> dict[str, object]:
                 "runs-on": "ubuntu-24.04",
                 "timeout-minutes": 10,
                 "permissions": {"contents": "read"},
-                "outputs": {
-                    "approval_run": "${{ steps.approval_metadata.outputs.run }}",
-                    "approval_manifest_sha256": "${{ steps.approval_metadata.outputs.sha256 }}",
-                },
                 "steps": [
                     {
                         "run": (
                             'if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then '
                             'test "$GITHUB_REF" = "refs/heads/main"; fi && '
                             "timeout 60s gh api tags/$GITHUB_REF_NAME && "
-                            "jq '.verification.verified == true and .object.sha == $GITHUB_SHA'"
+                            "jq '.verification.verified == true and .object.sha == $GITHUB_SHA'\n"
+                            'git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main'
                         )
-                    },
-                    {
-                        "id": "approval_metadata",
-                        "run": (
-                            "Release-approval-run: Release-approval-manifest-sha256: "
-                            '[[ "$run" =~ ^[1-9][0-9]*$ ]]\n'
-                            '[[ "$digest" =~ ^[0-9a-f]{64}$ ]]\n'
-                            'wc -l <<< "$run"\n'
-                            'wc -l <<< "$digest"\n'
-                            'echo "run=$run" >> "$GITHUB_OUTPUT"\n'
-                            'echo "sha256=$digest" >> "$GITHUB_OUTPUT"'
-                        ),
                     },
                     {
                         "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
                         "with": {
-                            "name": "release-evidence-tools-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}",
+                            "name": "release-evidence-tools-${{ github.run_id }}-${{ github.sha }}",
                             "path": "scripts/release_promotion_evidence.py scripts/_release_identity.py scripts/release_bundle.py scripts/release_consumer.py scripts/release_wheelhouse.py pyproject.toml",
                             "if-no-files-found": "error",
                             "retention-days": "90",
@@ -89,28 +105,20 @@ def _workflow() -> dict[str, object]:
                     },
                 ],
             },
+            "compatibility": {
+                "needs": "context",
+                "uses": "./.github/workflows/compatibility.yml",
+                "permissions": {"contents": "read"},
+            },
             "build": {
-                "if": "always() && ((github.event_name == 'push' && needs.approval.result == 'success' && needs.compatibility.result == 'success') || (github.event_name == 'workflow_dispatch' && needs.approval.result == 'skipped' && needs.compatibility.result == 'skipped'))",
-                "needs": ["context", "approval", "compatibility"],
+                "needs": ["context", "compatibility"],
                 "outputs": {"bundle_manifest_sha256": "${{ steps.bundle_manifest.outputs.sha256 }}"},
                 "runs-on": "ubuntu-24.04",
                 "timeout-minutes": 30,
-                "permissions": {"contents": "read", "actions": "read"},
+                "permissions": {"contents": "read"},
                 "steps": [
                     {
-                        "run": (
-                            "APPROVAL_RUN APPROVAL_MANIFEST_SHA256 actions/runs/$APPROVAL_RUN "
-                            ".github/workflows/release-approval.yml@ "
-                            "release-approval-input-${APPROVAL_RUN}-${approval_attempt}-${GITHUB_SHA} "
-                            "timeout 60s gh api --paginate --slurp jq -r --arg name length == 1 actions/artifacts/$artifact_id/zip "
-                            "scripts/release_approval_archive.py scripts/release_approval_input.py "
-                            "approved-artifact/approval-input/public-candidate/report.json "
-                            "approved-artifact/approval-input/public-candidate/bundle"
-                        )
-                    },
-                    {
                         "name": "Install the pinned export secret scanner",
-                        "if": "github.event_name == 'workflow_dispatch'",
                         "run": (
                             "curl --fail --location --proto '=https' --tlsv1.2 --retry 3 --connect-timeout 10 "
                             "--max-time 60 --output gitleaks.tar.gz\n"
@@ -122,57 +130,109 @@ def _workflow() -> dict[str, object]:
                     },
                     {
                         "name": "Build the one retained public candidate",
-                        "if": "github.event_name == 'workflow_dispatch'",
+                        "run": "uv run python scripts/check_public_candidate.py --output-dir candidate",
+                    },
+                    {
+                        "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+                        "with": {"name": _CANDIDATE, "path": "candidate/"},
+                    },
+                    {
                         "id": "bundle_manifest",
                         "run": 'echo "sha256=$(sha256sum candidate/bundle/SHA256SUMS)" >> "$GITHUB_OUTPUT"',
                     },
                 ],
             },
-            "approval": {
-                "if": "github.event_name == 'push'",
-                "needs": "context",
-                "runs-on": "ubuntu-24.04",
-                "timeout-minutes": 10,
-                "environment": "release-approval",
-                "permissions": {"contents": "read"},
-            },
-            "compatibility": {
-                "if": "github.event_name == 'push'",
-                "needs": ["context", "approval"],
-                "uses": "./.github/workflows/compatibility.yml",
-                "permissions": {"contents": "read"},
-            },
             "validate": {
-                "if": "always() && needs.build.result == 'success'",
                 "needs": "build",
                 "runs-on": "ubuntu-24.04",
                 "timeout-minutes": 30,
                 "permissions": {"contents": "read"},
+                "steps": [_download()],
             },
-            "consumer_pypi": {
-                "if": "always() && needs.context.result == 'success' && needs.build.result == 'success' && needs.validate.result == 'success' && needs.publish_pypi.result == 'success' && github.event_name == 'push'",
-                "needs": ["context", "build", "validate", "publish_pypi"],
+            "attest": {
+                "if": _PUSH_ONLY,
+                "needs": ["build", "validate"],
                 "runs-on": "ubuntu-24.04",
-                "timeout-minutes": 30,
-                "permissions": {"contents": "read"},
+                "timeout-minutes": 15,
+                "permissions": {"attestations": "write", "id-token": "write"},
                 "steps": [
-                    {"uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"},
-                    {"uses": "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97"},
-                    {"run": "python -m scripts.check_release_consumer"},
+                    _download(),
+                    _sealed_distribution_step(),
                     {
-                        "if": "always()",
-                        "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
-                        "with": {
-                            "path": "consumer-evidence.json",
-                            "if-no-files-found": "error",
-                            "retention-days": "90",
-                        },
+                        "uses": _RECORDED["attest"],
+                        "with": {"subject-path": "release-dist"},
+                    },
+                ],
+            },
+            "publish_testpypi": {
+                "if": _PUSH_ONLY,
+                "needs": ["build", "validate", "attest"],
+                "runs-on": "ubuntu-24.04",
+                "timeout-minutes": 15,
+                "environment": "testpypi",
+                "permissions": {"id-token": "write"},
+                "steps": [
+                    _download(),
+                    _sealed_distribution_step(),
+                    {
+                        "uses": _RECORDED["publish_testpypi"],
+                        "with": {"packages-dir": "release-dist", "attestations": True},
+                    },
+                ],
+            },
+            "consumer_testpypi": _consumer(
+                ["context", "build", "validate", "publish_testpypi"],
+                "https://test.pypi.org/pypi/fieldkit-cli/",
+                "test-files.pythonhosted.org",
+            ),
+            "publish_pypi": {
+                "if": _PUSH_ONLY,
+                "needs": ["build", "validate", "attest", "consumer_testpypi"],
+                "runs-on": "ubuntu-24.04",
+                "timeout-minutes": 15,
+                "environment": "pypi",
+                "permissions": {"id-token": "write"},
+                "steps": [
+                    _download(),
+                    _sealed_distribution_step(),
+                    {
+                        "uses": _RECORDED["publish_pypi"],
+                        "with": {"packages-dir": "release-dist", "attestations": True},
+                    },
+                ],
+            },
+            "consumer_pypi": _consumer(
+                ["context", "build", "validate", "publish_pypi"],
+                "https://pypi.org/pypi/fieldkit-cli/",
+                "files.pythonhosted.org",
+            ),
+            "github_release": {
+                "if": _PUSH_ONLY,
+                "needs": ["build", "validate", "attest", "publish_pypi", "consumer_pypi"],
+                "runs-on": "ubuntu-24.04",
+                "timeout-minutes": 15,
+                "permissions": {"contents": "write"},
+                "steps": [
+                    _download(),
+                    _sealed_distribution_step(),
+                    {
+                        "run": 'gh release create "$GITHUB_REF_NAME" release-dist/* --repo "$GITHUB_REPOSITORY" '
+                        "--verify-tag --generate-notes"
                     },
                 ],
             },
             "promotion_evidence": {
                 "if": "always() && github.event_name == 'push'",
-                "needs": ["build", "validate", "attest", "publish_pypi", "consumer_pypi", "github_release"],
+                "needs": [
+                    "build",
+                    "validate",
+                    "attest",
+                    "publish_testpypi",
+                    "consumer_testpypi",
+                    "publish_pypi",
+                    "consumer_pypi",
+                    "github_release",
+                ],
                 "runs-on": "ubuntu-24.04",
                 "timeout-minutes": 10,
                 "permissions": {"contents": "read"},
@@ -182,15 +242,15 @@ def _workflow() -> dict[str, object]:
                         "continue-on-error": True,
                         "uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
                     },
-                    {
-                        "id": "candidate",
-                        "continue-on-error": True,
-                        "uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
-                    },
+                    {**_download("release-inputs"), "id": "candidate", "continue-on-error": True},
                     {"uses": "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97"},
                     {"run": "python -m scripts.release_promotion_evidence --candidate-unavailable"},
                     {
-                        "run": f"boundary_actions = {{'attest': '{_RECORDED['attest']}', 'publish_pypi': '{_RECORDED['publish_pypi']}'}}"
+                        "run": (
+                            f"boundary_actions = {{'attest': '{_RECORDED['attest']}', "
+                            f"'publish_testpypi': '{_RECORDED['publish_testpypi']}', "
+                            f"'publish_pypi': '{_RECORDED['publish_pypi']}'}}"
+                        )
                     },
                     {
                         "if": "always()",
@@ -203,67 +263,16 @@ def _workflow() -> dict[str, object]:
                     },
                 ],
             },
-            "attest": {
-                "if": "always() && needs.build.result == 'success' && needs.validate.result == 'success' && (github.event_name == 'push' || inputs.mode == 'testpypi')",
-                "needs": ["build", "validate"],
-                "runs-on": "ubuntu-24.04",
-                "timeout-minutes": 15,
-                "permissions": {"attestations": "write", "id-token": "write"},
-                "steps": [
-                    {"uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"},
-                    _sealed_distribution_step(),
-                    {
-                        "uses": _RECORDED["attest"],
-                        "with": {"subject-path": "release-dist"},
-                    },
-                ],
-            },
-            "publish_testpypi": {
-                "if": "always() && needs.build.result == 'success' && needs.validate.result == 'success' && needs.attest.result == 'success' && github.event_name == 'workflow_dispatch' && inputs.mode == 'testpypi'",
-                "needs": ["build", "validate", "attest"],
-                "runs-on": "ubuntu-24.04",
-                "timeout-minutes": 15,
-                "environment": "testpypi",
-                "permissions": {"id-token": "write"},
-                "steps": [
-                    {"uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"},
-                    _sealed_distribution_step(),
-                    {
-                        "uses": _RECORDED["publish_pypi"],
-                        "with": {"packages-dir": "release-dist", "attestations": True},
-                    },
-                ],
-            },
-            "publish_pypi": {
-                "if": "always() && needs.build.result == 'success' && needs.validate.result == 'success' && needs.attest.result == 'success' && github.event_name == 'push'",
-                "needs": ["build", "validate", "attest"],
-                "runs-on": "ubuntu-24.04",
-                "timeout-minutes": 15,
-                "environment": "pypi",
-                "permissions": {"id-token": "write"},
-                "steps": [
-                    {"uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"},
-                    _sealed_distribution_step(),
-                    {
-                        "uses": _RECORDED["publish_pypi"],
-                        "with": {"packages-dir": "release-dist", "attestations": True},
-                    },
-                ],
-            },
-            "github_release": {
-                "if": "always() && needs.build.result == 'success' && needs.validate.result == 'success' && needs.attest.result == 'success' && needs.publish_pypi.result == 'success' && needs.consumer_pypi.result == 'success' && github.event_name == 'push'",
-                "needs": ["build", "validate", "attest", "publish_pypi", "consumer_pypi"],
-                "runs-on": "ubuntu-24.04",
-                "timeout-minutes": 15,
-                "permissions": {"contents": "write"},
-                "steps": [
-                    {"uses": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"},
-                    _sealed_distribution_step(),
-                    {"run": "gh release create $GITHUB_REF_NAME release-dist/* --generate-notes"},
-                ],
-            },
         },
     }
+
+
+def _job(workflow: dict[str, object], name: str) -> dict[str, object]:
+    jobs = workflow["jobs"]
+    assert isinstance(jobs, dict)
+    job = jobs[name]
+    assert isinstance(job, dict)
+    return job
 
 
 def test_policy_accepts_separate_artifact_only_authority_jobs() -> None:
@@ -273,69 +282,138 @@ def test_policy_accepts_separate_artifact_only_authority_jobs() -> None:
     assert report.findings == ()
 
 
-def test_approval_policy_rejects_an_operator_supplied_archive_url() -> None:
-    document = yaml.safe_load(
-        (release_workflow_policy.REPO_ROOT / release_workflow_policy.APPROVAL_WORKFLOW_PATH).read_text(encoding="utf-8")
-    )
-    job = document["jobs"]["approve"]
-    for step in job["steps"]:
-        if step.get("id") == "input_token":
-            step["with"]["repositories"] = "another-repository"
-
-    report = release_workflow_policy.validate_approval_document(document)
-
-    assert ("RWA006", "approve") in {(finding.code, finding.job) for finding in report.findings}
-
-
-def test_policy_rejects_missing_nonempty_approval_tag_metadata_validation() -> None:
+@pytest.mark.parametrize("dispatch", [{"inputs": {"mode": {"type": "choice"}}}, {"inputs": {}}])
+def test_policy_rejects_dispatch_inputs(dispatch: dict[str, object]) -> None:
     workflow = _workflow()
-    jobs = workflow["jobs"]
-    assert isinstance(jobs, dict)
-    context = jobs["context"]
-    assert isinstance(context, dict)
-    steps = context["steps"]
-    assert isinstance(steps, list)
-    metadata = steps[1]
-    assert isinstance(metadata, dict)
-    metadata["run"] = str(metadata["run"]).replace('[[ "$run" =~ ^[1-9][0-9]*$ ]]\n', "")
+    triggers = workflow["on"]
+    assert isinstance(triggers, dict)
+    triggers["workflow_dispatch"] = dispatch
 
     report = release_workflow_policy.validate_document(workflow)
 
-    assert ("RWF025", "context") in {(finding.code, finding.job) for finding in report.findings}
+    assert {(finding.code, finding.job) for finding in report.findings} == {("RWF001", "workflow")}
 
 
-def test_policy_rejects_production_acquisition_without_the_manifest_digest() -> None:
+def test_policy_rejects_a_production_tag_off_main() -> None:
     workflow = _workflow()
-    jobs = workflow["jobs"]
-    assert isinstance(jobs, dict)
-    build = jobs["build"]
-    assert isinstance(build, dict)
-    steps = build["steps"]
-    assert isinstance(steps, list)
-    acquisition = steps[0]
-    assert isinstance(acquisition, dict)
-    acquisition["run"] = str(acquisition["run"]).replace("APPROVAL_MANIFEST_SHA256 ", "", 1)
+    step = _job(workflow, "context")["steps"][0]
+    assert isinstance(step, dict)
+    step["run"] = str(step["run"]).replace("git merge-base --is-ancestor", "git merge-base")
 
     report = release_workflow_policy.validate_document(workflow)
 
-    assert ("RWF026", "build") in {(finding.code, finding.job) for finding in report.findings}
+    assert {(finding.code, finding.job) for finding in report.findings} == {("RWF030", "context")}
 
 
-def test_policy_rejects_unbounded_approval_input_requests() -> None:
+@pytest.mark.parametrize(
+    "step_name", ["Install the pinned export secret scanner", "Build the one retained public candidate"]
+)
+def test_policy_rejects_a_conditional_candidate_build(step_name: str) -> None:
     workflow = _workflow()
-    jobs = workflow["jobs"]
-    assert isinstance(jobs, dict)
-    build = jobs["build"]
-    assert isinstance(build, dict)
-    steps = build["steps"]
+    steps = _job(workflow, "build")["steps"]
     assert isinstance(steps, list)
-    acquisition = steps[0]
-    assert isinstance(acquisition, dict)
-    acquisition["run"] = str(acquisition["run"]).replace("timeout 60s gh api", "gh api", 1)
+    next(step for step in steps if step.get("name") == step_name)["if"] = "github.event_name == 'workflow_dispatch'"
 
     report = release_workflow_policy.validate_document(workflow)
 
-    assert ("RWF026", "build") in {(finding.code, finding.job) for finding in report.findings}
+    assert {(finding.code, finding.job) for finding in report.findings} == {("RWF026", "build")}
+
+
+@pytest.mark.parametrize("job_name", ["build", "validate", "compatibility"])
+def test_policy_rejects_a_condition_that_could_run_past_a_failed_dependency(job_name: str) -> None:
+    workflow = _workflow()
+    _job(workflow, job_name)["if"] = "always()"
+
+    report = release_workflow_policy.validate_document(workflow)
+
+    code = "RWF027" if job_name == "compatibility" else "RWF012"
+    assert {(finding.code, finding.job) for finding in report.findings} == {(code, job_name)}
+
+
+@pytest.mark.parametrize(
+    "candidate_name",
+    [
+        "release-candidate-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}",
+        "release-candidate-${{ github.sha }}",
+    ],
+)
+@pytest.mark.parametrize("job_name", ["build", "publish_pypi"])
+def test_policy_rejects_an_attempt_scoped_candidate_artifact(job_name: str, candidate_name: str) -> None:
+    workflow = _workflow()
+    steps = _job(workflow, job_name)["steps"]
+    assert isinstance(steps, list)
+    for step in steps:
+        if isinstance(step.get("with"), dict) and step["with"].get("name") == _CANDIDATE:
+            step["with"]["name"] = candidate_name
+
+    report = release_workflow_policy.validate_document(workflow)
+
+    assert {(finding.code, finding.job) for finding in report.findings} == {("RWF031", job_name)}
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'gh release create "$GITHUB_REF_NAME" release-dist/* --generate-notes',
+        'gh release create "$GITHUB_REF_NAME" release-dist/* --verify-tag --generate-notes',
+        'gh release create "$GITHUB_REF_NAME" release-dist/* --repo "$GITHUB_REPOSITORY" --generate-notes',
+        'gh release create "$GITHUB_REF_NAME" release-dist/* --repo "$GITHUB_REPOSITORY" --verify-tag '
+        "--verify-tag=false --generate-notes",
+        'gh release create "$GITHUB_REF_NAME" release-dist/* --repo "$OTHER_REPOSITORY" --verify-tag --generate-notes',
+    ],
+    ids=["no-repository-or-tag-check", "no-repository", "no-tag-check", "tag-check-disabled", "other-repository"],
+)
+def test_policy_requires_an_explicit_repository_for_the_checkout_free_release(command: str) -> None:
+    workflow = _workflow()
+    steps = _job(workflow, "github_release")["steps"]
+    assert isinstance(steps, list)
+    steps[-1]["run"] = command
+
+    report = release_workflow_policy.validate_document(workflow)
+
+    assert {(finding.code, finding.job) for finding in report.findings} == {("RWF032", "github_release")}
+
+
+def test_policy_rejects_overwriting_the_candidate_artifact() -> None:
+    workflow = _workflow()
+    steps = _job(workflow, "build")["steps"]
+    assert isinstance(steps, list)
+    upload = next(step for step in steps if str(step.get("uses", "")).startswith("actions/upload-artifact@"))
+    upload["with"]["overwrite"] = "true"
+
+    report = release_workflow_policy.validate_document(workflow)
+
+    assert {(finding.code, finding.job) for finding in report.findings} == {("RWF031", "build")}
+
+
+@pytest.mark.parametrize(
+    ("job_name", "replacement"),
+    [
+        ("consumer_testpypi", ("https://test.pypi.org/", "https://pypi.org/")),
+        ("consumer_testpypi", ("test-files.pythonhosted.org", "files.pythonhosted.org")),
+        ("consumer_pypi", ("files.pythonhosted.org", "files.pythonhosted.org --download-host example.com")),
+    ],
+)
+def test_policy_binds_each_consumer_to_its_own_index(job_name: str, replacement: tuple[str, str]) -> None:
+    workflow = _workflow()
+    steps = _job(workflow, job_name)["steps"]
+    assert isinstance(steps, list)
+    for step in steps:
+        if isinstance(step.get("run"), str):
+            step["run"] = step["run"].replace(*replacement)
+
+    report = release_workflow_policy.validate_document(workflow)
+
+    assert {(finding.code, finding.job) for finding in report.findings} == {("RWF014", job_name)}
+
+
+def test_policy_requires_the_testpypi_consumer_before_production_publication() -> None:
+    workflow = _workflow()
+    _job(workflow, "publish_pypi")["needs"] = ["build", "validate", "attest"]
+
+    report = release_workflow_policy.validate_document(workflow)
+
+    assert {(finding.code, finding.job) for finding in report.findings} == {("RWF008", "publish_pypi")}
 
 
 @pytest.mark.parametrize("job_name", ["attest", "publish_testpypi", "publish_pypi", "github_release"])
@@ -463,20 +541,6 @@ def test_policy_rejects_dispatch_that_does_not_require_main() -> None:
     assert ("RWF013", "context") in {(finding.code, finding.job) for finding in report.findings}
 
 
-def test_policy_rejects_build_that_cannot_follow_a_skipped_dispatch_approval() -> None:
-    """A deliberate non-production dispatch must not inherit a skipped-job failure."""
-    workflow = _workflow()
-    jobs = workflow["jobs"]
-    assert isinstance(jobs, dict)
-    build = jobs["build"]
-    assert isinstance(build, dict)
-    build.pop("if")
-
-    report = release_workflow_policy.validate_document(workflow)
-
-    assert ("RWF012", "build") in {(finding.code, finding.job) for finding in report.findings}
-
-
 def test_policy_rejects_scanner_install_to_its_extraction_directory() -> None:
     """The scanner must be a runnable file, not the directory created for extraction."""
     workflow = _workflow()
@@ -501,10 +565,6 @@ def test_repository_validator_accepts_checked_in_yaml_shape(tmp_path: Path) -> N
     workflow_path = tmp_path / ".github" / "workflows" / "release.yml"
     workflow_path.parent.mkdir(parents=True)
     workflow_path.write_text(yaml.dump(_workflow()), encoding="utf-8")
-    shutil.copy(
-        release_workflow_policy.REPO_ROOT / release_workflow_policy.APPROVAL_WORKFLOW_PATH,
-        workflow_path.parent / "release-approval.yml",
-    )
     (tmp_path / "scripts").mkdir()
     shutil.copy(
         release_workflow_policy.REPO_ROOT / release_workflow_policy.EVIDENCE_PATH,
@@ -518,7 +578,7 @@ def test_repository_validator_accepts_checked_in_yaml_shape(tmp_path: Path) -> N
 
 @pytest.mark.parametrize(
     ("job_name", "boundary"),
-    [("attest", "attest"), ("publish_testpypi", "publish_pypi"), ("publish_pypi", "publish_pypi")],
+    [("attest", "attest"), ("publish_testpypi", "publish_testpypi"), ("publish_pypi", "publish_pypi")],
 )
 def test_policy_rejects_an_action_revision_the_evidence_does_not_record(job_name: str, boundary: str) -> None:
     workflow = _workflow()
@@ -655,7 +715,7 @@ def test_checked_in_release_workflow_satisfies_policy() -> None:
 def test_checked_in_workflow_preserves_the_candidate_and_renderer_layout() -> None:
     workflow = yaml.safe_load((release_workflow_policy.REPO_ROOT / ".github/workflows/release.yml").read_text())
     jobs = workflow["jobs"]
-    candidate_name = "release-candidate-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}"
+    candidate_name = _CANDIDATE
 
     build_upload = jobs["build"]["steps"][-2]["with"]
     assert build_upload["path"].split() == [
@@ -676,7 +736,7 @@ def test_checked_in_workflow_preserves_the_candidate_and_renderer_layout() -> No
         )
         assert download["name"] == candidate_name
         assert download["path"] == "."
-    for job_name in ("consumer_pypi", "promotion_evidence"):
+    for job_name in ("consumer_testpypi", "consumer_pypi", "promotion_evidence"):
         download = next(
             step["with"] for step in jobs[job_name]["steps"] if step.get("with", {}).get("name") == candidate_name
         )

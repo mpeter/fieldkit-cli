@@ -58,7 +58,6 @@ artifact-check:
 # release-check — build exactly one retained wheel/sdist pair from an explicit verified public export.
 # The output directory must be absent: a stale candidate must never be overwritten or promoted by accident.
 PUBLIC_CANDIDATE_OUTPUT ?= build/public-candidate
-RELEASE_MANUAL_EVIDENCE ?=
 
 release-check:
 	@if [ -z "$(PUBLIC_CANDIDATE_REVISION)" ]; then \
@@ -69,8 +68,7 @@ release-check:
 		--repo . \
 		--revision "$(PUBLIC_CANDIDATE_REVISION)" \
 		--output-dir "$(PUBLIC_CANDIDATE_OUTPUT)" \
-		--output "$(PUBLIC_CANDIDATE_OUTPUT).json" \
-		$(if $(RELEASE_MANUAL_EVIDENCE),--manual-evidence "$(RELEASE_MANUAL_EVIDENCE)")
+		--output "$(PUBLIC_CANDIDATE_OUTPUT).json"
 
 # release-policy-check — validate immutable release identity and support policy without network access.
 release-policy-check:

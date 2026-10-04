@@ -132,23 +132,20 @@ def _build_steps(cfg: RunConfig) -> list[tuple[str, list[str]]]:
     steps: list[tuple[str, list[str]]] = []
 
     if not cfg.quick:
+        # `gmail sync` is deliberately NOT scoped. It fills the local SQLite
+        # cache; narrowing it to one account would leave that cache partial,
+        # and every later unscoped query would then read the gap as an
+        # absence of mail rather than an absence of sync. The cache stays
+        # complete (it is incremental, so the cost is small) and only the
+        # analysis steps below are scoped.
+        #
+        # It also does not accept the flag: passing it produced
+        # "Error: No such option: --account", failing the first step of every
+        # `fieldkit sync --account <slug>` run and taking the whole sync to
+        # exit 1.
         gmail_sync = [*_fk, "gmail", "sync"]
-        gmail_tags = [*_fk, "gmail", "account-tags"]
-        gmail_enrich = [*_fk, "gmail", "enrich-pursuits"]
-        if cfg.account:
-            # `gmail sync` is deliberately NOT scoped. It fills the local SQLite
-            # cache; narrowing it to one account would leave that cache partial,
-            # and every later unscoped query would then read the gap as an
-            # absence of mail rather than an absence of sync. The cache stays
-            # complete (it is incremental, so the cost is small) and only the
-            # analysis steps below are scoped.
-            #
-            # It also does not accept the flag: passing it produced
-            # "Error: No such option: --account", failing the first step of every
-            # `fieldkit sync --account <slug>` run and taking the whole sync to
-            # exit 1.
-            gmail_tags += ["--account", cfg.account]
-            gmail_enrich += ["--account", cfg.account]
+        gmail_tags = _scoped([*_fk, "gmail", "account-tags"], cfg.account)
+        gmail_enrich = _scoped([*_fk, "gmail", "enrich-pursuits"], cfg.account)
         steps += [
             ("gmail sync", gmail_sync),
             (PEOPLE_INDEX_LABEL, []),
@@ -163,15 +160,11 @@ def _build_steps(cfg: RunConfig) -> list[tuple[str, list[str]]]:
         ("ingest run", ingest_run),
     ]
 
-    backstory_cmd = [*_fk, "watch", "run", "backstory-health"]
-    stalls_cmd = [*_fk, "watch", "run", "pursuit-stalls"]
-    slack_cmd = [*_fk, "watch", "run", "slack-threads"]
-    if cfg.account:
-        backstory_cmd += ["--account", cfg.account]
-        stalls_cmd += ["--account", cfg.account]
-        # implementation change: slack-threads supports --account; scope it consistently with
-        # backstory-health and pursuit-stalls when --account is provided.
-        slack_cmd += ["--account", cfg.account]
+    # slack-threads supports --account; scope it consistently with
+    # backstory-health and pursuit-stalls when --account is provided.
+    backstory_cmd = _scoped([*_fk, "watch", "run", "backstory-health"], cfg.account)
+    stalls_cmd = _scoped([*_fk, "watch", "run", "pursuit-stalls"], cfg.account)
+    slack_cmd = _scoped([*_fk, "watch", "run", "slack-threads"], cfg.account)
     steps += [
         ("backstory-health", backstory_cmd),
         ("pursuit-stalls", stalls_cmd),
@@ -182,10 +175,20 @@ def _build_steps(cfg: RunConfig) -> list[tuple[str, list[str]]]:
         sf_cmd = [*_fk, "sf", "listview"]  # no TARGET = sync all accounts
         steps.append(("sf listview", sf_cmd))
 
+    _require_step_timeouts(steps)
+    return steps
+
+
+def _scoped(argv: list[str], account: str | None) -> list[str]:
+    """Return *argv* narrowed to one account when an account is selected."""
+    return [*argv, "--account", account] if account else argv
+
+
+def _require_step_timeouts(steps: list[tuple[str, list[str]]]) -> None:
+    """Fail before running when a subprocess step has no configured ceiling."""
     for label, cmd in steps:
         if cmd and label not in DATASYNC_STEP_TIMEOUTS:
             raise ValueError(f"No data-sync timeout configured for step {label!r}")
-    return steps
 
 
 def _step_note(returncode: int, stderr: str, stdout: str) -> str:
