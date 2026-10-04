@@ -234,7 +234,7 @@ def test_process_one_source_returns_error_on_failure(monkeypatch: pytest.MonkeyP
 
 
 # ---------------------------------------------------------------------------
-# Task 6.8 — _run_processing_loop always returns 0
+# _run_processing_loop exit status
 # ---------------------------------------------------------------------------
 
 
@@ -296,8 +296,8 @@ def test_run_processing_loop_returns_zero_on_all_success(monkeypatch: pytest.Mon
     assert rc == 0, f"_run_processing_loop must return 0 on success, got {rc}"
 
 
-def test_run_processing_loop_preserves_human_exit_on_item_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Human mode preserves its historical zero exit after reporting item failures."""
+def test_run_processing_loop_returns_partial_on_human_item_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Human mode returns partial status when a source fails to process."""
     import sys
     import types
 
@@ -315,7 +315,7 @@ def test_run_processing_loop_preserves_human_exit_on_item_failure(monkeypatch: p
     monkeypatch.setattr("fieldkit.ingest.sources.claim_pending_source", lambda conn, source_id: True)
     monkeypatch.setattr("fieldkit.config.get_fieldkit_home", lambda: __import__("pathlib").Path("/tmp/fake-data"))
 
-    # _process_one_source always fails (returns False)
+    # The source processor reports no completed artifact.
     monkeypatch.setattr(
         run_mod,
         "_process_one_source",
@@ -342,7 +342,7 @@ def test_run_processing_loop_preserves_human_exit_on_item_failure(monkeypatch: p
     )
     conn.close()
 
-    assert rc == 0
+    assert rc == 1
 
 
 # ---------------------------------------------------------------------------

@@ -273,6 +273,43 @@ def _registered_ambient_source(tmp_path: Path, texts: list[str]) -> tuple[sqlite
     return conn, snapshot.source_id
 
 
+def test_ambient_batch_stops_after_provider_threshold(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    conn, _source_id = _registered_ambient_source(tmp_path, ["meeting discussion " * 20])
+    ambient_root = tmp_path / "scratch" / "ambient"
+    for index in range(2):
+        path = ambient_root / f"session-20260910T12000{index + 1}Z.jsonl"
+        _write_session(path, [f"meeting topic {index} " * 20])
+        register_ambient_snapshots(conn, [load_ambient_snapshot(path, ambient_root=ambient_root)])
+    monkeypatch.setattr("fieldkit.config.get_fieldkit_home", lambda: tmp_path)
+    monkeypatch.setattr("fieldkit.ingest.db.get_db_path", lambda: tmp_path / "pipeline.db")
+    monkeypatch.setenv("FIELDKIT_INGEST_PROVIDER_FAILURE_THRESHOLD", "2")
+    monkeypatch.setattr(
+        "fieldkit.ingest.ambient_pipeline.route_by_content",
+        lambda _content: RouteResult(accounts=["acme-corp"], confidence=Confidence.LOW, is_internal=False),
+    )
+    calls: list[str] = []
+
+    def provider(_prompt: str) -> str:
+        calls.append("call")
+        raise LLMError("fictional response body", category="general", retryable=True)
+
+    monkeypatch.setattr("fieldkit.ingest.pipeline.synthesize", provider)
+    try:
+        result = CliRunner().invoke(run_cli, ["--pipeline", "ambient-transcript-ingest", "--json"])
+        assert result.exit_code == 1
+        payload = json.loads(result.stdout)
+        assert len(calls) == len(payload["deferred"]) == 2
+        assert len(payload["pending"]) == 1
+        assert payload["processed"] == payload["failed"] == payload["skipped"] == []
+        assert payload["provider_failure_threshold"] == 2
+        assert payload["stop_reason"] == "consecutive_retryable_provider_failures"
+        assert payload["resume_command"] == "fieldkit ingest run --pipeline ambient-transcript-ingest"
+        assert "fictional response body" not in result.output
+        assert conn.execute("SELECT COUNT(*) FROM sources WHERE status = 'pending'").fetchone()[0] == 3
+    finally:
+        conn.close()
+
+
 def test_process_noise_records_outcome_without_meeting_note(tmp_path: Path) -> None:
     conn, source_id = _registered_ambient_source(tmp_path, ["background noise"])
 
@@ -423,7 +460,7 @@ def test_concurrent_processors_create_at_most_one_artifact(tmp_path: Path) -> No
         verify_conn.close()
 
 
-def test_llm_failure_marks_source_failed_instead_of_leaving_claim(
+def test_nonretryable_llm_failure_propagates_and_releases_claim(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     conn, source_id = _registered_ambient_source(tmp_path, ["customer discussion " * 10])
@@ -436,11 +473,34 @@ def test_llm_failure_marks_source_failed_instead_of_leaving_claim(
         lambda _content: (_ for _ in ()).throw(LLMError("provider unavailable", category="general")),
     )
 
-    result = process_ambient_source(conn, source_id=source_id, fieldkit_home=tmp_path, pipeline_version="0.1.0")
+    with pytest.raises(LLMError, match="provider unavailable") as exc_info:
+        process_ambient_source(conn, source_id=source_id, fieldkit_home=tmp_path, pipeline_version="0.1.0")
 
-    assert result.status == "failed"
-    assert conn.execute("SELECT status FROM sources WHERE source_id = ?", (source_id,)).fetchone()[0] == "failed"
+    assert exc_info.value.retryable is False
+    assert conn.execute("SELECT status FROM sources WHERE source_id = ?", (source_id,)).fetchone()[0] == "pending"
     conn.close()
+
+
+def test_source_specific_llm_error_marks_only_source_failed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    conn, source_id = _registered_ambient_source(tmp_path, ["meeting discussion " * 10])
+    monkeypatch.setattr(
+        "fieldkit.ingest.ambient_pipeline.route_by_content",
+        lambda _content: RouteResult(accounts=["acme-corp"], confidence=Confidence.LOW, is_internal=False),
+    )
+    error = LLMError("fictional provider response", scope="source")
+
+    def reject_source(_content: str) -> None:
+        raise error
+
+    monkeypatch.setattr("fieldkit.ingest.ambient_pipeline.stage1_clean", reject_source)
+    try:
+        result = process_ambient_source(conn, source_id=source_id, fieldkit_home=tmp_path, pipeline_version="0.1.0")
+        assert result.status == "failed"
+        assert result.reason == "LLM input rejected for this source"
+        assert "fictional provider response" not in result.reason
+        assert conn.execute("SELECT status FROM sources WHERE source_id = ?", (source_id,)).fetchone()[0] == "failed"
+    finally:
+        conn.close()
 
 
 def test_llm_rate_limit_defers_source_for_retry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

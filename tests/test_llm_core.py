@@ -4,13 +4,17 @@ All tests run with NO_LLM=1 or mock litellm so no real API calls are made.
 """
 
 import os
-from typing import ClassVar
 from unittest.mock import MagicMock, patch
 
 import pytest
 from _env_helpers import hermetic_env
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.fixture(autouse=True)
+def local_model_costs(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
 
 # ---------------------------------------------------------------------------
@@ -132,11 +136,70 @@ def test_synthesize_timeout_timeout_exception_propagates_as_llmerror() -> None:
     with (
         patch.dict(os.environ, env_without_no_llm, clear=True),
         patch("litellm.completion", mock_completion),
-        pytest.raises(LLMError, match="timeout") as exc_info,
+        pytest.raises(LLMError, match="LLM provider request failed") as exc_info,
     ):
         synthesize("test prompt")
 
     assert exc_info.value.category == "general"
+    assert exc_info.value.retryable is False
+    assert str(exc_info.value.original) == "timeout"
+    assert "timeout" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize("kind", ["Timeout", "ServiceUnavailableError", "APIConnectionError", "RateLimitError"])
+def test_exhausted_provider_retries_are_identified(kind: str) -> None:
+    import litellm
+
+    from fieldkit.errors import LLMError
+    from fieldkit.llm.core import synthesize
+
+    error = getattr(litellm.exceptions, kind)(
+        message="temporary provider failure", llm_provider="vertex_ai", model="vertex_ai/test-model"
+    )
+    calls = MagicMock(side_effect=error)
+    with (
+        patch.dict(os.environ, hermetic_env(), clear=True),
+        patch("litellm.completion", calls),
+        patch("time.sleep"),
+        pytest.raises(LLMError, match="LLM provider") as exc_info,
+    ):
+        synthesize("test prompt", model="vertex_ai/test-model")
+    assert exc_info.value.retryable is True
+    assert exc_info.value.original is error
+    assert "temporary provider failure" not in str(exc_info.value)
+    assert calls.call_count == 3
+
+
+@pytest.mark.parametrize(
+    "kind,scope",
+    [
+        ("ContextWindowExceededError", "source"),
+        ("ContentPolicyViolationError", "source"),
+        ("BadRequestError", "provider"),
+    ],
+)
+def test_invalid_provider_requests_distinguish_source_from_configuration(kind: str, scope: str) -> None:
+    import litellm
+
+    from fieldkit.errors import LLMError
+    from fieldkit.llm.core import synthesize
+
+    error = getattr(litellm.exceptions, kind)(
+        message="fictional invalid request", llm_provider="vertex_ai", model="vertex_ai/test-model"
+    )
+    calls = MagicMock(side_effect=error)
+    with (
+        patch.dict(os.environ, hermetic_env(), clear=True),
+        patch("litellm.completion", calls),
+        pytest.raises(LLMError, match="LLM provider request failed") as exc_info,
+    ):
+        synthesize("test prompt", model="vertex_ai/test-model")
+    assert exc_info.value.scope == scope
+    assert exc_info.value.original is error
+    assert "fictional invalid request" not in str(exc_info.value)
+    assert exc_info.value.category == "general"
+    assert exc_info.value.retryable is False
+    assert calls.call_count == 1
 
 
 # ---------------------------------------------------------------------------
@@ -146,8 +209,8 @@ def test_synthesize_timeout_timeout_exception_propagates_as_llmerror() -> None:
 
 # ── TestSynthesizeRetry (flattened) ─────────────────────────────────────────
 
-_SYNTHESIZE_RETRY__ENV_NO_LLM_CLEARED: ClassVar[dict[str, str]] = {
-    **hermetic_env(),
+_SYNTHESIZE_RETRY__ENV_NO_LLM_CLEARED: dict[str, str] = {
+    **hermetic_env(LITELLM_LOCAL_MODEL_COST_MAP="True"),
 }
 
 
@@ -204,11 +267,14 @@ def test_synthesize_retry_auth_error_not_retried() -> None:
         patch.dict(os.environ, _SYNTHESIZE_RETRY__ENV_NO_LLM_CLEARED, clear=True),
         patch("litellm.completion", mock_completion),
         patch("time.sleep"),
-        pytest.raises(LLMError, match="auth failed") as exc_info,
+        pytest.raises(LLMError, match="authentication failed") as exc_info,
     ):
         synthesize("test prompt", model="vertex_ai/test-model")
 
     assert exc_info.value.category == "auth"
+    assert exc_info.value.original is auth_err
+    assert "auth failed" not in str(exc_info.value)
+    assert exc_info.value.retryable is False
     # Auth errors must not be retried — exactly one call
     assert mock_completion.call_count == 1
 
@@ -221,8 +287,8 @@ def test_synthesize_retry_auth_error_not_retried() -> None:
 
 # ── TestSynthesizePromptGuard (flattened) ───────────────────────────────────
 
-_SYNTHESIZE_PROMPT_GUARD__ENV_NO_LLM_CLEARED: ClassVar[dict[str, str]] = {
-    **hermetic_env(),
+_SYNTHESIZE_PROMPT_GUARD__ENV_NO_LLM_CLEARED: dict[str, str] = {
+    **hermetic_env(LITELLM_LOCAL_MODEL_COST_MAP="True"),
 }
 
 
@@ -247,6 +313,8 @@ def test_synthesize_prompt_guard_synthesize_raises_llmerror_on_oversized_prompt(
         synthesize("x" * (_MAX_PROMPT_CHARS + 1))
 
     assert exc_info.value.category == "general"
+    assert exc_info.value.scope == "source"
+    assert exc_info.value.retryable is False
     # Guard fires before any provider call — litellm must not be invoked.
     assert mock_completion.call_count == 0
 

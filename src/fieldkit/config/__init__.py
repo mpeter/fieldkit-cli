@@ -41,6 +41,7 @@ from fieldkit.config._quota import write_pipeline_quota as write_pipeline_quota
 from fieldkit.config._settings import get_companion_act_allowlist as get_companion_act_allowlist
 from fieldkit.config._settings import get_companion_tier as get_companion_tier
 from fieldkit.config._settings import get_email_domain as get_email_domain
+from fieldkit.config._settings import get_ingest_provider_failure_threshold as get_ingest_provider_failure_threshold
 from fieldkit.config._settings import get_llm_model as get_llm_model
 from fieldkit.config._settings import get_user_email as get_user_email
 from fieldkit.config._settings import get_user_email_from_env as get_user_email_from_env
@@ -105,6 +106,7 @@ __all__ = [
     "get_fieldkit_root",
     "get_google_token_path",
     "get_gsg_id",
+    "get_ingest_provider_failure_threshold",
     "get_integration_configuration_state",
     "get_internal_domains",
     "get_llm_model",

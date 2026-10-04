@@ -92,10 +92,9 @@ def test_run_parallel_loop_single_source_success() -> None:
     assert rc == 0
 
 
-def test_run_parallel_loop_single_source_error_preserves_human_exit() -> None:
-    """Human mode preserves its historical zero exit after reporting errors."""
+def test_run_parallel_loop_single_source_error_returns_partial() -> None:
     rc = _run_loop([_make_src()], process_result=False)
-    assert rc == 0
+    assert rc == 1
 
 
 def test_run_parallel_loop_source_with_no_meeting_date() -> None:
@@ -199,18 +198,19 @@ def test_run_parallel_interrupt_preserves_retry_boundary() -> None:
     sources = [_make_src("src-0"), _make_src("src-1"), _make_src("src-2")]
     first_future = MagicMock()
     first_future.result.return_value = ("src-0", "completed")
+    first_future.cancel.return_value = False
+    first_future.cancelled.return_value = False
     submitted = iter([first_future, MagicMock(), MagicMock()])
     pool = MagicMock()
     pool.__enter__.return_value.submit.side_effect = lambda *args: next(submitted)
 
-    def interrupted(futures: object) -> object:
-        yield first_future
-        raise KeyboardInterrupt
-
     outcomes = BatchOutcomes()
     with (
-        patch("fieldkit.commands.ingest.run.ThreadPoolExecutor", return_value=pool),
-        patch("fieldkit.commands.ingest.run.as_completed", side_effect=interrupted),
+        patch("fieldkit.ingest.batch.ThreadPoolExecutor", return_value=pool),
+        patch(
+            "fieldkit.ingest.batch.wait",
+            side_effect=[KeyboardInterrupt, ({first_future}, set())],
+        ),
         patch("fieldkit.ingest.docs.get_docs_service", return_value=MagicMock()),
     ):
         processed, degraded, skipped, errors = _run_parallel_loop(
@@ -249,7 +249,7 @@ def test_run_parallel_loop_worker_exception_counted_not_raised() -> None:
     ):
         rc = _run_processing_loop([src], conn=mock_conn, pipeline_version="0.2.0", interactive=False)
 
-    assert rc == 0
+    assert rc == 1
 
 
 def test_run_parallel_loop_many_workers_capped() -> None:
@@ -306,7 +306,7 @@ def test_run_processing_loop_interactive_yes_failure_counted() -> None:
     ):
         rc = _run_processing_loop([src], conn=mock_conn, pipeline_version="0.1.0", interactive=True)
 
-    assert rc == 0
+    assert rc == 1
 
 
 def test_run_processing_loop_interactive_quit_after_one_skip() -> None:

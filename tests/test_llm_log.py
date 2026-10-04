@@ -703,7 +703,7 @@ def test_env_var_override_after_import_env_var_change_between_calls_is_respected
 
 
 def test_failure_callback_writes_row_with_error(tmp_db: Path) -> None:
-    """_failure_callback writes a row with the error message and NULL tokens."""
+    """_failure_callback retains the error type without its body or tokens."""
     set_skill_context("fail-skill", "fail-account")
     kwargs = _make_kwargs()
 
@@ -714,7 +714,8 @@ def test_failure_callback_writes_row_with_error(tmp_db: Path) -> None:
     rows = _db_rows(tmp_db)
     assert len(rows) == 1
     row = rows[0]
-    assert "connection refused" in row["error"]
+    assert row["error"] == "RuntimeError"
+    assert "connection refused" not in row["error"]
     assert row["input_tokens"] is None
     assert row["output_tokens"] is None
     assert row["skill"] == "fail-skill"
@@ -736,8 +737,6 @@ def test_write_row_write_row_failure_warning_has_exc_info(
     import logging
     import sqlite3
 
-    import fieldkit.llm.log as llm_log
-
     db_path = tmp_path / "fail.db"
     monkeypatch.setenv("FIELDKIT_LLM_LOG", str(db_path))
 
@@ -745,7 +744,7 @@ def test_write_row_write_row_failure_warning_has_exc_info(
     def _bad_connect(path: object, **kw: object) -> object:
         raise sqlite3.OperationalError("disk full")
 
-    monkeypatch.setattr(llm_log.sqlite3, "connect", _bad_connect)
+    monkeypatch.setattr(sqlite3, "connect", _bad_connect)
 
     with caplog.at_level(logging.WARNING, logger="fieldkit.llm.log"):
         _write_row(

@@ -53,6 +53,7 @@ fieldkit init --minimal ./fieldkit-workspace
 | `gcp_project` | Vertex AI workflows | Provider project identifier |
 | `llm_model` | AI-assisted workflows | Supported LiteLLM model identifier |
 | `vertex_location` | Vertex AI workflows | Provider region |
+| `ingest_provider_failure_threshold` | Ingest batches | Positive integer of consecutive retryable LLM failures before stopping new sources; default `3`, overridden by `FIELDKIT_INGEST_PROVIDER_FAILURE_THRESHOLD` |
 | `mcp_gateway_url` | MCP-backed workflows | Base URL of a gateway you operate or are authorized to use |
 | `mcp_calendar_group` | Morning brief calendar source | Gateway group authorized for calendar access; required to enable this source |
 | `mcp_mail_group` | Draft-queue watcher | Gateway group authorized for mail access; required to run this watcher |

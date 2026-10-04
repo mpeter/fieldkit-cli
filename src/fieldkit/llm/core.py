@@ -175,6 +175,47 @@ def _resolve_vertex_location() -> str:
 # ---------------------------------------------------------------------------
 
 
+def _retryable_provider_error(error: BaseException) -> bool:
+    return isinstance(error, LLMError) and error.retryable
+
+
+def _completion_result(
+    model: str,
+    messages: list[dict[str, object]],
+    timeout: int,
+    extra_kwargs: dict[str, str],
+    retryable_types: tuple[type[BaseException], ...],
+    source_types: tuple[type[BaseException], ...],
+) -> str:
+    """Normalize provider diagnostics inside, not outside, the retry boundary."""
+    import litellm
+    from litellm.exceptions import AuthenticationError, RateLimitError
+
+    try:
+        response = litellm.completion(model=model, messages=messages, timeout=timeout, **extra_kwargs)
+        return str(response.choices[0].message.content)
+    except AuthenticationError as exc:
+        raise LLMError(
+            "LLM provider authentication failed. Refresh application-default credentials before retrying.",
+            category="auth",
+            original=exc,
+        ) from None
+    except RateLimitError as exc:
+        raise LLMError(
+            "LLM provider rate limit exceeded. Retry after provider recovery.",
+            category="rate-limit",
+            original=exc,
+        ) from None
+    except Exception as exc:  # noqa: BLE001 — normalize untrusted provider diagnostics
+        raise LLMError(
+            "LLM provider request failed. Check provider availability and configuration.",
+            category="general",
+            original=exc,
+            retryable=isinstance(exc, retryable_types),
+            scope="source" if isinstance(exc, source_types) else "provider",
+        ) from None
+
+
 def synthesize(
     prompt: str,
     model: str | None = None,
@@ -206,8 +247,8 @@ def synthesize(
     Raises:
         LLMError: On any provider error (auth, rate-limit, timeout, or general
                   failure).
-        LLMError: Also raised (category="general") if ``len(prompt)`` exceeds
-                  ``_MAX_PROMPT_CHARS`` before any provider call is attempted.
+        LLMError: Also raised (category="general", scope="source") if ``len(prompt)``
+                  exceeds ``_MAX_PROMPT_CHARS`` before any provider call is attempted.
     """
     # ------------------------------------------------------------------
     # 1. Stub path — checked before any litellm import
@@ -225,6 +266,7 @@ def synthesize(
             f"Prompt exceeds maximum size ({len(prompt):,} chars > {_MAX_PROMPT_CHARS:,} limit). "
             "Truncate the input before calling synthesize().",
             category="general",
+            scope="source",
         )
 
     # ------------------------------------------------------------------
@@ -236,7 +278,7 @@ def synthesize(
 
     import litellm
     import openai
-    from litellm.exceptions import AuthenticationError, RateLimitError
+    from litellm.exceptions import RateLimitError
 
     # historic regression: Register audit-log callbacks eagerly so the very first LLM call
     # is recorded. Previously _ensure_initialized() was only called from inside
@@ -258,6 +300,12 @@ def synthesize(
     with contextlib.suppress(AttributeError):
         _RETRYABLE = (*_RETRYABLE, litellm.exceptions.ServiceUnavailableError)
 
+    _SOURCE_SPECIFIC: tuple[type[BaseException], ...] = ()
+    with contextlib.suppress(AttributeError):
+        _SOURCE_SPECIFIC = (*_SOURCE_SPECIFIC, litellm.exceptions.ContextWindowExceededError)
+    with contextlib.suppress(AttributeError):
+        _SOURCE_SPECIFIC = (*_SOURCE_SPECIFIC, litellm.exceptions.ContentPolicyViolationError)
+
     # ------------------------------------------------------------------
     # 3. Model resolution: param > FIELDKIT_LLM_MODEL > LLM_MODEL > _resolve_model()
     #    implementation note: FIELDKIT_LLM_MODEL is the prefixed alias; LLM_MODEL is the fallback.
@@ -270,10 +318,10 @@ def synthesize(
     #    decorator can reference the now-imported exception classes).
     #    Policy comes from fieldkit.config.retry: 3 attempts, exponential
     #    backoff 2-10s, per-attempt WARNING. An LLM completion is an
-    #    idempotent read, hence transient_retry. Auth errors are NOT
-    #    retried — they are caught in the outer try/except below.
+    #    idempotent read, hence transient_retry. Auth errors are normalized
+    #    without retryability and escape on the first attempt.
     # ------------------------------------------------------------------
-    @transient_retry(lambda exc: isinstance(exc, _RETRYABLE), logger)
+    @transient_retry(_retryable_provider_error, logger)
     def _call_litellm_inner(p: str, m: str, t: int) -> str:
         extra_kwargs: dict[str, str] = {}
         if m.startswith("vertex_ai/"):
@@ -299,39 +347,6 @@ def synthesize(
                 }
             )
         messages.append({"role": "user", "content": p})
-        response = litellm.completion(
-            model=m,
-            messages=messages,
-            timeout=t,
-            **extra_kwargs,
-        )
-        return str(response.choices[0].message.content)
+        return _completion_result(m, messages, t, extra_kwargs, _RETRYABLE, _SOURCE_SPECIFIC)
 
-    # ------------------------------------------------------------------
-    # 5. Call the provider (with bounded retry for transient errors)
-    # ------------------------------------------------------------------
-    # Auth errors are caught first and re-raised as LLMError immediately —
-    # they are permanent failures that must not be retried.
-    try:
-        return _call_litellm_inner(prompt, resolved_model, timeout)
-
-    except AuthenticationError as exc:
-        raise LLMError(
-            f"Authentication failed for model '{resolved_model}': {exc}",
-            category="auth",
-            original=exc,
-        ) from exc
-
-    except RateLimitError as exc:
-        raise LLMError(
-            f"Rate limit exceeded for model '{resolved_model}': {exc}",
-            category="rate-limit",
-            original=exc,
-        ) from exc
-
-    except Exception as exc:
-        raise LLMError(
-            f"Unexpected error from model '{resolved_model}': {exc}",
-            category="general",
-            original=exc,
-        ) from exc
+    return _call_litellm_inner(prompt, resolved_model, timeout)

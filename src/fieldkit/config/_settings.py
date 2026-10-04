@@ -10,6 +10,22 @@ def llm_disabled() -> bool:
     return bool(os.environ.get("FIELDKIT_NO_LLM") or os.environ.get("NO_LLM"))
 
 
+DEFAULT_INGEST_PROVIDER_FAILURE_THRESHOLD = 3
+
+
+def get_ingest_provider_failure_threshold() -> int:
+    """Return the positive batch stop threshold, with an environment override."""
+    value: object = os.environ.get("FIELDKIT_INGEST_PROVIDER_FAILURE_THRESHOLD")
+    if value is None:
+        data = _loader._load_raw_config()
+        value = (data or {}).get("ingest_provider_failure_threshold", DEFAULT_INGEST_PROVIDER_FAILURE_THRESHOLD)
+    if isinstance(value, str) and value.isascii() and value.isdecimal():
+        value = int(value)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise _loader.ConfigError("ingest_provider_failure_threshold must be a positive integer.")
+    return value
+
+
 def get_vertex_location() -> str | None:
     """Return the configured Vertex region when readable and nonempty."""
     try:

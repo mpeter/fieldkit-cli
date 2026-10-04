@@ -5,7 +5,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal, TypedDict
 
 import click
 
@@ -22,6 +22,7 @@ class BatchOutcomes:
     skipped: list[str] = field(default_factory=list)
     failed: list[str] = field(default_factory=list)
     pending: list[str] = field(default_factory=list)
+    provider_failure_threshold: int | None = None
 
     def emit(
         self,
@@ -40,6 +41,7 @@ class BatchOutcomes:
             "pipeline": pipeline,
             "skipped": self.skipped,
         }
+        payload.update(provider_stop_metadata(pipeline, self.provider_failure_threshold))
         if force is not None:
             payload["force"] = force
         if include_degraded:
@@ -47,6 +49,23 @@ class BatchOutcomes:
         if include_deferred:
             payload["deferred"] = self.deferred
         click.echo(json.dumps(payload, sort_keys=True))
+
+
+class ProviderStopMetadata(TypedDict, total=False):
+    stop_reason: Literal["consecutive_retryable_provider_failures"]
+    provider_failure_threshold: int
+    resume_command: str
+
+
+def provider_stop_metadata(pipeline: str, threshold: int | None) -> ProviderStopMetadata:
+    """Return the same stop and recovery details for every ingest result format."""
+    if threshold is None:
+        return {}
+    return {
+        "stop_reason": "consecutive_retryable_provider_failures",
+        "provider_failure_threshold": threshold,
+        "resume_command": f"fieldkit ingest run --pipeline {pipeline}",
+    }
 
 
 def human_echo(message: object = None, *, err: bool = False, **kwargs: Any) -> None:

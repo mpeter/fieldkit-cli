@@ -16,7 +16,7 @@ llm_calls
   output_tokens INTEGER           — completion token count
   latency_ms   INTEGER            — wall-clock latency in milliseconds
   cost_usd     REAL               — estimated cost (from litellm pricing tables)
-  error        TEXT               — exception message if call failed, else NULL
+  error        TEXT               — exception type if call failed, else NULL
   prompt_hash  TEXT               — SHA-256 of the raw prompt (text NOT stored)
 
 Context variables
@@ -321,7 +321,7 @@ def _failure_callback(
     try:
         model: str | None = kwargs.get("model")
         exception = kwargs.get("exception")
-        error_str = str(exception) if exception is not None else "unknown error"
+        error_str = type(exception).__name__ if exception is not None else "unknown error"
 
         _write_row(
             call_id=str(uuid.uuid4()),
