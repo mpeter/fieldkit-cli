@@ -445,3 +445,34 @@ def test_conftest_production_dependencies_remain_tach_owned(tmp_path: Path) -> N
     (tests / "test_domain.py").write_text("def test_domain(client):\n    assert client", encoding="utf-8")
 
     assert repo_tool_test_paths(tmp_path) == set()
+
+
+@pytest.mark.parametrize("hook", ["pytest_runtest_setup", "pytest_pyfunc_call", "pytest_fixture_setup"])
+@pytest.mark.parametrize("plugin", [False, True])
+def test_tool_backed_pytest_hooks_retain_applicable_tests(tmp_path: Path, hook: str, plugin: bool) -> None:
+    tests = tmp_path / "tests"
+    nested = tests / "nested"
+    nested.mkdir(parents=True)
+    conftest = nested / "conftest.py"
+    source = conftest
+    if plugin:
+        source = tests / "fixture_plugin.py"
+        conftest.write_text('pytest_plugins = "tests.fixture_plugin"', encoding="utf-8")
+    source.write_text(
+        f"import scripts.foo\ndef {hook}(item):\n    if item.get_closest_marker('tool'):\n        scripts.foo.run()",
+        encoding="utf-8",
+    )
+    target = nested / "test_indirect.py"
+    target.write_text(
+        """import pytest
+@pytest.mark.tool
+def test_tool():
+    assert True
+""",
+        encoding="utf-8",
+    )
+    sibling = tests / "test_domain.py"
+    sibling.write_text("def test_domain():\n    assert True", encoding="utf-8")
+
+    expected = {source, conftest, target, sibling} if plugin else {conftest, target}
+    assert repo_tool_test_paths(tmp_path) == expected

@@ -4,4 +4,4 @@ Tach impact selection now uses non-overlapping source roots for deterministic te
 
 Hook import boundaries remain enforced without overlapping Tach roots. Tool test selection follows helper package re-exports, and CI reports checkout-tool test evidence with its own scope.
 
-Tool tests are retained when they consume tool-backed fixtures defined in conftest.py or registered local pytest plugins, including renamed fixtures, helper aliases, and autouse fixtures.
+Tool tests are retained when they consume tool-backed fixtures or per-test pytest hooks defined in conftest.py or registered local pytest plugins, including renamed fixtures, helper aliases, and autouse fixtures.

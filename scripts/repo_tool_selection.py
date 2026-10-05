@@ -76,6 +76,11 @@ def _fixture_tool_names(source: str, tool_names: set[str]) -> tuple[set[str], bo
         for node in definitions:
             if set(_WORD.findall(ast.get_source_segment(source, node) or "")) & names:
                 names.add(node.name)
+                autouse |= node.name.startswith("pytest_runtest_") or node.name in {
+                    "pytest_pyfunc_call",
+                    "pytest_fixture_setup",
+                    "pytest_fixture_post_finalizer",
+                }
                 for decorator in node.decorator_list:
                     if isinstance(decorator, ast.Call):
                         autouse |= any(

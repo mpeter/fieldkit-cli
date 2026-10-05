@@ -51,6 +51,8 @@ Selection follows helper package re-exports and tool-backed fixtures in
 `conftest.py` and registered local pytest plugins, including nested plugin
 registrations. Autouse tool fixtures retain all tests below their defining
 conftest directory; registered plugin autouse fixtures apply across the suite.
+Tool-backed per-test pytest hooks retain tests in the same applicable scope,
+including tests whose markers control whether the hook calls the tool.
 Run those tests alone with
 `uv run pytest tests/ --repo-tools-only -p no:tach -q -n 0`.
 
