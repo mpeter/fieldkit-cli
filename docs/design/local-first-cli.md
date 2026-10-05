@@ -47,6 +47,9 @@ resolves imports against the most specific Tach module, and rejects package
 imports of checkout hooks. Local PR/full gates and hosted lint run this check. Their tests and the script
 tests run independently of Tach on every code PR, both locally and in hosted
 `Test (pytest)`. The complete enforcement gate still runs the entire test suite.
+Selection follows helper package re-exports and tool-backed `conftest.py`
+fixtures. Autouse tool fixtures retain all tests below their defining conftest
+directory.
 Run those tests alone with
 `uv run pytest tests/ --repo-tools-only -p no:tach -q -n 0`.
 

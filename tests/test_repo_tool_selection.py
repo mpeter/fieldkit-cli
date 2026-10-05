@@ -119,3 +119,101 @@ def test_package_reexports_select_consumers(tmp_path: Path, package: str) -> Non
 
     assert result == {leaf, initializer, target}
     assert unrelated not in result
+
+
+@pytest.mark.parametrize("alias", [False, True])
+@pytest.mark.parametrize("rename", [False, True])
+def test_tool_backed_fixtures_select_consumers(tmp_path: Path, alias: bool, rename: bool) -> None:
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    conftest = tests / "conftest.py"
+    imported = "from scripts.foo import run as invoke" if alias else "import scripts.foo"
+    call = "invoke()" if alias else "scripts.foo.run()"
+    decorator = '@pytest.fixture(name="tool_runner")' if rename else "@pytest.fixture"
+    fixture_name = "internal_runner" if rename else "tool_runner"
+    conftest.write_text(
+        f"import pytest\n{imported}\ndef helper():\n    return {call}\n"
+        f"{decorator}\ndef {fixture_name}():\n    return helper()\n",
+        encoding="utf-8",
+    )
+    target = tests / "test_indirect.py"
+    target.write_text("def test_tool(tool_runner):\n    assert tool_runner", encoding="utf-8")
+    unrelated = tests / "test_domain.py"
+    unrelated.write_text("def test_domain():\n    assert True", encoding="utf-8")
+
+    result = repo_tool_test_paths(tmp_path)
+
+    assert result == {conftest, target}
+    assert unrelated not in result
+
+
+def test_selection_plugin_registration_does_not_select_unrelated_fixtures(tmp_path: Path) -> None:
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    conftest = tests / "conftest.py"
+    conftest.write_text(
+        'pytest_plugins = ("scripts.repo_tool_selection",)\ndef unrelated_fixture():\n    return "domain"\n',
+        encoding="utf-8",
+    )
+    target = tests / "test_domain.py"
+    target.write_text("def test_domain(unrelated_fixture):\n    assert unrelated_fixture", encoding="utf-8")
+
+    result = repo_tool_test_paths(tmp_path)
+
+    assert result == {conftest}
+
+
+def test_tool_backed_autouse_fixture_selects_only_its_subtree(tmp_path: Path) -> None:
+    tests = tmp_path / "tests"
+    nested = tests / "nested"
+    nested.mkdir(parents=True)
+    conftest = nested / "conftest.py"
+    conftest.write_text(
+        """import pytest
+from scripts.foo import run
+@pytest.fixture(autouse=True)
+def setup_tool():
+    run()
+""",
+        encoding="utf-8",
+    )
+    target = nested / "test_indirect.py"
+    target.write_text("def test_tool():\n    assert True", encoding="utf-8")
+    unrelated = tests / "test_domain.py"
+    unrelated.write_text("def test_domain():\n    assert True", encoding="utf-8")
+
+    result = repo_tool_test_paths(tmp_path)
+
+    assert result == {conftest, target}
+    assert unrelated not in result
+
+
+@pytest.mark.parametrize(
+    "binding",
+    [
+        "from . import tool_helper as invoke",
+        "import scripts.foo\ninvoke = scripts.foo.run",
+        'import importlib\ninvoke = importlib.import_module("scripts.foo").run',
+    ],
+)
+def test_fixture_helper_aliases_select_consumers(tmp_path: Path, binding: str) -> None:
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    helper = tests / "tool_helper.py"
+    helper.write_text("import scripts.foo", encoding="utf-8")
+    conftest = tests / "conftest.py"
+    conftest.write_text(
+        f"""import pytest
+{binding}
+@pytest.fixture
+def tool_runner():
+    return invoke()
+""",
+        encoding="utf-8",
+    )
+    target = tests / "test_indirect.py"
+    target.write_text("def test_tool(tool_runner):\n    assert tool_runner", encoding="utf-8")
+
+    result = repo_tool_test_paths(tmp_path)
+
+    assert result == {helper, conftest, target}
