@@ -217,3 +217,231 @@ def tool_runner():
     result = repo_tool_test_paths(tmp_path)
 
     assert result == {helper, conftest, target}
+
+
+@pytest.mark.parametrize("package", [False, True])
+@pytest.mark.parametrize("nested_registration", [False, True])
+def test_registered_fixture_plugins_select_consumers(tmp_path: Path, package: bool, nested_registration: bool) -> None:
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    plugin = tests / "fixture_plugin.py"
+    if package:
+        plugin = tests / "fixture_plugin" / "__init__.py"
+        plugin.parent.mkdir()
+    plugin.write_text(
+        """import pytest
+from scripts.foo import run as invoke
+@pytest.fixture(name="tool_runner")
+def internal_runner():
+    return invoke()
+""",
+        encoding="utf-8",
+    )
+    conftest = tests / "conftest.py"
+    registration = conftest
+    if nested_registration:
+        registration = tests / "registration.py"
+        conftest.write_text('pytest_plugins = "tests.registration"', encoding="utf-8")
+    registration.write_text('pytest_plugins = ("tests.fixture_plugin",)', encoding="utf-8")
+    target = tests / "test_indirect.py"
+    target.write_text("def test_tool(tool_runner):\n    assert tool_runner", encoding="utf-8")
+    unrelated = tests / "test_domain.py"
+    unrelated.write_text("def test_domain():\n    assert True", encoding="utf-8")
+
+    result = repo_tool_test_paths(tmp_path)
+
+    assert result == {plugin, registration, conftest, target}
+    assert unrelated not in result
+
+
+def test_registered_autouse_plugin_applies_outside_plugin_directory(tmp_path: Path) -> None:
+    tests = tmp_path / "tests"
+    helpers = tests / "helpers"
+    helpers.mkdir(parents=True)
+    plugin = helpers / "fixture_plugin.py"
+    plugin.write_text(
+        """import pytest
+import scripts.foo
+@pytest.fixture(autouse=True)
+def setup_tool():
+    scripts.foo.run()
+""",
+        encoding="utf-8",
+    )
+    conftest = tests / "conftest.py"
+    conftest.write_text('pytest_plugins = ["tests.helpers.fixture_plugin"]', encoding="utf-8")
+    target = tests / "test_indirect.py"
+    target.write_text("def test_tool():\n    assert True", encoding="utf-8")
+
+    assert repo_tool_test_paths(tmp_path) == {plugin, conftest, target}
+
+
+@pytest.mark.parametrize(
+    "registration",
+    [
+        'pytest_plugins = "fixture_plugin,empty_plugin"',
+        'PLUGINS = ["fixture_plugin"]; pytest_plugins = PLUGINS',
+        'BASE = ("fixture_plugin",); PLUGINS = BASE; pytest_plugins = PLUGINS',
+    ],
+)
+@pytest.mark.parametrize("location", ["src", "tests", "."])
+def test_plugin_registration_aliases_and_import_roots(tmp_path: Path, registration: str, location: str) -> None:
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    plugin_dir = tmp_path / location
+    plugin_dir.mkdir(exist_ok=True)
+    plugin = plugin_dir / "fixture_plugin.py"
+    plugin.write_text(
+        """import pytest
+import scripts.foo
+@pytest.fixture
+def tool_runner():
+    return scripts.foo.run()
+""",
+        encoding="utf-8",
+    )
+    conftest = tests / "conftest.py"
+    conftest.write_text(registration, encoding="utf-8")
+    target = tests / "test_indirect.py"
+    target.write_text("def test_tool(tool_runner):\n    assert tool_runner", encoding="utf-8")
+
+    assert repo_tool_test_paths(tmp_path) == {plugin, conftest, target}
+
+
+@pytest.mark.parametrize(
+    "registration",
+    [
+        'pytest_plugins = []; pytest_plugins += ["tests.fixture_plugin"]',
+        'pytest_plugins = []; pytest_plugins.append("tests.fixture_plugin")',
+        'pytest_plugins = []; pytest_plugins.extend(["tests.fixture_plugin"])',
+    ],
+)
+def test_test_module_plugin_registration_and_star_exports(tmp_path: Path, registration: str) -> None:
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    registration_module = tests / "test_registration.py"
+    registration_module.write_text(registration, encoding="utf-8")
+    plugin = tests / "fixture_plugin.py"
+    plugin.write_text('pytest_plugins = "tests.fixture_plugin"\nfrom .tool_helper import *', encoding="utf-8")
+    helper = tests / "tool_helper.py"
+    helper.write_text(
+        """import pytest
+import scripts.foo
+@pytest.fixture
+def tool_runner():
+    return scripts.foo.run()
+""",
+        encoding="utf-8",
+    )
+    target = tests / "test_indirect.py"
+    target.write_text("def test_tool(tool_runner):\n    assert tool_runner", encoding="utf-8")
+    unrelated = tests / "test_domain.py"
+    unrelated.write_text("def test_domain():\n    assert True", encoding="utf-8")
+
+    assert repo_tool_test_paths(tmp_path) == {registration_module, plugin, helper, target}
+
+
+@pytest.mark.parametrize("location", ["src", "tests"])
+@pytest.mark.parametrize("relative", [False, True])
+def test_plugin_package_reexports_fixture_from_relative_module(tmp_path: Path, location: str, relative: bool) -> None:
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    package = tmp_path / location / "fixture_package"
+    package.mkdir(parents=True)
+    plugin = package / "__init__.py"
+    imported = (
+        ".fixtures"
+        if relative
+        else ("tests.fixture_package.fixtures" if location == "tests" else "fixture_package.fixtures")
+    )
+    plugin.write_text(f"from {imported} import *", encoding="utf-8")
+    helper = package / "fixtures.py"
+    helper.write_text(
+        """import pytest
+import scripts.foo
+@pytest.fixture
+def tool_runner():
+    return scripts.foo.run()
+""",
+        encoding="utf-8",
+    )
+    module = "tests.fixture_package" if location == "tests" else "fixture_package"
+    conftest = tests / "conftest.py"
+    conftest.write_text(f'pytest_plugins = "{module}"', encoding="utf-8")
+    target = tests / "test_indirect.py"
+    target.write_text("def test_tool(tool_runner):\n    assert tool_runner", encoding="utf-8")
+
+    assert repo_tool_test_paths(tmp_path) == {plugin, helper, conftest, target}
+
+
+@pytest.mark.parametrize(
+    "registration",
+    [
+        'pytest_plugins = ["tests.first"]; pytest_plugins = pytest_plugins + ["tests.second"]',
+        'PLUGINS = ["tests.first"]; pytest_plugins = PLUGINS; PLUGINS = ["tests.second"]',
+    ],
+)
+def test_plugin_alias_rebindings_preserve_prior_registrations(tmp_path: Path, registration: str) -> None:
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    plugin = tests / "first.py"
+    plugin.write_text(
+        """import pytest
+import scripts.foo
+@pytest.fixture
+def tool_runner():
+    return scripts.foo.run()
+""",
+        encoding="utf-8",
+    )
+    conftest = tests / "conftest.py"
+    conftest.write_text(registration, encoding="utf-8")
+    target = tests / "test_indirect.py"
+    target.write_text("def test_tool(tool_runner):\n    assert tool_runner", encoding="utf-8")
+
+    assert repo_tool_test_paths(tmp_path) == {plugin, conftest, target}
+
+
+@pytest.mark.parametrize(
+    "binding",
+    ["from fixture_package import helpers", "import fixture_package.helpers as helpers"],
+)
+def test_plugin_imported_member_modules_select_fixture_consumers(tmp_path: Path, binding: str) -> None:
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    package = tmp_path / "src" / "fixture_package"
+    package.mkdir(parents=True)
+    initializer = package / "__init__.py"
+    initializer.write_text("", encoding="utf-8")
+    plugin = package / "plugin.py"
+    plugin.write_text(
+        f"""import pytest
+{binding}
+@pytest.fixture
+def tool_runner():
+    return helpers.invoke()
+""",
+        encoding="utf-8",
+    )
+    helper = package / "helpers.py"
+    helper.write_text("import scripts.foo\ndef invoke():\n    return scripts.foo.run()", encoding="utf-8")
+    conftest = tests / "conftest.py"
+    conftest.write_text('pytest_plugins = "fixture_package.plugin"', encoding="utf-8")
+    target = tests / "test_indirect.py"
+    target.write_text("def test_tool(tool_runner):\n    assert tool_runner", encoding="utf-8")
+
+    assert {plugin, helper, conftest, target} <= repo_tool_test_paths(tmp_path)
+
+
+def test_conftest_production_dependencies_remain_tach_owned(tmp_path: Path) -> None:
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    package = tmp_path / "src" / "fieldkit"
+    package.mkdir(parents=True)
+    (package / "domain.py").write_text(
+        '"""Documentation mentions scripts."""\ndef client():\n    return True', encoding="utf-8"
+    )
+    (tests / "conftest.py").write_text("import fieldkit.domain", encoding="utf-8")
+    (tests / "test_domain.py").write_text("def test_domain(client):\n    assert client", encoding="utf-8")
+
+    assert repo_tool_test_paths(tmp_path) == set()

@@ -9,7 +9,44 @@ import pytest
 _WORD = re.compile(r"[A-Za-z_]\w*")
 
 
-def _conftest_tool_names(source: str, tool_names: set[str]) -> tuple[set[str], bool]:
+def _pytest_plugin_names(source: str) -> set[str]:
+    """Resolve static plugin registrations and their local assignment aliases."""
+    bindings: dict[str, list[ast.expr]] = {}
+    additions: list[ast.expr] = []
+    for node in ast.parse(source).body:
+        if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    bindings.setdefault(target.id, []).append(node.value)
+        elif (
+            isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name) and node.target.id == "pytest_plugins"
+        ):
+            additions.append(node.value)
+        elif (
+            isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Attribute)
+            and isinstance(node.value.func.value, ast.Name)
+            and node.value.func.value.id == "pytest_plugins"
+            and node.value.func.attr in {"append", "extend"}
+        ):
+            additions.extend(node.value.args)
+    pending = list(bindings.get("pytest_plugins", []))
+    pending.extend(additions)
+    visited: set[str] = set()
+    names: set[str] = set()
+    while pending:
+        for expression in ast.walk(pending.pop()):
+            if isinstance(expression, ast.Constant) and isinstance(expression.value, str):
+                names.update(name.strip() for name in expression.value.split(",") if name.strip())
+            elif isinstance(expression, ast.Name) and expression.id in bindings and expression.id not in visited:
+                visited.add(expression.id)
+                pending.extend(bindings[expression.id])
+    return names
+
+
+def _fixture_tool_names(source: str, tool_names: set[str]) -> tuple[set[str], bool]:
     """Follow imported aliases and helper calls into fixture identifiers."""
     tree = ast.parse(source)
     names = set(tool_names)
@@ -71,16 +108,58 @@ def repo_tool_test_paths(root: Path) -> set[Path]:
             tool_names.add(path.relative_to(directory).parts[0].removesuffix(".py"))
     tool_names.discard("__init__")
     sources = {path.resolve(): path.read_text(encoding="utf-8") for path in (root / "tests").rglob("*.py")}
+    fixture_scopes = {path: path.parent for path in sources if path.name == "conftest.py"}
+    pending = list(sources)
+    while pending:
+        owner = pending.pop()
+        if owner in fixture_scopes:
+            for node in ast.walk(ast.parse(sources[owner])):
+                if not isinstance(node, (ast.ImportFrom, ast.Import)):
+                    continue
+                parents = [root / "src", root, owner.parent]
+                names = [alias.name for alias in node.names if alias.name != "*"]
+                if isinstance(node, ast.ImportFrom):
+                    if node.level:
+                        parents = [owner.parents[node.level - 1]]
+                    if node.module:
+                        names = [node.module, *(f"{node.module}.{name}" for name in names)]
+                for parent in parents:
+                    for name in names:
+                        # Conftest's production dependencies are selected by Tach.
+                        if owner.name == "conftest.py" and name.split(".")[0] == "fieldkit":
+                            continue
+                        module = parent.joinpath(*name.split("."))
+                        for candidate in (module.with_suffix(".py"), module / "__init__.py"):
+                            path = candidate.resolve()
+                            if path.is_relative_to(root.resolve()) and path.is_file() and path not in fixture_scopes:
+                                sources[path] = path.read_text(encoding="utf-8")
+                                fixture_scopes[path] = fixture_scopes[owner]
+                                pending.append(path)
+        for name in _pytest_plugin_names(sources[owner]):
+            for import_root in (root / "src", root, owner.parent):
+                module = import_root.joinpath(*name.split("."))
+                for candidate in (module.with_suffix(".py"), module / "__init__.py"):
+                    path = candidate.resolve()
+                    if path.is_relative_to(root.resolve()) and path.is_file() and path not in fixture_scopes:
+                        sources[path] = path.read_text(encoding="utf-8")
+                        fixture_scopes[path] = (root / "tests").resolve()
+                        pending.append(path)
     references = {path: set(_WORD.findall(source)) for path, source in sources.items()}
     selected: set[Path] = set()
     while True:
         autouse_paths: set[Path] = set()
-        for path, source in sources.items():
-            if path.name == "conftest.py":
-                fixture_names, autouse = _conftest_tool_names(source, tool_names)
-                tool_names.update(fixture_names)
-                if autouse:
-                    autouse_paths.update(test for test in references if test.is_relative_to(path.parent))
+        for path, scope in fixture_scopes.items():
+            fixture_names, autouse = _fixture_tool_names(sources[path], tool_names)
+            tool_names.update(fixture_names)
+            if autouse:
+                autouse_paths.update(test for test in references if test.is_relative_to(scope))
+        for path in selected - fixture_scopes.keys():
+            if path.name.startswith("test_"):
+                continue
+            fixture_names, autouse = _fixture_tool_names(sources[path], tool_names)
+            tool_names.update(fixture_names)
+            if autouse:
+                autouse_paths.update(references)
         added = {
             path
             for path, names in references.items()
