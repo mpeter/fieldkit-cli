@@ -54,7 +54,8 @@ def _write_coverage(path: Path, *, percent: float = 92.5) -> None:
     )
 
 
-def test_junit_evidence_records_scope_revision_counts_and_bounded_failures(tmp_path: Path) -> None:
+@pytest.mark.parametrize("scope", ["tach-selected", "repo-tools"])
+def test_junit_evidence_records_scope_revision_counts_and_bounded_failures(tmp_path: Path, scope: str) -> None:
     """A failed test run is attributable without copying failure payloads into the report."""
     junit = tmp_path / "pytest.xml"
     output = tmp_path / "pytest-summary.json"
@@ -73,7 +74,7 @@ def test_junit_evidence_records_scope_revision_counts_and_bounded_failures(tmp_p
             "--source-revision",
             "a" * 40,
             "--scope",
-            "tach-selected",
+            scope,
             "--command",
             "uv run pytest tests/ --tach",
         ]
@@ -83,7 +84,7 @@ def test_junit_evidence_records_scope_revision_counts_and_bounded_failures(tmp_p
     assert result == 1
     assert report["status"] == "fail"
     assert report["source_revision"] == "a" * 40
-    assert report["scope"] == "tach-selected"
+    assert report["scope"] == scope
     assert report["command"] == "uv run pytest tests/ --tach"
     assert report["tool"]["name"] == "pytest"
     assert report["counts"] == {"errors": 0, "failures": 1, "skipped": 1, "tests": 3}

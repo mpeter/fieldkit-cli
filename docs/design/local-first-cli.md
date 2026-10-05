@@ -40,7 +40,11 @@ Its source roots are `src` and `tests`. These roots must not overlap because
 Tach maps files against the first matching root.
 
 Checkout-only `hooks/` and `scripts/` are outside that module graph. The hooks
-still consume domain behavior rather than owning it. Their tests and the script
+still consume domain behavior rather than owning it.
+`uv run python scripts/check_hook_boundaries.py` preserves their original
+allowlist (`fieldkit`, `fieldkit.config`, `fieldkit.enrich`, `fieldkit.errors`),
+resolves imports against the most specific Tach module, and rejects package
+imports of checkout hooks. Local PR/full gates and hosted lint run this check. Their tests and the script
 tests run independently of Tach on every code PR, both locally and in hosted
 `Test (pytest)`. The complete enforcement gate still runs the entire test suite.
 Run those tests alone with

@@ -99,3 +99,23 @@ def test_native_pytest_selection(tmp_path: Path, disable_tach: bool) -> None:
         assert "1 passed, 1 deselected" in result.stdout
     else:
         assert "--repo-tools-only requires -p no:tach" in result.stderr
+
+
+@pytest.mark.parametrize("package", ["helpers", "helpers/nested"])
+def test_package_reexports_select_consumers(tmp_path: Path, package: str) -> None:
+    tests = tmp_path / "tests"
+    helpers = tests / package
+    helpers.mkdir(parents=True)
+    leaf = helpers / "runner.py"
+    leaf.write_text("import scripts.new_tool", encoding="utf-8")
+    initializer = helpers / "__init__.py"
+    initializer.write_text("from .runner import run as execute", encoding="utf-8")
+    target = tests / "test_indirect.py"
+    target.write_text(f"from tests.{package.replace('/', '.')} import execute", encoding="utf-8")
+    unrelated = tests / "test_domain.py"
+    unrelated.write_text("from fieldkit import errors", encoding="utf-8")
+
+    result = repo_tool_test_paths(tmp_path)
+
+    assert result == {leaf, initializer, target}
+    assert unrelated not in result

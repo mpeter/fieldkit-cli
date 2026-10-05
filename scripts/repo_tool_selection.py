@@ -26,7 +26,9 @@ def repo_tool_test_paths(root: Path) -> set[Path]:
     selected: set[Path] = set()
     while added := {path for path, names in references.items() if path not in selected and names & tool_names}:
         selected.update(added)
-        tool_names.update(path.stem for path in added if path.stem != "conftest")
+        tool_names.update(
+            path.parent.name if path.stem == "__init__" else path.stem for path in added if path.stem != "conftest"
+        )
     return selected
 
 

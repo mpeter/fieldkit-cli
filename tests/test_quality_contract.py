@@ -77,8 +77,8 @@ def test_quality_recipes_run_each_stage_through_timing_runner() -> None:
 
     assert "scripts/quality_stage.py" in makefile
     assert " --full-enforcement $(2) -- " in makefile
-    assert quality_recipe.count("$(call RUN_QUALITY_STAGE") == 17
-    assert full_recipe.count("$(call RUN_FULL_QUALITY_STAGE") == 30
+    assert quality_recipe.count("$(call RUN_QUALITY_STAGE") == 18
+    assert full_recipe.count("$(call RUN_FULL_QUALITY_STAGE") == 31
     assert '--quality-base "$(QUALITY_BASE)"' in quality_recipe
     assert "scripts/check_dependency_profiles.py" in quality_recipe
     assert "scripts/check_compatibility_policy.py" in quality_recipe
@@ -520,3 +520,14 @@ def test_full_enforcement_runs_on_schedule_and_dispatch() -> None:
     assert "make quality-full" in workflow
     assert "name: coverage-full-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}" in workflow
     assert "name: agentready-report-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}" in workflow
+
+
+def test_hook_boundary_check_runs_in_local_and_hosted_gates() -> None:
+    command = "uv run python scripts/check_hook_boundaries.py"
+    quality = _recipe("quality", "# quality-full")
+    full = _recipe("quality-full", "# coverage.json")
+    workflow = yaml.safe_load((_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
+
+    assert command in quality
+    assert command in full
+    assert any(step.get("run") == command for step in workflow["jobs"]["fast-checks"]["steps"])
