@@ -21,6 +21,7 @@ _MANIFEST_VERSION = 2
 _LEGACY_MANIFEST_VERSION = 1
 _SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 _DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
+_SIBLING_LINK = re.compile(r"\]\((\.\./[^)#\s]+)")
 JsonUpdate = Callable[[Path], AbstractContextManager[dict[str, Any]]]
 
 
@@ -202,6 +203,29 @@ def _installed_skill_names(target: InstallTarget) -> set[str]:
         for path in root.iterdir()
         if not path.name.startswith(".") and path.is_dir() and (path / "SKILL.md").is_file()
     }
+
+
+def linked_sibling_skills(skill_dir: Path) -> set[str]:
+    """Return the sibling skills that Markdown links in *skill_dir* point into."""
+    own_root = skill_dir.resolve()
+    skills_root = own_root.parent
+    siblings: set[str] = set()
+    for path in skill_dir.rglob("*.md"):
+        for link in _SIBLING_LINK.findall(path.read_text(encoding="utf-8")):
+            candidate = (path.parent / link).resolve()
+            if not candidate.is_relative_to(skills_root) or candidate.is_relative_to(own_root):
+                continue
+            sibling = candidate.relative_to(skills_root).parts[0]
+            if (skills_root / sibling / "SKILL.md").is_file():
+                siblings.add(sibling)
+    return siblings
+
+
+def missing_linked_skills(target: InstallTarget, selected: list[str], skills_dir: Path) -> dict[str, set[str]]:
+    """Map each selected skill to linked siblings that *target* will not contain."""
+    available = _installed_skill_names(target) | set(selected)
+    missing = {name: linked_sibling_skills(skills_dir / name) - available for name in selected}
+    return {name: absent for name, absent in missing.items() if absent}
 
 
 def inventory_prunable_skills(target: InstallTarget, bundled_names: set[str]) -> PruneInventory:

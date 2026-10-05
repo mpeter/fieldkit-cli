@@ -231,3 +231,16 @@ def test_force_does_not_bypass_target_containment(
 
     assert result == 1
     assert not (outside / "skills" / "alpha" / "SKILL.md").exists()
+
+
+def test_install_warns_when_linked_sibling_skill_is_left_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, skill_source: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (skill_source / "alpha" / "SKILL.md").write_text("# alpha\n\nSee [beta](../beta/SKILL.md).\n", encoding="utf-8")
+    _project(tmp_path, monkeypatch)
+
+    assert _cmd_install(["opencode"], ["alpha"]) == 0
+    assert "alpha links beta, which is not installed" in capsys.readouterr().err
+
+    assert _cmd_install(["opencode"], ["alpha", "beta"]) == 0
+    assert "which is not installed" not in capsys.readouterr().err
