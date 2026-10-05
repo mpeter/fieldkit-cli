@@ -2,8 +2,12 @@
 
 from pathlib import Path
 
+import pytest
+
 from fieldkit.skill.install import linked_sibling_skills, missing_linked_skills
 from fieldkit.skill.targets import InstallTarget
+
+pytestmark = pytest.mark.unit
 
 
 def _skills(tmp_path: Path) -> Path:
