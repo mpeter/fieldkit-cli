@@ -46,10 +46,11 @@ def _pytest_plugin_names(source: str) -> set[str]:
     return names
 
 
-def _fixture_tool_names(source: str, tool_names: set[str]) -> tuple[set[str], bool]:
+def _fixture_tool_names(source: str, tool_names: set[str], *, include_hooks: bool = True) -> tuple[set[str], bool]:
     """Follow imported aliases and helper calls into fixture identifiers."""
     tree = ast.parse(source)
     names = set(tool_names)
+    fixture_aliases: set[str] = set()
     autouse = False
     definitions = [node for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))]
     while True:
@@ -76,11 +77,7 @@ def _fixture_tool_names(source: str, tool_names: set[str]) -> tuple[set[str], bo
         for node in definitions:
             if set(_WORD.findall(ast.get_source_segment(source, node) or "")) & names:
                 names.add(node.name)
-                autouse |= node.name.startswith("pytest_runtest_") or node.name in {
-                    "pytest_pyfunc_call",
-                    "pytest_fixture_setup",
-                    "pytest_fixture_post_finalizer",
-                }
+                autouse |= include_hooks and node.name.startswith("pytest_")
                 for decorator in node.decorator_list:
                     if isinstance(decorator, ast.Call):
                         autouse |= any(
@@ -89,15 +86,25 @@ def _fixture_tool_names(source: str, tool_names: set[str]) -> tuple[set[str], bo
                             and keyword.value.value is True
                             for keyword in decorator.keywords
                         )
-                        names.update(
+                        aliases = {
                             keyword.value.value
                             for keyword in decorator.keywords
                             if keyword.arg == "name"
                             and isinstance(keyword.value, ast.Constant)
                             and isinstance(keyword.value.value, str)
+                        }
+                        names.update(aliases)
+                        fixture_aliases.update(aliases)
+                        autouse |= include_hooks and any(
+                            keyword.arg == "specname"
+                            and isinstance(keyword.value, ast.Constant)
+                            and isinstance(keyword.value.value, str)
+                            and keyword.value.value.startswith("pytest_")
+                            for keyword in decorator.keywords
                         )
         if names == previous:
-            return names - tool_names, autouse
+            exposed = {name for name in names - tool_names if not name.startswith("pytest_")}
+            return exposed | fixture_aliases, autouse
 
 
 def repo_tool_test_paths(root: Path) -> set[Path]:
@@ -154,7 +161,9 @@ def repo_tool_test_paths(root: Path) -> set[Path]:
     while True:
         autouse_paths: set[Path] = set()
         for path, scope in fixture_scopes.items():
-            fixture_names, autouse = _fixture_tool_names(sources[path], tool_names)
+            # This selection engine's lifecycle hooks do not exercise another tool.
+            include_hooks = path != (root / "scripts" / "repo_tool_selection.py").resolve()
+            fixture_names, autouse = _fixture_tool_names(sources[path], tool_names, include_hooks=include_hooks)
             tool_names.update(fixture_names)
             if autouse:
                 autouse_paths.update(test for test in references if test.is_relative_to(scope))

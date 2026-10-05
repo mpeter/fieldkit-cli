@@ -447,7 +447,17 @@ def test_conftest_production_dependencies_remain_tach_owned(tmp_path: Path) -> N
     assert repo_tool_test_paths(tmp_path) == set()
 
 
-@pytest.mark.parametrize("hook", ["pytest_runtest_setup", "pytest_pyfunc_call", "pytest_fixture_setup"])
+@pytest.mark.parametrize(
+    "hook",
+    [
+        "pytest_runtest_setup",
+        "pytest_pyfunc_call",
+        "pytest_fixture_setup",
+        "pytest_generate_tests",
+        "pytest_collection_modifyitems",
+        "pytest_sessionstart",
+    ],
+)
 @pytest.mark.parametrize("plugin", [False, True])
 def test_tool_backed_pytest_hooks_retain_applicable_tests(tmp_path: Path, hook: str, plugin: bool) -> None:
     tests = tmp_path / "tests"
@@ -476,3 +486,59 @@ def test_tool():
 
     expected = {source, conftest, target, sibling} if plugin else {conftest, target}
     assert repo_tool_test_paths(tmp_path) == expected
+
+
+def test_hook_specname_alias_retains_consumers(tmp_path: Path) -> None:
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    conftest = tests / "conftest.py"
+    conftest.write_text(
+        """import pytest
+import scripts.foo
+@pytest.hookimpl(specname="pytest_generate_tests")
+def generated_cases(metafunc):
+    metafunc.parametrize("case", scripts.foo.run())
+""",
+        encoding="utf-8",
+    )
+    target = tests / "test_indirect.py"
+    target.write_text("def test_tool(case):\n    assert case", encoding="utf-8")
+
+    assert repo_tool_test_paths(tmp_path) == {conftest, target}
+
+
+def test_selection_engines_own_hooks_do_not_retain_unrelated_tests(tmp_path: Path) -> None:
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    engine = scripts / "repo_tool_selection.py"
+    engine.write_text(
+        (Path(__file__).resolve().parents[1] / "scripts" / "repo_tool_selection.py").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    conftest = tests / "conftest.py"
+    conftest.write_text('pytest_plugins = "scripts.repo_tool_selection"', encoding="utf-8")
+    unrelated = tests / "test_domain.py"
+    unrelated.write_text("def test_domain():\n    assert True", encoding="utf-8")
+
+    assert repo_tool_test_paths(tmp_path) == {conftest, engine}
+
+
+def test_pytest_prefixed_fixture_alias_still_selects_consumers(tmp_path: Path) -> None:
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    conftest = tests / "conftest.py"
+    conftest.write_text(
+        """import pytest
+import scripts.foo
+@pytest.fixture(name="pytest_tool_runner")
+def internal_runner():
+    return scripts.foo.run()
+""",
+        encoding="utf-8",
+    )
+    target = tests / "test_indirect.py"
+    target.write_text("def test_tool(pytest_tool_runner):\n    assert pytest_tool_runner", encoding="utf-8")
+
+    assert repo_tool_test_paths(tmp_path) == {conftest, target}
