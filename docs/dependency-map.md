@@ -54,6 +54,11 @@ hooks/                     ← Claude Code hooks + git pre-commit
 
 **Boundary enforcement:** ✅ All module boundaries clean (`uvx tach check` passes)
 
+Tach covers the wheel's `src/fieldkit` package, using non-overlapping
+`src` and `tests` roots. Checkout-only hooks and scripts are outside
+the Tach module graph. Their tests run independently on every PR with
+`uv run pytest tests/ --repo-tools-only -p no:tach -q -n 0`.
+
 ---
 
 ## Domain Module Consumer Map

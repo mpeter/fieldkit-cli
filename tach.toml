@@ -23,7 +23,9 @@
 #
 # CLI adapters: fieldkit.commands.* — depends on domain modules
 #
-source_roots = ["src", "."]
+# Non-overlapping roots keep Tach's file-to-module mapping deterministic.
+# Checkout-only hooks and scripts are tested separately on every PR.
+source_roots = ["src", "tests"]
 # The ingest/Gmail circular dependency is avoided: GmailCandidate lives in
 # fieldkit.gmail.discover;
 # fieldkit.ingest.sources consumes _CandidateProtocol (structural typing, no import).
@@ -149,7 +151,3 @@ depends_on = [
     "fieldkit.contact",  # fieldkit.commands.contact delegates to the contact domain.
     "fieldkit.gtask",  # fieldkit.commands.gtask delegates to the Google Tasks domain.
 ]
-
-[[modules]]
-path = "hooks"
-depends_on = ["fieldkit", "fieldkit.config", "fieldkit.enrich", "fieldkit.errors"]

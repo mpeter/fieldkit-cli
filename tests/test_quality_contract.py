@@ -31,6 +31,9 @@ def test_quality_uses_impact_selected_serial_tests() -> None:
     assert "--skip-when-docs-only" in recipe
     assert "--cov" not in recipe
     assert "tests/test_quality_contract.py" in recipe
+    assert "uv run pytest tests/ --repo-tools-only -p no:tach -q -n 0" in recipe
+    tool_stage = next(line for line in recipe.splitlines() if "repo-tool-pytest" in line)
+    assert "--skip-when-docs-only" not in tool_stage
 
 
 def test_quality_full_retains_all_current_enforcement_commands() -> None:
@@ -74,7 +77,7 @@ def test_quality_recipes_run_each_stage_through_timing_runner() -> None:
 
     assert "scripts/quality_stage.py" in makefile
     assert " --full-enforcement $(2) -- " in makefile
-    assert quality_recipe.count("$(call RUN_QUALITY_STAGE") == 16
+    assert quality_recipe.count("$(call RUN_QUALITY_STAGE") == 17
     assert full_recipe.count("$(call RUN_FULL_QUALITY_STAGE") == 30
     assert '--quality-base "$(QUALITY_BASE)"' in quality_recipe
     assert "scripts/check_dependency_profiles.py" in quality_recipe
@@ -305,6 +308,17 @@ def test_pr_ci_uses_impact_tests_and_preserves_required_contexts() -> None:
     for context in ("Lint (ruff)", "Test (pytest)", "Skillsaw (skill lint)", "AgentReady score gate"):
         assert f"name: {context}" in workflow
     assert '--tach --tach-base "$BASE_SHA" --tach-head "$HEAD_SHA" -q -n 0' in workflow
+    workflow_document = yaml.load(workflow, Loader=yaml.BaseLoader)
+    tool_step = next(
+        step
+        for step in workflow_document["jobs"]["test"]["steps"]
+        if step.get("name") == "Run checkout hook and script tests"
+    )
+    assert tool_step["if"] == "needs.changes.outputs.code == 'true'"
+    assert "uv run pytest tests/ --repo-tools-only -p no:tach -q -n 0" in tool_step["run"]
+    assert "--junitxml=reports/pytest-repo-tools.xml" in tool_step["run"]
+    assert "--scope repo-tools" in workflow
+    assert "reports/pytest-repo-tools-summary.json" in workflow
     assert "scripts/check_dependency_profiles.py" in workflow
     assert "scripts/check_public_identity.py" in workflow
     assert "scripts/check_workflow_security.py" in workflow

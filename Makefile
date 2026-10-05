@@ -152,6 +152,7 @@ quality:
 	$(call RUN_QUALITY_STAGE,supply-chain-policy,--quality-base "$(QUALITY_BASE)",uv run python scripts/check_supply_chain_policy.py policy)
 	$(call RUN_QUALITY_STAGE,release-policy,--quality-base "$(QUALITY_BASE)",uv run python scripts/check_release.py policy)
 	$(call RUN_QUALITY_STAGE,quality-contract,--quality-base "$(QUALITY_BASE)",uv run pytest tests/test_quality_contract.py -q -n 0)
+	$(call RUN_QUALITY_STAGE,repo-tool-pytest,--quality-base "$(QUALITY_BASE)",uv run pytest tests/ --repo-tools-only -p no:tach -q -n 0)
 	$(call RUN_QUALITY_STAGE,impact-pytest,--quality-base "$(QUALITY_BASE)" --skip-when-docs-only,uv run pytest tests/ --tach --tach-base "$(QUALITY_BASE)" -q -n 0)
 
 # quality-full — complete merge/scheduled enforcement. pytest runs once and writes coverage.json;

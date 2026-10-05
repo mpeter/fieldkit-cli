@@ -33,6 +33,19 @@ one authoritative implementation. Persistent roots are intentionally separate
 so a checkout, user work, and generated data cannot be confused or committed
 together.
 
+## Architecture enforcement
+
+Tach enforces module boundaries within the wheel's `src/fieldkit` package.
+Its source roots are `src` and `tests`. These roots must not overlap because
+Tach maps files against the first matching root.
+
+Checkout-only `hooks/` and `scripts/` are outside that module graph. The hooks
+still consume domain behavior rather than owning it. Their tests and the script
+tests run independently of Tach on every code PR, both locally and in hosted
+`Test (pytest)`. The complete enforcement gate still runs the entire test suite.
+Run those tests alone with
+`uv run pytest tests/ --repo-tools-only -p no:tach -q -n 0`.
+
 ## Contributor action
 
 Before changing a boundary, read the relevant decision record in
