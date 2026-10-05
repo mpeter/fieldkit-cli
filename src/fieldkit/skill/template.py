@@ -533,17 +533,32 @@ def _flat_support_anchor(relative_path: Path) -> str:
     return f"fieldkit-support-{normalized}"
 
 
+def _flat_sibling_link(candidate: Path, skills_root: Path, fragment: str | None) -> str | None:
+    """Return the flat-target link for a file inside a sibling skill, if it is one."""
+    if not candidate.is_relative_to(skills_root) or not candidate.is_file():
+        return None
+    sibling, *inner = candidate.relative_to(skills_root).parts
+    if not inner or not (skills_root / sibling / "SKILL.md").is_file():
+        return None
+    if inner == ["SKILL.md"]:
+        return f"]({sibling}.md{fragment or ''})"
+    return f"]({sibling}.md#{_flat_support_anchor(Path(*inner))})"
+
+
 def _render_flat_skill_bundle(skill_dir: Path, ctx: dict[str, str]) -> tuple[str, list[UnresolvedVariable]]:
     """Render a Cursor-compatible one-file skill with local Markdown support included.
 
     Flat targets cannot retain a skill directory. Every Markdown file shipped in
     the skill bundle is therefore appended to the root rule, and relative local
-    Markdown links are redirected to the matching in-document anchor. Links
-    outside the bundle retain their original destination.
+    Markdown links are redirected to the matching in-document anchor. Flat
+    targets install each skill as ``<name>.md`` side by side, so a link into a
+    sibling skill points at that file, and at its bundled-support anchor for a
+    support file. Any other link retains its original destination.
     """
     root_file = skill_dir / "SKILL.md"
     markdown_files = [root_file, *sorted(path for path in skill_dir.rglob("*.md") if path != root_file)]
     resolved_root = skill_dir.resolve()
+    skills_root = resolved_root.parent
     relative_paths = {path.resolve(): path.relative_to(skill_dir) for path in markdown_files}
     unresolved: list[UnresolvedVariable] = []
     rendered_files: list[tuple[Path, str]] = []
@@ -557,10 +572,11 @@ def _render_flat_skill_bundle(skill_dir: Path, ctx: dict[str, str]) -> tuple[str
 
         def _replace_local_link(match: re.Match[str], source_parent: Path = source_parent) -> str:
             candidate = (source_parent / match.group("path")).resolve()
-            if not candidate.is_relative_to(resolved_root) or candidate not in relative_paths:
-                return match.group(0)
-            anchor = _flat_support_anchor(relative_paths[candidate])
-            return f"](#{anchor})"
+            if candidate.is_relative_to(resolved_root):
+                if candidate not in relative_paths:
+                    return match.group(0)
+                return f"](#{_flat_support_anchor(relative_paths[candidate])})"
+            return _flat_sibling_link(candidate, skills_root, match.group("fragment")) or match.group(0)
 
         rendered_files.append((relative_path, _LOCAL_MARKDOWN_LINK.sub(_replace_local_link, rendered_text)))
 
