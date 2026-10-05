@@ -9,6 +9,7 @@ from typing import Literal
 from fieldkit.commands.skill._install_io import _install_one_skill, _InstallDecision, _preflight_install
 from fieldkit.commands.skill._output import InstallItemOutcome, json_enabled
 from fieldkit.commands.skill._output import human_echo as _echo
+from fieldkit.skill.install import missing_linked_skills
 from fieldkit.skill.targets import InstallTarget
 
 
@@ -181,11 +182,23 @@ def _apply_install_plan(
             total_new, total_updated, total_unchanged, total_errors = _install_to_tools(
                 targets, selected_skills, skills_dir, ctx, decisions, dry_run=dry_run
             )
+        _warn_missing_linked_skills(targets, selected_skills, skills_dir)
     if prune and total_errors:
         _echo("Pruning skipped because installation reported errors.", err=True)
     elif prune:
         total_errors += _prune_tools(targets, skills_dir, confirm=confirm, dry_run=dry_run, outcomes=outcomes)
     return total_new, total_updated, total_unchanged, total_errors
+
+
+def _warn_missing_linked_skills(targets: list[InstallTarget], selected_skills: list[str], skills_dir: Path) -> None:
+    """Warn when an installed skill links a sibling skill the target does not have."""
+    for target in targets:
+        for name, absent in sorted(missing_linked_skills(target, selected_skills, skills_dir).items()):
+            _echo(
+                f"warning: {target.label}: {name} links {', '.join(sorted(absent))}, which is not installed; "
+                "those links will not resolve",
+                err=True,
+            )
 
 
 def _report_protected_skills(protected: list[str], *, force: bool) -> int:

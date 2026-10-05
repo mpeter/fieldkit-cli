@@ -64,6 +64,34 @@ def test_install_skill_flat_embeds_local_markdown_support(tmp_path: Path) -> Non
     assert "Prepare the week." in installed
 
 
+def test_install_skill_flat_points_sibling_skill_links_at_flat_files(tmp_path: Path) -> None:
+    """Flat targets name every skill <name>.md side by side, so sibling links follow suit."""
+    skills = tmp_path / "skills"
+    routing = skills / "tool-routing"
+    (routing / "references").mkdir(parents=True)
+    (routing / "SKILL.md").write_text("# Routing\n", encoding="utf-8")
+    (routing / "references" / "web-search.md").write_text("# Web\n", encoding="utf-8")
+    skill_dir = skills / "start"
+    (skill_dir / "ops").mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "Read [routing](../tool-routing/SKILL.md), [identity](../tool-routing/SKILL.md#identity),\n"
+        "[search](../tool-routing/references/web-search.md) and [missing](../absent/SKILL.md).\n",
+        encoding="utf-8",
+    )
+    (skill_dir / "ops" / "step.md").write_text("See [routing](../../tool-routing/SKILL.md).\n", encoding="utf-8")
+    target_file = tmp_path / ".cursor" / "rules" / "start.md"
+
+    result = install_skill_flat(skill_dir, target_file, {})
+
+    installed = target_file.read_text(encoding="utf-8")
+    assert result.errors == 0
+    assert "[routing](tool-routing.md)," in installed
+    assert "[identity](tool-routing.md#identity)" in installed
+    assert "[search](tool-routing.md#fieldkit-support-references-web-search-md)" in installed
+    assert "[missing](../absent/SKILL.md)" in installed
+    assert "See [routing](tool-routing.md)." in installed
+
+
 # ---------------------------------------------------------------------------
 # 2. Creates parent directory when it does not exist
 # ---------------------------------------------------------------------------
