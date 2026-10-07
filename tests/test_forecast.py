@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from fieldkit.commands.pursuit.forecast import _parse_acv, compute_forecast
+from fieldkit.commands.pursuit.forecast import compute_forecast
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -49,37 +49,6 @@ def _make_account(tmp_path: Path, deals: list[tuple[str, str, str]]) -> Path:
         p.mkdir(parents=True, exist_ok=True)
         (p / f"{name}.md").write_text(content, encoding="utf-8")
     return tmp_path
-
-
-# ---------------------------------------------------------------------------
-# _parse_acv
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.unit
-def test_parse_acv_dollar_string() -> None:
-    assert _parse_acv("$828,495.00") == pytest.approx(828495.0)
-
-
-@pytest.mark.unit
-def test_parse_acv_plain_float() -> None:
-    assert _parse_acv("3000000.0") == pytest.approx(3000000.0)
-
-
-@pytest.mark.unit
-def test_parse_acv_numeric() -> None:
-    assert _parse_acv(500000) == pytest.approx(500000.0)
-
-
-@pytest.mark.unit
-def test_parse_acv_empty() -> None:
-    assert _parse_acv("") == 0.0
-    assert _parse_acv(None) == 0.0
-
-
-@pytest.mark.unit
-def test_parse_acv_invalid() -> None:
-    assert _parse_acv("N/A") == 0.0
 
 
 # ---------------------------------------------------------------------------

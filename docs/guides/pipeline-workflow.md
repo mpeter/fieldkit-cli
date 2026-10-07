@@ -220,8 +220,20 @@ Best Case   : $1,370,000
 Closed Won  : $0
 ```
 
-ACV is resolved from `sf_consulting_acv`, then `sf_acv`, then `sf_arr` in the
-pursuit frontmatter.
+For standard contracts, forecast selects the first populated amount from
+`sf_consulting_acv`, `sf_acv`, then `sf_arr` in pursuit frontmatter.
+Fixed-price contracts prefer `sf_acv`, then `sf_consulting_acv`, then `sf_arr`.
+Blank, null, and absent amounts allow fallback. An explicit numeric zero is a
+populated amount and does not allow fallback. Malformed amounts produce a
+validation warning and are treated as missing. YAML mappings and lists are invalid
+amounts and make forecast exit 3 without emitting a forecast. Amount diagnostics
+identify the monetary fields without exposing their raw values.
+
+For example, a newly created pursuit at `validate` with `sf_acv: 100000` and
+blank `sf_consulting_acv` contributes $100,000 to best-case and $25,000 to
+weighted forecast. Run `fieldkit pursuit forecast --json --quota 200000` to
+inspect these totals. Forecast reads pursuit and configuration files without
+modifying them.
 
 Key flags:
 
