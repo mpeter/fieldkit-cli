@@ -26,6 +26,32 @@ RUNTIME_SCRIPT = ROOT / "scripts" / "hook_install_runtime.py"
 _TIMEOUT_SECONDS = 30
 
 
+def _assert_process_reaped(pid: int, *, within: float = 2.0) -> None:
+    """Fail unless ``pid`` is gone (or a zombie awaiting its reaper) within ``within`` seconds.
+
+    Polling returns as soon as the kill lands, so a passing test does not pay for a fixed
+    sleep, while a surviving process still fails at the deadline.
+    """
+    # Without procfs (macOS), a zombie is indistinguishable from a live process here,
+    # so only os.kill decides; the orphaned child's reaper clears it within the deadline.
+    stat = Path(f"/proc/{pid}/stat")
+    has_procfs = Path("/proc/self/stat").exists()
+    deadline = time.monotonic() + within
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        if has_procfs:
+            try:
+                if stat.read_text(encoding="utf-8").rsplit(")", 1)[1].split()[0] == "Z":
+                    return
+            except FileNotFoundError:
+                return  # Reaped between os.kill and the read.
+        time.sleep(0.01)
+    pytest.fail(f"process {pid} survived the process-group kill")
+
+
 def _isolated_env(home: Path | None = None) -> dict[str, str]:
     env = os.environ.copy()
     for key in (
@@ -383,13 +409,11 @@ def test_git_query_timeout_kills_process_group(tmp_path: Path, monkeypatch: pyte
     tool_bin = tmp_path / "bin"
     tool_bin.mkdir()
     ready = tmp_path / "git-child-ready"
-    marker = tmp_path / "surviving-git-child"
     child = (
-        "import pathlib,signal,time;"
+        "import os,pathlib,signal,time;"
         "signal.signal(signal.SIGTERM,signal.SIG_IGN);"
-        f"pathlib.Path({str(ready)!r}).write_text('ready');"
-        "time.sleep(5);"
-        f"pathlib.Path({str(marker)!r}).write_text('survived')"
+        f"pathlib.Path({str(ready)!r}).write_text(str(os.getpid()));"
+        "time.sleep(5)"
     )
     git_stub = tool_bin / "git"
     git_stub.write_text(
@@ -410,9 +434,7 @@ def test_git_query_timeout_kills_process_group(tmp_path: Path, monkeypatch: pyte
     with pytest.raises(hook_install_runtime.InstallError, match="Git query timed out"):
         hook_install_runtime._hooks_directory(tmp_path, timeout_seconds=0.5, kill_after_seconds=0.1)
 
-    assert ready.exists()
-    time.sleep(1.1)
-    assert not marker.exists()
+    _assert_process_reaped(int(ready.read_text(encoding="utf-8")))
 
 
 @pytest.mark.parametrize(
@@ -1124,13 +1146,11 @@ def test_run_retries_final_reap_after_interrupt(tmp_path: Path, monkeypatch: pyt
 def test_run_kills_term_ignoring_child_after_leader_exits(tmp_path: Path) -> None:
     """Verify that run kills term ignoring child after leader exits."""
     ready = tmp_path / "child-ready"
-    marker = tmp_path / "surviving-child"
     child = (
-        "import pathlib,signal,time;"
+        "import os,pathlib,signal,time;"
         "signal.signal(signal.SIGTERM,signal.SIG_IGN);"
-        f"pathlib.Path({str(ready)!r}).write_text('ready');"
-        "time.sleep(1);"
-        f"pathlib.Path({str(marker)!r}).write_text('survived')"
+        f"pathlib.Path({str(ready)!r}).write_text(str(os.getpid()));"
+        "time.sleep(5)"
     )
     leader = (
         "import pathlib,subprocess,sys,time;"
@@ -1149,9 +1169,7 @@ def test_run_kills_term_ignoring_child_after_leader_exits(tmp_path: Path) -> Non
             kill_after_seconds=0.1,
         )
 
-    assert ready.exists()
-    time.sleep(1.1)
-    assert not marker.exists()
+    _assert_process_reaped(int(ready.read_text(encoding="utf-8")))
 
 
 def test_temporary_allocation_cleans_path_when_descriptor_close_is_interrupted(
