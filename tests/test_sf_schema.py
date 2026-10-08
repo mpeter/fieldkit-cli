@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from click.testing import CliRunner
 
+import fieldkit.sf.client as sf_client
 from fieldkit.commands.sf.schema import cli
 from fieldkit.sf.client import SFAPIError, SFAuthError, SFDataAccessError, SFDirectClient, SFNotFoundError
 from fieldkit.sf.schema import MAX_SAMPLE_RECORDS, classify_observed_population, collect_schema_reference
@@ -13,6 +14,16 @@ from fieldkit.sf.schema import MAX_SAMPLE_RECORDS, classify_observed_population,
 pytestmark = pytest.mark.unit
 
 _RECORD_ID = "001000000000000AAA"
+
+
+@pytest.fixture(autouse=True)
+def _zero_retry_waits(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep retry counts and error paths while avoiding real backoff in unit tests."""
+    monkeypatch.setattr(
+        sf_client,
+        "_sf_request_idempotent",
+        sf_client._sf_request_idempotent.with_policy(wait_min=0, wait_max=0),
+    )
 
 
 def test_describe_sobject_requests_metadata() -> None:
