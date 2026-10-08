@@ -16,7 +16,7 @@ Do not open a public issue, discussion, or pull request for a suspected vulnerab
 
 Use [GitHub private vulnerability reporting](https://github.com/mpeter/fieldkit-cli/security/advisories/new).
 If that route is unavailable, do not disclose exploit details publicly. The [roadmap](ROADMAP.md)
-records private vulnerability reporting as a required repository-cutover control.
+records private vulnerability reporting as an ongoing repository control.
 
 Include, when available:
 

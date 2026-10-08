@@ -97,6 +97,20 @@
   "allowances": [
     {
       "rule_id": "PUBID001",
+      "path": "src/fieldkit/commands/gmail/README.md",
+      "pattern": "https://github\\.com/mpeter/fieldkit-cli/blob/main/docs/(?:guides/gmail|cli-reference)\\.md(?=$|[\\s)])",
+      "classification": "public_project_identity",
+      "rationale": "The packaged Gmail pointer links to canonical public guides that are absent from the installed distribution."
+    },
+    {
+      "rule_id": "PUBID001",
+      "path": "src/fieldkit/skills/contact/ops/contact-enrich.md",
+      "pattern": "https://github\\.com/mpeter/fieldkit-cli/blob/main/(?:docs/guides/gmail|src/fieldkit/skills/meeting/ops/stakeholder-map)\\.md(?=$|[\\s)])",
+      "classification": "public_project_identity",
+      "rationale": "The packaged contact guide links to canonical Gmail documentation and a sibling reference without assuming an installed sibling layout."
+    },
+    {
+      "rule_id": "PUBID001",
       "path": ".github/CODEOWNERS",
       "pattern": "@mpeter",
       "classification": "public_project_identity",

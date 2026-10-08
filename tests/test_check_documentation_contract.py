@@ -10,6 +10,36 @@ from scripts import check_documentation_contract
 pytestmark = pytest.mark.unit
 
 
+def test_packaged_guides_have_documentation_contract_owners() -> None:
+    """The two shipped guides cannot lose their public classification or owner."""
+    repo = Path(__file__).parents[1]
+    contract = json.loads((repo / "docs/documentation-contract.json").read_text(encoding="utf-8"))
+    public_paths = check_documentation_contract._public_markdown_paths(repo)
+    guides = {
+        "src/fieldkit/commands/gmail/README.md",
+        "src/fieldkit/skills/contact/ops/contact-enrich.md",
+    }
+    assert guides <= public_paths
+    assert guides <= contract["documents"].keys()
+    assert guides <= set(contract["verification"]["source_contract"]["paths"])
+
+
+def test_gmail_configuration_change_invalidates_guide_binding(tmp_path: Path) -> None:
+    """Changing the real token owner invalidates Gmail's declared source fingerprint."""
+    repo = Path(__file__).parents[1]
+    contract = json.loads((repo / "docs/documentation-contract.json").read_text(encoding="utf-8"))
+    sources = contract["documents"]["docs/guides/gmail.md"]["sources"]
+    owner = "src/fieldkit/config/_integrations.py"
+    _write(tmp_path / owner, (repo / owner).read_text(encoding="utf-8"))
+    before = check_documentation_contract._fingerprint(tmp_path, sources)
+    _write(
+        tmp_path / owner,
+        (repo / owner).read_text(encoding="utf-8").replace("google-oauth-token.json", "changed-token.json"),
+    )
+    after = check_documentation_contract._fingerprint(tmp_path, sources)
+    assert after != before
+
+
 def _write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
