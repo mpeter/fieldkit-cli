@@ -51,9 +51,16 @@ fieldkit contact report --account acme-corp
 ```
 
 Enrichment validates records, writes enriched contacts and personal-memory files,
-and reports successful and failed counts. The report command writes `report.md`
-and prints coverage, confidence distribution, and integration recommendations.
-Review those recommendations before authorizing changes to account files or CRM.
+and reports successful and failed counts. The progress checkpoint is not tied to
+an account: a run resumes from the index saved by any earlier run, including one
+for a different account, and can then process nothing while leaving earlier
+enriched data in place. Remove `checkpoint.json` before starting a new account
+scope.
+
+The report command writes `report.md` with coverage by account, source and
+confidence tier, the most-engaged contacts, failed contacts that need manual
+review, data-quality notes, Salesforce contact roles and a metric
+reconciliation. Review it before authorizing changes to account files or CRM.
 All three commands also support `--json`.
 
 ## Storage
