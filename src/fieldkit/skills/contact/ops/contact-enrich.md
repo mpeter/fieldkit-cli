@@ -51,11 +51,11 @@ fieldkit contact report --account acme-corp
 ```
 
 Enrichment validates records, writes enriched contacts and personal-memory files,
-and reports successful and failed counts. The progress checkpoint is not tied to
-an account: a run resumes from the index saved by any earlier run, including one
-for a different account, and can then process nothing while leaving earlier
-enriched data in place. Remove `checkpoint.json` before starting a new account
-scope.
+and reports successful and failed counts. Changing the account scope or raw
+contacts restarts processing with a warning while retaining existing enriched
+contacts and memory files. You no longer need to remove `checkpoint.json` when
+changing scope. Restarted passes append results, so retained contacts may appear
+more than once in the enriched output.
 
 The report command writes `report.md` with coverage by account, source and
 confidence tier, the most-engaged contacts, failed contacts that need manual
@@ -85,10 +85,15 @@ from contact methods, activity, title, and Salesforce role. Gmail engagement
 signals are populated from the local database when an email and matching cache
 data are available.
 
-Enrichment saves progress in `checkpoint.json` after each batch. Resume against
-the same raw-contact ordering and account scope; the checkpoint stores a processed
-index, not a fresh assessment of changed inputs. Inspect the reported failures
-and coverage rather than assuming every discovered contact was enriched.
+Enrichment saves a versioned checkpoint after each batch output is written. It
+binds the processed index to the account filter and a SHA-256 fingerprint of every
+raw-contact field in list order; dictionary key order does not affect the hash.
+The same scope and input resume from the saved offset. Changed fields, order,
+scope, legacy checkpoints without identity, unsupported versions, or out-of-range
+offsets restart from the first contact with a warning. Existing output is retained.
+Completed matching runs do no additional work; empty inputs leave checkpoint and
+enriched data unchanged. Inspect failures and coverage rather than assuming every
+discovered contact was enriched.
 
 The canonical schema and persistence helpers live in `src/fieldkit/enrich/`;
 discovery, web-result merging, enrichment orchestration, and reporting live in

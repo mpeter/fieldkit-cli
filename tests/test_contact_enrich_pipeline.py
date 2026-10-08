@@ -939,7 +939,10 @@ def test_run_enrichment_pipeline_resumes_from_a_checkpoint(
     Guards the resume path: without it a re-run would re-enrich (and re-bill)
     every contact processed before the interruption.
     """
+    from fieldkit.contact._enrich_helpers import _raw_contacts_fingerprint
     from fieldkit.enrich.schema import EnrichmentCheckpoint
+
+    raw = [_contact_dict(full_name=f"Person {i}") for i in range(7)]
 
     monkeypatch.setattr(
         "fieldkit.enrich._helpers.load_checkpoint",
@@ -949,6 +952,9 @@ def test_run_enrichment_pipeline_resumes_from_a_checkpoint(
             total_processed=5,
             total_enriched=5,
             total_failed=0,
+            checkpoint_version=1,
+            account_scope=None,
+            raw_contacts_fingerprint=_raw_contacts_fingerprint(raw),
         ),
     )
 
@@ -961,9 +967,9 @@ def test_run_enrichment_pipeline_resumes_from_a_checkpoint(
 
     monkeypatch.setattr("fieldkit.contact._enrich_helpers.enrich_contact", _tracking)
 
-    raw = [_contact_dict(full_name=f"Person {i}") for i in range(7)]
-    run_enrichment_pipeline(raw)
+    result = run_enrichment_pipeline(raw)
 
+    assert result == (2, 0)
     assert enriched_names == ["Person 5", "Person 6"], "the first five were already processed"
 
 

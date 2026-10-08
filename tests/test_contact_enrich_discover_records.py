@@ -153,7 +153,7 @@ def test_enrich_records_account_none_passes_all_raw_contacts() -> None:
     ):
         result = enrich_records()
 
-    mock_pipeline.assert_called_once_with(raw_contacts)
+    mock_pipeline.assert_called_once_with(raw_contacts, account=None)
     assert result.total_raw_contacts == 2
 
 
@@ -168,7 +168,7 @@ def test_enrich_records_account_filters_to_matching_slug() -> None:
     ):
         result = enrich_records(account="acme-corp")
 
-    mock_pipeline.assert_called_once_with([acme])
+    mock_pipeline.assert_called_once_with([acme], account="acme-corp")
     assert result.total_raw_contacts == 1
 
 
@@ -215,7 +215,7 @@ def test_enrich_records_happy_path_plumbs_pipeline_and_migration_counts() -> Non
     ):
         result = enrich_records()
 
-    mock_pipeline.assert_called_once_with(raw_contacts)
+    mock_pipeline.assert_called_once_with(raw_contacts, account=None)
     assert result == EnrichRecordsResult(
         total_enriched=5, total_failed=2, migrated_legacy_files=3, total_raw_contacts=2
     )
