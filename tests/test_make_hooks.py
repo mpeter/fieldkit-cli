@@ -32,20 +32,22 @@ def _assert_process_reaped(pid: int, *, within: float = 2.0) -> None:
     Polling returns as soon as the kill lands, so a passing test does not pay for a fixed
     sleep, while a surviving process still fails at the deadline.
     """
+    # Without procfs (macOS), a zombie is indistinguishable from a live process here,
+    # so only os.kill decides; the orphaned child's reaper clears it within the deadline.
+    stat = Path(f"/proc/{pid}/stat")
+    has_procfs = Path("/proc/self/stat").exists()
     deadline = time.monotonic() + within
     while time.monotonic() < deadline:
         try:
             os.kill(pid, 0)
         except ProcessLookupError:
             return
-        try:
-            state = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").rsplit(")", 1)[1].split()[0]
-        except (FileNotFoundError, ProcessLookupError):
-            return
-        except OSError:
-            state = ""
-        if state == "Z":
-            return
+        if has_procfs:
+            try:
+                if stat.read_text(encoding="utf-8").rsplit(")", 1)[1].split()[0] == "Z":
+                    return
+            except FileNotFoundError:
+                return  # Reaped between os.kill and the read.
         time.sleep(0.01)
     pytest.fail(f"process {pid} survived the process-group kill")
 
