@@ -79,19 +79,25 @@ def feed(as_json: bool, as_markdown: bool, show_all: bool, account_slug: str | N
     3 — malformed upstream state (unparseable status JSON).
     """
     with cli_main():
-        from fieldkit.companion.feed import get_feed
+        from fieldkit.companion.feed import FeedParseError, get_feed
         from fieldkit.companion.suppress import retired_item_ids
         from fieldkit.config import get_fieldkit_data, get_fieldkit_home
+        from fieldkit.errors import FieldkitError
 
         home = get_fieldkit_home()
         data_path = get_fieldkit_data()
-        items = get_feed(
-            home,
-            data_path,
-            since_cursor=not show_all,
-            account_slug=account_slug,
-            suppressed=retired_item_ids(data_path),
-        )
+        try:
+            items = get_feed(
+                home,
+                data_path,
+                since_cursor=not show_all,
+                account_slug=account_slug,
+                suppressed=retired_item_ids(data_path),
+            )
+        except FeedParseError:
+            raise FieldkitError(
+                "Malformed watcher-run-status.json. Repair the watcher state or rerun the watcher."
+            ) from None
 
         if as_markdown:
             if not items:
