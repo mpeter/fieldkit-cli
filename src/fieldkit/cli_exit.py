@@ -209,6 +209,7 @@ def cli_main() -> Generator[None, None, None]:
         LLMError(category='rate-limit')  → EXIT_PARTIAL (1)
         LLMError(any other category)     → EXIT_DATA (3) with traceback to stderr
         FieldkitError (exact type only)  → EXIT_DATA (3) with a clean one-liner, no traceback
+        click.ClickException             → EXIT_DATA (3) with Click's one-line message
         Any other Exception              → EXIT_DATA (3) with traceback to stderr
 
     On clean exit (no exception), the context manager returns normally and the
@@ -226,4 +227,11 @@ def cli_main() -> Generator[None, None, None]:
     try:
         yield
     except Exception as exc:  # noqa: BLE001  # broad catch is intentional: this is the per-command boundary
+        # Click's own errors (bad parameter, usage) are expected user mistakes: print Click's
+        # one-line message and exit EXIT_DATA, as the top-level normalizer does. Click's default
+        # code 2 would collide with EXIT_AUTH. Looked up lazily: this module does not import click.
+        click = sys.modules.get("click")
+        if click is not None and isinstance(exc, click.ClickException):
+            exc.show()
+            sys.exit(EXIT_DATA)
         sys.exit(handle_cli_exception(exc))
