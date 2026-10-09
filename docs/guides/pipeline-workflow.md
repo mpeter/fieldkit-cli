@@ -278,6 +278,30 @@ but not yet tracked as pursuit files in your workspace.
 
 Add `--json` to redirect output to stdout in machine-readable format.
 
+## SF drift
+
+Check whether your pursuit files still match Salesforce before a pipeline review
+or forecast call:
+
+```bash
+fieldkit sf drift
+fieldkit sf drift --account acme-corp --json
+```
+
+Every active pursuit that links an opportunity is fetched live and compared with
+its stored `sf_*` snapshot. The report lists unreadable pursuit files first, then
+each opportunity RED, YELLOW or GREEN:
+
+- **RED** — the close date has passed or is within 14 days, Salesforce shows the
+  opportunity closed while the pursuit is open, or the fetch failed.
+- **YELLOW** — the stored stage, close date or consulting ACV differs from live
+  Salesforce, the local stage differs from a Salesforce stage of the same name, or
+  the close date is within 30 days.
+
+The command writes nothing. To bring one pursuit's snapshot up to date, run
+`fieldkit sf opportunity <id> <pursuit-file>`. It exits `1` when the report is
+incomplete and `2` when the Salesforce session needs `fieldkit auth sf`.
+
 ## Pipeline review
 
 Generate the global pipeline review and reopen its newest saved artifact:

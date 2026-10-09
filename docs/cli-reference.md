@@ -17,7 +17,7 @@ generated_by: scripts/generate_cli_docs.py
 | Group | Key subcommands |
 |---|---|
 | `fieldkit auth` | `backstory`, `google`, `sf`, `shadowbot` |
-| `fieldkit sf` | `account`, `components`, `frontmatter`, `listview`, `meddpicc`, `opportunity`, `quote`, `reconcile`, `schema`, `session-check`, `set-field`, `set-next-steps`, `update-closeplan` |
+| `fieldkit sf` | `account`, `components`, `drift`, `frontmatter`, `listview`, `meddpicc`, `opportunity`, `quote`, `reconcile`, `schema`, `session-check`, `set-field`, `set-next-steps`, `update-closeplan` |
 | `fieldkit gmail` | `account-tags`, `backstory-gap`, `decay`, `enrich-pursuits`, `query`, `sync` |
 | `fieldkit pursuit` | `advance`, `archive`, `audit`, `create`, `forecast`, `health`, `projects`, `rename`, `repair-dates` |
 | `fieldkit shadowbot` | `query` |
@@ -134,7 +134,7 @@ Options:
 Usage: fieldkit sf [OPTIONS] [COMMAND] [ARGS]...
 
   Salesforce pipeline — listview, opportunity, account, quote, meddpicc,
-  frontmatter, reconcile, field writes.
+  frontmatter, reconcile, drift, field writes.
 
 Options:
   -h, --help  Show this message and exit.
@@ -142,6 +142,7 @@ Options:
 Commands:
   account           Fetch and display the Salesforce account dashboard.
   components        Show CPQ component lines for an Opportunity id or...
+  drift             Report pursuits whose stored Salesforce snapshot has...
   frontmatter       Write sf_* frontmatter fields to pursuit files.
   listview          Fetch and display Salesforce list view records.
   meddpicc          Read the ClosePlan/TSPC MEDDPICC scorecard for an...
@@ -192,6 +193,30 @@ Usage: fieldkit sf components [OPTIONS] OPPORTUNITY
 Options:
   --json      Emit deterministic component records as JSON.
   -h, --help  Show this message and exit.
+```
+
+### `fieldkit sf drift`
+
+```
+Usage: fieldkit sf drift [OPTIONS]
+
+  Report pursuits whose stored Salesforce snapshot has drifted from live
+  Salesforce.
+
+  Compares stage, close date and consulting ACV, and flags open opportunities
+  that are overdue or close within 14 (RED) or 30 (YELLOW) days. Read-only.
+
+  Exit codes:
+    0 — complete report (drift is reported, not an error)
+    1 — incomplete: unreadable pursuit files or failed opportunity fetches
+    2 — Salesforce session missing or expired; run: fieldkit auth sf
+    3 — no workspace or accounts directory
+
+Options:
+  -a, --account TEXT  Limit to a single account directory name.
+  --include-prospect  Include prospect-stage pursuits.
+  --json              Emit the report as JSON.
+  -h, --help          Show this message and exit.
 ```
 
 ### `fieldkit sf frontmatter`

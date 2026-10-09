@@ -72,6 +72,9 @@ These commands exit `1` when they produce a partial result or report findings:
 - **`fieldkit pursuit audit`**: one or more pursuit files contain schema errors,
   warnings, or malformed frontmatter. Fix the reported files, then run the audit
   again.
+- **`fieldkit sf drift`**: the drift report is incomplete because a pursuit file
+  could not be read or an opportunity fetch failed. Drift itself is reported with
+  exit `0`.
 
 ---
 
@@ -81,6 +84,8 @@ These commands exit `2` when their required credential is absent or expired:
 
 - **`fieldkit sf session-check`** — Salesforce session cookie (`sf-cookies.json`) is
   missing or the `sid` has expired. Run `fieldkit auth sf` to refresh.
+- **`fieldkit sf drift`** — the Salesforce session is missing or expired. The run
+  stops instead of reporting partial results. Run `fieldkit auth sf` to refresh.
 - **`fieldkit auth shadowbot`** — ShadowBot Chrome cookie is missing or the session
   has expired. Run `fieldkit auth shadowbot` to re-authenticate.
 - **`fieldkit gmail sync`** — Interactive Google OAuth consent is required but stdin
