@@ -39,6 +39,12 @@
       "type": "contains",
       "pattern": "draft-review",
       "message": "Customer-facing output must route through draft-review"
+    },
+    {
+      "id": "no_pursuit_note_writes",
+      "type": "not_contains",
+      "pattern": "update the pursuit note",
+      "message": "Assistant output must not become pursuit-note or qualification state"
     }
   ],
   "evals": [

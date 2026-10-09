@@ -133,10 +133,13 @@ jargon-free language.
 ### Phase 4: Publish & Polish
 
 #### Step 10 — Stage, don't publish
-Build into a **new, private staging copy** — never edit a live/shared deck
-directly, never share the staging file, never change its permissions. The
-operator reviews the staging deck and merges what they want into the live
-one themselves.
+Creating the staging copy is the one external write this skill makes, so
+**ask the operator before creating it** and name where it will live. Create
+it in the operator's own private location (not a shared folder, whose
+sharing a new file inherits), then confirm its sharing shows only the
+operator before adding content. Never edit a live or shared deck, share the
+staging file, or change permissions. The operator reviews the staging deck
+and merges what they want into the live one themselves.
 
 #### Step 11 — Visual polish + compress
 Use a fresh-eyes pass (a subagent, or re-read after a break) for visual QA —
@@ -153,8 +156,9 @@ Loop fix-and-verify until a full pass finds zero issues.
 
 ## Output
 
-- Staging deck, link or path presented to the operator in chat
-- All generated artifacts in `scratch/` (never committed)
+- Staging deck, link or path presented to the operator in chat (the one
+  artifact outside `scratch/`)
+- All other generated artifacts in `scratch/` (never committed)
 
 ## Gotchas
 
@@ -177,6 +181,7 @@ Loop fix-and-verify until a full pass finds zero issues.
 - **Never skip the citation gate** — 100% speaker-note coverage is a hard
   gate, not a goal.
 - **Never send the deck to anyone** — operator reviews and shares manually.
-- **Never commit generated output** — all artifacts go to `scratch/`.
+- **Never commit generated output** — everything except the approved
+  staging deck goes to `scratch/`.
 - **Headline value is value realization** — dollar savings stay out of the
   headline.

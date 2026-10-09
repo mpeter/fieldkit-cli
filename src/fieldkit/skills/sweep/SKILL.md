@@ -93,7 +93,8 @@ treat TASKS.md as the sole surface.
 - **SF writes:** teed-up commands only, clearly marked DRY. Execution
   requires the operator's explicit word per item.
 - Writes go to `scratch/out/sweep/`, `scratch/out/drafts/`, and (on approval)
-  TASKS.md / the ledger. Never notes/, never accounts/, never a commit.
+  TASKS.md, the ledger, or the Google Tasks list. Never notes/, never
+  accounts/, never a commit.
 - Bounded: 2–3 items per iteration, ≤6 external calls. An item that balloons
   gets returned to the list annotated "bigger than it looks" — not smeared
   across the iteration.

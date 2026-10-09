@@ -27,6 +27,12 @@
         "humanizer"
       ],
       "message": "Must route through the draft and voice gates"
+    },
+    {
+      "id": "staging_needs_approval",
+      "type": "contains",
+      "pattern": "ask the operator before creating it",
+      "message": "Creating the staging deck is an external write and needs operator approval"
     }
   ],
   "evals": [

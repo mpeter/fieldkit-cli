@@ -58,7 +58,9 @@ When the chosen work product is deck content, markdown is only the
 intermediate: the final EXECUTE iteration hands off to the `exec-review-deck`
 skill (citation gate, value-realization framing, de-AI pass, brand
 adherence) and produces a **new, private staging deck** in whatever
-presentation tool you use. Hard rules (also enforced by the SKILL.md
+presentation tool you use, created only after the operator approves it, in
+the operator's own private location, with its sharing confirmed before any
+content goes in. Hard rules (also enforced by the SKILL.md
 guardrails): NEVER edit an existing/live deck, never share the staging file,
 never touch permissions — the operator reviews the staging deck and copies
 slides into the live deck themselves. Speaker notes carry the citations;

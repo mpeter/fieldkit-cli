@@ -43,6 +43,12 @@
       "type": "contains",
       "pattern": "fieldkit sf reconcile",
       "message": "Must distinguish itself from the single-file CLI command"
+    },
+    {
+      "id": "accounts_relative_paths",
+      "type": "contains",
+      "pattern": "f\"accounts/{r['relative_path']}\"",
+      "message": "pursuit health reports paths relative to accounts/; the script must prefix them"
     }
   ],
   "evals": [

@@ -41,8 +41,8 @@ file for next time.
   prior thread — omitting it can let stale thread context bleed into new
   output.
 - **Take system-of-record facts (stage, ACV, close date) from
-  `fieldkit sf`.** Assistant output is unverified synthesis. The assistant is for intelligence and synthesis, not ground
-  truth.
+  `fieldkit sf`.** Assistant output is unverified synthesis: use it for
+  intelligence, not ground truth.
 - **Auth check before long workflows** — if the assistant returns an auth
   error or the stream dies immediately, run `fieldkit auth shadowbot`.
 - **Capability name must be exact in the prompt** when your organization's
@@ -66,7 +66,7 @@ file for next time.
 ## Gateway Prerequisite
 
 ```bash
-fieldkit shadowbot query --help      # confirms auth and CLI availability
+fieldkit auth shadowbot      # checks for a valid token; exit 2 means re-authenticate
 ```
 
 ---
@@ -159,9 +159,10 @@ After the command completes:
   account/context changes).
 - If output contains customer-facing content, route it through
   `draft-review` before the operator sends it.
-- If output contains information relevant to deal qualification, ask "Should
-  I update the pursuit note with any of this?" — write only on explicit
-  confirmation.
+- If output bears on deal qualification, route it to the `post-meeting`
+  skill as candidate evidence against native ClosePlan questions, labeled
+  `[Assistant]`. It never becomes pursuit-note or qualification state on
+  its own; `grill` reviews the evidence.
 
 ---
 

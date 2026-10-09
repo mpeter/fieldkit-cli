@@ -3,7 +3,7 @@ name: sf-reconcile
 description: >
   Pursuit-vs-Salesforce drift detection across your active pipeline. Fetches live SF for
   every active pursuit with a linked Opportunity, flags divergence from the pursuit files
-  (stage, close date, ACV, closing window) RED/YELLOW/GREEN, and syncs only on approval.
+  (stage, close date, consulting ACV, closing window) RED/YELLOW/GREEN, and syncs only on approval.
   Use when the operator types /sf-reconcile or asks whether pursuit files match Salesforce,
   including before a pipeline review or forecast call — even if they only say "are my files
   up to date" or "check the deals".
@@ -71,9 +71,12 @@ def closed(s):
     return s.startswith("closed")
 
 def frontmatter(path):
-    text = Path(path).read_text(encoding="utf-8")
-    parts = text.split("\n---", 1) if text.startswith("---") else []
-    return (yaml.safe_load(parts[0][3:]) or {}) if len(parts) == 2 else {}
+    text = path.read_text(encoding="utf-8")
+    m = re.match(r"---\n(.*?)\n---[ \t]*(\n|$)", text, re.S)
+    fm = yaml.safe_load(m.group(1)) if m else {}
+    if not isinstance(fm, dict):
+        raise ValueError("frontmatter is not a mapping")
+    return fm
 
 def days_until(d):
     try:
@@ -90,9 +93,11 @@ def run_json(cmd, timeout):
 def reconcile(opp_id, path):
     flags = []
     try:
-        fm = frontmatter(path)
+        fm = frontmatter(Path(path))
     except OSError as exc:
         return {"id": opp_id, "pursuit": path, "flags": [("RED", "missing-file", str(exc))]}
+    except (ValueError, yaml.YAMLError) as exc:
+        return {"id": opp_id, "pursuit": path, "flags": [("RED", "bad-frontmatter", str(exc)[:160])]}
     try:
         live = run_json(["fieldkit", "sf", "opportunity", opp_id, path, "--no-write", "--json"], 90)
     except (RuntimeError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
@@ -103,10 +108,10 @@ def reconcile(opp_id, path):
         flags.append(("YELLOW", "stage-mismatch", f"local '{local}' != SF '{sf}'"))
     if sf and stored != sf:
         flags.append(("YELLOW", "sf-stage-drift", f"stored sf_stage '{stored}' != live '{sf}'"))
-    if live.get("close_date") and str(fm.get("sf_close_date", "")) != live["close_date"]:
+    if live.get("close_date") and str(fm.get("sf_close_date") or "")[:10] != live["close_date"][:10]:
         flags.append(("YELLOW", "close-date-drift", f"stored {fm.get('sf_close_date') or '—'} != live {live['close_date']}"))
-    live_acv = money(live.get("consulting_acv"))
-    if live_acv is not None and money(fm.get("sf_consulting_acv")) != live_acv:
+    stored_acv, live_acv = money(fm.get("sf_consulting_acv")) or 0, money(live.get("consulting_acv")) or 0
+    if stored_acv != live_acv:  # blank and $0 are equal; a cleared SF value still drifts
         flags.append(("YELLOW", "acv-drift", f"stored {fm.get('sf_consulting_acv')} != live {live.get('consulting_acv')}"))
     du = days_until(live.get("close_date"))
     if du is not None and not closed(sf):
@@ -121,13 +126,19 @@ def reconcile(opp_id, path):
     return {"id": opp_id, "pursuit": path, "name": live.get("name"), "flags": flags,
             "live": {"stage": live.get("stage"), "close_date": live.get("close_date"), "consulting_acv": live.get("consulting_acv")}}
 
+if not Path("accounts").is_dir():
+    sys.exit("Run from the fieldkit workspace root (the directory containing accounts/).")
 cmd = ["fieldkit", "pursuit", "health", "--json"]
 cmd += ["--account", ACCOUNT] if ACCOUNT else []
 cmd += ["--include-prospect"] if INCLUDE_PROSPECT else []
-rows = [r for r in run_json(cmd, 120) if r.get("sf_opportunity_id")]
+try:
+    rows = [r for r in run_json(cmd, 120) if r.get("sf_opportunity_id")]
+except (RuntimeError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
+    sys.exit(f"No pursuits in scope: {exc}")
 results = []
 for r in rows:
-    e = reconcile(r["sf_opportunity_id"], r["relative_path"])
+    # health reports paths relative to accounts/
+    e = reconcile(r["sf_opportunity_id"], f"accounts/{r['relative_path']}")
     levels = {f[0] for f in e["flags"]}
     e["status"] = "RED" if "RED" in levels else "YELLOW" if levels else "GREEN"
     results.append(e)
@@ -140,8 +151,11 @@ print(f"\n{report['red']} RED, {report['yellow']} YELLOW of {report['count']} ->
 PY
 ```
 
-Edit `ACCOUNT` or `INCLUDE_PROSPECT` at the top of the script to narrow or
-widen the scope.
+Run it from the workspace root. Edit `ACCOUNT` or `INCLUDE_PROSPECT` at the
+top of the script to narrow or widen the scope. Each opportunity is a live
+fetch with a 90-second limit, so a large portfolio can outlast an agent's
+default command timeout: run it in the background, or narrow with
+`ACCOUNT`.
 
 `stage-mismatch` compares only when the SF stage name is one of fieldkit's
 lifecycle stages. Organizations with their own stage names still get
@@ -151,16 +165,18 @@ lifecycle stages. Organizations with their own stage names still get
 
 - 🔴 **RED** — `overdue` (SF close date passed, still open), `closing-14d`,
   `sf-closed-local-open` (SF closed, local still open), `sf-fetch-failed`,
-  `missing-file`.
+  `missing-file`, `bad-frontmatter`.
 - 🟡 **YELLOW** — `stage-mismatch` (local vs SF), `sf-stage-drift` /
-  `close-date-drift` / `acv-drift` (file snapshot stale vs live),
+  `close-date-drift` / `acv-drift` (consulting ACV; file snapshot stale vs live),
   `closing-30d`.
 - 🟢 **GREEN** — clean.
 
 Show every opportunity in scope, including rows with missing data, and lead
 with RED. A pursuit with no `sf_opportunity_id` is out of scope for this
 report, not GREEN — list it separately as "not yet linked to SF" when the
-operator asks about pipeline completeness.
+operator asks about pipeline completeness. Scope is what `pursuit health`
+returns: pre-pipeline pursuits and files its loader rejects are not in it,
+and `fieldkit pursuit audit` finds the latter.
 
 ## Step 4 — act only on approval (flag, don't fix)
 
@@ -168,8 +184,8 @@ Propose, then wait:
 
 - **Snapshot drift** (`sf-*-drift`, `close-date-drift`, `acv-drift`) → offer
   to sync that pursuit's `sf_*` frontmatter with
-  `fieldkit sf opportunity <id> <file>` (no `--no-write`). One pursuit at a
-  time, on the operator's word.
+  `fieldkit sf opportunity <id> accounts/<relative_path>` (no `--no-write`).
+  One pursuit at a time, on the operator's word.
 - **stage-mismatch** → surface it and ask; local `stage` is the operator's
   judgment (see the `pursuit-advance` skill for gate checks).
 - **overdue / sf-closed-local-open** → surface for a close/slip decision; SF

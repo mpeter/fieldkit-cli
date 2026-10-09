@@ -70,11 +70,10 @@ Read `## Mission` first. Run exactly one phase's iteration, update state, stop.
 ### Phase EXPLORE — grow the map
 
 1. Take the top 1–2 items from `## Queue` and explore them (verbs below).
-2. Write findings back: new docs → the matching kind section with **ID,
-   date, one-line "why it matters"** tied to a pursuit, play, or strategic
-   goal (no entry without a why). Deal-changing finds → also
-   `## Expansion leads`. New hops
-   → `## Queue`, ranked: money docs > program kits > peer precedents >
+2. Write findings back: new docs → their kind section with **ID, date,
+   one-line "why it matters"** tied to a pursuit, play, or goal (no entry
+   without a why). Deal-changing finds → also `## Expansion leads`. New
+   hops → `## Queue`, ranked: money docs > program kits > peer precedents >
    archives.
 3. Append to `## Explored log`: `YYYY-MM-DD — <hop> → <n> waypoints, <n>
    leads, <n> queued`.
@@ -91,7 +90,8 @@ Read `## Mission` first. Run exactly one phase's iteration, update state, stop.
 1. **Derive the strategic goals first — do not assume them.** Read whatever
    this workspace keeps as a statement of operator intent (a goals or
    territory-plan file in `notes/`, if you keep one), the `sf_*` blocks,
-   native ClosePlan qualification (`fieldkit sf meddpicc <opp-id>`), **and
+   native ClosePlan qualification for the few pursuits a candidate goal
+   hinges on (`fieldkit sf meddpicc <opp-id>`, within the call budget), **and
    the note body's reversal/status banners + newest
    `accounts/*/meetings/` entry** across `accounts/*/pursuits/*.md` — a note
    body can record that the customer killed a deal while `sf_*` still reads
@@ -146,8 +146,8 @@ Calibration examples: `REFERENCE.md` → "Goal shapes".
    `## Queue` and run it as a mini-EXPLORE next iteration — then return.
 
 **Deck work products** hand off to `exec-review-deck` in the final EXECUTE
-iteration and produce a new, private staging file (`REFERENCE.md` →
-"Slide/deck work products").
+iteration, which stops to ask before creating the private staging file —
+even under a loop (`REFERENCE.md` → "Slide/deck work products").
 
 5. When ALL criteria are checked: set `phase: DONE`, write a **"So-what"
    block** at the top of the pack — the ≤3 operator actions/decisions this
@@ -192,10 +192,10 @@ templates" has a worked example to adapt. Two decision rules:
 
 - **Read-only against every external system**, with ONE narrow carve-out:
   your document store is searched and read, never reorganized or shared; any
-  AI assistant is queried, never actioned. The carve-out: EXECUTE may
-  **create a new private staging file** for a deck work product (see
-  EXECUTE). It may never modify, share, move, or change permissions on any
-  existing document.
+  AI assistant is queried, never actioned. The carve-out: with the
+  operator's approval, EXECUTE may create one private staging file for a
+  deck work product. Existing documents are never modified, shared, moved,
+  or re-permissioned.
 - Writes go to `scratch/waypoints/` and `scratch/out/` only. Never `notes/`,
   never `accounts/`, never a commit. If a mission's natural output is a
   pursuit file or note update, produce it as a *proposal* in scratch and say
@@ -219,7 +219,7 @@ per mission for NARROW: `REFERENCE.md` → "Model & token economics".
 ## Loop usage
 
 ```
-/loop /waypoint            # self-paced
+/loop /waypoint            # Claude Code; use your harness's loop facility
 /loop 30m /waypoint        # fixed cadence
 ```
 
