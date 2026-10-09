@@ -5,6 +5,7 @@ live opportunity and maps it to :class:`LiveOpportunity`; nothing here performs
 I/O, so every flag is unit-testable from plain data.
 """
 
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
@@ -24,6 +25,7 @@ DriftCode = Literal[
     "closing-14d",
     "closing-30d",
     "sf-closed-local-open",
+    "opportunity-not-found",
     "sf-fetch-failed",
 ]
 
@@ -70,17 +72,29 @@ def _iso_day(value: object) -> str:
     return str(value or "")[:10]
 
 
-def _whole_dollars(value: object) -> int:
-    """Parse a stored or live amount to whole dollars; blank and non-numeric read as 0."""
+def _field(frontmatter: Mapping[str, Any], key: str) -> Any:
+    """Read an ``sf_*`` field, accepting the legacy hyphenated spelling (``sf-stage``)."""
+    value = frontmatter.get(key)
+    return value if value is not None else frontmatter.get(key.replace("_", "-"))
+
+
+def _whole_dollars(value: object) -> int | None:
+    """Parse an amount to whole dollars: blank reads as 0, non-numeric or non-finite as None."""
+    if value is None or value == "":
+        return 0
     parsed = _parse_monetary(value) if isinstance(value, (str, int, float)) else None
-    return round(parsed) if isinstance(parsed, float) else 0
+    if parsed is None:
+        return 0
+    if not isinstance(parsed, float) or not math.isfinite(parsed):
+        return None
+    return round(parsed)
 
 
 def _stage_flags(frontmatter: Mapping[str, Any], live: LiveOpportunity) -> list[DriftFlag]:
     flags: list[DriftFlag] = []
     local = normalize_stage(frontmatter.get("stage"))
     sf_stage = normalize_stage(live["stage"])
-    stored = normalize_stage(frontmatter.get("sf_stage"))
+    stored = normalize_stage(_field(frontmatter, "sf_stage"))
     if live["is_closed"]:
         if local not in TERMINAL_STAGES:
             flags.append(DriftFlag("RED", "sf-closed-local-open", f"SF '{live['stage']}', local '{local}'"))
@@ -95,13 +109,15 @@ def _stage_flags(frontmatter: Mapping[str, Any], live: LiveOpportunity) -> list[
 
 def _snapshot_flags(frontmatter: Mapping[str, Any], live: LiveOpportunity) -> list[DriftFlag]:
     flags: list[DriftFlag] = []
-    stored_close = _iso_day(frontmatter.get("sf_close_date"))
+    stored_close = _iso_day(_field(frontmatter, "sf_close_date"))
     live_close = _iso_day(live["close_date"])
     if live_close and stored_close != live_close:
         flags.append(DriftFlag("YELLOW", "close-date-drift", f"stored {stored_close or '—'} != live {live_close}"))
-    stored_acv = _whole_dollars(frontmatter.get("sf_consulting_acv"))
+    stored_acv = _whole_dollars(_field(frontmatter, "sf_consulting_acv"))
     live_acv = _whole_dollars(live["consulting_acv"])
-    if stored_acv != live_acv:
+    if stored_acv is None:
+        flags.append(DriftFlag("YELLOW", "acv-drift", "stored consulting ACV is not a number"))
+    elif live_acv is not None and stored_acv != live_acv:
         flags.append(DriftFlag("YELLOW", "acv-drift", f"stored consulting ACV {stored_acv:,} != live {live_acv:,}"))
     return flags
 

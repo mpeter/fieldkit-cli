@@ -8,9 +8,13 @@ from typing import Any, ClassVar
 import pytest
 from click.testing import CliRunner, Result
 
+from fieldkit.cli_exit import EXIT_AUTH, handle_cli_exception
 from fieldkit.commands.sf import drift
 from fieldkit.sf.client import SFAPIError, SFAuthError, SFNotFoundError
 from fieldkit.sf.types import OpportunitySObject
+
+_ID_A = "006A00000000000000"
+_ID_B = "006B00000000000000"
 
 # Far-future close dates keep close-window flags out of tests that are not about them.
 _FAR = "2099-03-01"
@@ -91,7 +95,7 @@ def _report(result: Result) -> dict[str, Any]:
 
 @pytest.mark.unit
 def test_live_from_record_maps_salesforce_fields() -> None:
-    live = drift.live_from_record(_record("006A", stage="Closed Won", acv=None, closed=True))  # type: ignore[arg-type]
+    live = drift.live_from_record(_record("006A00000000000000", stage="Closed Won", acv=None, closed=True))  # type: ignore[arg-type]
     assert live == {"stage": "Closed Won", "close_date": _FAR, "consulting_acv": None, "is_closed": True}
 
 
@@ -99,18 +103,18 @@ def test_live_from_record_maps_salesforce_fields() -> None:
 def test_complete_report_orders_red_first_and_uses_workspace_paths(
     workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _pursuit(workspace, "acme-corp", "clean", sf_opportunity_id="006A")
-    _pursuit(workspace, "acme-corp", "drifted", sf_opportunity_id="006B")
-    _pursuit(workspace, "acme-corp", "overdue", sf_opportunity_id="006C", sf_close_date="2020-01-01")
+    _pursuit(workspace, "acme-corp", "clean", sf_opportunity_id="006A00000000000000")
+    _pursuit(workspace, "acme-corp", "drifted", sf_opportunity_id="006B00000000000000")
+    _pursuit(workspace, "acme-corp", "overdue", sf_opportunity_id="006C00000000000000", sf_close_date="2020-01-01")
     _pursuit(workspace, "acme-corp", "unlinked")
-    _pursuit(workspace, "acme-corp", "won", stage="closed-won", sf_opportunity_id="006D")
-    _pursuit(workspace, "acme-corp", "early", stage="prospect", sf_opportunity_id="006E")
+    _pursuit(workspace, "acme-corp", "won", stage="closed-won", sf_opportunity_id="006D00000000000000")
+    _pursuit(workspace, "acme-corp", "early", stage="prospect", sf_opportunity_id="006E00000000000000")
     _use_responses(
         monkeypatch,
         {
-            "006A": _record("006A"),
-            "006B": _record("006B", stage="Negotiate"),
-            "006C": _record("006C", close="2020-01-01"),
+            "006A00000000000000": _record("006A00000000000000"),
+            "006B00000000000000": _record("006B00000000000000", stage="Negotiate"),
+            "006C00000000000000": _record("006C00000000000000", close="2020-01-01"),
         },
     )
 
@@ -126,41 +130,37 @@ def test_complete_report_orders_red_first_and_uses_workspace_paths(
         "accounts/acme-corp/pursuits/clean.md",
     ]
     assert [flag["code"] for flag in report["opportunities"][1]["flags"]] == ["stage-mismatch", "sf-stage-drift"]
-    assert {opp_id for opp_id, _ in FakeClient.instances[0].fetched} == {"006A", "006B", "006C"}
+    assert {opp_id for opp_id, _ in FakeClient.instances[0].fetched} == {
+        "006A00000000000000",
+        "006B00000000000000",
+        "006C00000000000000",
+    }
 
 
 @pytest.mark.unit
 def test_include_prospect_and_account_filter_narrow_scope(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _pursuit(workspace, "acme-corp", "early", stage="prospect", sf_opportunity_id="006E")
-    _pursuit(workspace, "globex", "other", sf_opportunity_id="006F")
-    _use_responses(monkeypatch, {"006E": _record("006E", stage="Prospect"), "006F": _record("006F")})
+    _pursuit(workspace, "acme-corp", "early", stage="prospect", sf_opportunity_id="006E00000000000000")
+    _pursuit(workspace, "globex", "other", sf_opportunity_id="006F00000000000000")
+    _use_responses(
+        monkeypatch,
+        {
+            "006E00000000000000": _record("006E00000000000000", stage="Prospect"),
+            "006F00000000000000": _record("006F00000000000000"),
+        },
+    )
 
     result = _run("--json", "--account", "acme-corp", "--include-prospect")
 
     assert result.exit_code == 0, result.output
-    assert [row["opportunity_id"] for row in _report(result)["opportunities"]] == ["006E"]
+    assert [row["opportunity_id"] for row in _report(result)["opportunities"]] == ["006E00000000000000"]
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize(
-    ("error", "detail"),
-    [
-        pytest.param(
-            SFNotFoundError("Opportunity 006B not found"), "opportunity not found in Salesforce", id="not-found"
-        ),
-        pytest.param(
-            SFAPIError("HTTP 500: internal detail https://internal.example"),
-            "Salesforce request failed; retry later",
-            id="api-error",
-        ),
-    ],
-)
-def test_failed_fetch_is_a_red_row_and_partial_exit(
-    workspace: Path, monkeypatch: pytest.MonkeyPatch, error: Exception, detail: str
-) -> None:
-    _pursuit(workspace, "acme-corp", "clean", sf_opportunity_id="006A")
-    _pursuit(workspace, "acme-corp", "broken", sf_opportunity_id="006B")
-    _use_responses(monkeypatch, {"006A": _record("006A"), "006B": error})
+@pytest.mark.unit
+def test_failed_request_is_a_red_row_and_partial_exit(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _pursuit(workspace, "acme-corp", "clean", sf_opportunity_id=_ID_A)
+    _pursuit(workspace, "acme-corp", "broken", sf_opportunity_id=_ID_B)
+    _use_responses(monkeypatch, {_ID_A: _record(_ID_A), _ID_B: SFAPIError("HTTP 500: detail https://internal.example")})
 
     result = _run("--json")
 
@@ -169,28 +169,84 @@ def test_failed_fetch_is_a_red_row_and_partial_exit(
     assert report["complete"] is False
     failed = report["opportunities"][0]
     assert failed["status"] == "RED"
-    assert failed["flags"] == [{"level": "RED", "code": "sf-fetch-failed", "detail": detail}]
+    assert failed["flags"] == [{"level": "RED", "code": "sf-fetch-failed", "detail": "Salesforce request failed"}]
     assert "internal" not in result.output
     assert report["counts"]["green"] == 1
 
 
 @pytest.mark.unit
+def test_missing_opportunity_is_a_finding_in_a_complete_report(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stale id is answered definitively; retrying cannot help, so the report stays complete."""
+    _pursuit(workspace, "acme-corp", "stale", sf_opportunity_id=_ID_B)
+    _use_responses(monkeypatch, {_ID_B: SFNotFoundError("Opportunity not found")})
+
+    result = _run("--json")
+
+    assert result.exit_code == 0
+    report = _report(result)
+    assert report["complete"] is True
+    assert [flag["code"] for flag in report["opportunities"][0]["flags"]] == ["opportunity-not-found"]
+
+
+@pytest.mark.unit
+def test_placeholder_ids_are_unlinked_and_malformed_ids_unassessed(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _pursuit(workspace, "acme-corp", "placeholder", sf_opportunity_id="TBD")
+    _pursuit(workspace, "acme-corp", "malformed", sf_opportunity_id="006/../services?x=1")
+    _pursuit(workspace, "acme-corp", "clean", sf_opportunity_id=_ID_A)
+    _use_responses(monkeypatch, {_ID_A: _record(_ID_A)})
+
+    result = _run("--json")
+
+    assert result.exit_code == 1
+    report = _report(result)
+    assert report["unassessed"] == [
+        {
+            "pursuit": "accounts/acme-corp/pursuits/malformed.md",
+            "reason": "sf_opportunity_id is not a 15- or 18-character Salesforce id",
+        }
+    ]
+    assert [opp_id for opp_id, _ in FakeClient.instances[0].fetched] == [_ID_A]
+
+
+@pytest.mark.unit
+def test_hyphenated_legacy_id_key_links_the_pursuit(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    directory = workspace / "accounts" / "acme-corp" / "pursuits"
+    directory.mkdir(parents=True)
+    (directory / "legacy.md").write_text(
+        f"---\nstage: propose\nsf-opportunity-id: {_ID_A}\nsf-stage: Propose\nsf-close-date: {_FAR}\n"
+        "sf-consulting-acv: $100,000\n---\n",
+        encoding="utf-8",
+    )
+    _use_responses(monkeypatch, {_ID_A: _record(_ID_A)})
+
+    result = _run("--json")
+
+    assert result.exit_code == 0, result.output
+    assert _report(result)["counts"] == {"red": 0, "yellow": 0, "green": 1, "total": 1}
+
+
+@pytest.mark.unit
 def test_expired_session_propagates_instead_of_partial_report(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _pursuit(workspace, "acme-corp", "clean", sf_opportunity_id="006A")
-    _use_responses(monkeypatch, {"006A": SFAuthError("session expired")})
+    _pursuit(workspace, "acme-corp", "clean", sf_opportunity_id="006A00000000000000")
+    _use_responses(monkeypatch, {"006A00000000000000": SFAuthError("session expired")})
 
     result = _run("--json")
 
     assert isinstance(result.exception, SFAuthError)
     assert result.stdout == ""
+    assert handle_cli_exception(result.exception) == EXIT_AUTH
 
 
 @pytest.mark.unit
 def test_unreadable_pursuit_is_reported_and_valid_rows_kept(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _pursuit(workspace, "acme-corp", "clean", sf_opportunity_id="006A")
+    _pursuit(workspace, "acme-corp", "clean", sf_opportunity_id="006A00000000000000")
     broken = workspace / "accounts" / "acme-corp" / "pursuits" / "broken.md"
     broken.write_text("---\nstage: [unclosed\n---\n", encoding="utf-8")
-    _use_responses(monkeypatch, {"006A": _record("006A")})
+    _use_responses(monkeypatch, {"006A00000000000000": _record("006A00000000000000")})
 
     result = _run("--json")
 
@@ -202,8 +258,8 @@ def test_unreadable_pursuit_is_reported_and_valid_rows_kept(workspace: Path, mon
 
 @pytest.mark.unit
 def test_missing_session_exits_auth_before_fetching(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _pursuit(workspace, "acme-corp", "clean", sf_opportunity_id="006A")
-    _use_responses(monkeypatch, {"006A": _record("006A")})
+    _pursuit(workspace, "acme-corp", "clean", sf_opportunity_id="006A00000000000000")
+    _use_responses(monkeypatch, {"006A00000000000000": _record("006A00000000000000")})
     monkeypatch.setattr(drift, "get_sf_session_id", lambda: None)
 
     result = _run("--json")
@@ -236,9 +292,9 @@ def test_missing_accounts_directory_is_a_data_error(tmp_path: Path, monkeypatch:
 
 @pytest.mark.unit
 def test_table_lists_unassessed_files_then_rows(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _pursuit(workspace, "acme-corp", "drifted", sf_opportunity_id="006B", sf_consulting_acv="$90,000")
+    _pursuit(workspace, "acme-corp", "drifted", sf_opportunity_id="006B00000000000000", sf_consulting_acv="$90,000")
     (workspace / "accounts" / "acme-corp" / "pursuits" / "broken.md").write_text("no frontmatter\n", encoding="utf-8")
-    _use_responses(monkeypatch, {"006B": _record("006B")})
+    _use_responses(monkeypatch, {"006B00000000000000": _record("006B00000000000000")})
 
     result = _run()
 

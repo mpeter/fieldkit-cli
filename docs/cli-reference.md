@@ -208,7 +208,8 @@ Usage: fieldkit sf drift [OPTIONS]
 
   Exit codes:
     0 — complete report (drift is reported, not an error)
-    1 — incomplete: unreadable pursuit files or failed opportunity fetches
+    1 — incomplete: unreadable pursuit files, invalid opportunity ids, or
+        failed Salesforce requests
     2 — Salesforce session missing or expired; run: fieldkit auth sf
     3 — no workspace or accounts directory
 

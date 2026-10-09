@@ -174,3 +174,37 @@ def test_unparseable_live_close_date_skips_window() -> None:
 def test_drift_status(levels: list[str], expected: str) -> None:
     flags = [DriftFlag(level, "acv-drift", "x") for level in levels]  # type: ignore[arg-type]
     assert drift_status(flags) == expected
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "stored",
+    [
+        pytest.param(float("nan"), id="yaml-nan"),
+        pytest.param("NaN", id="nan-string"),
+        pytest.param("inf", id="inf-string"),
+        pytest.param("1e400", id="overflow"),
+        pytest.param("TBD", id="placeholder-text"),
+    ],
+)
+def test_unusable_stored_amount_is_flagged_not_crashed(stored: object) -> None:
+    flags = assess_drift(_frontmatter(sf_consulting_acv=stored), _live(), TODAY)
+    assert flags == [DriftFlag("YELLOW", "acv-drift", "stored consulting ACV is not a number")]
+
+
+@pytest.mark.unit
+def test_non_finite_live_amount_is_not_compared() -> None:
+    flags = assess_drift(_frontmatter(), _live(consulting_acv=float("inf")), TODAY)
+    assert flags == []
+
+
+@pytest.mark.unit
+def test_hyphenated_legacy_keys_are_read() -> None:
+    frontmatter = {
+        "stage": "propose",
+        "sf-stage": "Propose",
+        "sf-close-date": "2027-03-01",
+        "sf-consulting-acv": "$100,000",
+    }
+    flags = assess_drift(frontmatter, _live(), TODAY)
+    assert flags == []

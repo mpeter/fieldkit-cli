@@ -293,14 +293,17 @@ its stored `sf_*` snapshot. The report lists unreadable pursuit files first, the
 each opportunity RED, YELLOW or GREEN:
 
 - **RED** — the close date has passed or is within 14 days, Salesforce shows the
-  opportunity closed while the pursuit is open, or the fetch failed.
+  opportunity closed while the pursuit is open, Salesforce has no opportunity with
+  the stored ID, or the request failed.
 - **YELLOW** — the stored stage, close date or consulting ACV differs from live
   Salesforce, the local stage differs from a Salesforce stage of the same name, or
   the close date is within 30 days.
 
 The command writes nothing. To bring one pursuit's snapshot up to date, run
-`fieldkit sf opportunity <id> <pursuit-file>`. It exits `1` when the report is
-incomplete and `2` when the Salesforce session needs `fieldkit auth sf`.
+`fieldkit sf opportunity <id> <pursuit-file>`. A placeholder ID such as `TBD`
+counts as not linked. The command exits `1` when the report is incomplete (an
+unreadable file, an ID that is not a Salesforce record ID, or a failed request)
+and `2` when the Salesforce session needs `fieldkit auth sf`.
 
 ## Pipeline review
 

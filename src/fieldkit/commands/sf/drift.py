@@ -17,11 +17,13 @@ from typing import Any, TypedDict
 import click
 
 from fieldkit.cli_exit import EXIT_AUTH, EXIT_DATA, EXIT_PARTIAL, EXIT_SUCCESS
+from fieldkit.commands.sf.sync import PLACEHOLDER_VALUES
 from fieldkit.config import get_fieldkit_home, get_sf_rest_base_url, get_sf_session_id
 from fieldkit.pursuit.drift import DriftFlag, DriftStatus, LiveOpportunity, assess_drift, drift_status
-from fieldkit.pursuit.io import ReportAssessment, ReportInput, scan_report_inputs
+from fieldkit.pursuit.io import ReportAssessment, ReportFailure, ReportInput, scan_report_inputs
 from fieldkit.pursuit.stages import in_review_scope
 from fieldkit.sf.client import SFAPIError, SFDirectClient, SFNotFoundError
+from fieldkit.sf.opportunities import is_opportunity_id
 from fieldkit.sf.types import OpportunitySObject
 
 LOG_PREFIX = "[sf-drift]"
@@ -70,14 +72,24 @@ def _opportunity_id(frontmatter: dict[str, object]) -> str:
 def select_linked_pursuits(
     root: Path, account: str | None, *, include_prospect: bool
 ) -> tuple[list[ReportInput], ReportAssessment]:
-    """Return in-scope pursuits that link an opportunity, and the scan assessment."""
+    """Return in-scope pursuits that link an opportunity, and the scan assessment.
+
+    A blank or placeholder ``sf_opportunity_id`` (``TBD``) means not yet linked. Any
+    other value that is not a Salesforce record id is reported as unassessed and is
+    never sent to Salesforce.
+    """
     assessment = ReportAssessment()
-    linked = [
-        report_input
-        for report_input in scan_report_inputs(root, account, assessment)
-        if in_review_scope(str(report_input.frontmatter.get("stage", "")), include_prospect=include_prospect)
-        and _opportunity_id(report_input.frontmatter)
-    ]
+    linked: list[ReportInput] = []
+    for report_input in scan_report_inputs(root, account, assessment):
+        opp_id = _opportunity_id(report_input.frontmatter)
+        stage = str(report_input.frontmatter.get("stage", ""))
+        if not in_review_scope(stage, include_prospect=include_prospect) or opp_id.lower() in PLACEHOLDER_VALUES:
+            continue
+        if not is_opportunity_id(opp_id):
+            reason = "sf_opportunity_id is not a 15- or 18-character Salesforce id"
+            assessment.failures.append(ReportFailure(report_input.relative_path, reason))
+            continue
+        linked.append(report_input)
     assessment.finish(len(linked))
     return linked, assessment
 
@@ -92,25 +104,27 @@ def live_from_record(record: OpportunitySObject) -> LiveOpportunity:
     }
 
 
-def _failed_row(opp_id: str, pursuit: str, detail: str) -> DriftRow:
-    flags = [DriftFlag("RED", "sf-fetch-failed", detail)]
-    return DriftRow(opp_id, pursuit, None, "RED", flags, None)
+def _unfetched_row(opp_id: str, pursuit: str, flag: DriftFlag) -> DriftRow:
+    return DriftRow(opp_id, pursuit, None, "RED", [flag], None)
 
 
 def assess_pursuit(client: SFDirectClient, report_input: ReportInput, today: date) -> DriftRow:
     """Fetch one pursuit's opportunity and compare it.
 
-    A missing or failed record becomes a RED row; ``SFAuthError`` propagates so a
-    dead session stops the run with exit 2 instead of reading as partial drift.
+    An opportunity Salesforce reports as missing is a RED finding (a stale id that a
+    retry cannot fix); any other failed request is a RED row that leaves the report
+    incomplete. ``SFAuthError`` propagates so a dead session stops the run with exit 2
+    instead of reading as partial drift.
     """
     opp_id = _opportunity_id(report_input.frontmatter)
     pursuit = f"accounts/{report_input.relative_path}"
     try:
         record = client.fetch_record(opp_id, fields=_DRIFT_FIELDS)
     except SFNotFoundError:
-        return _failed_row(opp_id, pursuit, "opportunity not found in Salesforce")
+        detail = "no such opportunity in Salesforce; check sf_opportunity_id"
+        return _unfetched_row(opp_id, pursuit, DriftFlag("RED", "opportunity-not-found", detail))
     except SFAPIError:
-        return _failed_row(opp_id, pursuit, "Salesforce request failed; retry later")
+        return _unfetched_row(opp_id, pursuit, DriftFlag("RED", "sf-fetch-failed", "Salesforce request failed"))
     live = live_from_record(record)
     flags = assess_drift(report_input.frontmatter, live, today)
     return DriftRow(opp_id, pursuit, record.get("Name"), drift_status(flags), flags, live)
@@ -174,7 +188,8 @@ def cli(account: str | None, include_prospect: bool, as_json: bool) -> None:
     \b
     Exit codes:
       0 — complete report (drift is reported, not an error)
-      1 — incomplete: unreadable pursuit files or failed opportunity fetches
+      1 — incomplete: unreadable pursuit files, invalid opportunity ids, or
+          failed Salesforce requests
       2 — Salesforce session missing or expired; run: fieldkit auth sf
       3 — no workspace or accounts directory
     """
