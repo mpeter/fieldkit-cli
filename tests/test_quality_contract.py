@@ -352,6 +352,8 @@ def test_pr_ci_classifies_dependency_source_and_documentation_changes(
         result = subprocess.run(
             ["git", "-c", "user.name=Contributor", "-c", "user.email=contributor@example.com", *arguments],
             cwd=tmp_path,
+            # Ignore the contributor's global and system Git config (signing, hooksPath, templates).
+            env={**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"},
             capture_output=True,
             text=True,
             check=True,
