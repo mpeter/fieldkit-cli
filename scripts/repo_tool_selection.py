@@ -107,6 +107,29 @@ def _fixture_tool_names(source: str, tool_names: set[str], *, include_hooks: boo
             return exposed | fixture_aliases, autouse
 
 
+def _star_exports(source: str) -> set[str]:
+    """Names a ``from module import *`` binds: a literal ``__all__``, else public top-level names."""
+    tree = ast.parse(source)
+    for node in tree.body:
+        if (
+            isinstance(node, (ast.Assign, ast.AnnAssign))
+            and any(
+                isinstance(t, ast.Name) and t.id == "__all__"
+                for t in (node.targets if isinstance(node, ast.Assign) else [node.target])
+            )
+            and isinstance(node.value, (ast.List, ast.Tuple))
+        ):
+            return {e.value for e in node.value.elts if isinstance(e, ast.Constant) and isinstance(e.value, str)}
+    names: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            names.update(t.id for target in targets for t in ast.walk(target) if isinstance(t, ast.Name))
+    return {name for name in names if not name.startswith("_")}
+
+
 def repo_tool_test_paths(root: Path) -> set[Path]:
     """Find test files referencing tools, including through local test helpers.
 
@@ -170,6 +193,17 @@ def repo_tool_test_paths(root: Path) -> set[Path]:
         for path in selected - fixture_scopes.keys():
             if path.name.startswith("test_"):
                 continue
+            # A wildcard re-export of a tool-backed module exposes that module's
+            # names without naming them, so its consumers are found by those names.
+            for node in ast.walk(ast.parse(sources[path])):
+                if isinstance(node, ast.ImportFrom) and any(alias.name == "*" for alias in node.names):
+                    parents = [path.parents[node.level - 1]] if node.level else [root / "src", root]
+                    module = (node.module or "").split(".") if node.module else []
+                    for parent in parents:
+                        target = parent.joinpath(*module)
+                        for candidate in (target.with_suffix(".py"), target / "__init__.py"):
+                            if candidate.resolve() in selected:
+                                tool_names.update(_star_exports(sources[candidate.resolve()]))
             fixture_names, autouse = _fixture_tool_names(sources[path], tool_names)
             tool_names.update(fixture_names)
             if autouse:

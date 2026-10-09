@@ -542,3 +542,26 @@ def internal_runner():
     target.write_text("def test_tool(pytest_tool_runner):\n    assert pytest_tool_runner", encoding="utf-8")
 
     assert repo_tool_test_paths(tmp_path) == {conftest, target}
+
+
+@pytest.mark.parametrize(
+    "runner_source",
+    [
+        "import scripts.foo\ndef execute():\n    return 1\ndef _private():\n    return 2",
+        '__all__ = ["execute"]\nimport scripts.foo\ndef execute():\n    return 1',
+    ],
+)
+def test_wildcard_reexport_of_tool_backed_module_retains_name_consumers(tmp_path: Path, runner_source: str) -> None:
+    tests = tmp_path / "tests"
+    package = tests / "helpers"
+    package.mkdir(parents=True)
+    init = package / "__init__.py"
+    init.write_text("from .runner import *", encoding="utf-8")
+    runner = package / "runner.py"
+    runner.write_text(runner_source, encoding="utf-8")
+    sibling = package / "test_sibling.py"
+    sibling.write_text("from . import execute\ndef test_execute():\n    assert execute()", encoding="utf-8")
+    unrelated = tests / "test_domain.py"
+    unrelated.write_text("def test_domain():\n    assert True", encoding="utf-8")
+
+    assert repo_tool_test_paths(tmp_path) == {init, runner, sibling}
