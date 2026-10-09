@@ -20,18 +20,21 @@ Public API:
 
 import dataclasses
 import json
-import re
+import warnings
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
 
 import click
+from pydantic import ValidationError
 
 from fieldkit.cli_exit import EXIT_DATA
 from fieldkit.commands.pursuit.audit import no_files_message
 from fieldkit.config import get_fieldkit_home, get_pipeline_quota
+from fieldkit.errors import FieldkitError
 from fieldkit.pursuit.enums import Stage
 from fieldkit.pursuit.io import parse_frontmatter_fallback
+from fieldkit.pursuit.models import PursuitFrontmatter
 from fieldkit.pursuit.stage_weights import STAGE_WEIGHTS
 from fieldkit.sf.components import effective_net_consulting_acv
 
@@ -82,21 +85,30 @@ class ForecastResult:
 # ---------------------------------------------------------------------------
 
 
-def _parse_acv(raw: object) -> float:
-    """Parse a raw ACV value (e.g. '$828,495.00', '3000000.0', 828495) to float."""
-    if raw is None:
-        return 0.0
-    if isinstance(raw, (int, float)):
-        return float(raw)
-    s = str(raw).strip()
-    if not s:
-        return 0.0
-    # Strip currency symbols and commas
-    s = re.sub(r"[$,\s]", "", s)
-    try:
-        return float(s)
-    except ValueError:
-        return 0.0
+def _normalize_forecast_amounts(stage: str, frontmatter: dict[str, object]) -> PursuitFrontmatter:
+    """Normalize forecast inputs without exposing raw values in model warnings."""
+    with warnings.catch_warnings(record=True) as validation_warnings:
+        warnings.simplefilter("always", UserWarning)
+        try:
+            amounts = PursuitFrontmatter.model_validate(
+                {
+                    "stage": stage,
+                    "sf_consulting_acv": frontmatter.get("sf_consulting_acv"),
+                    "sf_acv": frontmatter.get("sf_acv"),
+                    "sf_arr": frontmatter.get("sf_arr"),
+                }
+            )
+        except ValidationError:
+            raise FieldkitError(
+                "Invalid forecast amount in sf_consulting_acv, sf_acv, or sf_arr. Expected a numeric value or blank."
+            ) from None
+    if validation_warnings:
+        click.echo(
+            "WARNING: Malformed forecast amount in sf_consulting_acv, sf_acv, or sf_arr. "
+            "Treating malformed amounts as missing.",
+            err=True,
+        )
+    return amounts
 
 
 def _extract_name_from_path(path: Path, accounts_dir: Path) -> str:
@@ -149,14 +161,12 @@ def _parse_deal_row(
         if skipped is not None:
             skipped.append(stage)
         return None
-    gross_acv = _parse_acv(fm["sf_consulting_acv"]) if fm.get("sf_consulting_acv") is not None else None
-    net_acv = _parse_acv(fm["sf_acv"]) if fm.get("sf_acv") is not None else None
-    arr = _parse_acv(fm["sf_arr"]) if fm.get("sf_arr") is not None else None
+    amounts = _normalize_forecast_amounts(stage, fm)
     acv = effective_net_consulting_acv(
         str(fm["sf_contract_type"]) if fm.get("sf_contract_type") is not None else None,
-        gross_acv,
-        net_acv,
-        arr,
+        amounts.sf_consulting_acv,
+        amounts.sf_acv,
+        amounts.sf_arr,
     )
     close_str = str(fm.get("sf_close_date") or fm.get("sf-close-date") or "")
     name = _extract_name_from_path(path, accounts_dir)

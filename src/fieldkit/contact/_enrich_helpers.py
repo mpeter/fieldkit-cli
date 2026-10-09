@@ -5,6 +5,8 @@ Split out of ``enrich.py`` purely to keep that module under the repo's
 leaves. Not part of the public API — import from ``fieldkit.contact.enrich``.
 """
 
+import copy
+import hashlib
 import json
 import logging
 import random
@@ -693,27 +695,51 @@ def enrich_batch(contacts: list[dict[str, Any]], start_idx: int) -> tuple[list[d
     return enriched, failed
 
 
-def run_enrichment_pipeline(raw_contacts: list[dict[str, Any]]) -> tuple[int, int]:
+def _raw_contacts_fingerprint(raw_contacts: list[dict[str, Any]]) -> str:
+    """Hash all raw fields and list order, independent of dictionary key order."""
+    payload = json.dumps(raw_contacts, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def run_enrichment_pipeline(raw_contacts: list[dict[str, Any]], *, account: str | None = None) -> tuple[int, int]:
     """Run the batch enrichment pipeline over *raw_contacts*.
 
     Loads/saves ``checkpoint.json`` and appends to ``contacts-enriched.json``
     incrementally (atomic writes after each batch). Returns
-    ``(total_enriched, total_failed)``.
+    ``(total_enriched, total_failed)``. Resume requires the same account filter
+    and ordered raw input. Incompatible or legacy checkpoints restart without
+    deleting existing output. Empty input returns ``(0, 0)`` without writes.
     """
     from fieldkit.enrich._helpers import load_checkpoint, save_checkpoint
     from fieldkit.enrich._io import CONTACTS_ENRICHED
     from fieldkit.enrich.schema import EnrichmentCheckpoint
 
+    if not raw_contacts:
+        return 0, 0
+
+    fingerprint = _raw_contacts_fingerprint(raw_contacts)
+    # Enrichment adds confidence, engagement and retry fields in-place. Keep
+    # the caller's raw input stable so a repeated call has the same identity.
+    raw_contacts = copy.deepcopy(raw_contacts)
     checkpoint = load_checkpoint()
-    if checkpoint:
+    start_idx = 0
+    if checkpoint and (
+        checkpoint.checkpoint_version == 1
+        and "account_scope" in checkpoint.model_fields_set
+        and checkpoint.account_scope == account
+        and checkpoint.raw_contacts_fingerprint == fingerprint
+        and 0 <= checkpoint.total_processed <= len(raw_contacts)
+    ):
         log.info(
             "Resuming from checkpoint: %s (processed %d)",
             checkpoint.last_completed_account,
             checkpoint.total_processed,
         )
         start_idx = checkpoint.total_processed
-    else:
-        start_idx = 0
+    elif checkpoint:
+        log.warning(
+            "Legacy or incompatible enrichment checkpoint; restarting from the first contact, preserving output."
+        )
 
     enriched_file = enrich_dir() / CONTACTS_ENRICHED
     enriched_contacts: list[dict[str, Any]] = (
@@ -740,13 +766,16 @@ def run_enrichment_pipeline(raw_contacts: list[dict[str, Any]]) -> tuple[int, in
         current_account = raw_contacts[min(current_idx + BATCH_SIZE - 1, total_contacts - 1)]["account"]
         checkpoint = EnrichmentCheckpoint(
             last_completed_account=current_account,
-            last_completed_contact_index=current_idx + BATCH_SIZE,
-            total_processed=current_idx + BATCH_SIZE,
+            last_completed_contact_index=min(current_idx + BATCH_SIZE, total_contacts),
+            total_processed=min(current_idx + BATCH_SIZE, total_contacts),
             total_enriched=len(enriched_contacts),
             total_failed=len(failed_contacts),
+            checkpoint_version=1,
+            account_scope=account,
+            raw_contacts_fingerprint=fingerprint,
         )
-        save_checkpoint(checkpoint)
         _write_json_atomic(enriched_file, enriched_contacts)
+        save_checkpoint(checkpoint)
 
         current_idx += BATCH_SIZE
 

@@ -46,11 +46,9 @@ Choose an output directory that does not exist. The candidate check refuses to
 replace previous evidence and binds its result to an exact committed revision.
 The current public-tree and governance policies must select the same canonical
 `v<version>` tag, matching the exported `pyproject.toml` before any package build.
-The active candidate is `v1.0.2`; the historical `first_public_version` stays
-`1.0.0`, and prior policies and evidence remain in their original Git history.
-Version `1.0.1` was never published to PyPI: its TestPyPI version was consumed
-by a rehearsal of an earlier commit, so a `1.0.1` release run would stop at its
-TestPyPI upload.
+Before preparing a successor, update the project version and both policies to
+the intended unused version and tag. Prior policies and evidence remain in
+their original Git history; published versions belong in the release history.
 Do not relabel a previous report or bundle as a successor; every release run
 builds and verifies its own candidate.
 An export is a content snapshot; it does not publish or rewrite Git history.

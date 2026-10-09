@@ -57,6 +57,18 @@ selection engine's own lifecycle hooks do not imply a dependency on other tools.
 Run those tests alone with
 `uv run pytest tests/ --repo-tools-only -p no:tach -q -n 0`.
 
+## Contact enrichment checkpoints
+
+Contact enrichment persists version 1 checkpoints with an account filter, a
+deterministic SHA-256 fingerprint of the ordered raw contacts, and the processed
+count. The fingerprint includes all raw fields and ignores dictionary key order.
+Only matching identities with an in-range count can resume. Legacy, unsupported,
+or mismatched checkpoints restart with a warning; existing enriched records and
+memory files are retained. Restarting appends results and can retain duplicates.
+An empty input makes no checkpoint or enriched-output writes. Batch output is
+written atomically before advancing the checkpoint; separate output/checkpoint
+writes do not provide exactly-once processing after a crash.
+
 ## Contributor action
 
 Before changing a boundary, read the relevant decision record in

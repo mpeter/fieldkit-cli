@@ -8,6 +8,7 @@ Two test layers:
    so the full pipeline runs against ephemeral tmp_path fixtures with no real I/O.
 """
 
+import functools
 import os
 import sqlite3
 import subprocess
@@ -36,11 +37,18 @@ _SUBPROCESS_TIMEOUT_SECONDS = 30
 
 
 def _run(*args: str) -> subprocess.CompletedProcess[str]:
-    """Run `python -m fieldkit <args>` from fieldkit-tools/."""
-    env = {
-        **os.environ,
-        "XDG_CONFIG_HOME": str(config_loader.CONFIG_PATH.parent.parent),
-    }
+    """Run `python -m fieldkit <args>` from fieldkit-tools/.
+
+    Several smoke tests assert different things about the same invocation. Each
+    distinct command line runs once per session, because a fresh interpreter is the
+    expensive part of these tests.
+    """
+    return _run_once(str(config_loader.CONFIG_PATH.parent.parent), args)
+
+
+@functools.cache
+def _run_once(xdg_config_home: str, args: tuple[str, ...]) -> subprocess.CompletedProcess[str]:
+    env = {**os.environ, "XDG_CONFIG_HOME": xdg_config_home}
     return subprocess.run(
         [sys.executable, "-m", "fieldkit", *args],
         capture_output=True,

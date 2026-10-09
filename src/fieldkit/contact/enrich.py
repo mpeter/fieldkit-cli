@@ -176,9 +176,9 @@ def enrich_records(*, account: str | None = None) -> EnrichRecordsResult:
             slug. ``None`` processes every raw contact.
 
     Note:
-        Checkpoint/resume (``checkpoint.json``) tracks progress against the
-        full raw-contacts list ordering; scoping to a single ``account`` runs
-        an independent pass rather than resuming a prior filtered run.
+        Checkpoint/resume (``checkpoint.json``) binds progress to this account
+        filter and the ordered raw-contact input. Changes restart the pass
+        while preserving existing enriched contacts and memory files.
 
     Returns:
         An :class:`EnrichRecordsResult` summary of the run.
@@ -194,7 +194,7 @@ def enrich_records(*, account: str | None = None) -> EnrichRecordsResult:
             total_enriched=0, total_failed=0, migrated_legacy_files=migrated, total_raw_contacts=0
         )
 
-    total_enriched, total_failed = run_enrichment_pipeline(raw_contacts)
+    total_enriched, total_failed = run_enrichment_pipeline(raw_contacts, account=account)
 
     return EnrichRecordsResult(
         total_enriched=total_enriched,

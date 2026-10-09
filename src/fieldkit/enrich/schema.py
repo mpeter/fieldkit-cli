@@ -112,4 +112,7 @@ class EnrichmentCheckpoint(BaseModel):
     total_processed: int
     total_enriched: int
     total_failed: int
+    checkpoint_version: int = 0
+    account_scope: str | None = None
+    raw_contacts_fingerprint: str | None = None
     timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
