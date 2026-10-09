@@ -225,5 +225,10 @@ def cli_main() -> Generator[None, None, None]:
     """
     try:
         yield
-    except Exception as exc:  # noqa: BLE001  # broad catch is intentional: this is the per-command boundary
+    except Exception as exc:  # broad catch is intentional: this is the per-command boundary
+        # Click's own errors (bad parameter, usage) belong to the top-level normalizer,
+        # which prints a one-line message. Looked up lazily: this module does not import click.
+        click = sys.modules.get("click")
+        if click is not None and isinstance(exc, click.ClickException):
+            raise
         sys.exit(handle_cli_exception(exc))

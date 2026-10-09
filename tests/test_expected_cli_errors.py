@@ -42,7 +42,9 @@ def test_invalid_advance_usage(args: list[str], capsys: pytest.CaptureFixture[st
     assert "Traceback" not in output.err
 
 
-@pytest.mark.parametrize("content", ["{invalid", "[]"])
+@pytest.mark.parametrize(
+    "content", ["{invalid", "[]", '{"watcher": {"failures": "many"}}', '{"watcher": {"failures": [1]}}']
+)
 def test_malformed_companion_state(tmp_path: Path, capsys: pytest.CaptureFixture[str], content: str) -> None:
     state = tmp_path / "watchers/watcher-run-status.json"
     state.parent.mkdir()
@@ -61,6 +63,30 @@ def test_malformed_companion_state(tmp_path: Path, capsys: pytest.CaptureFixture
     assert str(tmp_path) not in output.err
     assert state.read_bytes() == before
     assert not (tmp_path / "companion-cursor.json").exists()
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["companion", "prune", "--older-than", "nope"],
+        ["companion", "prune", "--older-than", "0d", "--json"],
+    ],
+)
+def test_click_errors_inside_command_boundary_are_one_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], args: list[str]
+) -> None:
+    with (
+        patch("fieldkit.config.get_fieldkit_home", return_value=tmp_path),
+        patch("fieldkit.config.get_fieldkit_data", return_value=tmp_path),
+    ):
+        result = main(args)
+    assert result == 3
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert "Error:" in output.err
+    assert "--older-than" in output.err
+    assert "Traceback" not in output.err
+    assert "Unhandled exception" not in output.err
 
 
 def test_unexpected_failure_keeps_traceback(capsys: pytest.CaptureFixture[str]) -> None:
