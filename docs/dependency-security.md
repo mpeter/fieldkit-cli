@@ -33,6 +33,12 @@ fail-closed check to the action’s machine-readable output because the upstream
 does not fail, when it cannot identify a license. The retained report identifies the package URL and
 the policy criterion that failed.
 
+Dependency updates also run the complete pytest suite against the proposed locked environment in
+the pull request's `Test (pytest)` job. This covers lock-only changes even when no Python source
+files change. The retained JUnit report records the test and skip counts; review those counts
+alongside the dependency-policy report. These tests exercise isolated compatibility behavior;
+credentialed provider integrations still require separate verification.
+
 If a dependency check fails, update or remove the dependency when a safe version exists. If the
 failure is license-related, confirm the package’s tagged upstream license before proposing any
 policy change. Do not suppress a finding solely because a transitive dependency is familiar.
