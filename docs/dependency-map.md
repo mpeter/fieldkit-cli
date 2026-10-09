@@ -11,7 +11,7 @@ generated_by: scripts/generate_dep_map.py
 
 > **Derived document — generated exhaust, not a system of record.** Verify facts against the sources listed in `derived_from`.
 
-> Auto-generated 2026-10-04 from live repo analysis. Do not edit manually.
+> Auto-generated 2026-10-08 from live repo analysis. Do not edit manually.
 > Re-generate: `uv run python scripts/generate_dep_map.py`
 
 ---
@@ -53,6 +53,13 @@ hooks/                     ← Claude Code hooks + git pre-commit
 ```
 
 **Boundary enforcement:** ✅ All module boundaries clean (`uvx tach check` passes)
+
+Tach covers the wheel's `src/fieldkit` package, using non-overlapping
+`src` and `tests` roots. Checkout-only hooks and scripts are outside
+the Tach module graph. `uv run python scripts/check_hook_boundaries.py`
+enforces the original hook import allowlist in local and hosted gates.
+Hosted PR checks run the whole test suite, so their tests always run
+there: `uv run pytest tests/ -p no:tach -q -n 4`.
 
 ---
 

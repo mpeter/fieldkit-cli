@@ -1,7 +1,6 @@
 """Contract tests for bounded PR validation and complete post-merge enforcement."""
 
 import json
-import re
 import signal
 import subprocess
 import sys
@@ -74,8 +73,8 @@ def test_quality_recipes_run_each_stage_through_timing_runner() -> None:
 
     assert "scripts/quality_stage.py" in makefile
     assert " --full-enforcement $(2) -- " in makefile
-    assert quality_recipe.count("$(call RUN_QUALITY_STAGE") == 16
-    assert full_recipe.count("$(call RUN_FULL_QUALITY_STAGE") == 30
+    assert quality_recipe.count("$(call RUN_QUALITY_STAGE") == 17
+    assert full_recipe.count("$(call RUN_FULL_QUALITY_STAGE") == 31
     assert '--quality-base "$(QUALITY_BASE)"' in quality_recipe
     assert "scripts/check_dependency_profiles.py" in quality_recipe
     assert "scripts/check_compatibility_policy.py" in quality_recipe
@@ -298,13 +297,18 @@ def test_quality_stage_reports_failing_command_output_and_status() -> None:
     assert record["exit_status"] == 3
 
 
-def test_pr_ci_uses_impact_tests_and_preserves_required_contexts() -> None:
-    """The required PR contexts stay stable while test selection becomes bounded."""
+def test_pr_ci_runs_the_full_suite_and_preserves_required_contexts() -> None:
+    """Hosted PR tests run every test in parallel, so no selection gap can pass silently."""
     workflow = (_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 
     for context in ("Lint (ruff)", "Test (pytest)", "Skillsaw (skill lint)", "AgentReady score gate"):
         assert f"name: {context}" in workflow
-    assert '--tach --tach-base "$BASE_SHA" --tach-head "$HEAD_SHA" -q -n 0' in workflow
+    workflow_document = yaml.load(workflow, Loader=yaml.BaseLoader)
+    test_step = next(step for step in workflow_document["jobs"]["test"]["steps"] if step.get("name") == "Run pytest")
+    assert test_step["if"] == "needs.changes.outputs.code == 'true'"
+    assert "uv run pytest tests/ -p no:tach -q -n 4" in test_step["run"]
+    assert "--tach" not in workflow
+    assert "--scope full-suite" in workflow
     assert "scripts/check_dependency_profiles.py" in workflow
     assert "scripts/check_public_identity.py" in workflow
     assert "scripts/check_workflow_security.py" in workflow
@@ -322,7 +326,6 @@ def test_pr_ci_uses_impact_tests_and_preserves_required_contexts() -> None:
     )[0]
     assert "if:" not in public_identity_step
     assert "--cov-report=json:coverage.json" not in workflow
-    assert re.search(r"test:.*?fetch-depth: 0", workflow, flags=re.DOTALL) is not None
     changelog = (_ROOT / ".github" / "workflows" / "changelog.yml").read_text(encoding="utf-8")
     assert "name: Changelog fragment" in changelog
 
@@ -418,7 +421,7 @@ def test_ci_artifacts_are_revision_named_bounded_and_fail_closed() -> None:
 
     assert "--junitxml=reports/pytest.xml" in ci
     assert "scripts/ci_evidence.py junit" in ci
-    assert "pytest-tach-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}" in ci
+    assert "pytest-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}" in ci
     assert "required-checks-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}" in ci
     assert ci.count("if-no-files-found: error") == ci.count("actions/upload-artifact@")
     assert ci.count("retention-days:") == ci.count("actions/upload-artifact@")
@@ -506,3 +509,14 @@ def test_full_enforcement_runs_on_schedule_and_dispatch() -> None:
     assert "make quality-full" in workflow
     assert "name: coverage-full-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}" in workflow
     assert "name: agentready-report-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}" in workflow
+
+
+def test_hook_boundary_check_runs_in_local_and_hosted_gates() -> None:
+    command = "uv run python scripts/check_hook_boundaries.py"
+    quality = _recipe("quality", "# quality-full")
+    full = _recipe("quality-full", "# coverage.json")
+    workflow = yaml.safe_load((_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
+
+    assert command in quality
+    assert command in full
+    assert any(step.get("run") == command for step in workflow["jobs"]["fast-checks"]["steps"])

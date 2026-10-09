@@ -33,6 +33,22 @@ one authoritative implementation. Persistent roots are intentionally separate
 so a checkout, user work, and generated data cannot be confused or committed
 together.
 
+## Architecture enforcement
+
+Tach enforces module boundaries within the wheel's `src/fieldkit` package.
+Its source roots are `src` and `tests`. These roots must not overlap because
+Tach maps files against the first matching root.
+
+Checkout-only `hooks/` and `scripts/` are outside that module graph. The hooks
+still consume domain behavior rather than owning it.
+`uv run python scripts/check_hook_boundaries.py` preserves their original
+allowlist (`fieldkit`, `fieldkit.config`, `fieldkit.enrich`, `fieldkit.errors`),
+resolves imports against the most specific Tach module, and rejects package
+imports of checkout hooks. Local PR/full gates and hosted lint run this check.
+Tach impact selection is a local speed aid only. Hosted `Test (pytest)` runs the
+entire suite in parallel on every code PR, so hook and script tests, and any test
+a selection would miss, always run before merge.
+
 ## Contact enrichment checkpoints
 
 Contact enrichment persists version 1 checkpoints with an account filter, a

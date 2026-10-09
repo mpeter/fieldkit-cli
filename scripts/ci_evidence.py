@@ -250,12 +250,12 @@ def _required_markdown(report: dict[str, object]) -> str:
     return "\n".join(rows)
 
 
-def _add_common_evidence_arguments(parser: argparse.ArgumentParser, *, scope: str) -> None:
+def _add_common_evidence_arguments(parser: argparse.ArgumentParser, *, scopes: tuple[str, ...]) -> None:
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--step-summary", type=Path)
     parser.add_argument("--source-revision", required=True)
-    parser.add_argument("--scope", choices=(scope,), required=True)
+    parser.add_argument("--scope", choices=scopes, required=True)
     parser.add_argument("--command", required=True)
 
 
@@ -264,10 +264,10 @@ def _parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="kind", required=True)
 
     junit = subparsers.add_parser("junit")
-    _add_common_evidence_arguments(junit, scope="tach-selected")
+    _add_common_evidence_arguments(junit, scopes=("full-suite",))
 
     coverage = subparsers.add_parser("coverage")
-    _add_common_evidence_arguments(coverage, scope="full-repository")
+    _add_common_evidence_arguments(coverage, scopes=("full-repository",))
     coverage.add_argument("--minimum-percent", type=float, required=True)
 
     required = subparsers.add_parser("required")
