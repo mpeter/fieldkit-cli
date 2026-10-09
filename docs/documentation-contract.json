@@ -256,7 +256,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Assess the supported security boundary before enabling an integration or reporting a vulnerability.",
-      "source_fingerprint": "sha256:10066e7f12dfee5942be073f1598c3b7ded3bfbf4e4371f389dbbc5542b16c4c",
+      "source_fingerprint": "sha256:3acabe2b9462e03272afe35bdfc0951d972a36306761ccac0c7acad540fc18cb",
       "sources": [
         "SECURITY.md",
         "docs/privacy.md",
@@ -294,7 +294,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Implement a command with the established command-to-domain boundary.",
-      "source_fingerprint": "sha256:9f0af7bed7481ac289756f0c8c96a8741e109f3082f9a949d02a93dc58b7d16e",
+      "source_fingerprint": "sha256:4ab815d99f8aaf81a50a09ebaed0e98b1ef0aaae7862ac133389fa1d1c17bbb7",
       "sources": [
         "src/fieldkit/__main__.py",
         "src/fieldkit/cli_exit.py"
@@ -304,7 +304,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Choose the canonical safe write mechanism for persistent state.",
-      "source_fingerprint": "sha256:3a4ef4ff8010b121069c56da9a11d16e1089d1fb127b658ad06df3282096098d",
+      "source_fingerprint": "sha256:6925a52f82fbb2f10d6b370ce838833f2621a4a25a70652c1f39f34489fded94",
       "sources": [
         "src/fieldkit/**/*.py"
       ]
@@ -1233,7 +1233,7 @@
         }
       ],
       "reader_action": "Inspect the generated module dependency graph.",
-      "source_fingerprint": "sha256:4357cd15f67cb923abd3b890ef765fe3f906f38a7ede81be8fa2aca20c097203",
+      "source_fingerprint": "sha256:12e52d4c96b6a3cfd7e4dd697d21c7389363afeacf2102dff2bd536a279a3011",
       "sources": [
         "tach.toml",
         "src/fieldkit/**/*.py",
@@ -1283,7 +1283,7 @@
       "content_type": "concept",
       "fenced_blocks": [],
       "reader_action": "Preserve local-first command, persistence, and integration invariants in a contribution.",
-      "source_fingerprint": "sha256:453443ef1eb30e8953f117ff766fa0c93b3fccbd20fb3229cc1237fdb4426be4",
+      "source_fingerprint": "sha256:2d14c4c50719fdc6a4f71b42574734448ebef0d6850d530dafe9d93d8cb25e03",
       "sources": [
         "AGENTS.md",
         "src/fieldkit/__main__.py",
@@ -1895,7 +1895,7 @@
       "content_type": "concept",
       "fenced_blocks": [],
       "reader_action": "Understand local storage and external data flows.",
-      "source_fingerprint": "sha256:3a4ef4ff8010b121069c56da9a11d16e1089d1fb127b658ad06df3282096098d",
+      "source_fingerprint": "sha256:6925a52f82fbb2f10d6b370ce838833f2621a4a25a70652c1f39f34489fded94",
       "sources": [
         "src/fieldkit/**/*.py"
       ],
@@ -2051,7 +2051,7 @@
         }
       ],
       "reader_action": "Interpret process exit status.",
-      "source_fingerprint": "sha256:c2b70ce1b0b3f9927a6d69352b27c8d5718e7c93a39008d28cd378b009c0d12a",
+      "source_fingerprint": "sha256:c0646fcb5483e1bf9598c0ed493f0755cd40136af5404f51579112b0f4578dd0",
       "sources": [
         "src/fieldkit/cli_exit.py",
         "src/fieldkit/__main__.py",
