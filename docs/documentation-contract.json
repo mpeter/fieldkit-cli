@@ -304,7 +304,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Choose the canonical safe write mechanism for persistent state.",
-      "source_fingerprint": "sha256:ad7849f8610c02b2480dccf24f299ee2e98b132282bc6c539819a3e676f72aee",
+      "source_fingerprint": "sha256:ee555d62ca895d47b39d1f414a9ea8c438b7e8945b6d31403a2e584277fd10a4",
       "sources": [
         "src/fieldkit/**/*.py"
       ]
@@ -1233,7 +1233,7 @@
         }
       ],
       "reader_action": "Inspect the generated module dependency graph.",
-      "source_fingerprint": "sha256:390a7ddd9cbf605778b6d932d3abfc2cf8ca6bd3f68f6b9aadbcf5fafbe4f916",
+      "source_fingerprint": "sha256:50c5c3d64c47a06e8f3496cca8141441524a5bd77b5f815ca35f1469a6ef7302",
       "sources": [
         "tach.toml",
         "src/fieldkit/**/*.py",
@@ -1895,7 +1895,7 @@
       "content_type": "concept",
       "fenced_blocks": [],
       "reader_action": "Understand local storage and external data flows.",
-      "source_fingerprint": "sha256:ad7849f8610c02b2480dccf24f299ee2e98b132282bc6c539819a3e676f72aee",
+      "source_fingerprint": "sha256:ee555d62ca895d47b39d1f414a9ea8c438b7e8945b6d31403a2e584277fd10a4",
       "sources": [
         "src/fieldkit/**/*.py"
       ],
@@ -2212,7 +2212,7 @@
         }
       ],
       "reader_action": "Discover contacts and apply reviewed enrichment results.",
-      "source_fingerprint": "sha256:7a25768c02078d37c21f98f537a07cfb0b403ffdab566f8337ee814bb49d784c",
+      "source_fingerprint": "sha256:83ca9a4b0bf90b2535c02e6122b841a56a89bf4c99640021021520a950dc3dc4",
       "sources": [
         "src/fieldkit/commands/contact/enrich_cmd.py",
         "src/fieldkit/commands/contact/report_cmd.py",
