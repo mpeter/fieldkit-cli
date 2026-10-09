@@ -21,19 +21,19 @@ Public API:
 import dataclasses
 import json
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from pathlib import Path
 
 import click
 from pydantic import ValidationError
 
-from fieldkit.cli_exit import EXIT_DATA
+from fieldkit.cli_exit import EXIT_DATA, EXIT_PARTIAL
 from fieldkit.commands.pursuit.audit import no_files_message
 from fieldkit.config import get_fieldkit_home, get_pipeline_quota
 from fieldkit.errors import FieldkitError
 from fieldkit.pursuit.enums import Stage
-from fieldkit.pursuit.io import parse_frontmatter_fallback
+from fieldkit.pursuit.io import ReportAssessment, ReportFailure, read_pursuit_for_report
 from fieldkit.pursuit.models import PursuitFrontmatter
 from fieldkit.pursuit.stage_weights import STAGE_WEIGHTS
 from fieldkit.sf.components import effective_net_consulting_acv
@@ -78,6 +78,7 @@ class ForecastResult:
     quota: float | None
     closed_won: float
     skipped: list[str]  # stage strings of deals dropped for unknown stage (historic regression)
+    assessment: ReportAssessment = field(default_factory=ReportAssessment)
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +132,7 @@ def _parse_deal_row(
     path: Path,
     accounts_dir: Path,
     skipped: list[str] | None = None,
+    assessment: ReportAssessment | None = None,
 ) -> DealRow | None:
     """Parse a single pursuit file into a DealRow, or return None if it should be skipped.
 
@@ -143,12 +145,13 @@ def _parse_deal_row(
     """
     if path.name in {"gmail-intel.md", "template.md"}:
         return None
-    try:
-        content = path.read_text(encoding="utf-8")
-    except OSError:
-        return None
-    fm, _ = parse_frontmatter_fallback(content)
+    outcome = read_pursuit_for_report(path)
+    fm = outcome.frontmatter
     if fm is None:
+        if assessment is not None:
+            assessment.failures.append(
+                ReportFailure(str(path.relative_to(accounts_dir)), outcome.error or "invalid frontmatter")
+            )
         return None
     stage = str(fm.get("stage", "")).lower()
     if stage in SKIP_STAGES:
@@ -210,10 +213,15 @@ def compute_forecast(
     deals: list[DealRow] = []
     skipped: list[str] = []  # unrecognized stage strings (historic regression)
 
+    assessment = ReportAssessment()
     for path in sorted(accounts_dir.glob(pattern)):
-        row = _parse_deal_row(path, accounts_dir, skipped=skipped)
+        assessment.scanned += 1
+        row = _parse_deal_row(path, accounts_dir, skipped=skipped, assessment=assessment)
         if row is not None:
             deals.append(row)
+
+    assessment.included = len(deals)
+    assessment.excluded = assessment.scanned - assessment.included - len(assessment.failures)
 
     # Sort: by stage weight descending, then ACV descending
     deals.sort(key=lambda d: (-d.weight, -d.acv))
@@ -231,6 +239,7 @@ def compute_forecast(
         quota=quota,
         closed_won=closed_won,
         skipped=skipped,
+        assessment=assessment,
     )
 
 
@@ -273,7 +282,8 @@ def cli(account: str | None, quota: float | None, as_json: bool) -> None:
     When -q/--quota is not provided, reads pipeline.quota.target from config automatically.
 
     Exit codes:
-      0 — forecast computed
+      0 — complete forecast computed
+      1 — partial forecast; unreadable records disclosed
       3 — data error (config missing, accounts directory not found)
     """
     data_root = get_fieldkit_home()
@@ -299,7 +309,11 @@ def cli(account: str | None, quota: float | None, as_json: bool) -> None:
     today = datetime.now(tz=UTC).date()
     result = compute_forecast(root, account_filter=account, quota=quota, today=today)
 
-    if not result.deals:
+    for failure in result.assessment.failures:
+        click.echo(f"WARNING: {failure.relative_path}: {failure.reason} — assessment incomplete", err=True)
+    exit_code = EXIT_PARTIAL if result.assessment.failures else 0
+
+    if not result.deals and not result.assessment.failures:
         click.echo(no_files_message("pursuit", account), err=True)
         raise SystemExit(EXIT_DATA) from None
 
@@ -316,7 +330,7 @@ def cli(account: str | None, quota: float | None, as_json: bool) -> None:
     if as_json:
         # cell-28b9dae2e9395288: machine-readable output.
         click.echo(json.dumps(dataclasses.asdict(result), indent=2, default=str))
-        raise SystemExit(0)
+        raise SystemExit(exit_code)
 
     # Per-deal table
     click.echo(f"\nPipeline Forecast — {today}")
@@ -355,3 +369,10 @@ def cli(account: str | None, quota: float | None, as_json: bool) -> None:
             " Update STAGE_WEIGHT in forecast.py to include these stages.",
             err=True,
         )
+
+    if result.assessment.failures:
+        click.echo(
+            f"Assessment incomplete: {result.assessment.scanned} scanned, {result.assessment.included} included, "
+            f"{result.assessment.excluded} excluded, {len(result.assessment.failures)} failed."
+        )
+        raise SystemExit(exit_code)
