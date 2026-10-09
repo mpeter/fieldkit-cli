@@ -24,6 +24,7 @@ import warnings
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from pathlib import Path
+from typing import Any
 
 import click
 from pydantic import ValidationError
@@ -33,7 +34,7 @@ from fieldkit.commands.pursuit.audit import no_files_message
 from fieldkit.config import get_fieldkit_home, get_pipeline_quota
 from fieldkit.errors import FieldkitError
 from fieldkit.pursuit.enums import Stage
-from fieldkit.pursuit.io import ReportAssessment, ReportFailure, read_pursuit_for_report
+from fieldkit.pursuit.io import NON_PURSUIT_FILES, ReportAssessment, read_pursuit_for_report, scan_report_inputs
 from fieldkit.pursuit.models import PursuitFrontmatter
 from fieldkit.pursuit.stage_weights import STAGE_WEIGHTS
 from fieldkit.sf.components import effective_net_consulting_acv
@@ -132,7 +133,6 @@ def _parse_deal_row(
     path: Path,
     accounts_dir: Path,
     skipped: list[str] | None = None,
-    assessment: ReportAssessment | None = None,
 ) -> DealRow | None:
     """Parse a single pursuit file into a DealRow, or return None if it should be skipped.
 
@@ -143,16 +143,21 @@ def _parse_deal_row(
                       When a deal is dropped for an unknown stage, its stage value
                       is appended so callers can surface a summary warning.
     """
-    if path.name in {"gmail-intel.md", "template.md"}:
+    if path.name in NON_PURSUIT_FILES:
         return None
-    outcome = read_pursuit_for_report(path)
-    fm = outcome.frontmatter
+    fm = read_pursuit_for_report(path).frontmatter
     if fm is None:
-        if assessment is not None:
-            assessment.failures.append(
-                ReportFailure(str(path.relative_to(accounts_dir)), outcome.error or "invalid frontmatter")
-            )
         return None
+    return _deal_row_from_frontmatter(path, fm, accounts_dir, skipped)
+
+
+def _deal_row_from_frontmatter(
+    path: Path,
+    fm: dict[str, Any],
+    accounts_dir: Path,
+    skipped: list[str] | None = None,
+) -> DealRow | None:
+    """Build a DealRow from parsed frontmatter, or return None for closed or unweighted stages."""
     stage = str(fm.get("stage", "")).lower()
     if stage in SKIP_STAGES:
         return None
@@ -209,19 +214,15 @@ def compute_forecast(
         today = datetime.now(tz=UTC).date()
 
     accounts_dir = root / "accounts"
-    pattern = f"{account_filter}/pursuits/*.md" if account_filter else "*/pursuits/*.md"
     deals: list[DealRow] = []
     skipped: list[str] = []  # unrecognized stage strings (historic regression)
 
     assessment = ReportAssessment()
-    for path in sorted(accounts_dir.glob(pattern)):
-        assessment.scanned += 1
-        row = _parse_deal_row(path, accounts_dir, skipped=skipped, assessment=assessment)
+    for report_input in scan_report_inputs(root, account_filter, assessment):
+        row = _deal_row_from_frontmatter(report_input.path, report_input.frontmatter, accounts_dir, skipped)
         if row is not None:
             deals.append(row)
-
-    assessment.included = len(deals)
-    assessment.excluded = assessment.scanned - assessment.included - len(assessment.failures)
+    assessment.finish(len(deals))
 
     # Sort: by stage weight descending, then ACV descending
     deals.sort(key=lambda d: (-d.weight, -d.acv))

@@ -10,7 +10,7 @@ from fieldkit.__main__ import main
 from fieldkit.commands.pursuit.audit import audit_file
 from fieldkit.commands.pursuit.forecast import compute_forecast
 from fieldkit.commands.pursuit.pipeline_health import health_check
-from fieldkit.pursuit.io import ReportAssessment, read_pursuit_for_report
+from fieldkit.pursuit.io import ReportAssessment, ReportFailure, read_pursuit_for_report, scan_report_inputs
 
 pytestmark = pytest.mark.unit
 
@@ -141,6 +141,32 @@ def test_intentional_exclusions_are_complete(tmp_path: Path) -> None:
     assert assessment.complete
     assert assessment.scanned == 5
     assert assessment.excluded == 4
+
+
+def test_scan_report_inputs_partitions_every_scanned_file(tmp_path: Path) -> None:
+    broken = _portfolio(tmp_path, b"---\n- invalid\n---\n")
+    (broken.parent / "template.md").write_text("---\nstage: validate\n---\n", encoding="utf-8")
+    other = tmp_path / "accounts/other-fictional/pursuits"
+    other.mkdir(parents=True)
+    (other / "renewal.md").write_text("---\nstage: closed-won\n---\n", encoding="utf-8")
+
+    assessment = ReportAssessment()
+    inputs = list(scan_report_inputs(tmp_path, None, assessment))
+    assessment.finish(1)
+
+    assert [i.relative_path for i in inputs] == [
+        "acme-fictional/pursuits/pilot.md",
+        "other-fictional/pursuits/renewal.md",
+    ]
+    assert inputs[0].frontmatter["stage"] == "validate"
+    assert assessment.failures == [ReportFailure("acme-fictional/pursuits/broken.md", "invalid frontmatter mapping")]
+    assert (assessment.scanned, assessment.included, assessment.excluded) == (4, 1, 2)
+
+    filtered = ReportAssessment()
+    assert [i.relative_path for i in scan_report_inputs(tmp_path, "other-fictional", filtered)] == [
+        "other-fictional/pursuits/renewal.md"
+    ]
+    assert filtered.scanned == 1
 
 
 def test_reader_and_audit_distinguish_malformed_yaml(tmp_path: Path) -> None:

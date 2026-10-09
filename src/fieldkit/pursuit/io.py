@@ -20,7 +20,7 @@ import os
 import re
 import stat
 import tempfile
-from collections.abc import Generator
+from collections.abc import Generator, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -236,6 +236,44 @@ class ReportAssessment:
     @property
     def complete(self) -> bool:
         return not self.failures
+
+    def finish(self, included: int) -> None:
+        """Record the final included count; every other non-failed input was intentionally excluded."""
+        self.included = included
+        self.excluded = self.scanned - included - len(self.failures)
+
+
+NON_PURSUIT_FILES = frozenset({"gmail-intel.md", "template.md"})
+
+
+@dataclass(frozen=True)
+class ReportInput:
+    """A pursuit file whose frontmatter parsed as a mapping."""
+
+    path: Path
+    relative_path: str
+    frontmatter: dict[str, Any]
+
+
+def scan_report_inputs(root: Path, account_filter: str | None, assessment: ReportAssessment) -> Iterator[ReportInput]:
+    """Yield readable pursuit inputs under ``root/accounts`` in path order.
+
+    Every matched file counts as scanned. Non-pursuit files are skipped as exclusions, and
+    unreadable or invalid files are recorded as failures instead of being dropped. Consume
+    the iterator fully, then call ``assessment.finish()`` with the number the report kept.
+    """
+    accounts_dir = root / "accounts"
+    pattern = f"{account_filter}/pursuits/*.md" if account_filter else "*/pursuits/*.md"
+    for path in sorted(accounts_dir.glob(pattern)):
+        assessment.scanned += 1
+        if path.name in NON_PURSUIT_FILES:
+            continue
+        relative = str(path.relative_to(accounts_dir))
+        outcome = read_pursuit_for_report(path)
+        if outcome.frontmatter is None:
+            assessment.failures.append(ReportFailure(relative, outcome.error or "invalid frontmatter"))
+            continue
+        yield ReportInput(path=path, relative_path=relative, frontmatter=outcome.frontmatter)
 
 
 def read_pursuit_for_report(path: Path) -> PursuitReadResult:

@@ -17,7 +17,7 @@ import json
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import click
 
@@ -29,7 +29,7 @@ from fieldkit.commands.pursuit.audit import (
 )
 from fieldkit.config import get_fieldkit_home
 from fieldkit.pursuit.enums import Stage
-from fieldkit.pursuit.io import PursuitReadResult, ReportAssessment, ReportFailure, read_pursuit_for_report
+from fieldkit.pursuit.io import ReportAssessment, read_pursuit_for_report, scan_report_inputs
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -99,15 +99,13 @@ def _classify_medium_risk(
     return tier
 
 
-def classify_pursuit(result: AuditResult, today: date, outcome: PursuitReadResult | None = None) -> RiskItem | None:
+def classify_pursuit(result: AuditResult, today: date, frontmatter: dict[str, Any] | None = None) -> RiskItem | None:
     """Classify a parsed AuditResult into a RiskItem.
 
     Returns None if the pursuit should be excluded from the health report
     (closed stage or parse error with no meaningful data).
     """
-    if outcome is None:
-        outcome = read_pursuit_for_report(result.path)
-    fm = outcome.frontmatter
+    fm = frontmatter if frontmatter is not None else read_pursuit_for_report(result.path).frontmatter
     if fm is None:
         return None
 
@@ -173,29 +171,17 @@ def health_check(
 
     if assessment is None:
         assessment = ReportAssessment()
-    accounts_dir = root / "accounts"
-    pattern = f"{account_filter}/pursuits/*.md" if account_filter else "*/pursuits/*.md"
     items: list[RiskItem] = []
 
-    for path in sorted(accounts_dir.glob(pattern)):
-        assessment.scanned += 1
-        if path.name in {"gmail-intel.md", "template.md"}:
-            continue
-        relative = str(path.relative_to(accounts_dir))
-        outcome = read_pursuit_for_report(path)
-        if outcome.frontmatter is None:
-            assessment.failures.append(ReportFailure(relative, outcome.error or "invalid frontmatter"))
-            continue
-        result = AuditResult(path=path, relative_path=relative)
-        item = classify_pursuit(result, today, outcome)
+    for report_input in scan_report_inputs(root, account_filter, assessment):
+        result = AuditResult(path=report_input.path, relative_path=report_input.relative_path)
+        item = classify_pursuit(result, today, report_input.frontmatter)
         if item is None:
             continue
         if not include_prospect and item.stage in _EARLY_STAGES:
             continue
         items.append(item)
-
-    assessment.included = len(items)
-    assessment.excluded = assessment.scanned - assessment.included - len(assessment.failures)
+    assessment.finish(len(items))
 
     # Sort: HIGH → MEDIUM → LOW, then by days_until_close ascending (None = far future)
     tier_order = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
