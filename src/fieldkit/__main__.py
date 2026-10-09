@@ -119,8 +119,8 @@ def main(argv: list[str] | None = None) -> int:
     except click.exceptions.Exit as exc:
         # Exit(None) must not silently become 0 — treat as generic failure (1).
         return exc.exit_code if isinstance(exc.exit_code, int) else 1
-    except click.exceptions.UsageError as exc:
-        # UsageError (unknown command, bad flag, wrong args) → EXIT_DATA (3).
+    except click.ClickException as exc:
+        # Expected Click errors (usage or missing targets) → EXIT_DATA (3).
         # A malformed invocation is a caller data error; retrying without fixing it will not help.
         click.echo(f"Error: {exc.format_message()}", err=True)
         return 3

@@ -54,6 +54,8 @@ typed exceptions; the dispatcher is the final process boundary.
 | `LLMError(category="rate-limit")` | Provider rate limit hit | `1` |
 | `LLMError(category="general")` | Any other LLM failure | `3` |
 | `click.exceptions.Exit` | Used by `--help`, `--version` | code from exc (`Exit(None)` → `1`) |
+| `click.ClickException` (including usage errors) | Invalid invocation or missing target; concise stderr | `3` |
+| Companion malformed watcher status | Repair watcher state; concise stderr | `3` |
 | Any other `Exception` | Unhandled error | `3` |
 
 `KeyboardInterrupt` is not caught by either application boundary. The shell
