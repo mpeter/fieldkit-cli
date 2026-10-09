@@ -264,7 +264,7 @@ def _parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="kind", required=True)
 
     junit = subparsers.add_parser("junit")
-    _add_common_evidence_arguments(junit, scopes=("tach-selected", "repo-tools"))
+    _add_common_evidence_arguments(junit, scopes=("full-suite",))
 
     coverage = subparsers.add_parser("coverage")
     _add_common_evidence_arguments(coverage, scopes=("full-repository",))

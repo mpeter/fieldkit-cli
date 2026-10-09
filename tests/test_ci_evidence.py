@@ -54,7 +54,7 @@ def _write_coverage(path: Path, *, percent: float = 92.5) -> None:
     )
 
 
-@pytest.mark.parametrize("scope", ["tach-selected", "repo-tools"])
+@pytest.mark.parametrize("scope", ["full-suite"])
 def test_junit_evidence_records_scope_revision_counts_and_bounded_failures(tmp_path: Path, scope: str) -> None:
     """A failed test run is attributable without copying failure payloads into the report."""
     junit = tmp_path / "pytest.xml"
@@ -108,7 +108,7 @@ def test_junit_evidence_rejects_missing_input(tmp_path: Path, capsys: pytest.Cap
             "--source-revision",
             "b" * 40,
             "--scope",
-            "tach-selected",
+            "full-suite",
             "--command",
             "pytest",
         ]
@@ -135,7 +135,7 @@ def test_junit_evidence_rejects_oversized_input(tmp_path: Path, capsys: pytest.C
             "--source-revision",
             "b" * 40,
             "--scope",
-            "tach-selected",
+            "full-suite",
             "--command",
             "pytest",
         ]
@@ -180,7 +180,7 @@ def test_scope_labels_cannot_overstate_partial_or_full_evidence(tmp_path: Path) 
                 "--source-revision",
                 "b" * 40,
                 "--scope",
-                "tach-selected",
+                "full-suite",
                 "--command",
                 "pytest --cov",
                 "--minimum-percent",

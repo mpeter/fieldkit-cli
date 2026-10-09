@@ -44,18 +44,10 @@ still consume domain behavior rather than owning it.
 `uv run python scripts/check_hook_boundaries.py` preserves their original
 allowlist (`fieldkit`, `fieldkit.config`, `fieldkit.enrich`, `fieldkit.errors`),
 resolves imports against the most specific Tach module, and rejects package
-imports of checkout hooks. Local PR/full gates and hosted lint run this check. Their tests and the script
-tests run independently of Tach on every code PR, both locally and in hosted
-`Test (pytest)`. The complete enforcement gate still runs the entire test suite.
-Selection follows helper package re-exports and tool-backed fixtures in
-`conftest.py` and registered local pytest plugins, including nested plugin
-registrations. Autouse tool fixtures retain all tests below their defining
-conftest directory; registered plugin autouse fixtures apply across the suite.
-Tool-backed pytest hooks retain tests in the same applicable scope, including
-collection-time parameter generation and marker-controlled tool calls. The
-selection engine's own lifecycle hooks do not imply a dependency on other tools.
-Run those tests alone with
-`uv run pytest tests/ --repo-tools-only -p no:tach -q -n 0`.
+imports of checkout hooks. Local PR/full gates and hosted lint run this check.
+Tach impact selection is a local speed aid only. Hosted `Test (pytest)` runs the
+entire suite in parallel on every code PR, so hook and script tests, and any test
+a selection would miss, always run before merge.
 
 ## Contact enrichment checkpoints
 

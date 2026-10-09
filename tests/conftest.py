@@ -57,8 +57,6 @@ from fieldkit.pursuit import clear_pursuit_caches
 
 ROOT = Path(__file__).resolve().parents[1]
 
-pytest_plugins = ("scripts.repo_tool_selection",)
-
 # ---------------------------------------------------------------------------
 # CI config bootstrap — runs before xdist workers spawn
 # ---------------------------------------------------------------------------

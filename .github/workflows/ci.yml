@@ -176,8 +176,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          # Tach compares the explicit PR base and head revisions below.
-          fetch-depth: 0
+          fetch-depth: 1
       - if: needs.changes.outputs.code == 'true'
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
         with:
@@ -202,20 +201,13 @@ jobs:
       - name: Install dependencies
         if: needs.changes.outputs.code == 'true'
         run: uv sync --locked --all-extras --dev
-      - name: Run checkout hook and script tests
-        if: needs.changes.outputs.code == 'true'
-        run: |
-          mkdir -p reports
-          uv run pytest tests/ --repo-tools-only -p no:tach -q -n 0 \
-            --junitxml=reports/pytest-repo-tools.xml
+      # The whole suite runs in parallel instead of an impact selection, so a
+      # selection gap can never skip a test while the check stays green.
       - name: Run pytest
         if: needs.changes.outputs.code == 'true'
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           mkdir -p reports
-          uv run pytest tests/ --tach --tach-base "$BASE_SHA" --tach-head "$HEAD_SHA" -q -n 0 \
+          uv run pytest tests/ -p no:tach -q -n 4 \
             --junitxml=reports/pytest.xml
       - name: Summarize bounded pytest evidence
         if: always() && needs.changes.outputs.code == 'true'
@@ -227,30 +219,16 @@ jobs:
           --output reports/pytest-summary.json
           --step-summary "$GITHUB_STEP_SUMMARY"
           --source-revision "$HEAD_SHA"
-          --scope tach-selected
-          --command 'uv run pytest tests/ --tach --tach-base BASE_SHA --tach-head HEAD_SHA -q -n 0'
-      - name: Summarize checkout tool pytest evidence
-        if: always() && needs.changes.outputs.code == 'true'
-        env:
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: >-
-          uv run python scripts/ci_evidence.py junit
-          --input reports/pytest-repo-tools.xml
-          --output reports/pytest-repo-tools-summary.json
-          --step-summary "$GITHUB_STEP_SUMMARY"
-          --source-revision "$HEAD_SHA"
-          --scope repo-tools
-          --command 'uv run pytest tests/ --repo-tools-only -p no:tach -q -n 0'
+          --scope full-suite
+          --command 'uv run pytest tests/ -p no:tach -q -n 4'
       - name: Upload bounded pytest evidence
         if: always() && needs.changes.outputs.code == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
-          name: pytest-tach-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+          name: pytest-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
           path: |
             reports/pytest.xml
             reports/pytest-summary.json
-            reports/pytest-repo-tools.xml
-            reports/pytest-repo-tools-summary.json
           if-no-files-found: error
           retention-days: 14
       - name: Behavioral eval smoke test (NO_LLM=1)
