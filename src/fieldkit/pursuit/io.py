@@ -20,10 +20,11 @@ import os
 import re
 import stat
 import tempfile
-from collections.abc import Generator
+from collections.abc import Generator, Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 
@@ -187,16 +188,113 @@ def parse_frontmatter_fallback(content: str) -> tuple[dict[str, Any], str] | tup
 
 
 def _load_fallback_frontmatter(frontmatter_text: str) -> dict[str, Any] | None:
-    """Load a fallback YAML mapping, treating an empty block as a mapping."""
+    """Load a fallback YAML mapping, treating an empty block as a mapping.
+
+    Only a block with no YAML node (blank or comment-only) is empty; an explicit
+    ``null`` or ``~`` document is a non-mapping scalar and is rejected.
+    """
     try:
+        if yaml.compose(frontmatter_text, Loader=yaml.SafeLoader) is None:
+            return {}
         parsed = yaml.safe_load(frontmatter_text)
     except yaml.YAMLError:
         return None
-    if parsed is None:
-        return {}
     if not isinstance(parsed, dict):
         return None
     return parsed
+
+
+@dataclass(frozen=True)
+class PursuitReadResult:
+    """Read-only report input, with sanitized failure reasons instead of silent loss."""
+
+    frontmatter: dict[str, Any] | None = None
+    body: str = ""
+    error: (
+        Literal[
+            "unreadable input", "invalid UTF-8", "missing frontmatter", "malformed YAML", "invalid frontmatter mapping"
+        ]
+        | None
+    ) = None
+
+
+@dataclass(frozen=True)
+class ReportFailure:
+    relative_path: str
+    reason: str
+
+
+@dataclass
+class ReportAssessment:
+    """Counts partition scanned inputs into included, intentional exclusions, and failures."""
+
+    scanned: int = 0
+    included: int = 0
+    excluded: int = 0
+    failures: list[ReportFailure] = field(default_factory=list)
+
+    @property
+    def complete(self) -> bool:
+        return not self.failures
+
+    def finish(self, included: int) -> None:
+        """Record the final included count; every other non-failed input was intentionally excluded."""
+        self.included = included
+        self.excluded = self.scanned - included - len(self.failures)
+
+
+NON_PURSUIT_FILES = frozenset({"gmail-intel.md", "template.md"})
+
+
+@dataclass(frozen=True)
+class ReportInput:
+    """A pursuit file whose frontmatter parsed as a mapping."""
+
+    path: Path
+    relative_path: str
+    frontmatter: dict[str, Any]
+
+
+def scan_report_inputs(root: Path, account_filter: str | None, assessment: ReportAssessment) -> Iterator[ReportInput]:
+    """Yield readable pursuit inputs under ``root/accounts`` in path order.
+
+    Every matched file counts as scanned. Non-pursuit files are skipped as exclusions, and
+    unreadable or invalid files are recorded as failures instead of being dropped. Consume
+    the iterator fully, then call ``assessment.finish()`` with the number the report kept.
+    """
+    accounts_dir = root / "accounts"
+    pattern = f"{account_filter}/pursuits/*.md" if account_filter else "*/pursuits/*.md"
+    for path in sorted(accounts_dir.glob(pattern)):
+        assessment.scanned += 1
+        if path.name in NON_PURSUIT_FILES:
+            continue
+        relative = str(path.relative_to(accounts_dir))
+        outcome = read_pursuit_for_report(path)
+        if outcome.frontmatter is None:
+            assessment.failures.append(ReportFailure(relative, outcome.error or "invalid frontmatter"))
+            continue
+        yield ReportInput(path=path, relative_path=relative, frontmatter=outcome.frontmatter)
+
+
+def read_pursuit_for_report(path: Path) -> PursuitReadResult:
+    """Read a pursuit without exposing source text or operating-system diagnostics."""
+    try:
+        content = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return PursuitReadResult(error="invalid UTF-8")
+    except OSError:
+        return PursuitReadResult(error="unreadable input")
+    fm, body = parse_frontmatter_fallback(content)
+    if fm is not None:
+        return PursuitReadResult(frontmatter=fm, body=body)
+    parts = content.split("---", 2)
+    if not content.startswith("---") or len(parts) < 3:
+        return PursuitReadResult(error="missing frontmatter")
+    try:
+        yaml.safe_load(parts[1])
+    except yaml.YAMLError:
+        return PursuitReadResult(error="malformed YAML")
+    return PursuitReadResult(error="invalid frontmatter mapping")
 
 
 def _split_frontmatter(content: str) -> tuple[str, str]:

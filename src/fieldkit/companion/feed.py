@@ -149,7 +149,10 @@ def _parse_status_json(path: Path, status: dict[str, Any] | None) -> list[Attent
         if not isinstance(entry, dict):
             continue
         outcome = str(entry.get("outcome", ""))
-        failures = int(entry.get("failures", 0) or 0)
+        try:
+            failures = int(entry.get("failures", 0) or 0)
+        except (TypeError, ValueError) as exc:
+            raise FeedParseError(f"watcher run-status has a non-numeric failure count: {path}") from exc
         last_run = str(entry.get("last_run", ""))
         if outcome in ("ok", "") and failures == 0:
             continue

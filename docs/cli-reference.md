@@ -9,7 +9,7 @@ generated_by: scripts/generate_cli_docs.py
 
 > **Derived document — generated exhaust, not a system of record.** Verify facts against the sources listed in `derived_from`.
 
-> Auto-generated 2026-10-01 from `fieldkit --help`. Do not edit manually.
+> Auto-generated 2026-10-09 from `fieldkit --help`. Do not edit manually.
 > Re-generate: `uv run python scripts/generate_cli_docs.py`
 
 ## Quick reference
@@ -861,8 +861,9 @@ Usage: fieldkit pursuit forecast [OPTIONS]
   When -q/--quota is not provided, reads pipeline.quota.target from config
   automatically.
 
-  Exit codes:   0 — forecast computed   3 — data error (config missing,
-  accounts directory not found)
+  Exit codes:   0 — complete forecast computed   1 — partial forecast;
+  unreadable records disclosed   3 — data error (config missing, accounts
+  directory not found)
 
 Options:
   -a, --account TEXT  Limit to a single account directory name.
@@ -887,8 +888,8 @@ Usage: fieldkit pursuit health [OPTIONS]
   are not used as current risk evidence.
 
   Exit codes:   0 — valid report (default), or no high-risk items with
-  --strict   1 — one or more high-risk items with --strict   3 — data error
-  (config missing, accounts directory not found)
+  --strict   1 — incomplete assessment, or one or more high-risk items with
+  --strict   3 — data error (config missing, accounts directory not found)
 
 Options:
   -a, --account TEXT  Limit to a single account directory name.
