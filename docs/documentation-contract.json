@@ -304,7 +304,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Choose the canonical safe write mechanism for persistent state.",
-      "source_fingerprint": "sha256:ee555d62ca895d47b39d1f414a9ea8c438b7e8945b6d31403a2e584277fd10a4",
+      "source_fingerprint": "sha256:db77cf8a7b08c32f61e6d9f7ef809407c893272240b0361b8ea7645c25bdda29",
       "sources": [
         "src/fieldkit/**/*.py"
       ]
@@ -1233,7 +1233,7 @@
         }
       ],
       "reader_action": "Inspect the generated module dependency graph.",
-      "source_fingerprint": "sha256:fee55c43c7b95d08c226763b15bd78ccb58c79a88331119e99afecb3bd4e67c1",
+      "source_fingerprint": "sha256:a324b9f092cc14d5f36ca9d88241da76fe44c00315fc14c37478f470a451dd57",
       "sources": [
         "tach.toml",
         "src/fieldkit/**/*.py",
@@ -1895,7 +1895,7 @@
       "content_type": "concept",
       "fenced_blocks": [],
       "reader_action": "Understand local storage and external data flows.",
-      "source_fingerprint": "sha256:ee555d62ca895d47b39d1f414a9ea8c438b7e8945b6d31403a2e584277fd10a4",
+      "source_fingerprint": "sha256:db77cf8a7b08c32f61e6d9f7ef809407c893272240b0361b8ea7645c25bdda29",
       "sources": [
         "src/fieldkit/**/*.py"
       ],
