@@ -40,16 +40,20 @@ for that opportunity, not a skip.
 ## Step 2 — collect (read-only, never mutates a pursuit file)
 
 Run the whole pass as one script so the comparison is deterministic rather
-than eyeballed. `uv` supplies PyYAML, so the operator's system Python needs
-nothing installed:
+than eyeballed. It runs on fieldkit's own interpreter (the one its `fieldkit`
+launcher names), so it uses fieldkit's installed, locked dependencies and
+fetches nothing from a package index:
 
 ```bash
+FIELDKIT_PY=$(sed -n '1s/^#!//p' "$(command -v fieldkit)")
+"$FIELDKIT_PY" -c 'import fieldkit' || { echo "Cannot locate fieldkit's interpreter; stop." >&2; exit 3; }
 mkdir -p scratch/out
-uv run --no-project --with pyyaml python - <<'PY'
+"$FIELDKIT_PY" - <<'PY'
 import json, re, subprocess, sys
 from datetime import UTC, datetime
 from pathlib import Path
-import yaml
+from fieldkit.pursuit.io import read_pursuit_for_report
+from fieldkit.sf.opportunities import is_opportunity_id
 
 ACCOUNT = None            # "<slug>" narrows to one account
 INCLUDE_PROSPECT = False  # True widens to prospect-stage pursuits
@@ -70,13 +74,8 @@ def stage(s):
 def closed(s):
     return s.startswith("closed")
 
-def frontmatter(path):
-    text = path.read_text(encoding="utf-8")
-    m = re.match(r"---\n(.*?)\n---[ \t]*(\n|$)", text, re.S)
-    fm = yaml.safe_load(m.group(1)) if m else {}
-    if not isinstance(fm, dict):
-        raise ValueError("frontmatter is not a mapping")
-    return fm
+class SessionExpired(Exception):
+    pass
 
 def days_until(d):
     try:
@@ -86,18 +85,18 @@ def days_until(d):
 
 def run_json(cmd, timeout):
     p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    if p.returncode == 2:  # auth: every later fetch would fail the same way
+        raise SessionExpired(p.stderr.strip()[:160])
     if p.returncode != 0:
         raise RuntimeError(p.stderr.strip()[:160] or f"exit {p.returncode}")
     return json.loads(p.stdout)
 
 def reconcile(opp_id, path):
     flags = []
-    try:
-        fm = frontmatter(Path(path))
-    except OSError as exc:
-        return {"id": opp_id, "pursuit": path, "flags": [("RED", "missing-file", str(exc))]}
-    except (ValueError, yaml.YAMLError) as exc:
-        return {"id": opp_id, "pursuit": path, "flags": [("RED", "bad-frontmatter", str(exc)[:160])]}
+    read = read_pursuit_for_report(Path(path))
+    if read.frontmatter is None:
+        return {"id": opp_id, "pursuit": path, "flags": [("RED", "bad-frontmatter", read.error)]}
+    fm = read.frontmatter
     try:
         live = run_json(["fieldkit", "sf", "opportunity", opp_id, path, "--no-write", "--json"], 90)
     except (RuntimeError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
@@ -136,23 +135,31 @@ try:
     h = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
     if h.returncode not in (0, 1):
         raise RuntimeError(h.stderr.strip()[:160] or f"exit {h.returncode}")
-    rows = [r for r in json.loads(h.stdout) if r.get("sf_opportunity_id")]
+    rows = json.loads(h.stdout)
 except (RuntimeError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
     sys.exit(f"No pursuits in scope: {exc}")
 unassessed = [l.removeprefix("WARNING: ") for l in h.stderr.splitlines() if "assessment incomplete" in l]
 for line in unassessed:
     print(f"NOT ASSESSED {line}", file=sys.stderr)
+linked = [r for r in rows if is_opportunity_id(str(r.get("sf_opportunity_id") or ""))]
+unlinked = [r["relative_path"] for r in rows if r.get("sf_opportunity_id") and r not in linked]
+for path in unlinked:  # placeholder such as NEEDS-LOOKUP: not linked, not a fetch failure
+    print(f"UNLINKED {path}: sf_opportunity_id is not a Salesforce id", file=sys.stderr)
 results = []
-for r in rows:
+for r in linked:
     # health reports paths relative to accounts/
-    e = reconcile(r["sf_opportunity_id"], f"accounts/{r['relative_path']}")
+    try:
+        e = reconcile(r["sf_opportunity_id"], f"accounts/{r['relative_path']}")
+    except SessionExpired as exc:
+        print(f"Salesforce session expired mid-run ({exc}). Run `fieldkit auth sf`, then rerun; no report written.", file=sys.stderr)
+        sys.exit(2)
     levels = {f[0] for f in e["flags"]}
     e["status"] = "RED" if "RED" in levels else "YELLOW" if levels else "GREEN"
     results.append(e)
     print(f"{e['status']:6} {r['relative_path']}: " + (", ".join(f[1] for f in e["flags"]) or "clean"), file=sys.stderr)
 
 report = {"count": len(results), "red": sum(e["status"] == "RED" for e in results),
-          "yellow": sum(e["status"] == "YELLOW" for e in results), "unassessed": unassessed,
+          "yellow": sum(e["status"] == "YELLOW" for e in results), "unassessed": unassessed, "unlinked": unlinked,
           "opportunities": results}
 Path("scratch/out/sf-reconcile.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
 print(f"\n{report['red']} RED, {report['yellow']} YELLOW of {report['count']}, {len(unassessed)} not assessed"
@@ -174,7 +181,7 @@ lifecycle stages. Organizations with their own stage names still get
 
 - 🔴 **RED** — `overdue` (SF close date passed, still open), `closing-14d`,
   `sf-closed-local-open` (SF closed, local still open), `sf-fetch-failed`,
-  `missing-file`, `bad-frontmatter`.
+  `bad-frontmatter`.
 - 🟡 **YELLOW** — `stage-mismatch` (local vs SF), `sf-stage-drift` /
   `close-date-drift` / `acv-drift` (consulting ACV; file snapshot stale vs live),
   `closing-30d`.
@@ -182,7 +189,8 @@ lifecycle stages. Organizations with their own stage names still get
 
 Show every opportunity in scope, including rows with missing data, and lead
 with RED. A pursuit with no `sf_opportunity_id` is out of scope for this
-report, not GREEN — list it separately as "not yet linked to SF" when the
+report, not GREEN; so is a placeholder id such as `NEEDS-LOOKUP`, which
+the script lists under `unlinked`. List them separately as "not yet linked to SF" when the
 operator asks about pipeline completeness. Pre-pipeline pursuits are never
 in scope.
 
@@ -208,6 +216,9 @@ Propose, then wait:
   native ClosePlan evidence. This skill does not judge qualification.
 
 ## Gotchas
+
+- **An expired session stops the whole run.** If any fetch exits 2, the
+  script exits without a report; tell the operator to run `fieldkit auth sf`.
 
 - **A `sf-fetch-failed` flag means the fetch died, not that the opportunity
   is clean.** A run with fetch failures is incomplete; say so instead of

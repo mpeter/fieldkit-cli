@@ -45,6 +45,18 @@
       "type": "not_contains",
       "pattern": "update the pursuit note",
       "message": "Assistant output must not become pursuit-note or qualification state"
+    },
+    {
+      "id": "prompt_not_shell_interpolated",
+      "type": "contains",
+      "pattern": "<<'PROMPT'",
+      "message": "Prompt text comes from customer-controlled files; pass it on stdin through a quoted heredoc so the shell never expands it"
+    },
+    {
+      "id": "scratch_created",
+      "type": "contains",
+      "pattern": "mkdir -p scratch",
+      "message": "fieldkit init does not create scratch/; redirections fail before the query runs"
     }
   ],
   "evals": [
@@ -64,7 +76,7 @@
       "expected_behavior": "Refuses to treat assistant output as system-of-record and verifies via fieldkit sf",
       "assertions": [
         "Verifies the close date with fieldkit sf before any change",
-        "Writes the pursuit note only on explicit operator confirmation"
+        "Does not write the assistant's output into the pursuit note"
       ]
     }
   ]

@@ -24,10 +24,10 @@
       "message": "Dates must come from datetime.now(tz=UTC), not date.today()"
     },
     {
-      "id": "pyyaml_declared",
-      "type": "contains",
-      "pattern": "--with pyyaml",
-      "message": "The script must declare PyYAML rather than assume the system Python has it"
+      "id": "locked_interpreter",
+      "type": "not_contains",
+      "pattern": "--with",
+      "message": "The script must run on fieldkit's own interpreter, not resolve dependencies from a package index"
     },
     {
       "id": "flag_dont_fix",
@@ -55,6 +55,18 @@
       "type": "contains",
       "pattern": "h.returncode not in (0, 1)",
       "message": "pursuit health exits 1 with valid rows when some files are damaged; the script must keep the rows and report the rest"
+    },
+    {
+      "id": "auth_aborts_run",
+      "type": "contains",
+      "pattern": "p.returncode == 2",
+      "message": "An expired Salesforce session must stop the run instead of becoming per-opportunity fetch failures"
+    },
+    {
+      "id": "canonical_opportunity_ids",
+      "type": "contains",
+      "pattern": "is_opportunity_id(",
+      "message": "Placeholder ids must be reported as unlinked, not fetched"
     }
   ],
   "evals": [

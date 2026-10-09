@@ -35,6 +35,12 @@
       "type": "contains",
       "pattern": "REFERENCE.md",
       "message": "Command templates live in REFERENCE.md"
+    },
+    {
+      "id": "scratch_ignored",
+      "type": "contains",
+      "pattern": "git check-ignore",
+      "message": "fieldkit init does not ignore scratch/; the skill must verify or add the ignore rule before writing customer material there"
     }
   ],
   "evals": [

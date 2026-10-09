@@ -9,6 +9,7 @@ description: >
   asks to keep building the account document map — even if they just say "keep digging" or
   "find more account docs".
 metadata:
+  opencode/slash: "true"
   category: product
 ---
 
@@ -17,9 +18,9 @@ metadata:
 A waypoint is a document whose location you've confirmed and whose value to
 your stated goals you've written down. A map is not the end state — the
 mission converges: explore while exploration pays, then pick the single most
-valuable thing the map makes possible, then build it. Each run of this skill
-executes ONE bounded iteration of whichever phase the mission is in, persists
-state, and stops. Designed to be safe under a loop.
+valuable thing the map makes possible, then build it. Each run executes ONE
+bounded iteration of the current phase, saves state, and stops, so it is safe
+in a loop.
 
 It needs a tool that can search and read your account documents (Google
 Drive, a file share, a wiki); the exploration verbs below are generic.
@@ -41,10 +42,8 @@ Drive, a file share, a wiki); the exploration verbs below are generic.
   index".
 - **Raw output:** `scratch/waypoints/*.json` — sweep results, kept for
   reference.
-- If `MAP.md` does not exist, seed it from any prior waypoint-map export you
-  have, normalizing field names to match the schema below. If none exists,
-  start fresh from whatever account notes and pursuit files already link out
-  to external documents.
+- If `MAP.md` is missing, seed it from a prior map export (normalized to the
+  schema below) or from account notes and pursuit files that link out.
 
 The `## Mission` block at the top of MAP.md is the state machine:
 
@@ -61,7 +60,9 @@ done_criteria:
 progress: <one line, updated every EXECUTE iteration>
 ```
 
-Everything lives in `scratch/` (gitignored). **Never commit any of this.**
+Everything lives in `scratch/`, which `fieldkit init` does not ignore. In a Git
+workspace, first run `git check-ignore -q scratch/x || echo 'scratch/' >> .gitignore`.
+**Never commit any of this.**
 
 ## Phase logic — what one iteration does
 

@@ -8,6 +8,7 @@ description: >
   that matches a capability in this workspace's local ShadowBot routing reference (if one
   exists).
 metadata:
+  opencode/slash: "true"
   category: product
 ---
 
@@ -110,16 +111,21 @@ evidence.
 ## Step 3 — Execute
 
 Construct and run the query. Use `--new` unless continuing a thread, and
-redirect output to `scratch/` so it's reviewable and not lost:
+redirect output to `scratch/` so it's reviewable and not lost. The prompt
+goes in on stdin through a quoted heredoc (`<<'PROMPT'`), so the shell never
+expands `$(...)`, backticks or quotes in account names or pursuit text. Keep
+it to identifiers and the few fields the request needs (under about 2,000
+characters, never a whole file), and drop any line that is exactly `PROMPT`:
 
 ```bash
 set -o pipefail   # report fieldkit's exit status, not tee's (bash and zsh)
-fieldkit shadowbot query --new \
-  "<capability-name, if your assistant supports named capabilities> for <account display name>.
-   <canonical account identifier(s), per your workspace's scheme>.
-   <additional context relevant to the request>." \
-  2>>scratch/shadowbot-stderr.log \
+mkdir -p scratch  # fieldkit init does not create it
+fieldkit shadowbot query --new 2>>scratch/shadowbot-stderr.log <<'PROMPT' \
   | tee scratch/shadowbot-<capability-slug>-<account-slug>-$(date +%Y%m%d).md
+<capability-name, if your assistant supports named capabilities> for <account display name>.
+<canonical account identifier(s), per your workspace's scheme>.
+<additional context relevant to the request>.
+PROMPT
 echo "exit: $?"
 ```
 
@@ -176,13 +182,18 @@ confirmed-safe chains in your local routing reference as you discover them.
 
 **Pattern (if your assistant supports thread continuation):**
 ```bash
+set -o pipefail && mkdir -p scratch
 # First call — always --new
-fieldkit shadowbot query --new "<capability> for <account>. <context>." \
-  2>>scratch/shadowbot-stderr.log | tee scratch/shadowbot-chain-<account>-$(date +%Y%m%d).md
+fieldkit shadowbot query --new 2>>scratch/shadowbot-stderr.log <<'PROMPT' \
+  | tee scratch/shadowbot-chain-<account>-$(date +%Y%m%d).md
+<capability> for <account>. <context>.
+PROMPT
 
 # Chained call — no --new, same thread, appended to same file
-fieldkit shadowbot query "<second capability>. <context>." \
-  2>>scratch/shadowbot-stderr.log | tee -a scratch/shadowbot-chain-<account>-$(date +%Y%m%d).md
+fieldkit shadowbot query 2>>scratch/shadowbot-stderr.log <<'PROMPT' \
+  | tee -a scratch/shadowbot-chain-<account>-$(date +%Y%m%d).md
+<second capability>. <context>.
+PROMPT
 ```
 
 **Always use `--new` regardless of chaining, when:**

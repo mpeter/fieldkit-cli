@@ -13,12 +13,23 @@ whatever document-access tool your environment actually provides (a
 different Drive CLI, a wiki search API, a file-share mount).
 
 **Document-store search** (names are usually the reliable index; full-text
-search is noisier):
+search is noisier). Search terms often come from documents or assistant
+output, so never splice one into shell or query syntax. Read it through a
+quoted heredoc and let `jq` build the query, escaping `\` and `'` for the
+Drive query language:
 ```bash
-<your-drive-cli> drive files list --params '{"q":"name contains '\''<TERM>'\'' and trashed=false","pageSize":20,"fields":"files(id,name,mimeType,modifiedTime)","orderBy":"modifiedTime desc"}'
+term=$(cat <<'TERM'
+<TERM>
+TERM
+)
+params=$(jq -nc --arg t "$term" '([39] | implode) as $sq
+  | {q: ("name contains " + $sq + ($t | gsub("\\\\"; "\\\\") | gsub($sq; "\\" + $sq)) + $sq + " and trashed=false"),
+     pageSize: 20, fields: "files(id,name,mimeType,modifiedTime)", orderBy: "modifiedTime desc"}')
+<your-drive-cli> drive files list --params "$params"
 ```
 
-**Folder walk** (the highest-yield expansion move):
+**Folder walk** (the highest-yield expansion move). Use only IDs taken from a
+files listing, and only if they match `^[A-Za-z0-9_-]+$`:
 ```bash
 <your-drive-cli> drive files list --params '{"q":"'\''<FOLDER_ID>'\'' in parents and trashed=false","pageSize":30,"fields":"files(id,name,mimeType,modifiedTime)","orderBy":"modifiedTime desc"}'
 ```
@@ -34,7 +45,9 @@ sheet-read call against a Doc (or vice versa) typically 404s.
 **AI assistant** (program/policy waypoints — if your organization has one
 configured):
 ```bash
-fieldkit shadowbot query "<question — ask for document names + links>"
+fieldkit shadowbot query <<'PROMPT'
+<question — ask for document names + links>
+PROMPT
 ```
 
 ## Model & token economics
