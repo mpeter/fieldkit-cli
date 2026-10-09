@@ -1,6 +1,7 @@
 """Contract tests for bounded PR validation and complete post-merge enforcement."""
 
 import json
+import os
 import signal
 import subprocess
 import sys
@@ -15,6 +16,7 @@ from scripts import quality_stage
 pytestmark = pytest.mark.unit
 
 _ROOT = Path(__file__).resolve().parent.parent
+_CI_FILTER_TEST_TIMEOUT = 10
 
 
 def _recipe(name: str, next_heading: str) -> str:
@@ -328,6 +330,62 @@ def test_pr_ci_runs_the_full_suite_and_preserves_required_contexts() -> None:
     assert "--cov-report=json:coverage.json" not in workflow
     changelog = (_ROOT / ".github" / "workflows" / "changelog.yml").read_text(encoding="utf-8")
     assert "name: Changelog fragment" in changelog
+
+
+@pytest.mark.parametrize(
+    ("changed_file", "expected_code"),
+    [
+        ("uv.lock", "true"),
+        ("pyproject.toml", "true"),
+        ("src/fieldkit/example.py", "true"),
+        ("docs/example.md", "false"),
+    ],
+)
+def test_pr_ci_classifies_dependency_source_and_documentation_changes(
+    tmp_path: Path, changed_file: str, expected_code: str
+) -> None:
+    """Dependency-only and source changes take the full-suite path; ordinary prose retains no-impact handling."""
+    workflow = yaml.load((_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+    filter_step = next(step for step in workflow["jobs"]["changes"]["steps"] if step.get("id") == "filter")
+
+    def _git(*arguments: str) -> str:
+        result = subprocess.run(
+            ["git", "-c", "user.name=Contributor", "-c", "user.email=contributor@example.com", *arguments],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=_CI_FILTER_TEST_TIMEOUT,
+        )
+        return result.stdout.strip()
+
+    _git("init", "--quiet")
+    _git("commit", "--allow-empty", "--quiet", "-m", "test: base")
+    base = _git("rev-parse", "HEAD")
+    changed = tmp_path / changed_file
+    changed.parent.mkdir(parents=True, exist_ok=True)
+    changed.write_text("synthetic change\n", encoding="utf-8")
+    _git("add", changed_file)
+    _git("commit", "--quiet", "-m", "test: candidate")
+    output = tmp_path / "github-output"
+    environment = os.environ.copy()
+    environment.update(BASE_SHA=base, HEAD_SHA=_git("rev-parse", "HEAD"), GITHUB_OUTPUT=str(output))
+
+    result = subprocess.run(
+        ["bash", "-e", "-c", filter_step["run"]],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=_CI_FILTER_TEST_TIMEOUT,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert output.read_text(encoding="utf-8").strip() == f"code={expected_code}"
+    test_step = next(step for step in workflow["jobs"]["test"]["steps"] if step.get("name") == "Run pytest")
+    assert test_step["if"] == "needs.changes.outputs.code == 'true'"
+    assert "uv run pytest tests/ -p no:tach -q -n 4" in test_step["run"]
 
 
 def test_pr_ci_exposes_stable_bounded_aggregate_and_keeps_compatibility_dispatchable() -> None:

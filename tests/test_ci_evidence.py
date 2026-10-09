@@ -93,6 +93,88 @@ def test_junit_evidence_records_scope_revision_counts_and_bounded_failures(tmp_p
     assert "private output" not in summary.read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize(
+    ("tests", "skipped", "failures", "errors", "expected_exit"),
+    [(0, 0, 0, 0, 1), (3, 3, 0, 0, 1), (1, 0, 0, 0, 0), (3, 1, 0, 0, 0), (3, 1, 1, 0, 1), (3, 1, 0, 1, 1)],
+)
+def test_full_suite_evidence_requires_execution_and_retains_failure_semantics(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    tests: int,
+    skipped: int,
+    failures: int,
+    errors: int,
+    expected_exit: int,
+) -> None:
+    """Empty/all-skipped execution fails, while partial skips and ordinary failures keep their meaning."""
+    junit = tmp_path / "pytest.xml"
+    output = tmp_path / "summary.json"
+    summary = tmp_path / "summary.md"
+    _write_junit(junit, tests=tests, skipped=skipped, failures=failures, errors=errors)
+
+    result = ci_evidence.main(
+        [
+            "junit",
+            "--input",
+            str(junit),
+            "--output",
+            str(output),
+            "--step-summary",
+            str(summary),
+            "--source-revision",
+            "a" * 40,
+            "--scope",
+            "full-suite",
+            "--command",
+            "uv run pytest tests/ -p no:tach -q -n 4",
+        ]
+    )
+
+    assert result == expected_exit
+    report = json.loads(output.read_text(encoding="utf-8"))
+    assert report["status"] == ("fail" if expected_exit else "pass")
+    assert report["source_revision"] == "a" * 40
+    assert report["scope"] == "full-suite"
+    assert report["executed_tests"] == tests - skipped
+    assert report["counts"] == {"tests": tests, "skipped": skipped, "failures": failures, "errors": errors}
+    captured = capsys.readouterr()
+    if tests == skipped:
+        assert "no executed tests" in report["diagnostic"]
+        assert "without impact selection" in captured.err
+        assert report["diagnostic"] in summary.read_text(encoding="utf-8")
+    else:
+        assert report["diagnostic"] is None
+        assert captured.err == ""
+    assert "Executed" in summary.read_text(encoding="utf-8")
+
+
+def test_junit_evidence_rejects_more_skips_than_tests(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """Inconsistent counts cannot produce passing execution evidence."""
+    junit = tmp_path / "pytest.xml"
+    output = tmp_path / "summary.json"
+    _write_junit(junit, tests=1, skipped=2)
+
+    result = ci_evidence.main(
+        [
+            "junit",
+            "--input",
+            str(junit),
+            "--output",
+            str(output),
+            "--source-revision",
+            "a" * 40,
+            "--scope",
+            "full-suite",
+            "--command",
+            "pytest",
+        ]
+    )
+
+    assert result == 2
+    assert not output.exists()
+    assert "skipped count must not exceed" in capsys.readouterr().err
+
+
 def test_junit_evidence_rejects_missing_input(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """Missing evidence fails closed with a payload-safe diagnostic."""
     missing = tmp_path / "missing.xml"
