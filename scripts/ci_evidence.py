@@ -123,18 +123,29 @@ def _junit_report(args: argparse.Namespace) -> dict[str, object]:
     root = ET.fromstring(_read_bounded(args.input, MAX_JUNIT_BYTES))
     suites = _junit_suites(root)
     counts = _junit_counts(suites)
-    status = "fail" if counts["failures"] or counts["errors"] else "pass"
+    executed_tests = counts["tests"] - counts["skipped"]
+    if executed_tests < 0:
+        raise ValueError("JUnit skipped count must not exceed the test count")
+    diagnostic = (
+        "Full-suite evidence contains no executed tests; run the complete suite without impact selection."
+        if executed_tests == 0
+        else None
+    )
+    status = "fail" if counts["failures"] or counts["errors"] or executed_tests == 0 else "pass"
     return {
         "schema_version": SCHEMA_VERSION,
         "kind": "junit-summary",
         "status": status,
         "source_revision": _validate_revision(args.source_revision),
         "scope": args.scope,
+        "selection_reason": "full-suite-policy",
         "command": args.command,
         "tool": {"name": "pytest", "version": importlib.metadata.version("pytest")},
         "generated_at": _generated_at(),
         "duration_seconds": sum(_float_attribute(suite, "time") for suite in suites),
         "counts": counts,
+        "executed_tests": executed_tests,
+        "diagnostic": diagnostic,
         "failures": _failure_names(root),
     }
 
@@ -213,10 +224,11 @@ def _junit_markdown(report: dict[str, object]) -> str:
     return (
         "## Pull-request test evidence\n\n"
         f"Scope: `{report['scope']}` · revision: `{report['source_revision']}` · status: **{report['status']}**\n\n"
-        "| Tests | Failures | Errors | Skipped | Duration |\n"
-        "| ---: | ---: | ---: | ---: | ---: |\n"
-        f"| {counts['tests']} | {counts['failures']} | {counts['errors']} | {counts['skipped']} | "
-        f"{duration:.2f}s |\n"
+        f"Selection reason: `{report['selection_reason']}`\n\n"
+        "| Tests | Executed | Failures | Errors | Skipped | Duration |\n"
+        "| ---: | ---: | ---: | ---: | ---: | ---: |\n"
+        f"| {counts['tests']} | {report['executed_tests']} | {counts['failures']} | {counts['errors']} | {counts['skipped']} | "
+        f"{duration:.2f}s |\n" + (f"\n{report['diagnostic']}\n" if report["diagnostic"] else "")
     )
 
 
@@ -299,6 +311,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"CI evidence: ERROR: {exc}", file=sys.stderr)
         return 2
     print(f"CI evidence: {report['kind']} {report['status']}")
+    if report.get("diagnostic"):
+        print(f"CI evidence: {report['diagnostic']}", file=sys.stderr)
     return 0 if report["status"] == "pass" else 1
 
 
