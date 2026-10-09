@@ -393,16 +393,13 @@ def audit_file(path: Path, today: date | None = None) -> AuditResult:
     relative_path = str(path)
     result = AuditResult(path=path, relative_path=relative_path)
 
-    try:
-        content = path.read_text(encoding="utf-8")
-    except OSError as exc:
-        result.parse_error = f"Cannot read file: {exc}"
-        return result
+    from fieldkit.pursuit.io import read_pursuit_for_report
 
-    fm, body = parse_frontmatter_fallback(content)
+    outcome = read_pursuit_for_report(path)
+    fm, body = outcome.frontmatter, outcome.body
     if fm is None:
-        result.parse_error = "No YAML frontmatter found"
-        result.findings.append(Finding("ERROR", "Missing frontmatter entirely — no `---` delimited YAML block"))
+        result.parse_error = outcome.error
+        result.findings.append(Finding("ERROR", outcome.error or "invalid frontmatter"))
         return result
 
     result.stage = str(fm.get("stage", "")).lower()

@@ -49,12 +49,21 @@ def test_parse_frontmatter_no_frontmatter_returns_none() -> None:
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("frontmatter", ["- sf-opportunity-id", "not-a-mapping", "42"])
+@pytest.mark.parametrize("frontmatter", ["- sf-opportunity-id", "not-a-mapping", "42", "null", "~"])
 def test_parse_frontmatter_fallback_rejects_non_mapping_yaml(frontmatter: str) -> None:
     parsed, body = parse_frontmatter_fallback(f"---\n{frontmatter}\n---\nBody\n")
 
     assert parsed is None
     assert body
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("frontmatter", ["", "\n", "# comment only\n"])
+def test_parse_frontmatter_fallback_accepts_empty_block(frontmatter: str) -> None:
+    parsed, body = parse_frontmatter_fallback(f"---\n{frontmatter}---\nBody\n")
+
+    assert parsed == {}
+    assert body == "\nBody\n"
 
 
 @pytest.mark.unit

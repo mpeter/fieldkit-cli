@@ -74,3 +74,16 @@ writes do not provide exactly-once processing after a crash.
 Before changing a boundary, read the relevant decision record in
 [`docs/adr`](../adr/0001-local-first-roots.md) and update this guide or that
 record when its preconditions, invariants, or trade-offs change.
+
+## Read-only pursuit assessment
+
+The pursuit I/O domain supplies a typed per-file read result for audit, health,
+and forecast. It retains either frontmatter/body or a sanitized failure reason.
+Report consumers partition scanned files into included rows, intentional
+exclusions, and failed inputs. An unreadable record cannot become an absent deal
+in a successful report. Partial reports exit 1 and carry failure paths relative
+to the account root; source YAML and OS error details are never copied into
+parse diagnostics. This contract adds forecast assessment metadata. Health
+JSON keeps its array format in every case, because the web dashboard and
+reconciliation scripts parse it as one; incompleteness shows on stderr and in
+the exit code. Readers make no workspace or runtime writes.

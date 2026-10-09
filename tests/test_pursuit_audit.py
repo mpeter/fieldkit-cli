@@ -601,7 +601,8 @@ def test_audit_file_reports_unreadable_file(tmp_path: Path, monkeypatch: pytest.
     monkeypatch.setattr(Path, "read_text", raise_oserror)
     result = audit_file(path, today=date(2026, 6, 1))
 
-    assert result.parse_error == "Cannot read file: simulated read failure"
+    assert result.parse_error == "unreadable input"
+    assert "simulated read failure" not in str(result.findings)
 
 
 def test_check_yaml_duplicates_no_frontmatter(tmp_path: Path) -> None:

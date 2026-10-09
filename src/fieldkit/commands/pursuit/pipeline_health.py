@@ -25,11 +25,11 @@ from fieldkit.cli_exit import EXIT_DATA, EXIT_PARTIAL
 from fieldkit.commands.pursuit.audit import (
     AuditResult,
     _parse_sf_date,
-    audit_directory,
     no_files_message,
 )
 from fieldkit.config import get_fieldkit_home
 from fieldkit.pursuit.enums import Stage
+from fieldkit.pursuit.io import ReportAssessment, read_pursuit_for_report, scan_report_inputs
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -99,25 +99,13 @@ def _classify_medium_risk(
     return tier
 
 
-def _load_health_frontmatter(path: Path) -> dict[str, Any] | None:
-    try:
-        content = path.read_text(encoding="utf-8")
-    except OSError:
-        return None
-
-    from fieldkit.pursuit.io import parse_frontmatter_fallback
-
-    fm, _ = parse_frontmatter_fallback(content)
-    return fm
-
-
-def classify_pursuit(result: AuditResult, today: date) -> RiskItem | None:
+def classify_pursuit(result: AuditResult, today: date, frontmatter: dict[str, Any] | None = None) -> RiskItem | None:
     """Classify a parsed AuditResult into a RiskItem.
 
     Returns None if the pursuit should be excluded from the health report
     (closed stage or parse error with no meaningful data).
     """
-    fm = _load_health_frontmatter(result.path)
+    fm = frontmatter if frontmatter is not None else read_pursuit_for_report(result.path).frontmatter
     if fm is None:
         return None
 
@@ -163,6 +151,7 @@ def health_check(
     account_filter: str | None = None,
     today: date | None = None,
     include_prospect: bool = False,
+    assessment: ReportAssessment | None = None,
 ) -> list[RiskItem]:
     """Run health check across all pursuit files.
 
@@ -180,16 +169,19 @@ def health_check(
     if today is None:
         today = datetime.now(tz=UTC).date()
 
-    results = audit_directory(root, account_filter=account_filter, today=today)
+    if assessment is None:
+        assessment = ReportAssessment()
     items: list[RiskItem] = []
 
-    for result in results:
-        item = classify_pursuit(result, today)
+    for report_input in scan_report_inputs(root, account_filter, assessment):
+        result = AuditResult(path=report_input.path, relative_path=report_input.relative_path)
+        item = classify_pursuit(result, today, report_input.frontmatter)
         if item is None:
             continue
         if not include_prospect and item.stage in _EARLY_STAGES:
             continue
         items.append(item)
+    assessment.finish(len(items))
 
     # Sort: HIGH → MEDIUM → LOW, then by days_until_close ascending (None = far future)
     tier_order = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
@@ -216,6 +208,7 @@ def _emit_health_results(
     as_json: bool,
     compact: bool,
     strict: bool,
+    assessment: ReportAssessment | None = None,
 ) -> None:
     """Emit health results to stdout and raise SystemExit with the appropriate code.
 
@@ -230,7 +223,11 @@ def _emit_health_results(
     if as_json:
         import dataclasses
 
+        # The JSON contract stays a list; consumers (web dashboard, sf-reconcile) parse it as
+        # one. An incomplete assessment is disclosed on stderr and by EXIT_PARTIAL instead.
         click.echo(json.dumps([dataclasses.asdict(i) for i in items], indent=2, default=str))
+        if assessment is not None and assessment.failures:
+            raise SystemExit(EXIT_PARTIAL)
         if strict and high:
             raise SystemExit(EXIT_PARTIAL)
         raise SystemExit(0)
@@ -266,6 +263,12 @@ def _emit_health_results(
     # Exit codes:
     #   0 — valid report by default; no HIGH-risk items in strict mode
     #   1 — one or more HIGH-risk items with --strict
+    if assessment is not None and assessment.failures:
+        click.echo(
+            f"Assessment incomplete: {assessment.scanned} scanned, {assessment.included} included, "
+            f"{assessment.excluded} excluded, {len(assessment.failures)} failed."
+        )
+        raise SystemExit(EXIT_PARTIAL)
     if strict and high:
         raise SystemExit(EXIT_PARTIAL)
     raise SystemExit(0)
@@ -305,7 +308,7 @@ def cli(account: str | None, include_prospect: bool, as_json: bool, strict: bool
 
     Exit codes:
       0 — valid report (default), or no high-risk items with --strict
-      1 — one or more high-risk items with --strict
+      1 — incomplete assessment, or one or more high-risk items with --strict
       3 — data error (config missing, accounts directory not found)
     """
     data_root = get_fieldkit_home()
@@ -320,9 +323,14 @@ def cli(account: str | None, include_prospect: bool, as_json: bool, strict: bool
         raise SystemExit(EXIT_DATA) from None
 
     today = datetime.now(tz=UTC).date()
-    items = health_check(root, account_filter=account, today=today, include_prospect=include_prospect)
+    assessment = ReportAssessment()
+    items = health_check(
+        root, account_filter=account, today=today, include_prospect=include_prospect, assessment=assessment
+    )
+    for failure in assessment.failures:
+        click.echo(f"WARNING: {failure.relative_path}: {failure.reason} — assessment incomplete", err=True)
 
-    if not items:
+    if not items and not assessment.failures:
         click.echo(no_files_message("pursuit", account), err=True)
         raise SystemExit(EXIT_DATA) from None
 
@@ -339,4 +347,5 @@ def cli(account: str | None, include_prospect: bool, as_json: bool, strict: bool
         as_json=as_json,
         compact=compact,
         strict=strict,
+        assessment=assessment,
     )

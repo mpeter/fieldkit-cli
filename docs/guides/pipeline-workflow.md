@@ -404,3 +404,25 @@ documentation.
 
 Not every opportunity has a ClosePlan scorecard. When no ClosePlan is linked, the
 command reports `not_found`, returns an empty `deals` collection, and exits 0.
+
+## Detect incomplete pursuit reports
+
+Run `fieldkit pursuit health --json` or `fieldkit pursuit forecast --json` to
+assess a portfolio without changing its files. If an input is unreadable,
+invalid UTF-8, missing frontmatter, malformed YAML, or a non-mapping YAML block,
+valid pursuits remain in the report and the command exits `1`. Stderr names each
+failed file relative to the accounts directory and gives a sanitized reason.
+An entirely damaged scope also returns an empty partial report with exit `1`;
+its zero totals do not describe a complete portfolio.
+
+Forecast JSON adds an `assessment` object. Health JSON is always an array of the
+valid risk rows; an incomplete health report shows only through stderr and exit
+`1`. The forecast assessment contains `scanned`, `included`,
+`excluded`, and `failures` (each with `relative_path` and `reason`). The counts
+partition all scanned files: scanned = included + excluded + number of failures.
+An empty failures array means assessment is complete. Templates, Gmail intel,
+and each command's documented excluded stages count as intentional exclusions,
+not failures. Account filters limit both report rows and assessment counts.
+Human output shows the same failed files and an incomplete-assessment summary.
+Current qualification remains unavailable; damaged records receive no invented
+risk classification. Audit distinguishes malformed YAML from missing frontmatter.
