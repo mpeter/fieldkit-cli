@@ -549,6 +549,7 @@ def internal_runner():
     [
         "import scripts.foo\ndef execute():\n    return 1\ndef _private():\n    return 2",
         '__all__ = ["execute"]\nimport scripts.foo\ndef execute():\n    return 1',
+        "import scripts.foo\nfrom .impl import execute",
     ],
 )
 def test_wildcard_reexport_of_tool_backed_module_retains_name_consumers(tmp_path: Path, runner_source: str) -> None:
@@ -559,9 +560,12 @@ def test_wildcard_reexport_of_tool_backed_module_retains_name_consumers(tmp_path
     init.write_text("from .runner import *", encoding="utf-8")
     runner = package / "runner.py"
     runner.write_text(runner_source, encoding="utf-8")
+    # Defines the exported name, so it is retained once that name is tool-backed.
+    impl = package / "impl.py"
+    impl.write_text("def execute():\n    return 1", encoding="utf-8")
     sibling = package / "test_sibling.py"
     sibling.write_text("from . import execute\ndef test_execute():\n    assert execute()", encoding="utf-8")
     unrelated = tests / "test_domain.py"
     unrelated.write_text("def test_domain():\n    assert True", encoding="utf-8")
 
-    assert repo_tool_test_paths(tmp_path) == {init, runner, sibling}
+    assert repo_tool_test_paths(tmp_path) == {init, runner, impl, sibling}
