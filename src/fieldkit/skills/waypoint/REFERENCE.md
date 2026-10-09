@@ -14,17 +14,16 @@ different Drive CLI, a wiki search API, a file-share mount).
 
 **Document-store search** (names are usually the reliable index; full-text
 search is noisier). Search terms often come from documents or assistant
-output, so never splice one into shell or query syntax. Read it through a
-quoted heredoc and let `jq` build the query, escaping `\` and `'` for the
-Drive query language:
+output, so never put one in shell syntax, not even a heredoc. Write the term
+to `scratch/waypoints/term.txt` with your file-writing tool, then let `jq`
+read it, reject anything multi-line, and escape `\` and `'` for the Drive
+query language:
 ```bash
-term=$(cat <<'TERM'
-<TERM>
-TERM
-)
-params=$(jq -nc --arg t "$term" '([39] | implode) as $sq
+params=$(jq -nc --rawfile raw scratch/waypoints/term.txt '([39] | implode) as $sq
+  | ($raw | rtrimstr("\n")) as $t
+  | if ($t | test("[\r\n]")) then error("search term must be one line") else . end
   | {q: ("name contains " + $sq + ($t | gsub("\\\\"; "\\\\") | gsub($sq; "\\" + $sq)) + $sq + " and trashed=false"),
-     pageSize: 20, fields: "files(id,name,mimeType,modifiedTime)", orderBy: "modifiedTime desc"}')
+     pageSize: 20, fields: "files(id,name,mimeType,modifiedTime)", orderBy: "modifiedTime desc"}') &&
 <your-drive-cli> drive files list --params "$params"
 ```
 
@@ -45,9 +44,7 @@ sheet-read call against a Doc (or vice versa) typically 404s.
 **AI assistant** (program/policy waypoints — if your organization has one
 configured):
 ```bash
-fieldkit shadowbot query <<'PROMPT'
-<question — ask for document names + links>
-PROMPT
+fieldkit shadowbot query < scratch/waypoints/prompt.txt   # question written with your file tool
 ```
 
 ## Model & token economics

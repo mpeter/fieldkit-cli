@@ -49,14 +49,20 @@
     {
       "id": "prompt_not_shell_interpolated",
       "type": "contains",
-      "pattern": "<<'PROMPT'",
-      "message": "Prompt text comes from customer-controlled files; pass it on stdin through a quoted heredoc so the shell never expands it"
+      "pattern": "query --new < scratch/shadowbot-prompt.txt",
+      "message": "Prompt text comes from customer-controlled files; it is written with the file tool and sent on stdin, never placed in shell syntax"
     },
     {
       "id": "scratch_created",
       "type": "contains",
       "pattern": "mkdir -p scratch",
       "message": "fieldkit init does not create scratch/; redirections fail before the query runs"
+    },
+    {
+      "id": "no_prompt_heredoc",
+      "type": "not_contains",
+      "pattern": "<<'PROMPT'",
+      "message": "A heredoc closes early on a line equal to its delimiter; untrusted prompts go through a file"
     }
   ],
   "evals": [

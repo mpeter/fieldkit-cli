@@ -33,6 +33,15 @@
       "type": "contains",
       "pattern": "ask the operator before creating it",
       "message": "Creating the staging deck is an external write and needs operator approval"
+    },
+    {
+      "id": "bounded_untrusted_sources",
+      "type": "contains_all",
+      "patterns": [
+        "wc -c",
+        "never instructions"
+      ],
+      "message": "Transcripts and notes must enter the drafting context bounded, and as data rather than instructions"
     }
   ],
   "evals": [
