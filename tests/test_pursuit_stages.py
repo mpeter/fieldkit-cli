@@ -2,7 +2,7 @@
 
 import pytest
 
-from fieldkit.pursuit.stages import ALL_STAGES, CLOSED_STAGES, PIPELINE_STAGES, TERMINAL_STAGES
+from fieldkit.pursuit.stages import ALL_STAGES, CLOSED_STAGES, PIPELINE_STAGES, TERMINAL_STAGES, in_review_scope
 
 
 @pytest.mark.unit
@@ -91,3 +91,22 @@ def test_stage_constants_are_frozensets() -> None:
 def test_pipeline_stages_is_tuple() -> None:
     """PIPELINE_STAGES must be a tuple (ordered, immutable)."""
     assert isinstance(PIPELINE_STAGES, tuple)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("stage", "include_prospect", "expected"),
+    [
+        ("qualify", False, True),
+        ("negotiate", False, True),
+        ("Propose", False, True),
+        ("prospect", False, False),
+        ("prospect", True, True),
+        ("pre-pipeline", True, False),
+        ("closed-won", True, False),
+        ("closed-lost", False, False),
+    ],
+)
+def test_in_review_scope(stage: str, include_prospect: bool, expected: bool) -> None:
+    """Closed and pre-pipeline pursuits never enter review; prospects only on opt-in."""
+    assert in_review_scope(stage, include_prospect=include_prospect) is expected

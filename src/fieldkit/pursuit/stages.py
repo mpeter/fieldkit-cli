@@ -55,3 +55,18 @@ STAGE_ORDER: list[Stage] = [
 # All known stages (pipeline + closed). Does not include informal aliases
 # from TERMINAL_STAGES (closed, won, lost).
 ALL_STAGES: frozenset[str] = frozenset(PIPELINE_STAGES) | CLOSED_STAGES
+
+# Stages that pipeline reviews (health, Salesforce drift) never assess:
+# closed deals and pre-pipeline ideas.
+REVIEW_EXCLUDED_STAGES: frozenset[str] = frozenset({Stage.CLOSED_WON, Stage.CLOSED_LOST, Stage.PRE_PIPELINE})
+
+# Stages too early for risk review unless the caller opts in (--include-prospect).
+REVIEW_OPT_IN_STAGES: frozenset[str] = frozenset({Stage.PROSPECT})
+
+
+def in_review_scope(stage: str, *, include_prospect: bool = False) -> bool:
+    """Return whether a pursuit at ``stage`` belongs in an active pipeline review."""
+    normalized = stage.lower()
+    if normalized in REVIEW_EXCLUDED_STAGES:
+        return False
+    return include_prospect or normalized not in REVIEW_OPT_IN_STAGES
