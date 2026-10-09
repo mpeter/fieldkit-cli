@@ -49,6 +49,12 @@
       "type": "contains",
       "pattern": "f\"accounts/{r['relative_path']}\"",
       "message": "pursuit health reports paths relative to accounts/; the script must prefix them"
+    },
+    {
+      "id": "incomplete_health_scope",
+      "type": "contains",
+      "pattern": "h.returncode not in (0, 1)",
+      "message": "pursuit health exits 1 with valid rows when some files are damaged; the script must keep the rows and report the rest"
     }
   ],
   "evals": [

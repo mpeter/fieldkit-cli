@@ -132,9 +132,16 @@ cmd = ["fieldkit", "pursuit", "health", "--json"]
 cmd += ["--account", ACCOUNT] if ACCOUNT else []
 cmd += ["--include-prospect"] if INCLUDE_PROSPECT else []
 try:
-    rows = [r for r in run_json(cmd, 120) if r.get("sf_opportunity_id")]
+    # exit 1 = incomplete assessment: valid rows on stdout, damaged files named on stderr
+    h = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    if h.returncode not in (0, 1):
+        raise RuntimeError(h.stderr.strip()[:160] or f"exit {h.returncode}")
+    rows = [r for r in json.loads(h.stdout) if r.get("sf_opportunity_id")]
 except (RuntimeError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
     sys.exit(f"No pursuits in scope: {exc}")
+unassessed = [l.removeprefix("WARNING: ") for l in h.stderr.splitlines() if "assessment incomplete" in l]
+for line in unassessed:
+    print(f"NOT ASSESSED {line}", file=sys.stderr)
 results = []
 for r in rows:
     # health reports paths relative to accounts/
@@ -145,9 +152,11 @@ for r in rows:
     print(f"{e['status']:6} {r['relative_path']}: " + (", ".join(f[1] for f in e["flags"]) or "clean"), file=sys.stderr)
 
 report = {"count": len(results), "red": sum(e["status"] == "RED" for e in results),
-          "yellow": sum(e["status"] == "YELLOW" for e in results), "opportunities": results}
+          "yellow": sum(e["status"] == "YELLOW" for e in results), "unassessed": unassessed,
+          "opportunities": results}
 Path("scratch/out/sf-reconcile.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
-print(f"\n{report['red']} RED, {report['yellow']} YELLOW of {report['count']} -> scratch/out/sf-reconcile.json", file=sys.stderr)
+print(f"\n{report['red']} RED, {report['yellow']} YELLOW of {report['count']}, {len(unassessed)} not assessed"
+      " -> scratch/out/sf-reconcile.json", file=sys.stderr)
 PY
 ```
 
@@ -174,9 +183,14 @@ lifecycle stages. Organizations with their own stage names still get
 Show every opportunity in scope, including rows with missing data, and lead
 with RED. A pursuit with no `sf_opportunity_id` is out of scope for this
 report, not GREEN — list it separately as "not yet linked to SF" when the
-operator asks about pipeline completeness. Scope is what `pursuit health`
-returns: pre-pipeline pursuits and files its loader rejects are not in it,
-and `fieldkit pursuit audit` finds the latter.
+operator asks about pipeline completeness. Pre-pipeline pursuits are never
+in scope.
+
+**Lead with any `unassessed` entries.** These are pursuit files
+`pursuit health` could not read (malformed YAML, missing frontmatter, bad
+encoding), so their opportunities were not checked at all. A report with
+unassessed files is incomplete, however clean the rest looks; name each
+file and suggest `fieldkit pursuit audit` to diagnose it.
 
 ## Step 4 — act only on approval (flag, don't fix)
 
