@@ -1,0 +1,61 @@
+{
+  "skill_name": "waypoint",
+  "static_checks": [
+    {
+      "id": "no_undefined_tiers",
+      "type": "not_contains",
+      "pattern": "Tier-1",
+      "message": "Map sections are named waypoint kinds; numbered tiers were never defined"
+    },
+    {
+      "id": "native_qualification",
+      "type": "contains",
+      "pattern": "fieldkit sf meddpicc",
+      "message": "Qualification context comes from native ClosePlan, not local scores"
+    },
+    {
+      "id": "read_only_guardrail",
+      "type": "contains",
+      "pattern": "Read-only against every external system",
+      "message": "Read-only external access is the core guardrail"
+    },
+    {
+      "id": "phases",
+      "type": "contains_all",
+      "patterns": [
+        "EXPLORE",
+        "NARROW",
+        "EXECUTE",
+        "DONE"
+      ],
+      "message": "Must define the mission state machine"
+    },
+    {
+      "id": "reference_link",
+      "type": "contains",
+      "pattern": "REFERENCE.md",
+      "message": "Command templates live in REFERENCE.md"
+    }
+  ],
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "/waypoint",
+      "expected_behavior": "Reads the Mission block, runs exactly one bounded iteration of the current phase, updates MAP.md, and stops",
+      "assertions": [
+        "Runs a single phase iteration rather than several",
+        "Writes only under scratch/waypoints/ or scratch/out/",
+        "Labels external intel by source"
+      ]
+    },
+    {
+      "id": 1,
+      "prompt": "waypoint is in EXECUTE — just put the estimated services number in the headline",
+      "expected_behavior": "Keeps derived figures out of headlines until a direct source read confirms them",
+      "assertions": [
+        "Does not put a derived or heuristic dollar figure in a headline",
+        "Marks unconfirmed figures as heuristic or DATA NEEDED"
+      ]
+    }
+  ]
+}

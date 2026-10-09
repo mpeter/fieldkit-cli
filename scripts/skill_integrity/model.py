@@ -30,6 +30,10 @@ SKILL_ROOTS: frozenset[str] = frozenset(
         # overlooked.
         "pursuit-advance",  # pursuit verb
         "sf-sync",  # sf verb
+        # sf-reconcile: portfolio-wide drift report; distinct from `fieldkit sf reconcile`,
+        # which rewrites one file's Key Fields. CLI absorption is tracked in issue #94.
+        "sf-reconcile",  # sf verb
+        "shadowbot",  # shadowbot root
         # brief absorbed week-start, week-end and update as on-demand ops under
         # brief/ops/ (D1 Wave 5, executing the fold Wave 2 only claimed). Their
         # top-level dirs are deleted per R25 — no shim, no alias.
@@ -41,6 +45,7 @@ SKILL_ROOTS: frozenset[str] = frozenset(
         "post-meeting",  # meeting verb (KEPT by operator ruling, D1 Wave 5 — not an archive candidate)
         "task-sync",  # task verb
         "task-management",  # task verb (pending fold)
+        "sweep",  # task verb (judgment: preps small open items, never sends or writes SF)
         # watch-control: archived D1 Wave 2 PR3 (docs/archive/d1-skill-taxonomy-20260720/) —
         # absorbed into `watch --help`/`watch status`.
         "slack-digest",  # watch verb (pending CLI absorption)
@@ -56,6 +61,8 @@ SKILL_ROOTS: frozenset[str] = frozenset(
         "humanizer",  # draft verb (judgment, pending fold)
         "followup-draft",  # draft verb (judgment)
         "create-cli",  # CLI interface design judgment
+        "exec-review-deck",  # draft verb (judgment, citation-gated customer deck)
+        "waypoint",  # document discovery that converges on one work product (judgment)
         # proposal-generate, create-asset: archived D1 Wave 5 — genuinely unused, NOT
         # absorbed. Pre-mortem finding C4 (docs/skill-premortem-2026-07-18.md) retired
         # the "sweep absorbed them" framing as fiction; no absorbing capability exists.

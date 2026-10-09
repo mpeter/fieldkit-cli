@@ -1,0 +1,78 @@
+{
+  "skill_name": "sf-reconcile",
+  "static_checks": [
+    {
+      "id": "commands_exist",
+      "type": "commands_exist",
+      "commands": [
+        "fieldkit sf session-check",
+        "fieldkit sf opportunity",
+        "fieldkit pursuit health",
+        "fieldkit auth sf"
+      ]
+    },
+    {
+      "id": "no_local_meddpicc",
+      "type": "not_contains",
+      "pattern": "meddpicc_last_scored",
+      "message": "Local MEDDPICC scores are retired as current evidence; qualification routes to grill"
+    },
+    {
+      "id": "utc_dates",
+      "type": "not_contains",
+      "pattern": "date.today()",
+      "message": "Dates must come from datetime.now(tz=UTC), not date.today()"
+    },
+    {
+      "id": "pyyaml_declared",
+      "type": "contains",
+      "pattern": "--with pyyaml",
+      "message": "The script must declare PyYAML rather than assume the system Python has it"
+    },
+    {
+      "id": "flag_dont_fix",
+      "type": "contains_all",
+      "patterns": [
+        "--no-write",
+        "One pursuit at a time"
+      ],
+      "message": "Must keep the read-only default and per-pursuit approval"
+    },
+    {
+      "id": "distinct_from_cli_reconcile",
+      "type": "contains",
+      "pattern": "fieldkit sf reconcile",
+      "message": "Must distinguish itself from the single-file CLI command"
+    }
+  ],
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "are my pursuit files still in line with salesforce?",
+      "expected_behavior": "Runs the session preflight, then the read-only drift script, and presents every in-scope opportunity RED first",
+      "assertions": [
+        "Runs fieldkit sf session-check before fetching anything",
+        "Presents RED opportunities before YELLOW and GREEN",
+        "Does not write any pursuit file without approval"
+      ]
+    },
+    {
+      "id": 1,
+      "prompt": "sf-reconcile for {{primary_account}} — the salesforce session expired",
+      "expected_behavior": "Stops at preflight and asks the operator to re-authenticate instead of reporting cached data",
+      "assertions": [
+        "Instructs the operator to run 'fieldkit auth sf'",
+        "Does not present stored frontmatter as current Salesforce data"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "sf-reconcile flagged stage-mismatch on {{primary_pursuit}}, just fix it",
+      "expected_behavior": "Treats local stage as operator judgment and asks rather than changing it",
+      "assertions": [
+        "Does not edit the local stage field on its own",
+        "Points to pursuit-advance or asks the operator for the stage decision"
+      ]
+    }
+  ]
+}
