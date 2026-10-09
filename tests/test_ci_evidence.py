@@ -85,6 +85,7 @@ def test_junit_evidence_records_scope_revision_counts_and_bounded_failures(tmp_p
     assert report["status"] == "fail"
     assert report["source_revision"] == "a" * 40
     assert report["scope"] == scope
+    assert report["selection_reason"] == "full-suite-policy"
     assert report["command"] == "uv run pytest tests/ --tach"
     assert report["tool"]["name"] == "pytest"
     assert report["counts"] == {"errors": 0, "failures": 1, "skipped": 1, "tests": 3}
@@ -135,6 +136,7 @@ def test_full_suite_evidence_requires_execution_and_retains_failure_semantics(
     assert report["status"] == ("fail" if expected_exit else "pass")
     assert report["source_revision"] == "a" * 40
     assert report["scope"] == "full-suite"
+    assert report["selection_reason"] == "full-suite-policy"
     assert report["executed_tests"] == tests - skipped
     assert report["counts"] == {"tests": tests, "skipped": skipped, "failures": failures, "errors": errors}
     captured = capsys.readouterr()
@@ -146,6 +148,7 @@ def test_full_suite_evidence_requires_execution_and_retains_failure_semantics(
         assert report["diagnostic"] is None
         assert captured.err == ""
     assert "Executed" in summary.read_text(encoding="utf-8")
+    assert "Selection reason: `full-suite-policy`" in summary.read_text(encoding="utf-8")
 
 
 def test_junit_evidence_rejects_more_skips_than_tests(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

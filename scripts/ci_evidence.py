@@ -138,6 +138,7 @@ def _junit_report(args: argparse.Namespace) -> dict[str, object]:
         "status": status,
         "source_revision": _validate_revision(args.source_revision),
         "scope": args.scope,
+        "selection_reason": "full-suite-policy",
         "command": args.command,
         "tool": {"name": "pytest", "version": importlib.metadata.version("pytest")},
         "generated_at": _generated_at(),
@@ -223,6 +224,7 @@ def _junit_markdown(report: dict[str, object]) -> str:
     return (
         "## Pull-request test evidence\n\n"
         f"Scope: `{report['scope']}` · revision: `{report['source_revision']}` · status: **{report['status']}**\n\n"
+        f"Selection reason: `{report['selection_reason']}`\n\n"
         "| Tests | Executed | Failures | Errors | Skipped | Duration |\n"
         "| ---: | ---: | ---: | ---: | ---: | ---: |\n"
         f"| {counts['tests']} | {report['executed_tests']} | {counts['failures']} | {counts['errors']} | {counts['skipped']} | "

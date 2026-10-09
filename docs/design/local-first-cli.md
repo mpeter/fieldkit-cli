@@ -54,6 +54,8 @@ their counts and an actionable diagnostic, but fail the evidence step. Runs
 with passing execution and some skipped tests remain valid. A documentation
 no-impact classification is a separate workflow decision and does not produce
 a passing full-suite JUnit report.
+The normalized `selection_reason` is `full-suite-policy`: hosted testing runs
+the complete suite for every non-doc change, including dependency-only changes.
 
 ## Contact enrichment checkpoints
 
