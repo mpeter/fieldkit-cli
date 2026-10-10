@@ -21,15 +21,21 @@ class BatchProviderFailures:
 
     @property
     def stopped(self) -> bool:
+        """Return True once consecutive retryable failures reached the threshold."""
         with self._lock:
             return self._stopped
 
     @property
     def had_retryable_failure(self) -> bool:
+        """Return True if any retryable provider failure was recorded."""
         with self._lock:
             return self._failures > 0
 
     def record(self, error: LLMError | None) -> None:
+        """Record a provider outcome: None resets the consecutive count, a retryable error extends it.
+
+        Reaching the threshold stops the batch; outcomes after that are ignored.
+        """
         with self._lock:
             if self._stopped:
                 return

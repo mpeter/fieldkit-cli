@@ -200,11 +200,15 @@ quote-style = "double"
 indent-style = "space"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP", "BLE", "C4", "SIM", "PLW", "RUF", "W", "PTH", "TID"]
+select = ["E", "F", "I", "B", "UP", "BLE", "C4", "SIM", "PLW", "RUF", "W", "PTH", "TID", "D100", "D101", "D102", "D103", "D104"]
 ignore = ["E501"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["BLE001"]
+# Docstrings are required on public production code only (D100-D104). Tests,
+# scripts and hooks may document themselves but are not gated.
+"tests/*" = ["BLE001", "D"]
+"scripts/*" = ["D"]
+"hooks/*" = ["D"]
 
 [tool.ruff.lint.flake8-tidy-imports]
 # Tombstone list for deleted backward-compat shims (R25).

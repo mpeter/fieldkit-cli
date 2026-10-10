@@ -21,15 +21,18 @@ log = logging.getLogger("gmail-sync")
 
 
 def sync_get(conn: sqlite3.Connection, key: str) -> str | None:
+    """Return the stored sync-state value for ``key``, or None if absent."""
     row = conn.execute("SELECT value FROM sync_state WHERE key=?", (key,)).fetchone()
     return row[0] if row else None
 
 
 def sync_set(conn: sqlite3.Connection, key: str, value: str | None) -> None:
+    """Store ``value`` under ``key`` in the sync state, replacing any existing entry."""
     conn.execute("INSERT OR REPLACE INTO sync_state(key, value) VALUES (?, ?)", (key, value))
 
 
 def raise_partial_sync(summary: SyncSummary) -> None:
+    """Raise ``GmailSyncPartialError`` when the summary contains any failed message."""
     if summary.failed:
         raise GmailSyncPartialError(
             f"{summary.added} added, {summary.failed} failed "

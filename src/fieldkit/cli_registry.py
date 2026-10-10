@@ -83,6 +83,7 @@ class CommandArgument:
     type_name: str
 
     def to_dict(self) -> dict[str, Any]:
+        """Return the argument as a JSON-serializable mapping."""
         return {"name": self.name, "required": self.required, "type": self.type_name}
 
 
@@ -96,6 +97,7 @@ class CommandFlag:
     help: str | None
 
     def to_dict(self) -> dict[str, Any]:
+        """Return the flag as a JSON-serializable mapping."""
         return {"opts": self.opts, "is_flag": self.is_flag, "type": self.type_name, "help": self.help}
 
 
@@ -120,6 +122,7 @@ class WriteDeclaration:
     confirm_exempt: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
+        """Return the declaration as a JSON-serializable mapping."""
         return {"write_class": self.write_class, "confirm_exempt": self.confirm_exempt}
 
 
@@ -216,6 +219,7 @@ class CommandEntry:
     account_scope: AccountScope | None = None
 
     def to_dict(self) -> dict[str, Any]:
+        """Return the command entry as a JSON-serializable mapping."""
         return {
             "full_name": self.full_name,
             "summary": self.summary,

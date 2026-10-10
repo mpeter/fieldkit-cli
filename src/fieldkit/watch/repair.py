@@ -21,6 +21,8 @@ _log = logging.getLogger(__name__)
 
 
 class RepairReport(TypedDict):
+    """One proposed or written close-date repair for a pursuit."""
+
     path: Path
     account: str
     pursuit: str
@@ -31,6 +33,8 @@ class RepairReport(TypedDict):
 
 @dataclass(frozen=True)
 class RepairRunResult:
+    """Repairs produced by a run and the paths it skipped."""
+
     repairs: tuple[RepairReport, ...]
     skipped: tuple[Path, ...]
 

@@ -19,10 +19,12 @@ _JOURNAL_NAME = "review-journal.jsonl"
 
 
 def journal_path(data_path: Path) -> Path:
+    """Return the review journal file path under ``data_path``."""
     return data_path / _JOURNAL_NAME
 
 
 def generate_run_id() -> str:
+    """Return a new random UUID string identifying a review run."""
     return str(uuid.uuid4())
 
 

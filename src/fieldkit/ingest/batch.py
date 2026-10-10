@@ -24,6 +24,8 @@ WorkerResult = tuple[str, SourceStatus]
 
 @dataclass(frozen=True)
 class WorkerContext:
+    """Shared, read-only inputs handed to every ingest worker in a batch."""
+
     data_root: Path
     db_path: Path | None
     pipeline_version: str
@@ -33,6 +35,8 @@ class WorkerContext:
 
 @dataclass
 class ParallelState:
+    """Accumulated statuses, first preferred fatal error, and interrupt flag of a parallel ingest run."""
+
     statuses: dict[str, SourceStatus] = field(default_factory=dict)
     fatal: FieldkitError | None = None
     interrupted: bool = False
@@ -43,6 +47,10 @@ class ParallelState:
         src: SourceRecord,
         report_error: Callable[[str, Exception], None],
     ) -> None:
+        """Record a finished worker future's status, keeping the highest-priority fatal error.
+
+        Cancelled futures are ignored; authentication failures take precedence over other fatal errors.
+        """
         if future.cancelled():
             return
         try:
@@ -71,6 +79,10 @@ def completed_source(
     source_id: str,
     report_error: Callable[[str, Exception], None],
 ) -> WorkerResult:
+    """Return a worker's result, reporting and absorbing per-source failures.
+
+    Fatal provider errors propagate; any other failure is reported and yields a ``failed`` status.
+    """
     try:
         return future.result()
     except LLMError as exc:

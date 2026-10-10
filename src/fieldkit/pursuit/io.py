@@ -221,6 +221,8 @@ class PursuitReadResult:
 
 @dataclass(frozen=True)
 class ReportFailure:
+    """A pursuit file a report could not read, with the reason."""
+
     relative_path: str
     reason: str
 
@@ -237,6 +239,7 @@ class ReportAssessment:
 
     @property
     def complete(self) -> bool:
+        """Return True when no input failed to load."""
         return not self.failures
 
     def finish(self, included: int) -> None:

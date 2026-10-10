@@ -83,6 +83,8 @@ def _truncate_output(text: str, max_lines: int = MAX_VERBOSE_LINES) -> str:
 
 @dataclass
 class StepResult:
+    """Outcome of one executed pipeline step, including its position, argv, and elapsed seconds."""
+
     index: int
     total: int
     label: str
@@ -102,6 +104,8 @@ class _StepExecution:
 
 @dataclass
 class RunConfig:
+    """Options selecting which steps a ``fieldkit sync`` run executes and how it reports."""
+
     quick: bool = False
     sf: bool = False
     dry_run: bool = False

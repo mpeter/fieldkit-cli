@@ -22,7 +22,9 @@ class CommandRunner(Protocol):
         *,
         check: bool,
         timeout: int,
-    ) -> subprocess.CompletedProcess[bytes]: ...
+    ) -> subprocess.CompletedProcess[bytes]:
+        """Run MCPJungle with ``args``, failing on a nonzero exit when ``check`` is set, within ``timeout`` seconds."""
+        ...
 
 
 class BackstoryAuthError(AuthError):

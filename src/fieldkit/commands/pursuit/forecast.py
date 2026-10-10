@@ -67,6 +67,8 @@ LOG_PREFIX = "[pursuit-forecast]"
 
 @dataclass
 class DealRow:
+    """One pursuit's forecast inputs: stage, ACV in USD, close date, and probability weight."""
+
     relative_path: str
     name: str
     stage: str
@@ -77,6 +79,8 @@ class DealRow:
 
 @dataclass
 class ForecastResult:
+    """Forecast totals (commit, best case, weighted) with the deals and skipped stages behind them."""
+
     deals: list[DealRow]
     commit: float  # closed-won + negotiate
     best_case: float  # all active deals
