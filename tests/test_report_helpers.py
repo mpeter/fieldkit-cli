@@ -8,6 +8,7 @@ import click
 import pytest
 
 from fieldkit.cli_exit import EXIT_DATA, EXIT_PARTIAL, _exit_code_for
+from fieldkit.commands.pursuit.audit import assessment_failure_warnings, assessment_summary_line
 from fieldkit.commands.pursuit.forecast import _quota_standing, _resolve_quota
 from fieldkit.commands.pursuit.pipeline_health import (
     RiskItem,
@@ -105,10 +106,10 @@ def test_assessment_text_names_each_failure_and_count() -> None:
     assessment = ReportAssessment(scanned=4, failures=[ReportFailure("acme-fictional/pursuits/x.md", "malformed YAML")])
     assessment.finish(2)
 
-    assert assessment.failure_warnings() == [
+    assert assessment_failure_warnings(assessment) == [
         "WARNING: acme-fictional/pursuits/x.md: malformed YAML — assessment incomplete"
     ]
-    assert assessment.summary_line() == "Assessment incomplete: 4 scanned, 2 included, 1 excluded, 1 failed."
+    assert assessment_summary_line(assessment) == "Assessment incomplete: 4 scanned, 2 included, 1 excluded, 1 failed."
 
 
 @pytest.mark.parametrize(

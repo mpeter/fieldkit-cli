@@ -25,6 +25,8 @@ from fieldkit.cli_exit import EXIT_DATA, EXIT_PARTIAL
 from fieldkit.commands.pursuit.audit import (
     AuditResult,
     _parse_sf_date,
+    assessment_failure_warnings,
+    assessment_summary_line,
     no_files_message,
 )
 from fieldkit.config import get_fieldkit_home
@@ -288,7 +290,7 @@ def _emit_health_results(
     #   0 — valid report by default; no HIGH-risk items in strict mode
     #   1 — one or more HIGH-risk items with --strict
     if assessment is not None and assessment.failures:
-        click.echo(assessment.summary_line())
+        click.echo(assessment_summary_line(assessment))
     raise SystemExit(_health_exit_code(high, strict, assessment))
 
 
@@ -349,7 +351,7 @@ def cli(account: str | None, include_prospect: bool, as_json: bool, strict: bool
     items = health_check(
         root, account_filter=account, today=today, include_prospect=include_prospect, assessment=assessment
     )
-    for warning in assessment.failure_warnings():
+    for warning in assessment_failure_warnings(assessment):
         click.echo(warning, err=True)
 
     if not items and not assessment.failures:

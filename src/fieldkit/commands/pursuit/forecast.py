@@ -30,7 +30,7 @@ import click
 from pydantic import ValidationError
 
 from fieldkit.cli_exit import EXIT_DATA, EXIT_PARTIAL
-from fieldkit.commands.pursuit.audit import no_files_message
+from fieldkit.commands.pursuit.audit import assessment_failure_warnings, assessment_summary_line, no_files_message
 from fieldkit.config import get_fieldkit_home, get_pipeline_quota
 from fieldkit.errors import FieldkitError
 from fieldkit.pursuit.enums import Stage
@@ -361,7 +361,7 @@ def cli(account: str | None, quota: float | None, as_json: bool) -> None:
     today = datetime.now(tz=UTC).date()
     result = compute_forecast(root, account_filter=account, quota=quota, today=today)
 
-    for warning in result.assessment.failure_warnings():
+    for warning in assessment_failure_warnings(result.assessment):
         click.echo(warning, err=True)
     exit_code = EXIT_PARTIAL if result.assessment.failures else 0
 
@@ -390,5 +390,5 @@ def cli(account: str | None, quota: float | None, as_json: bool) -> None:
         )
 
     if result.assessment.failures:
-        click.echo(result.assessment.summary_line())
+        click.echo(assessment_summary_line(result.assessment))
         raise SystemExit(exit_code)
