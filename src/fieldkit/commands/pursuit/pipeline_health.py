@@ -53,6 +53,9 @@ LOG_PREFIX = "[pursuit-health]"
 # ---------------------------------------------------------------------------
 
 
+RiskTier = Literal["HIGH", "MEDIUM", "LOW"]
+
+
 @dataclass
 class RiskItem:
     relative_path: str
@@ -294,7 +297,7 @@ def _emit_health_results(
     raise SystemExit(_health_exit_code(high, strict, assessment))
 
 
-def _items_in_tier(items: list[RiskItem], tier: str) -> list[RiskItem]:
+def _items_in_tier(items: list[RiskItem], tier: RiskTier) -> list[RiskItem]:
     return [i for i in items if i.risk_tier == tier]
 
 
@@ -358,7 +361,9 @@ def cli(account: str | None, include_prospect: bool, as_json: bool, strict: bool
         click.echo(no_files_message("pursuit", account), err=True)
         raise SystemExit(EXIT_DATA) from None
 
-    high, medium, low = (_items_in_tier(items, tier) for tier in ("HIGH", "MEDIUM", "LOW"))
+    high = _items_in_tier(items, "HIGH")
+    medium = _items_in_tier(items, "MEDIUM")
+    low = _items_in_tier(items, "LOW")
 
     _emit_health_results(
         items,
