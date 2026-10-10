@@ -469,10 +469,10 @@ risk classification. Audit distinguishes malformed YAML from missing frontmatter
 
 ## Reserved pursuit names
 
-`template` and `gmail-intel` name account-level artifacts, so reports never
-treat `template.md` or `gmail-intel.md` in a `pursuits/` directory as a pursuit.
-Only the exact file name is reserved: `gmail-intel-rollout.md` is an ordinary
-pursuit. `fieldkit pursuit create --name` and `fieldkit pursuit rename --to`
+`template` and `gmail-intel` name account-level artifacts, so reports and ingest
+routing never treat `template.md` or `gmail-intel.md` in a `pursuits/` directory
+as a pursuit. Only the exact file name is reserved: `gmail-intel-rollout.md` is
+an ordinary pursuit and can receive routed material. `fieldkit pursuit create --name` and `fieldkit pursuit rename --to`
 refuse a reserved name with exit `3` and change nothing; with `--json`, create
 and rename print an error object whose `error` is `reserved_name`.
 

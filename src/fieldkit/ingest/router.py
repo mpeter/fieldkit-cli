@@ -9,6 +9,7 @@ Provides two public functions:
 """
 
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -17,6 +18,7 @@ from typing import Any
 import yaml
 
 from fieldkit.config import get_accounts_config, get_fieldkit_home, get_internal_domains
+from fieldkit.pursuit.io import is_reserved_pursuit_path
 
 # ---------------------------------------------------------------------------
 # Product name normalization (historic regression)
@@ -356,6 +358,18 @@ def _pursuit_haystack(slug: str, h1: str) -> set[str]:
     return (set(slug_tokens) | set(h1_tokens)) - {""}
 
 
+def _pursuit_candidates(pursuit_dir: Path) -> Iterator[Path]:
+    """Yield the pursuit files that can receive routed material, in sorted order.
+
+    Reserved names are matched on the whole file name, the rule every report
+    applies, so ``gmail-intel-rollout.md`` is a candidate and ``template.md`` and
+    ``gmail-intel.md`` are not.
+    """
+    for md_file in sorted(pursuit_dir.glob("*.md")):
+        if not is_reserved_pursuit_path(md_file):
+            yield md_file
+
+
 def _read_pursuit_h1(path: Path) -> str:
     """Return the first H1 heading from the first 500 bytes of *path*, or ''."""
     try:
@@ -535,8 +549,8 @@ def route_with_pursuits(
     route_by_domains() is returned unchanged.
 
     Pursuit matching:
-    - Globs ``<pursuit_dir>/*.md``, skipping files whose stem contains
-      '.template' or 'gmail-intel'.
+    - Globs ``<pursuit_dir>/*.md``, skipping reserved pursuit file names
+      (``template.md``, ``gmail-intel.md``).
     - For each file, extracts the slug (stem) and the first H1 heading from
       the first 500 characters.
     - A pursuit is included when *any* of the following keyword lists has at
@@ -577,12 +591,8 @@ def route_with_pursuits(
 
     matched_pursuits: list[str] = []
 
-    for md_file in sorted(pursuit_dir.glob("*.md")):
+    for md_file in _pursuit_candidates(pursuit_dir):
         slug = md_file.stem
-        # Skip template and intel files
-        if ".template" in slug or "gmail-intel" in slug:
-            continue
-
         h1 = _read_pursuit_h1(md_file)
         tokens = _pursuit_haystack(slug, h1)
 
@@ -639,10 +649,8 @@ def match_pursuits_for_account(
     all_keywords: list[str] = normalized + account_keywords
 
     matched: list[str] = []
-    for md_file in sorted(pursuit_dir.glob("*.md")):
+    for md_file in _pursuit_candidates(pursuit_dir):
         slug = md_file.stem
-        if ".template" in slug or "gmail-intel" in slug:
-            continue
         h1 = _read_pursuit_h1(md_file)
         tokens = _pursuit_haystack(slug, h1)
         if any(kw in tokens for kw in all_keywords):
