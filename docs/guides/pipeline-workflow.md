@@ -120,10 +120,27 @@ fieldkit pursuit audit
 ```
 
 This validates all pursuit files in your workspace for frontmatter structure, SF
-field naming, transition history, Backstory contamination, and close-date/timeline
-risks. It does not score qualification from local MEDDPICC data. Current native
-qualification is reported as `unavailable` because the audit does not perform a
-live ClosePlan read.
+field naming, transition history, Backstory contamination, next actions, and
+close-date/timeline risks. It does not score qualification from local MEDDPICC
+data. Current native qualification is reported as `unavailable` because the audit
+does not perform a live ClosePlan read.
+
+Every active stage (prospect, qualify, discover, validate, propose, negotiate)
+needs a recorded next action, regardless of whether its close date is missing,
+invalid, overdue, near or distant. An absent, null, empty or whitespace-only
+`sf_next_steps`, or the literal text `None` or `null` that older files carry,
+produces one warning: `Missing sf_next_steps — confirm and record
+the next agreed action`. Pre-pipeline and terminal stages are excluded.
+
+When `sf_next_steps` exists, its value takes precedence even if blank or null.
+Only an absent canonical key permits the legacy `sf-next-steps` fallback; the
+legacy naming warning still applies. Non-text, non-null values produce an error:
+`sf_next_steps must be text or null`. Close-date findings remain independent.
+These are observations of the local snapshot, rather than current CRM truth.
+
+Use `fieldkit pursuit audit --account acme-corp --json` for machine-readable
+findings without changing pursuit/configuration files or writing a report.
+A missing next action alone exits 1; a compliant scope exits 0.
 
 Output format:
 

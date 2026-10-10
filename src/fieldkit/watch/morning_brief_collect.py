@@ -21,6 +21,7 @@ from pydantic import ValidationError
 
 from fieldkit.config import get_account_names, get_accounts_config, get_fieldkit_home, get_user_email_from_env
 from fieldkit.pursuit.io import GMAIL_INTEL_SLUG, is_reserved_pursuit_path, load_pursuit, parse_frontmatter
+from fieldkit.pursuit.next_steps import MISSING_NEXT_STEP_VALUES
 from fieldkit.pursuit.stages import CLOSED_STAGES as _CLOSED_STAGE_NAMES
 from fieldkit.watch.morning_brief_mcp import MCPSession
 
@@ -399,11 +400,10 @@ def extract_pursuit_summary(pursuit_file: Path) -> dict[str, str] | None:
     last_updated_raw = model.last_updated or model.sf_last_pulled or ""
     last_updated = str(last_updated_raw) if last_updated_raw else ""
 
-    # next_steps: str | None — also guard against the literal string "None"
-    # that may appear in legacy files written before model validation was added.
+    # next_steps: str | None — legacy files may carry a literal "None"/"null".
     next_steps_raw = model.sf_next_steps or ""
     next_steps_str = str(next_steps_raw)
-    if next_steps_str in ("", "None", "null"):
+    if next_steps_str in MISSING_NEXT_STEP_VALUES:
         next_steps_str = ""
     next_steps = next_steps_str[:120] + "…" if len(next_steps_str) > 120 else next_steps_str
 

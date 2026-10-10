@@ -35,6 +35,7 @@ from fieldkit.pursuit.io import (
     write_frontmatter_raw,
 )
 from fieldkit.pursuit.models import canonicalize_legacy_meddpicc
+from fieldkit.pursuit.next_steps import check_next_steps
 from fieldkit.pursuit.stages import ALL_STAGES as ALLOWED_STAGES
 from fieldkit.pursuit.stages import CLOSED_STAGES
 from fieldkit.pursuit.utils import parse_sf_date
@@ -309,27 +310,25 @@ def _check_historical_qualification(fm: dict[str, Any]) -> list[Finding]:
     return []
 
 
+def _check_next_steps(fm: dict[str, Any]) -> list[Finding]:
+    """Adapt the typed domain observation to the audit's existing finding shape."""
+    finding = check_next_steps(fm)
+    if finding is None:
+        return []
+    return [Finding(finding.level, finding.message)]
+
+
 def _check_close_date_upcoming(
-    fm: dict[str, Any],
     days_until: int,
     sf_stage_str: str,
 ) -> list[Finding]:
     """Return warnings for deals closing within 30 days."""
     findings: list[Finding] = []
-    next_steps = fm.get("sf_next_steps") or fm.get("sf-next-steps") or ""
 
-    if 0 <= days_until <= 30:
-        if sf_stage_str not in LATE_STAGES:
-            findings.append(
-                Finding("WARNING", f"Close date in {days_until}d but SF stage is '{sf_stage_str}' — timeline risk")
-            )
-        if not str(next_steps).strip():
-            findings.append(
-                Finding(
-                    "WARNING",
-                    f"Close date in {days_until}d but sf_next_steps is empty — add a current next action",
-                )
-            )
+    if 0 <= days_until <= 30 and sf_stage_str not in LATE_STAGES:
+        findings.append(
+            Finding("WARNING", f"Close date in {days_until}d but SF stage is '{sf_stage_str}' — timeline risk")
+        )
 
     return findings
 
@@ -356,7 +355,7 @@ def _check_close_date(fm: dict[str, Any], today: date) -> list[Finding]:
             Finding("ERROR", f"SF close date overdue: {raw_date} — update sf_close_date or close the opportunity")
         )
 
-    findings.extend(_check_close_date_upcoming(fm, days_until, sf_stage_str))
+    findings.extend(_check_close_date_upcoming(days_until, sf_stage_str))
     return findings
 
 
@@ -408,6 +407,7 @@ def audit_file(path: Path, today: date | None = None) -> AuditResult:
     result.findings.extend(_check_backstory(fm, body))
     result.findings.extend(_check_historical_qualification(fm))
     result.findings.extend(_check_close_date(fm, today))
+    result.findings.extend(_check_next_steps(fm))
 
     return result
 

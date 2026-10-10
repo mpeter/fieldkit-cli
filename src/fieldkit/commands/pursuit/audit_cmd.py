@@ -125,7 +125,7 @@ def _render_report(results: list[AuditResult], today: date) -> str:
         "",
         "1. **Fix hyphenated sf- fields first.** Fields like `sf-opportunity-id` are silently ignored by automation.",
         "2. **Treat current qualification as unavailable.** Review native ClosePlan evidence; historical local scores are not current policy.",
-        "3. **Keep Salesforce next steps current.** Near-term close dates need an explicit next action.",
+        "3. **Keep Salesforce next steps current.** Every active pursuit needs an explicit next action, regardless of close date.",
         "4. **Overdue close dates need immediate Salesforce action.** Push out, change stage, or qualify out.",
     ]
     return "\n".join(lines)

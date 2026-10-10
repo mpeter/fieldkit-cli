@@ -87,3 +87,10 @@ parse diagnostics. This contract adds forecast assessment metadata. Health
 JSON keeps its array format in every case, because the web dashboard and
 reconciliation scripts parse it as one; incompleteness shows on stderr and in
 the exit code. Readers make no workspace or runtime writes.
+
+Audit also consumes the pursuit domain's typed next-action rule. It observes
+all canonical pipeline stages except pre-pipeline, independently of close date
+and historical qualification. Canonical key presence takes precedence over the
+legacy key; blank/null actions warn once and non-text values error. Audit maps
+the domain finding into its existing output shape. JSON audit writes no report
+artifact, and current qualification remains unavailable.
