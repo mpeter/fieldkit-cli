@@ -48,6 +48,7 @@ from fieldkit.config._settings import get_user_email_from_env as get_user_email_
 from fieldkit.config._settings import get_user_name as get_user_name
 from fieldkit.config._settings import llm_disabled as llm_disabled
 from fieldkit.config._shadowbot import SHADOWBOT_DEFAULT_CLIENT_ID as SHADOWBOT_DEFAULT_CLIENT_ID
+from fieldkit.config._shadowbot import SHADOWBOT_TOKEN_KEY as SHADOWBOT_TOKEN_KEY
 from fieldkit.config._shadowbot import get_shadowbot_api_base as get_shadowbot_api_base
 from fieldkit.config._shadowbot import get_shadowbot_assistant_id as get_shadowbot_assistant_id
 from fieldkit.config._shadowbot import get_shadowbot_auth_endpoint as get_shadowbot_auth_endpoint
@@ -77,6 +78,7 @@ __all__ = [
     "DATASYNC_STEP_TIMEOUTS",
     "GOOGLE_OAUTH_SCOPES",
     "SHADOWBOT_DEFAULT_CLIENT_ID",
+    "SHADOWBOT_TOKEN_KEY",
     "TIMEOUT_COMPANION_ACTION",
     "TIMEOUT_CRON",
     "TIMEOUT_EVAL",

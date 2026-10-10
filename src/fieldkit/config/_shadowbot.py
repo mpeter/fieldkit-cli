@@ -127,13 +127,18 @@ def get_shadowbot_chrome_cookies_path() -> Path | None:
     return resolved
 
 
+# Top-level key that relocates the ShadowBot token directory; read by ``shadowbot.auth.get_state_dir``.
+SHADOWBOT_TOKEN_KEY = "shadowbot_token"
+
+
 def shadowbot_config_warnings(data: Mapping[str, object]) -> tuple[str, ...]:
     """Report ShadowBot keys that are present but ignored.
 
     Flags unrecognized keys inside the ``shadowbot:`` section and top-level
-    ``shadowbot_*`` keys. A top-level key whose suffix names a defined ShadowBot
-    key points at the expected ``shadowbot.<key>`` location. Unknown keys stay
-    valid configuration; the result is advisory only.
+    ``shadowbot_*`` keys other than the honored ``shadowbot_token``. A top-level
+    key whose suffix names a defined ShadowBot key points at the expected
+    ``shadowbot.<key>`` location. Unknown keys stay valid configuration; the
+    result is advisory only.
     """
     known = frozenset(_ShadowbotConfig.model_fields)
     warnings: list[str] = []
@@ -146,7 +151,7 @@ def shadowbot_config_warnings(data: Mapping[str, object]) -> tuple[str, ...]:
         )
     prefix = "shadowbot_"
     for key in data:
-        if not isinstance(key, str) or not key.startswith(prefix):
+        if not isinstance(key, str) or not key.startswith(prefix) or key == SHADOWBOT_TOKEN_KEY:
             continue
         suffix = key[len(prefix) :]
         if suffix in known:

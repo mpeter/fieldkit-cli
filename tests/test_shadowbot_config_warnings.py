@@ -35,6 +35,7 @@ _LOADER_MODULE = "fieldkit.config._loader"
         pytest.param({"fieldkit_home": "home", "other_key": 1}, [], id="unrelated-top-level"),
         pytest.param({"shadowbot": {"chrome_cookies_path": "Cookies", "client_id": "c"}}, [], id="correct"),
         pytest.param({"shadowbot": {"redirect_uri": "https://example.com/cb"}}, [], id="redirect-uri-is-known"),
+        pytest.param({"shadowbot_token": "tokens/shadowbot.json"}, [], id="honored-token-key"),
         pytest.param({}, [], id="absent-section"),
         pytest.param({"shadowbot": "not-a-mapping"}, [], id="non-mapping-section"),
     ],

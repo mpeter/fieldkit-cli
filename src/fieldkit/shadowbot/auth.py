@@ -35,7 +35,7 @@ from typing import cast
 
 import httpx
 
-from fieldkit.config import CONFIG_PATH, TIMEOUT_OIDC_HTTP, get_fieldkit_data, get_fieldkit_home
+from fieldkit.config import CONFIG_PATH, SHADOWBOT_TOKEN_KEY, TIMEOUT_OIDC_HTTP, get_fieldkit_data, get_fieldkit_home
 from fieldkit.config import get_shadowbot_auth_endpoint as _get_auth_endpoint
 from fieldkit.config import get_shadowbot_client_id as _get_client_id
 from fieldkit.config import get_shadowbot_redirect_uri as _get_redirect_uri
@@ -139,8 +139,8 @@ def get_state_dir() -> Path:
 
     try:
         data = _read_config_dict(CONFIG_PATH)
-        if data is not None and "shadowbot_token" in data:
-            token_path = Path(str(data["shadowbot_token"])).expanduser()
+        if data is not None and SHADOWBOT_TOKEN_KEY in data:
+            token_path = Path(str(data[SHADOWBOT_TOKEN_KEY])).expanduser()
             candidate = token_path.parent
     except Exception:  # noqa: BLE001
         pass  # preserve the existing fallback for unreadable config and invalid override values
