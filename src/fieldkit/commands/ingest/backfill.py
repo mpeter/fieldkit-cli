@@ -30,6 +30,8 @@ from fieldkit.config import get_fieldkit_home
 
 
 class CandidateFile(NamedTuple):
+    """A file eligible for backfill, with its account and the reason it was selected."""
+
     path: Path
     account: str
     reason: str  # human-readable explanation of why it is a candidate

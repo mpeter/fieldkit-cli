@@ -8,11 +8,19 @@ import yaml
 
 
 class SplitFrontmatter(Protocol):
-    def __call__(self, text: str) -> tuple[str, str] | None: ...
+    """Callable that splits a document into (frontmatter, body), or None when it has no frontmatter."""
+
+    def __call__(self, text: str) -> tuple[str, str] | None:
+        """Split ``text`` into its frontmatter block and body."""
+        ...
 
 
 class WriteFrontmatter(Protocol):
-    def __call__(self, path: str | Path, fm: dict[str, Any], body: str, *, create: bool) -> None: ...
+    """Callable that writes frontmatter and body to a file."""
+
+    def __call__(self, path: str | Path, fm: dict[str, Any], body: str, *, create: bool) -> None:
+        """Write ``fm`` and ``body`` to ``path``; ``create`` permits creating a missing file."""
+        ...
 
 
 # ---------------------------------------------------------------------------
@@ -29,6 +37,8 @@ _ACCOUNT_NAME_ALIASES: dict[str, str] = {
 
 
 class RouteItem(TypedDict):
+    """Per-item result of a route run, including outcome and whether the frontmatter update and move completed."""
+
     item: str
     outcome: Literal["moved", "would-move", "ambiguous", "unmatched", "skipped", "error"]
     ok: bool
@@ -37,11 +47,18 @@ class RouteItem(TypedDict):
 
 
 class RouteError(TypedDict):
+    """Machine-readable error code and the operation that failed during routing."""
+
     code: str
     operation: str
 
 
 class RouteMutationError(OSError):
+    """Raised when a route step fails after or while mutating a file.
+
+    ``frontmatter_updated`` tells the caller whether the file's frontmatter was already changed.
+    """
+
     def __init__(self, item: str, operation: str, *, frontmatter_updated: bool) -> None:
         super().__init__(f"{operation} failed for {item}")
         self.item = item

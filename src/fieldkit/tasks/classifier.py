@@ -31,6 +31,8 @@ from enum import StrEnum
 
 
 class ItemClass(StrEnum):
+    """Classification of an action item: the user's task, a wait on someone else, or dropped."""
+
     MY_TASK = "my_task"
     WAITING_ON = "waiting_on"
     DROP = "drop"

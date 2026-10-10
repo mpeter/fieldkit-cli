@@ -54,6 +54,8 @@ RiskTier = Literal["HIGH", "MEDIUM", "LOW"]
 
 @dataclass
 class RiskItem:
+    """A pursuit's close-date and stage-age risk assessment with its tier and reasons."""
+
     relative_path: str
     stage: str
     qualification_status: Literal["unavailable"]

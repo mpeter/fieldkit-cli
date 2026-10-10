@@ -58,6 +58,10 @@ class RequestBodyLimitMiddleware:
         self.max_body_size = max_body_size
 
     async def __call__(self, scope: ASGIScope, receive: ASGIReceive, send: ASGISend) -> None:
+        """Enforce the body size limit on HTTP requests, answering 413 when it is exceeded.
+
+        Checks ``Content-Length`` up front and counts streamed bytes for requests that omit or misstate it.
+        """
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return

@@ -12,6 +12,10 @@ from fieldkit.cli_exit import EXIT_PARTIAL
 
 @contextlib.contextmanager
 def gmail_sync_lock(db_path: Path) -> Iterator[None]:
+    """Hold an exclusive non-blocking lock beside the Gmail cache database for the duration of a sync.
+
+    The lock file is ``<db_path>.lock``; a second concurrent sync fails instead of waiting.
+    """
     lock_path = db_path.with_suffix(f"{db_path.suffix}.lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("a", encoding="utf-8") as lock_file:

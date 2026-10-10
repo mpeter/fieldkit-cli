@@ -108,6 +108,10 @@ def _collect_features() -> dict[str, Any]:
 
 
 def main(argv: list[str]) -> int:
+    """Run the ``version`` command for ``argv`` and return its exit status.
+
+    Supports ``--features``, ``--json``, and ``--help``.
+    """
     want_features = "--features" in argv or "-f" in argv
     want_json = "--json" in argv
 

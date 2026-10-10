@@ -22,11 +22,15 @@ LOG_PREFIX = "[pursuit-archive]"
 
 
 class ArchiveError(TypedDict):
+    """Machine-readable error code and the operation that failed during an archive."""
+
     code: str
     operation: str
 
 
 class ArchiveRecord(TypedDict):
+    """Per-pursuit result of an archive run, including outcome and whether the archive directory was created."""
+
     pursuit: str
     source: str
     dest: str | None

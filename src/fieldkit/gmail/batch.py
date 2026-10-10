@@ -23,10 +23,12 @@ class BatchFetchResult:
 
     @property
     def failed(self) -> int:
+        """Return the count of messages that were not found or stayed unresolved."""
         return self.not_found + self.unresolved
 
 
 def warn_if_batch_incomplete(result: BatchFetchResult, logger: Logger) -> None:
+    """Log a warning when any message in the batch was not found or unresolved."""
     if result.failed:
         logger.warning("Batch fetch incomplete: %d not found, %d unresolved", result.not_found, result.unresolved)
 
@@ -41,9 +43,11 @@ class SyncSummary:
 
     @property
     def failed(self) -> int:
+        """Return the count of messages that were not found or stayed unresolved."""
         return self.not_found + self.unresolved
 
     def plus(self, other: "SyncSummary") -> "SyncSummary":
+        """Return a new summary with ``other``'s counts added to this one's."""
         return SyncSummary(
             added=self.added + other.added,
             not_found=self.not_found + other.not_found,
@@ -62,6 +66,10 @@ class BatchAccumulator:
     auth_error: GmailAuthError | None = None
 
     def record(self, message_id: str, request_id: str, response: Any, exception: Any) -> None:
+        """Record one batch callback: append the built message, or count a missing or unresolved one.
+
+        Authentication errors are retained and raised later by ``result``.
+        """
         del request_id
         if exception is None:
             if response is None:
@@ -80,6 +88,7 @@ class BatchAccumulator:
             self.unresolved += 1
 
     def result(self) -> BatchFetchResult:
+        """Return the collected batch result, raising a retained authentication error if one occurred."""
         if self.auth_error is not None:
             raise self.auth_error
         return BatchFetchResult(
