@@ -5,7 +5,7 @@ from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
-from fieldkit.sf.client import SFAPIError
+from fieldkit.sf.client import SFAPIError, SFDataAccessError
 
 PopulationState = Literal["observed-populated", "observed-null", "not-sampled"]
 
@@ -79,7 +79,7 @@ def collect_schema_reference(
     if len(record_ids) > MAX_SAMPLE_RECORDS:
         raise ValueError(f"At most {MAX_SAMPLE_RECORDS} record IDs may be sampled.")
     describe = client.describe_sobject(sobject_type)
-    fields = _queryable_fields(describe)
+    fields = _eligible_fields(describe)
     field_names = tuple(field.name for field in fields)
     populations = classify_observed_population(
         field_names, _record_observations(client, sobject_type, record_ids, field_names)
@@ -99,14 +99,18 @@ def collect_schema_reference(
     )
 
 
-def _queryable_fields(describe: Mapping[str, object]) -> tuple[SchemaField, ...]:
+def _eligible_fields(describe: Mapping[str, object]) -> tuple[SchemaField, ...]:
+    """Return described fields that have a name and are not deprecated and hidden.
+
+    ``queryable`` is an object-level describe attribute, so eligibility must not read it per field.
+    """
     raw_fields = describe.get("fields")
     if not isinstance(raw_fields, list):
         raise SFAPIError("SF describe response did not contain a fields list.")
 
     fields: list[SchemaField] = []
     for raw_field in raw_fields:
-        if not isinstance(raw_field, Mapping) or raw_field.get("queryable") is not True:
+        if not isinstance(raw_field, Mapping) or raw_field.get("deprecatedAndHidden") is True:
             continue
         name = raw_field.get("name")
         if not isinstance(name, str):
@@ -121,6 +125,8 @@ def _queryable_fields(describe: Mapping[str, object]) -> tuple[SchemaField, ...]
                 population="not-sampled",
             )
         )
+    if raw_fields and not fields:
+        raise SFDataAccessError("SF describe response listed fields but no eligible fields were described.")
     return tuple(fields)
 
 
@@ -130,9 +136,8 @@ def _record_observations(
     record_ids: tuple[str, ...],
     field_names: tuple[str, ...],
 ) -> Iterator[Mapping[str, object]]:
-    requested_fields = field_names or ("Id",)
     for record_id in record_ids:
-        for field_chunk in _chunked(requested_fields, _MAX_QUERY_FIELDS_PER_REQUEST):
+        for field_chunk in _chunked(field_names, _MAX_QUERY_FIELDS_PER_REQUEST):
             yield client.fetch_sobject(sobject_type, record_id, ",".join(field_chunk))
 
 
