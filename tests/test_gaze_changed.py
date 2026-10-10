@@ -236,15 +236,88 @@ def test_ratchet_baseline_accepts_only_tightening_edits(
     assert [f"{v.key}: {v.detail}" for v in violations] == expected_violations
 
 
-def test_ratchet_baseline_compares_same_named_functions_by_their_highest_score() -> None:
-    """gazepy keys a few same-named functions in one file alike; a raise on either is caught."""
+@pytest.mark.parametrize(
+    ("proposed", "expected"),
+    [
+        pytest.param([3.0, 9.0], [], id="lowered-first-is-accepted"),
+        pytest.param([4.5, 3.0], ["io.py:query (#1): crap raised 4.00 -> 4.50"], id="raised-first-hidden-by-lower-max"),
+        pytest.param([4.0, 9.0, 12.0], [], id="third-namesake-is-an-addition"),
+    ],
+)
+def test_ratchet_baseline_pairs_same_named_functions_by_position(proposed: list[float], expected: list[str]) -> None:
+    """gazepy matches same-key entries one-to-one in order, so each pair is ratcheted on its own."""
     base = _baseline(_entry("query", 4.0), _entry("query", 9.0))
 
-    _, accepted = gaze_changed.ratchet_baseline(base, _baseline(_entry("query", 9.0), _entry("query", 3.0)))
-    _, raised = gaze_changed.ratchet_baseline(base, _baseline(_entry("query", 4.0), _entry("query", 11.0)))
+    _, violations = gaze_changed.ratchet_baseline(base, _baseline(*(_entry("query", s) for s in proposed)))
 
-    assert accepted == []
-    assert raised == [gaze_changed.BaselineViolation("io.py:query", "crap raised 9.00 -> 11.00")]
+    assert [f"{v.key}: {v.detail}" for v in violations] == expected
+
+
+@pytest.mark.parametrize(
+    ("base_entry", "proposed_entry", "expected"),
+    [
+        pytest.param(
+            _entry("f", 5.0, 8.0),
+            _entry("f", 5.0, 0.0),
+            ["io.py:f: gaze_crap 8.00 removed"],
+            id="zero-gaze-disables-the-gate",
+        ),
+        pytest.param(_entry("f", 5.0, 0.0), _entry("f", 5.0, 30.0), [], id="ungated-gaze-may-be-set"),
+        pytest.param(
+            {**_entry("f", 5.0), "crap": None},
+            _entry("f", 2.0),
+            ["io.py:f: crap raised 0.00 -> 2.00"],
+            id="missing-crap-scores-zero",
+        ),
+        pytest.param(_entry("f", 5.0), {**_entry("f", 5.0), "crap": None}, [], id="clearing-crap-tightens"),
+    ],
+)
+def test_ratchet_baseline_follows_gazepys_score_defaults(
+    base_entry: dict[str, object], proposed_entry: dict[str, object], expected: list[str]
+) -> None:
+    _, violations = gaze_changed.ratchet_baseline(_baseline(base_entry), _baseline(proposed_entry))
+
+    assert [f"{v.key}: {v.detail}" for v in violations] == expected
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), "7"])
+@pytest.mark.parametrize("origin", ["base", "proposed"])
+def test_ratchet_baseline_rejects_non_finite_or_non_numeric_scores(value: object, origin: str) -> None:
+    """NaN compares false both ways, so it would slip past every rise and regression check."""
+    bad = _baseline({**_entry("f", 5.0), "crap": value})
+    good = _baseline(_entry("f", 5.0))
+    base, proposed = (bad, good) if origin == "base" else (good, bad)
+
+    with pytest.raises(ValueError, match=f"{origin} baseline: non-numeric or non-finite CRAP value"):
+        gaze_changed.ratchet_baseline(base, proposed)
+
+
+@pytest.mark.parametrize(
+    ("live", "proposed", "expected"),
+    [
+        pytest.param(
+            2, 1, ["io.py:enqueue: 1 of 2 entries removed while the functions still exist"], id="one-of-two-live"
+        ),
+        pytest.param(1, 1, [], id="namesake-deleted"),
+        pytest.param(2, 2, [], id="both-kept"),
+    ],
+)
+def test_dropped_entries_counts_same_named_functions(live: int, proposed: int, expected: list[str]) -> None:
+    target = {"package": "io.py", "function": "enqueue", "receiver": None}
+    report = {"results": [{"target": target}] * live}
+    base = _baseline(_entry("enqueue", 3.21), _entry("enqueue", 3.33))
+
+    dropped = gaze_changed.dropped_entries(base, _baseline(*[_entry("enqueue", 3.0)] * proposed), report)
+
+    assert [f"{v.key}: {v.detail}" for v in dropped] == expected
+
+
+def test_added_above_threshold_treats_an_extra_namesake_as_an_addition() -> None:
+    added = gaze_changed.added_above_threshold(
+        _baseline(_entry("query", 4.0)), _baseline(_entry("query", 4.0), _entry("query", 30.0)), 15.0
+    )
+
+    assert [f"{v.key}: {v.detail}" for v in added] == ["io.py:query (#2): entry added at CRAP 30.00 > threshold 15.00"]
 
 
 def test_ratchet_baseline_rejects_a_baseline_without_results() -> None:

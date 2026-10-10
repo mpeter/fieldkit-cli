@@ -69,8 +69,9 @@ single file would therefore produce keys that never match the baseline.
    let a refactor re-track moved or renamed functions without a scheduled
    regeneration job; lowered scores lock in gains. The job also runs when only
    the baseline changes, so no pull request raises a score: a function that
-   must grow is tested or decomposed instead. Same-named functions that gazepy
-   keys alike are compared by their highest score.
+   must grow is tested or decomposed instead. Entries are paired by key and
+   position, as gazepy matches same-named functions one-to-one, and a
+   non-finite score is invalid input.
 4. **Fix main first.** `run_enrichment_pipeline` regains its baseline score
    by moving the five-clause resume condition into a typed helper,
    `_checkpoint_resume_index(checkpoint, account, fingerprint, total) -> int`.

@@ -43,10 +43,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import subprocess
 import sys
 import tempfile
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -105,8 +106,9 @@ def _entries(report: Mapping[str, object], key: str) -> list[dict[str, object]]:
 
 
 def _number(value: object) -> float:
-    if not isinstance(value, int | float):
-        raise ValueError(f"gazepy report has a non-numeric CRAP value: {value!r}")
+    # NaN compares false both ways, so it would pass every rise and regression check.
+    if not isinstance(value, int | float) or not math.isfinite(value):
+        raise ValueError(f"non-numeric or non-finite CRAP value: {value!r}")
     return float(value)
 
 
@@ -163,54 +165,81 @@ def score_key(target: Mapping[str, object]) -> str:
     return f"{target.get('package', '')}:{qualifier}{target.get('function', '')}"
 
 
+def _score(entry: Mapping[str, object], field: str) -> float | None:
+    value = entry.get(field)
+    return None if value is None else _number(value)
+
+
 def _baseline_entries(text: str, origin: str) -> dict[str, list[dict[str, object]]]:
-    """Group a baseline's entries by match key; a few same-named functions share one."""
+    """Group a baseline's entries by match key, in file order, validating every score.
+
+    A few same-named functions share a key; gazepy matches them one-to-one in
+    this order, so the ratchet compares them position by position too.
+    """
     data = json.loads(text)
     if not isinstance(data, dict) or not isinstance(data.get("results"), list):
         raise ValueError(f"{origin} baseline has no 'results' list")
     grouped: dict[str, list[dict[str, object]]] = defaultdict(list)
     for entry in _entries(data, "results"):
+        try:
+            for field in _SCORE_FIELDS:
+                _score(entry, field)
+        except ValueError as exc:
+            raise ValueError(f"{origin} baseline: {exc}") from exc
         grouped[score_key(cast(dict[str, object], entry["target"]))].append(entry)
     return grouped
 
 
-def _highest(entries: list[dict[str, object]], field: str) -> float | None:
-    scores = [_number(entry[field]) for entry in entries if entry.get(field) is not None]
-    return max(scores) if scores else None
+def _label(key: str, position: int, *groups: list[dict[str, object]]) -> str:
+    return key if max(len(group) for group in groups) == 1 else f"{key} (#{position + 1})"
 
 
-def _raised_scores(
-    key: str, base: list[dict[str, object]], proposed: list[dict[str, object]]
-) -> list[BaselineViolation]:
+def _gaze_gate(entry: Mapping[str, object]) -> float | None:
+    """Return the GazeCRAP score gazepy gates on; it ignores a missing or non-positive one."""
+    score = _score(entry, "gaze_crap")
+    return score if score is not None and score > 0 else None
+
+
+def _loosened(label: str, base: Mapping[str, object], proposed: Mapping[str, object]) -> list[BaselineViolation]:
+    """Return the ways ``proposed`` would let gazepy accept a worse score than ``base``."""
     violations = []
-    for field in _SCORE_FIELDS:
-        before, after = _highest(base, field), _highest(proposed, field)
-        if before is None:
-            continue
-        if after is None:
-            violations.append(BaselineViolation(key, f"{field} {before:.2f} removed"))
-        elif after > before + _SCORE_TOLERANCE:
-            violations.append(BaselineViolation(key, f"{field} raised {before:.2f} -> {after:.2f}"))
+    # gazepy scores a missing CRAP baseline as 0.0.
+    before, after = _score(base, "crap") or 0.0, _score(proposed, "crap") or 0.0
+    if after > before + _SCORE_TOLERANCE:
+        violations.append(BaselineViolation(label, f"crap raised {before:.2f} -> {after:.2f}"))
+    gaze_before, gaze_after = _gaze_gate(base), _gaze_gate(proposed)
+    if gaze_before is not None and gaze_after is None:
+        violations.append(BaselineViolation(label, f"gaze_crap {gaze_before:.2f} removed"))
+    elif gaze_before is not None and gaze_after is not None and gaze_after > gaze_before + _SCORE_TOLERANCE:
+        violations.append(BaselineViolation(label, f"gaze_crap raised {gaze_before:.2f} -> {gaze_after:.2f}"))
     return violations
 
 
 def ratchet_baseline(base_text: str, proposed_text: str) -> tuple[dict[str, object], list[BaselineViolation]]:
     """Merge the change's baseline into the base one, accepting only tightening edits.
 
-    Returns the baseline to compare against and every score the change raised.
-    Entries the change adds are taken as recorded; a key whose scores did not
-    rise takes the change's entries, so a lowered score is held to its new
-    value; a raised key keeps the base entries and is reported.
+    Returns the baseline to compare against and every score the change loosened.
+    Entries are paired by key and position, as gazepy matches them. An entry
+    that did not loosen is taken as the change recorded it, so a lowered score
+    is held to its new value and an added entry is tracked; a loosened entry
+    keeps its base value. Base entries the change dropped stay in the
+    comparison; ``dropped_entries`` decides whether dropping them was allowed.
     """
     base = _baseline_entries(base_text, "base")
     proposed = _baseline_entries(proposed_text, "proposed")
     merged = dict(base)
     violations: list[BaselineViolation] = []
     for key, entries in proposed.items():
-        raised = _raised_scores(key, base[key], entries) if key in base else []
-        violations.extend(raised)
-        if not raised:
-            merged[key] = entries
+        base_group = base.get(key, [])
+        group: list[dict[str, object]] = []
+        for position, entry in enumerate(entries):
+            if position >= len(base_group):
+                group.append(entry)
+                continue
+            loosened = _loosened(_label(key, position, base_group, entries), base_group[position], entry)
+            violations.extend(loosened)
+            group.append(base_group[position] if loosened else entry)
+        merged[key] = group + base_group[len(entries) :]
     results = [entry for entries in merged.values() for entry in entries]
     return {"results": results}, violations
 
@@ -219,17 +248,28 @@ def dropped_entries(base_text: str, proposed_text: str, report: Mapping[str, obj
     """Return base entries the change deleted although their function still exists.
 
     Deleting the entry of a deleted function is ordinary cleanup; deleting a
-    live one would put it back under the new-function threshold.
+    live one would put it back under the new-function threshold. Same-named
+    functions are counted, so dropping one of two live entries is caught.
     """
-    removed = _baseline_entries(base_text, "base").keys() - _baseline_entries(proposed_text, "proposed").keys()
-    current = {
+    base = _baseline_entries(base_text, "base")
+    proposed = _baseline_entries(proposed_text, "proposed")
+    live = Counter(
         score_key(cast(dict[str, object], entry["target"]))
         for key in ("results", "new_functions")
         for entry in _entries(report, key)
-    }
-    return [
-        BaselineViolation(key, "entry removed while the function still exists") for key in sorted(removed & current)
-    ]
+    )
+    violations = []
+    for key, entries in sorted(base.items()):
+        lost = min(len(entries), live[key]) - len(proposed.get(key, []))
+        if lost <= 0:
+            continue
+        detail = (
+            "entry removed while the function still exists"
+            if len(entries) == 1
+            else f"{lost} of {len(entries)} entries removed while the functions still exist"
+        )
+        violations.append(BaselineViolation(key, detail))
+    return violations
 
 
 def added_above_threshold(base_text: str, proposed_text: str, threshold: float) -> list[BaselineViolation]:
@@ -237,14 +277,20 @@ def added_above_threshold(base_text: str, proposed_text: str, threshold: float) 
 
     An untracked function is held to the threshold; recording it in the
     baseline at a higher score would grant it an allowance the threshold
-    refuses, so only entries within it may be added.
+    refuses, so only entries within it may be added. An entry beyond the base
+    count of a shared key is an addition too.
     """
     base = _baseline_entries(base_text, "base")
     violations = []
     for key, entries in sorted(_baseline_entries(proposed_text, "proposed").items()):
-        crap = _highest(entries, "crap")
-        if key not in base and crap is not None and crap > threshold:
-            violations.append(BaselineViolation(key, f"entry added at CRAP {crap:.2f} > threshold {threshold:.2f}"))
+        start = len(base.get(key, []))
+        for position, entry in enumerate(entries[start:], start=start):
+            crap = _score(entry, "crap")
+            if crap is not None and crap > threshold:
+                label = _label(key, position, entries)
+                violations.append(
+                    BaselineViolation(label, f"entry added at CRAP {crap:.2f} > threshold {threshold:.2f}")
+                )
     return violations
 
 
