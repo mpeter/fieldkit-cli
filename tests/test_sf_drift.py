@@ -289,6 +289,61 @@ def test_unknown_account_is_a_data_error(workspace: Path) -> None:
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("account", [".", "..", "acme-corp/pursuits", "../outside", "acme-corp/", "a\\b"])
+def test_account_with_path_components_is_a_data_error(workspace: Path, account: str) -> None:
+    _pursuit(workspace, "acme-corp", "clean", sf_opportunity_id=_ID_A)
+    (workspace / "outside").mkdir()
+
+    result = _run("--json", "--account", account)
+
+    assert result.exit_code == 3
+    assert "Account directory not found" in result.stderr
+    assert result.stdout == ""
+    assert FakeClient.instances == []
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("stage", ["closed", "won", "lost", "Closed", "won-lost"])
+def test_informal_terminal_stage_pursuit_is_out_of_scope(workspace: Path, stage: str) -> None:
+    _pursuit(workspace, "acme-corp", "done", stage=stage, sf_opportunity_id=_ID_A)
+
+    result = _run("--json")
+
+    assert result.exit_code == 0, result.output
+    assert _report(result)["counts"]["total"] == 0
+    assert FakeClient.instances == []
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("value", [False, 0, [], {}, 12345, True])
+def test_non_string_opportunity_id_is_unassessed_not_unlinked(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch, value: object
+) -> None:
+    _pursuit(workspace, "acme-corp", "odd", sf_opportunity_id=value)
+    _use_responses(monkeypatch, {})
+
+    result = _run("--json")
+
+    assert result.exit_code == 1
+    report = _report(result)
+    assert [item["pursuit"] for item in report["unassessed"]] == ["accounts/acme-corp/pursuits/odd.md"]
+    assert FakeClient.instances == []
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("value", [None, "", "   ", " tbd "])
+def test_absent_or_blank_opportunity_id_is_unlinked(workspace: Path, value: str | None) -> None:
+    _pursuit(workspace, "acme-corp", "unlinked", sf_opportunity_id=value)
+
+    result = _run("--json")
+
+    assert result.exit_code == 0, result.output
+    report = _report(result)
+    assert report["unassessed"] == []
+    assert report["counts"]["total"] == 0
+
+
+@pytest.mark.unit
 def test_expired_session_propagates_instead_of_partial_report(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _pursuit(workspace, "acme-corp", "clean", sf_opportunity_id="006A00000000000000")
     _use_responses(monkeypatch, {"006A00000000000000": SFAuthError("session expired")})

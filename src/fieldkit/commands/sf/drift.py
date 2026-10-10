@@ -17,13 +17,12 @@ from typing import Any, TypedDict
 import click
 
 from fieldkit.cli_exit import EXIT_AUTH, EXIT_DATA, EXIT_PARTIAL, EXIT_SUCCESS
-from fieldkit.commands.sf.sync import PLACEHOLDER_VALUES
 from fieldkit.config import get_fieldkit_home, get_sf_rest_base_url, get_sf_session_id
 from fieldkit.pursuit.drift import DriftFlag, DriftStatus, LiveOpportunity, assess_drift, drift_status
 from fieldkit.pursuit.io import ReportAssessment, ReportFailure, ReportInput, scan_report_inputs
 from fieldkit.pursuit.stages import ALL_STAGES, TERMINAL_STAGES, in_review_scope
 from fieldkit.sf.client import SFAPIError, SFDirectClient, SFNotFoundError
-from fieldkit.sf.opportunities import is_opportunity_id
+from fieldkit.sf.opportunities import PLACEHOLDER_VALUES, is_opportunity_id
 from fieldkit.sf.types import OpportunitySObject
 
 LOG_PREFIX = "[sf-drift]"
@@ -74,25 +73,29 @@ def select_linked_pursuits(
 ) -> tuple[list[ReportInput], ReportAssessment]:
     """Return in-scope pursuits that link an opportunity, and the scan assessment.
 
-    A blank or placeholder ``sf_opportunity_id`` (``TBD``) means not yet linked. Any
-    other value that is not a Salesforce record id is reported as unassessed and is
-    never sent to Salesforce. A linked pursuit whose ``stage`` is missing or not a
-    known stage cannot be placed in review scope, so it is unassessed as well.
+    An absent, blank or placeholder ``sf_opportunity_id`` (``TBD``) means not yet
+    linked. Any other value that is not a Salesforce record id string (including a
+    non-string such as ``false`` or ``[]``) is reported as unassessed and is never
+    sent to Salesforce. A linked pursuit whose ``stage`` is missing or not a known
+    stage cannot be placed in review scope, so it is unassessed as well; informal
+    terminal stages (``closed``, ``won``, ``lost``) are closed and out of scope.
     """
     assessment = ReportAssessment()
     linked: list[ReportInput] = []
     for report_input in scan_report_inputs(root, account, assessment):
-        opp_id = _opportunity_id(report_input.frontmatter)
-        if opp_id.lower() in PLACEHOLDER_VALUES:
+        raw_id = report_input.frontmatter.get("sf_opportunity_id")
+        if raw_id is None or (isinstance(raw_id, str) and raw_id.strip().lower() in PLACEHOLDER_VALUES):
             continue
         stage = report_input.frontmatter.get("stage")
         if not isinstance(stage, str) or stage.strip().lower() not in ALL_STAGES | TERMINAL_STAGES:
             reason = "stage is missing or not a recognized pursuit stage"
             assessment.failures.append(ReportFailure(report_input.relative_path, reason))
             continue
-        if not in_review_scope(stage.strip(), include_prospect=include_prospect):
+        if stage.strip().lower() in TERMINAL_STAGES or not in_review_scope(
+            stage.strip(), include_prospect=include_prospect
+        ):
             continue
-        if not is_opportunity_id(opp_id):
+        if not isinstance(raw_id, str) or not is_opportunity_id(raw_id.strip()):
             reason = "sf_opportunity_id is not a 15- or 18-character Salesforce id"
             assessment.failures.append(ReportFailure(report_input.relative_path, reason))
             continue
@@ -187,6 +190,17 @@ def _open_client() -> SFDirectClient:
     return SFDirectClient(session_id=session_id, base_url=base_url)
 
 
+def _is_account_directory(root: Path, account: str) -> bool:
+    """Return whether *account* names a direct child directory of ``accounts/``.
+
+    ``--account`` is a directory name, not a path: separators, ``.`` and ``..`` would
+    let the scan leave the account tree or silently cover the whole of it.
+    """
+    if account in {"", ".", ".."} or Path(account).name != account or "\\" in account:
+        return False
+    return (root / "accounts" / account).is_dir()
+
+
 @click.command(name="drift")
 @click.option("-a", "--account", default=None, help="Limit to a single account directory name.")
 @click.option("--include-prospect", is_flag=True, default=False, help="Include prospect-stage pursuits.")
@@ -211,7 +225,7 @@ def cli(account: str | None, include_prospect: bool, as_json: bool) -> None:
     if root is None or not (Path(root) / "accounts").is_dir():
         click.echo(f"{LOG_PREFIX} Accounts directory not found. Run 'fieldkit init' to initialize.", err=True)
         raise SystemExit(EXIT_DATA)
-    if account is not None and not (Path(root) / "accounts" / account).is_dir():
+    if account is not None and not _is_account_directory(Path(root), account):
         click.echo(f"{LOG_PREFIX} Account directory not found: accounts/{account}", err=True)
         raise SystemExit(EXIT_DATA)
 

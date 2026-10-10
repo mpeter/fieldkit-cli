@@ -26,7 +26,7 @@ from fieldkit.commands.sf.frontmatter import _run_sf_mode
 from fieldkit.commands.sf.reconcile import _run_reconcile as _reconcile_with_path
 from fieldkit.config import get_fieldkit_home
 from fieldkit.pursuit.io import _split_frontmatter, load_pursuit
-from fieldkit.sf.opportunities import is_opportunity_id
+from fieldkit.sf.opportunities import PLACEHOLDER_VALUES, is_opportunity_id
 
 LOG_PREFIX = "[sf-sync]"
 
@@ -53,9 +53,6 @@ def _load_known_accounts() -> tuple[str, ...]:
     except (ImportError, OSError, ValueError):
         pass  # optional dep — fall back to hardcoded list
     return ("global-pay", "acme-bank", "shield-ins")
-
-
-PLACEHOLDER_VALUES = {"tbd", "placeholder", "todo", "xxx", "none", "n/a", "na", "null", ""}
 
 
 def _project_root() -> Path:
