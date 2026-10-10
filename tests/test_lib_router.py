@@ -86,7 +86,7 @@ def data_root(tmp_path: Path) -> Path:
         "# Gmail intel (should be skipped)\n",
         encoding="utf-8",
     )
-    (acme_pursuits / ".template.md").write_text(
+    (acme_pursuits / "template.md").write_text(
         "# Template (should be skipped)\n",
         encoding="utf-8",
     )
@@ -339,7 +339,18 @@ def test_route_with_pursuits_template_file_is_skipped(patched_config: Path) -> N
         keywords=["template"],
         data_root=patched_config,
     )
-    assert ".template" not in result.pursuits
+    assert "template" not in result.pursuits
+
+
+def test_route_with_pursuits_includes_a_pursuit_whose_slug_contains_gmail_intel(patched_config: Path) -> None:
+    """Reserved names match the whole file name, so gmail-intel-rollout.md is an ordinary pursuit (#104)."""
+    rollout = patched_config / "accounts" / "acme-bank" / "pursuits" / "gmail-intel-rollout.md"
+    rollout.write_text("# Acme Bank — Gmail intel rollout\n", encoding="utf-8")
+
+    result = route_with_pursuits(["acmebank.com"], keywords=["rollout"], data_root=patched_config)
+
+    assert "gmail-intel-rollout" in result.pursuits
+    assert "gmail-intel" not in result.pursuits
 
 
 def test_route_with_pursuits_low_confidence_skips_pursuit_scan(patched_config: Path) -> None:

@@ -130,8 +130,8 @@ def test_pursuit_dir_not_a_directory_skips_glob_and_returns_empty_list(tmp_path:
 
 
 # ---------------------------------------------------------------------------
-# 5. Mixed pursuit dir: .template skip, gmail-intel skip, slug match, H1
-#    match, non-match exclusion — exact result in sorted glob order.
+# 5. Mixed pursuit dir: reserved names skipped by exact file name, slug match,
+#    H1 match, non-match exclusion — exact result in sorted glob order.
 # ---------------------------------------------------------------------------
 
 
@@ -142,12 +142,15 @@ def test_mixed_pursuit_files_slug_and_h1_matches_with_skips(tmp_path: Path) -> N
 
     # a: matches via slug token 'rhoai' (caller keyword).
     (pursuit_dir / "a-acme-rhoai-2026.md").write_text("Body.\n", encoding="utf-8")
-    # b: would match via slug token 'quarterly' (account keyword) if not
-    #    skipped by the '.template' guard.
-    (pursuit_dir / "b-acme-quarterly-review.template.md").write_text("Body.\n", encoding="utf-8")
-    # c: would match via slug token 'rhoai' (caller keyword) if not skipped
-    #    by the 'gmail-intel' guard.
-    (pursuit_dir / "c-rhoai-gmail-intel-thread.md").write_text("Body.\n", encoding="utf-8")
+    # template.md: would match via its H1 (account keyword 'quarterly') if it
+    #    were not a reserved pursuit name.
+    (pursuit_dir / "template.md").write_text("Body.\n", encoding="utf-8")
+    # gmail-intel.md: would match via its H1 (caller keyword 'rhoai') if it
+    #    were not a reserved pursuit name.
+    (pursuit_dir / "gmail-intel.md").write_text("Body.\n", encoding="utf-8")
+    # A pursuit whose slug merely contains a reserved name is an ordinary
+    #    pursuit; it matches via slug token 'rhoai'.
+    (pursuit_dir / "gmail-intel-rhoai-rollout.md").write_text("Body.\n", encoding="utf-8")
     # d: no slug match; matches only via its H1 heading (account keyword 'quarterly').
     (pursuit_dir / "d-acme-project-x.md").write_text("Body.\n", encoding="utf-8")
     # e: matches neither slug nor H1 — excluded.
@@ -155,8 +158,9 @@ def test_mixed_pursuit_files_slug_and_h1_matches_with_skips(tmp_path: Path) -> N
 
     h1_by_filename = {
         "a-acme-rhoai-2026.md": "",
-        "b-acme-quarterly-review.template.md": "",
-        "c-rhoai-gmail-intel-thread.md": "",
+        "template.md": "Quarterly template",
+        "gmail-intel.md": "RHOAI intel",
+        "gmail-intel-rhoai-rollout.md": "",
         "d-acme-project-x.md": "Quarterly Business Review",
         "e-acme-unrelated.md": "General Notes",
     }
@@ -171,7 +175,7 @@ def test_mixed_pursuit_files_slug_and_h1_matches_with_skips(tmp_path: Path) -> N
     ):
         result = match_pursuits_for_account(account_name, keywords=["RHOAI rollout"], data_root=tmp_path)
 
-    assert result == ["a-acme-rhoai-2026", "d-acme-project-x"]
+    assert result == ["a-acme-rhoai-2026", "d-acme-project-x", "gmail-intel-rhoai-rollout"]
 
 
 # ---------------------------------------------------------------------------
