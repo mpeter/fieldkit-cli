@@ -50,6 +50,7 @@ class FakeClient:
         return None
 
     def fetch_record(self, record_id: str, fields: str | None = None) -> OpportunitySObject:
+        """Record the request and return, or raise, the configured response for *record_id*."""
         self.fetched.append((record_id, fields))
         response = self.responses[record_id]
         if isinstance(response, Exception):
@@ -72,6 +73,7 @@ def _pursuit(root: Path, account: str, name: str, **fields: object) -> None:
 
 @pytest.fixture
 def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A workspace with an empty ``accounts`` tree and a configured fake Salesforce session."""
     FakeClient.instances.clear()
     monkeypatch.setattr(drift, "get_fieldkit_home", lambda: tmp_path)
     monkeypatch.setattr(drift, "get_sf_session_id", lambda: "fake-session")
@@ -95,6 +97,7 @@ def _report(result: Result) -> dict[str, Any]:
 
 @pytest.mark.unit
 def test_live_from_record_maps_salesforce_fields() -> None:
+    """The live snapshot keeps exactly the fields drift compares, including a null ACV."""
     live = drift.live_from_record(_record("006A00000000000000", stage="Closed Won", acv=None, closed=True))  # type: ignore[arg-type]
     assert live == {"stage": "Closed Won", "close_date": _FAR, "consulting_acv": None, "is_closed": True}
 
@@ -291,6 +294,7 @@ def test_unknown_account_is_a_data_error(workspace: Path) -> None:
 @pytest.mark.unit
 @pytest.mark.parametrize("account", [".", "..", "acme-corp/pursuits", "../outside", "acme-corp/", "a\\b"])
 def test_account_with_path_components_is_a_data_error(workspace: Path, account: str) -> None:
+    """``--account`` is a directory name; path components must not widen or escape the scan."""
     _pursuit(workspace, "acme-corp", "clean", sf_opportunity_id=_ID_A)
     (workspace / "outside").mkdir()
 
@@ -305,6 +309,7 @@ def test_account_with_path_components_is_a_data_error(workspace: Path, account: 
 @pytest.mark.unit
 @pytest.mark.parametrize("stage", ["closed", "won", "lost", "Closed", "won-lost"])
 def test_informal_terminal_stage_pursuit_is_out_of_scope(workspace: Path, stage: str) -> None:
+    """Informal terminal stages are closed, so they are neither fetched nor reported."""
     _pursuit(workspace, "acme-corp", "done", stage=stage, sf_opportunity_id=_ID_A)
 
     result = _run("--json")
@@ -319,6 +324,7 @@ def test_informal_terminal_stage_pursuit_is_out_of_scope(workspace: Path, stage:
 def test_non_string_opportunity_id_is_unassessed_not_unlinked(
     workspace: Path, monkeypatch: pytest.MonkeyPatch, value: object
 ) -> None:
+    """A malformed non-string id must surface as incomplete, not hide as an unlinked pursuit."""
     _pursuit(workspace, "acme-corp", "odd", sf_opportunity_id=value)
     _use_responses(monkeypatch, {})
 
@@ -333,6 +339,7 @@ def test_non_string_opportunity_id_is_unassessed_not_unlinked(
 @pytest.mark.unit
 @pytest.mark.parametrize("value", [None, "", "   ", " tbd "])
 def test_absent_or_blank_opportunity_id_is_unlinked(workspace: Path, value: str | None) -> None:
+    """Only an absent, blank or placeholder id means the pursuit is not linked yet."""
     _pursuit(workspace, "acme-corp", "unlinked", sf_opportunity_id=value)
 
     result = _run("--json")
@@ -345,6 +352,7 @@ def test_absent_or_blank_opportunity_id_is_unlinked(workspace: Path, value: str 
 
 @pytest.mark.unit
 def test_expired_session_propagates_instead_of_partial_report(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An auth failure reaches the top-level handler so orchestrators stop instead of retrying."""
     _pursuit(workspace, "acme-corp", "clean", sf_opportunity_id="006A00000000000000")
     _use_responses(monkeypatch, {"006A00000000000000": SFAuthError("session expired")})
 
@@ -357,6 +365,7 @@ def test_expired_session_propagates_instead_of_partial_report(workspace: Path, m
 
 @pytest.mark.unit
 def test_unreadable_pursuit_is_reported_and_valid_rows_kept(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """One malformed file makes the report incomplete without discarding the valid rows."""
     _pursuit(workspace, "acme-corp", "clean", sf_opportunity_id="006A00000000000000")
     broken = workspace / "accounts" / "acme-corp" / "pursuits" / "broken.md"
     broken.write_text("---\nstage: [unclosed\n---\n", encoding="utf-8")
@@ -372,6 +381,7 @@ def test_unreadable_pursuit_is_reported_and_valid_rows_kept(workspace: Path, mon
 
 @pytest.mark.unit
 def test_missing_session_exits_auth_before_fetching(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Missing credentials are reported before any Salesforce request is attempted."""
     _pursuit(workspace, "acme-corp", "clean", sf_opportunity_id="006A00000000000000")
     _use_responses(monkeypatch, {"006A00000000000000": _record("006A00000000000000")})
     monkeypatch.setattr(drift, "get_sf_session_id", lambda: None)
@@ -385,6 +395,7 @@ def test_missing_session_exits_auth_before_fetching(workspace: Path, monkeypatch
 
 @pytest.mark.unit
 def test_no_linked_pursuits_needs_no_session(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """With nothing to fetch, the command never consults the Salesforce session."""
     _pursuit(workspace, "acme-corp", "unlinked")
     monkeypatch.setattr(drift, "get_sf_session_id", lambda: None)
 
@@ -396,6 +407,7 @@ def test_no_linked_pursuits_needs_no_session(workspace: Path, monkeypatch: pytes
 
 @pytest.mark.unit
 def test_missing_accounts_directory_is_a_data_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An uninitialized workspace is a data error that points the user to ``fieldkit init``."""
     monkeypatch.setattr(drift, "get_fieldkit_home", lambda: tmp_path)
 
     result = _run()
@@ -406,6 +418,7 @@ def test_missing_accounts_directory_is_a_data_error(tmp_path: Path, monkeypatch:
 
 @pytest.mark.unit
 def test_table_lists_unassessed_files_then_rows(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Human output names unassessed files before the comparison rows and summary."""
     _pursuit(workspace, "acme-corp", "drifted", sf_opportunity_id="006B00000000000000", sf_consulting_acv="$90,000")
     (workspace / "accounts" / "acme-corp" / "pursuits" / "broken.md").write_text("no frontmatter\n", encoding="utf-8")
     _use_responses(monkeypatch, {"006B00000000000000": _record("006B00000000000000")})

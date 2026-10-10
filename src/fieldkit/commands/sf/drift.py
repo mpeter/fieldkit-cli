@@ -44,6 +44,8 @@ class DriftRow:
 
 
 class DriftCounts(TypedDict):
+    """Rows per drift status, plus the number of linked pursuits that were compared."""
+
     red: int
     yellow: int
     green: int
@@ -51,6 +53,8 @@ class DriftCounts(TypedDict):
 
 
 class UnassessedPursuit(TypedDict):
+    """A workspace-relative pursuit path and why it could not be compared."""
+
     pursuit: str
     reason: str
 
@@ -152,6 +156,7 @@ def build_report(rows: list[DriftRow], assessment: ReportAssessment) -> DriftRep
     fetch_failed = any(flag.code == "sf-fetch-failed" for row in rows for flag in row.flags)
 
     def count(status: DriftStatus) -> int:
+        """Number of compared rows with *status*."""
         return sum(1 for row in rows if row.status == status)
 
     return {
