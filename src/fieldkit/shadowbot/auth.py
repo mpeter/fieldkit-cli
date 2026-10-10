@@ -30,6 +30,7 @@ import tempfile
 import time
 import urllib.parse
 import warnings
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast
@@ -792,16 +793,26 @@ def _silent_oidc(session_cookies: dict[str, str], cookie_label: str | None = Non
 # ---------------------------------------------------------------------------
 
 
-def _decrypt_labelled(cookie_path: Path, source: CookieSource, label: str) -> dict[str, str]:
-    """Decrypt Chrome cookies, adding the cookie source to any failure that does not name it."""
+@contextlib.contextmanager
+def _cookie_labelled(label: str) -> Iterator[None]:
+    """Add the cookie source to any ``ShadowbotAuthError`` that does not already name it."""
     try:
-        return _decrypt_chrome_cookies(cookie_path, source)
+        yield
     except ShadowbotAuthError as exc:
         if label in str(exc):
             raise
         raise ShadowbotAuthError(f"{exc} (while reading {label})") from exc
-    except Exception as exc:
-        raise ShadowbotAuthError(f"cookie decryption failed: {type(exc).__name__} (while reading {label})") from exc
+
+
+def _decrypt_labelled(cookie_path: Path, source: CookieSource, label: str) -> dict[str, str]:
+    """Decrypt Chrome cookies; every failure names the cookie source."""
+    with _cookie_labelled(label):
+        try:
+            return _decrypt_chrome_cookies(cookie_path, source)
+        except ShadowbotAuthError:
+            raise
+        except Exception as exc:
+            raise ShadowbotAuthError(f"cookie decryption failed: {type(exc).__name__}") from exc
 
 
 def acquire_from_chrome(profile_path: Path | None = None) -> None:
@@ -838,7 +849,8 @@ def acquire_from_chrome(profile_path: Path | None = None) -> None:
 
     session_cookies = _decrypt_labelled(cookies_path, cookie_source, cookie_label)
 
-    access_token, refresh_token = _silent_oidc(session_cookies, cookie_label)
+    with _cookie_labelled(cookie_label):
+        access_token, refresh_token = _silent_oidc(session_cookies, cookie_label)
 
     # Load existing token data to preserve any extra fields
     existing: dict[str, str] = {}

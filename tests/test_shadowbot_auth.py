@@ -1590,7 +1590,32 @@ def test_acquire_from_chrome_decrypt_failure_names_cookie_source(
     message = str(excinfo.value)
     assert "Chrome profile 'Profile 2' (configured)" in message
     assert str(tmp_path) not in message
-    assert excinfo.value.__cause__ is failure
+    chain: list[BaseException] = []
+    cause: BaseException | None = excinfo.value.__cause__
+    while cause is not None:
+        chain.append(cause)
+        cause = cause.__cause__
+    assert failure in chain
+
+
+@pytest.mark.unit
+def test_acquire_from_chrome_authorization_failure_names_cookie_source(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _patch_state_dir(monkeypatch, tmp_path)
+    monkeypatch.setattr("fieldkit.shadowbot.auth._HAS_CHROME_AUTH", True)
+
+    with (
+        patch("fieldkit.shadowbot.auth._decrypt_chrome_cookies", return_value={"AUTH_SESSION_ID": "s"}),
+        patch("fieldkit.shadowbot.auth._silent_oidc", side_effect=ShadowbotAuthError("unexpected status 500")),
+        patch("fieldkit.config.get_shadowbot_chrome_cookies_path", return_value=None),
+        pytest.raises(ShadowbotAuthError) as excinfo,
+    ):
+        acquire_from_chrome()
+
+    message = str(excinfo.value)
+    assert "unexpected status 500" in message
+    assert "Chrome profile 'Default' (default)" in message
 
 
 @pytest.mark.unit
