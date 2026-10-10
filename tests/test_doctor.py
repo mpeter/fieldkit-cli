@@ -651,6 +651,7 @@ _MISPLACED_CONFIG: dict[str, object] = {"shadowbot_chrome_cookies_path": "Profil
 
 
 def test_doctor_result_warnings_do_not_change_health() -> None:
+    """Warnings are advisory, so attaching them must never flip a healthy result to unhealthy."""
     result = DoctorResult("shadowbot", True, True, "token valid", warnings=("careful",))
 
     assert result.render().splitlines() == ["shadowbot: OK — token valid", "  warning: careful"]
@@ -659,6 +660,7 @@ def test_doctor_result_warnings_do_not_change_health() -> None:
 
 @pytest.mark.parametrize("token_exists", [True, False], ids=["configured", "not-configured"])
 def test_check_shadowbot_includes_config_warnings(tmp_path: Path, token_exists: bool) -> None:
+    """Misplaced ShadowBot keys are silently ignored, so doctor must surface them whether or not a token exists."""
     token_path = tmp_path / "shadowbot-token.json"
     if token_exists:
         token_path.write_text('{"refresh_token": "rt"}', encoding="utf-8")
@@ -675,6 +677,7 @@ def test_check_shadowbot_includes_config_warnings(tmp_path: Path, token_exists: 
 
 
 def test_doctor_shadowbot_cmd_json_warns_without_changing_exit_status(tmp_path: Path) -> None:
+    """Scripts parse doctor --json, so warnings must appear in the payload without altering the exit status."""
     token_path = tmp_path / "shadowbot-token.json"
     token_path.write_text('{"refresh_token": "rt"}', encoding="utf-8")
     exit_codes = []
@@ -695,6 +698,7 @@ def test_doctor_shadowbot_cmd_json_warns_without_changing_exit_status(tmp_path: 
 
 
 def test_doctor_all_shows_shadowbot_warning_and_keeps_exit_status() -> None:
+    """The aggregate doctor run must show ShadowBot warnings yet keep its exit status tied to health alone."""
     results = [
         DoctorResult("sf", True, True, "session active"),
         DoctorResult("shadowbot", True, True, "token valid", warnings=("shadowbot.chrome_cookie_path is typo",)),
@@ -715,6 +719,7 @@ def test_doctor_all_shows_shadowbot_warning_and_keeps_exit_status() -> None:
 
 
 def test_doctor_all_prints_warnings_beneath_auth_required_line() -> None:
+    """A warning must stay attached to the auth-required line it explains instead of floating elsewhere in the output."""
     results = [DoctorResult("shadowbot", False, False, "run 'fieldkit auth shadowbot'", warnings=("w1",))]
     with (
         patch("fieldkit.commands.doctor.cli._run_all", return_value=results),

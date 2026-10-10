@@ -42,6 +42,7 @@ _LOADER_MODULE = "fieldkit.config._loader"
     ],
 )
 def test_shadowbot_config_warnings(data: Mapping[str, object], expected_fragments: list[str]) -> None:
+    """Each ignored ShadowBot key must produce exactly one advisory, and valid configuration none."""
     warnings = shadowbot_config_warnings(data)
 
     assert isinstance(warnings, tuple)
@@ -61,6 +62,7 @@ _SENSITIVE_KEYS = [
 @pytest.mark.parametrize("key", _SENSITIVE_KEYS)
 @pytest.mark.parametrize("location", ["section", "top-level"])
 def test_unsafe_config_keys_are_not_echoed(key: str, location: str) -> None:
+    """Config keys are user text that may carry identifiers or forged log lines, so unrelated names stay out of warnings."""
     data: Mapping[str, object] = {"shadowbot": {key: 1}} if location == "section" else {f"shadowbot_{key}": 1}
 
     warnings = shadowbot_config_warnings(data)
@@ -72,6 +74,7 @@ def test_unsafe_config_keys_are_not_echoed(key: str, location: str) -> None:
 
 
 def test_unsafe_config_key_is_not_logged(caplog: pytest.LogCaptureFixture) -> None:
+    """The log sink is where a leaked key would persist, so it gets the same redaction guarantee as doctor output."""
     clear_config_caches()
     with (
         patch(f"{_LOADER_MODULE}._load_raw_config", return_value={"shadowbot": {"alice@example.com": 1}}),
@@ -84,6 +87,7 @@ def test_unsafe_config_key_is_not_logged(caplog: pytest.LogCaptureFixture) -> No
 
 
 def test_get_shadowbot_config_warnings_reads_loaded_config() -> None:
+    """Doctor reads warnings from the loaded configuration rather than from a separate parse."""
     with patch(f"{_LOADER_MODULE}._load_raw_config", return_value={"shadowbot_client_id": "c"}):
         warnings = get_shadowbot_config_warnings()
 
@@ -92,11 +96,13 @@ def test_get_shadowbot_config_warnings_reads_loaded_config() -> None:
 
 
 def test_get_shadowbot_config_warnings_without_config_is_empty() -> None:
+    """A missing config file is normal and must not be reported as a problem."""
     with patch(f"{_LOADER_MODULE}._load_raw_config", return_value=None):
         assert get_shadowbot_config_warnings() == ()
 
 
 def test_log_shadowbot_config_warnings_once_logs_a_single_record(caplog: pytest.LogCaptureFixture) -> None:
+    """Repeated auth attempts must not repeat the same warning in the logs."""
     with (
         patch(f"{_LOADER_MODULE}._load_raw_config", return_value={"shadowbot_chrome_cookies_path": "x"}),
         caplog.at_level(logging.WARNING),
@@ -111,6 +117,7 @@ def test_log_shadowbot_config_warnings_once_logs_a_single_record(caplog: pytest.
 
 
 def test_clear_config_caches_rearms_the_once_log(caplog: pytest.LogCaptureFixture) -> None:
+    """Clearing config caches must re-arm the once-only log so reloaded configuration is reported again."""
     with (
         patch(f"{_LOADER_MODULE}._load_raw_config", return_value={"shadowbot": {"typo": 1}}),
         caplog.at_level(logging.WARNING),

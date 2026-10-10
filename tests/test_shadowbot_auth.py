@@ -1454,6 +1454,7 @@ def test_refresh_access_token_does_not_retry_server_error() -> None:
 def test_missing_cookie_file_error_names_configured_profile_without_path(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, profile: str
 ) -> None:
+    """The error must say which Chrome profile was read without leaking the absolute path."""
     monkeypatch.setattr("fieldkit.shadowbot.auth._HAS_CHROME_AUTH", True)
     missing = tmp_path / profile / "Cookies"
 
@@ -1469,6 +1470,7 @@ def test_missing_cookie_file_error_names_configured_profile_without_path(
 def test_symlinked_cookie_file_error_names_profile_without_path(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """Rejecting a symlinked cookie file must still identify the profile while keeping the home path out of the message."""
     monkeypatch.setattr("fieldkit.shadowbot.auth._HAS_CHROME_AUTH", True)
     real = tmp_path / "real"
     real.touch()
@@ -1486,6 +1488,7 @@ def test_symlinked_cookie_file_error_names_profile_without_path(
 
 @pytest.mark.unit
 def test_default_cookie_path_is_reported_as_default_source(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """When no path is configured the diagnostics must say the built-in default profile was used."""
     default = tmp_path / "Default" / "Cookies"
     monkeypatch.setattr("fieldkit.shadowbot.auth._HAS_CHROME_AUTH", True)
     monkeypatch.setattr("fieldkit.shadowbot.auth._DEFAULT_COOKIES_PATH", default)
@@ -1502,6 +1505,7 @@ def test_default_cookie_path_is_reported_as_default_source(monkeypatch: pytest.M
 def test_explicitly_configured_default_path_is_reported_as_configured(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """The source reflects what the user did, so configuring the default path explicitly still reads as configured."""
     default = tmp_path / "Default" / "Cookies"
     monkeypatch.setattr("fieldkit.shadowbot.auth._HAS_CHROME_AUTH", True)
     monkeypatch.setattr("fieldkit.shadowbot.auth._DEFAULT_COOKIES_PATH", default)
@@ -1522,12 +1526,14 @@ def test_explicitly_configured_default_path_is_reported_as_configured(
     [(None, "default"), (Path("Default/Cookies"), "configured")],
 )
 def test_cookie_source_follows_whether_a_path_was_configured(configured: Path | None, expected: str) -> None:
+    """The source label depends on whether a path was configured, never on the path's value."""
     assert auth_mod._cookie_source(configured) == expected
 
 
 @pytest.mark.unit
 @pytest.mark.parametrize("profile", ["Default", "Profile 12", "Guest Profile", "System Profile"])
 def test_cookie_db_label_names_chrome_profile_directories(tmp_path: Path, profile: str) -> None:
+    """Chrome's own profile directory names are safe to show and tell the user which profile was read."""
     label = auth_mod._cookie_db_label(tmp_path / profile / "Cookies", "configured")
 
     assert label == f"Chrome profile '{profile}' (configured)"
@@ -1536,6 +1542,7 @@ def test_cookie_db_label_names_chrome_profile_directories(tmp_path: Path, profil
 @pytest.mark.unit
 @pytest.mark.parametrize("parent", ["jdoe-fictional", "Profile", "Profile 2 extra", "default"])
 def test_cookie_db_label_omits_non_chrome_parent_names(tmp_path: Path, parent: str) -> None:
+    """A configured parent directory may name a person, so only Chrome's own profile names are shown."""
     label = auth_mod._cookie_db_label(tmp_path / parent / "Cookies", "configured")
 
     assert label == "configured Chrome cookie database (configured)"
@@ -1544,6 +1551,7 @@ def test_cookie_db_label_omits_non_chrome_parent_names(tmp_path: Path, parent: s
 
 @pytest.mark.unit
 def test_missing_cookie_file_error_hides_sensitive_parent_name(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """End to end, a sensitive-looking parent directory must not appear in the user-facing error."""
     monkeypatch.setattr("fieldkit.shadowbot.auth._HAS_CHROME_AUTH", True)
 
     with pytest.raises(ShadowbotAuthError) as excinfo:
@@ -1557,6 +1565,7 @@ def test_missing_cookie_file_error_hides_sensitive_parent_name(monkeypatch: pyte
 @pytest.mark.unit
 @pytest.mark.parametrize("label_profile", ["Default", "Profile 2"])
 def test_login_required_error_names_profile_read(tmp_path: Path, label_profile: str) -> None:
+    """An expired session is fixed by logging in to the right profile, so the error names the one that was read."""
     response = MagicMock()
     response.status_code = 302
     response.headers = {"Location": "https://shadowbot.example.test/callback?error=login_required"}
@@ -1576,6 +1585,7 @@ def test_login_required_error_names_profile_read(tmp_path: Path, label_profile: 
 def test_acquire_from_chrome_decrypt_failure_names_cookie_source(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, failure: Exception
 ) -> None:
+    """Database, keyring and decryption failures need the cookie source too, or the user cannot tell which profile failed."""
     _patch_state_dir(monkeypatch, tmp_path)
     monkeypatch.setattr("fieldkit.shadowbot.auth._HAS_CHROME_AUTH", True)
     cookies = tmp_path / "Profile 2" / "Cookies"
@@ -1602,6 +1612,7 @@ def test_acquire_from_chrome_decrypt_failure_names_cookie_source(
 def test_acquire_from_chrome_authorization_failure_names_cookie_source(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """Authorization failures happen while the selected cookies are in use, so they must name the profile and source."""
     _patch_state_dir(monkeypatch, tmp_path)
     monkeypatch.setattr("fieldkit.shadowbot.auth._HAS_CHROME_AUTH", True)
 
@@ -1622,6 +1633,7 @@ def test_acquire_from_chrome_authorization_failure_names_cookie_source(
 def test_acquire_from_chrome_does_not_label_an_already_labelled_failure(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """A message that already names the source must pass through untouched rather than being labelled twice."""
     _patch_state_dir(monkeypatch, tmp_path)
     monkeypatch.setattr("fieldkit.shadowbot.auth._HAS_CHROME_AUTH", True)
     cookies = tmp_path / "Default" / "Cookies"
@@ -1641,6 +1653,7 @@ def test_acquire_from_chrome_does_not_label_an_already_labelled_failure(
 def test_acquire_from_chrome_logs_misplaced_key_warning_once(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
+    """The misplaced-key warning is useful once per process but would spam logs if repeated on every recovery."""
     _patch_state_dir(monkeypatch, tmp_path)
     monkeypatch.setattr("fieldkit.shadowbot.auth._HAS_CHROME_AUTH", True)
 
