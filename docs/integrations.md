@@ -77,6 +77,11 @@ core health.
 Only configure an endpoint and credential you are authorized to use. If your
 organization does not provide the service, leave that capability unconfigured.
 
+Most of these endpoints come from your configuration. Backstory is the exception:
+fieldkit routes it through the MCP gateway you configure, but `fieldkit auth
+backstory` registers People.ai's fixed upstream endpoint with that gateway, and the
+`backstory-health` watcher then sends configured account names to it.
+
 ## Trust boundary
 
 Installing a profile causes no external request by itself. A configured command
