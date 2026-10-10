@@ -21,7 +21,7 @@ from fieldkit.config import build_domain_account_map, get_accounts_root, get_int
 from fieldkit.enrich._helpers import _should_skip_contact, _write_json_atomic, normalize_name_for_filename
 from fieldkit.enrich._io import contacts_memory_dir, enrich_dir
 from fieldkit.enrich.constants import GARBAGE_NAMES as _GARBAGE_NAMES
-from fieldkit.enrich.schema import ContactRecord
+from fieldkit.enrich.schema import ContactRecord, EnrichmentCheckpoint
 from fieldkit.gmail.discover import get_gmail_db_path
 from fieldkit.gmail.query_domain import connect_read_only, prepare_database, query_by_email
 from fieldkit.pursuit.io import extract_frontmatter_text
@@ -701,6 +701,36 @@ def _raw_contacts_fingerprint(raw_contacts: list[dict[str, Any]]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _checkpoint_resume_index(
+    checkpoint: EnrichmentCheckpoint | None, account: str | None, fingerprint: str, total: int
+) -> int:
+    """Return the contact index to resume from, or 0 when *checkpoint* does not match this run.
+
+    A checkpoint matches only when it is version 1, records its account scope
+    explicitly, was written for the same *account* and raw-input *fingerprint*,
+    and its processed count lies within ``0..total``.
+    """
+    if checkpoint is None:
+        return 0
+    if not (
+        checkpoint.checkpoint_version == 1
+        and "account_scope" in checkpoint.model_fields_set
+        and checkpoint.account_scope == account
+        and checkpoint.raw_contacts_fingerprint == fingerprint
+        and 0 <= checkpoint.total_processed <= total
+    ):
+        log.warning(
+            "Legacy or incompatible enrichment checkpoint; restarting from the first contact, preserving output."
+        )
+        return 0
+    log.info(
+        "Resuming from checkpoint: %s (processed %d)",
+        checkpoint.last_completed_account,
+        checkpoint.total_processed,
+    )
+    return checkpoint.total_processed
+
+
 def run_enrichment_pipeline(raw_contacts: list[dict[str, Any]], *, account: str | None = None) -> tuple[int, int]:
     """Run the batch enrichment pipeline over *raw_contacts*.
 
@@ -712,7 +742,6 @@ def run_enrichment_pipeline(raw_contacts: list[dict[str, Any]], *, account: str 
     """
     from fieldkit.enrich._helpers import load_checkpoint, save_checkpoint
     from fieldkit.enrich._io import CONTACTS_ENRICHED
-    from fieldkit.enrich.schema import EnrichmentCheckpoint
 
     if not raw_contacts:
         return 0, 0
@@ -721,25 +750,7 @@ def run_enrichment_pipeline(raw_contacts: list[dict[str, Any]], *, account: str 
     # Enrichment adds confidence, engagement and retry fields in-place. Keep
     # the caller's raw input stable so a repeated call has the same identity.
     raw_contacts = copy.deepcopy(raw_contacts)
-    checkpoint = load_checkpoint()
-    start_idx = 0
-    if checkpoint and (
-        checkpoint.checkpoint_version == 1
-        and "account_scope" in checkpoint.model_fields_set
-        and checkpoint.account_scope == account
-        and checkpoint.raw_contacts_fingerprint == fingerprint
-        and 0 <= checkpoint.total_processed <= len(raw_contacts)
-    ):
-        log.info(
-            "Resuming from checkpoint: %s (processed %d)",
-            checkpoint.last_completed_account,
-            checkpoint.total_processed,
-        )
-        start_idx = checkpoint.total_processed
-    elif checkpoint:
-        log.warning(
-            "Legacy or incompatible enrichment checkpoint; restarting from the first contact, preserving output."
-        )
+    start_idx = _checkpoint_resume_index(load_checkpoint(), account, fingerprint, len(raw_contacts))
 
     enriched_file = enrich_dir() / CONTACTS_ENRICHED
     enriched_contacts: list[dict[str, Any]] = (

@@ -2,6 +2,7 @@
 
 import copy
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ from fieldkit.contact import _enrich_helpers as pipeline
 from fieldkit.contact import enrich
 from fieldkit.enrich import _helpers as persistence
 from fieldkit.enrich import _io
+from fieldkit.enrich.schema import EnrichmentCheckpoint
 
 pytestmark = pytest.mark.unit
 
@@ -193,3 +195,89 @@ def test_failed_output_write_does_not_advance_checkpoint(state: Path, monkeypatc
     with pytest.raises(OSError, match="synthetic disk failure"):
         pipeline.run_enrichment_pipeline(contacts(2))
     assert (state / "checkpoint.json").read_bytes() == checkpoint_before
+
+
+def _checkpoint(**overrides: object) -> EnrichmentCheckpoint:
+    fields: dict[str, object] = {
+        "last_completed_account": "acme-corp",
+        "last_completed_contact_index": 2,
+        "total_processed": 2,
+        "total_enriched": 2,
+        "total_failed": 0,
+        "checkpoint_version": 1,
+        "account_scope": "acme-corp",
+        "raw_contacts_fingerprint": "fp",
+    }
+    fields.update(overrides)
+    return EnrichmentCheckpoint.model_validate(fields)
+
+
+def test_resume_index_without_checkpoint_is_zero(caplog: pytest.LogCaptureFixture) -> None:
+    index = pipeline._checkpoint_resume_index(None, "acme-corp", "fp", 4)
+    assert index == 0
+    assert "incompatible" not in caplog.text
+
+
+@pytest.mark.parametrize("total", [2, 4])
+def test_resume_index_matching_checkpoint_resumes(total: int) -> None:
+    index = pipeline._checkpoint_resume_index(_checkpoint(), "acme-corp", "fp", total)
+    assert index == 2
+
+
+def test_resume_index_unscoped_run_matches_explicit_none_scope() -> None:
+    index = pipeline._checkpoint_resume_index(_checkpoint(account_scope=None), None, "fp", 4)
+    assert index == 2
+
+
+@pytest.mark.parametrize(
+    ("checkpoint", "account", "fingerprint", "total"),
+    [
+        pytest.param(_checkpoint(checkpoint_version=0), "acme-corp", "fp", 4, id="legacy-version"),
+        pytest.param(
+            EnrichmentCheckpoint.model_validate(
+                {**_checkpoint().model_dump(exclude={"account_scope"}), "checkpoint_version": 1}
+            ),
+            None,
+            "fp",
+            4,
+            id="scope-not-recorded",
+        ),
+        pytest.param(_checkpoint(), "globex", "fp", 4, id="scope-mismatch"),
+        pytest.param(_checkpoint(), "acme-corp", "other", 4, id="fingerprint-mismatch"),
+        pytest.param(_checkpoint(), "acme-corp", "fp", 1, id="offset-past-input"),
+        pytest.param(_checkpoint(total_processed=-1), "acme-corp", "fp", 4, id="negative-offset"),
+    ],
+)
+def test_resume_index_incompatible_checkpoint_restarts(
+    checkpoint: EnrichmentCheckpoint,
+    account: str | None,
+    fingerprint: str,
+    total: int,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    index = pipeline._checkpoint_resume_index(checkpoint, account, fingerprint, total)
+    assert index == 0
+    assert "incompatible enrichment checkpoint" in caplog.text
+
+
+class _RecoveredRecord:
+    def model_dump(self) -> dict[str, str]:
+        return {"full_name": "Example Person 0", "account": "acme-corp"}
+
+
+def test_failed_contact_recovered_on_retry_counts_as_enriched(state: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    raw = contacts(1)
+    failed = [{**raw[0], "retry_count": 1}]
+    remembered: list[object] = []
+    monkeypatch.setattr(pipeline, "enrich_batch", lambda contacts, start: ([], failed))
+    monkeypatch.setattr(pipeline, "enrich_contact", lambda contact, retry_count: _RecoveredRecord())
+    monkeypatch.setattr(pipeline, "write_to_memory", remembered.append)
+    monkeypatch.setattr(time, "sleep", lambda seconds: None)
+
+    totals = pipeline.run_enrichment_pipeline(raw, account="acme-corp")
+
+    assert totals == (1, 0)
+    assert len(remembered) == 1
+    assert json.loads((state / _io.CONTACTS_ENRICHED).read_text(encoding="utf-8")) == [
+        {"full_name": "Example Person 0", "account": "acme-corp"}
+    ]
