@@ -101,11 +101,14 @@ If the file is large, read only the rows you present.
 Propose, then wait:
 
 - **Snapshot drift** (`sf-stage-drift`, `close-date-drift`, `acv-drift`) →
-  offer to sync that pursuit's `sf_*` frontmatter with
+  offer to sync that pursuit with
   `fieldkit sf opportunity <opportunity_id> <pursuit>` (the row's `pursuit`
-  path is already workspace-relative; no `--no-write`). One pursuit at a time,
-  on the operator's word. Preview first with `--no-write` if they want to see
-  the change.
+  path is already workspace-relative; no `--no-write`). The sync writes three
+  things, so say so in the proposal: the pursuit's `sf_*` frontmatter, a
+  cache file for the opportunity in fieldkit's data directory, and a refresh
+  of the pursuit body's Key Fields table. One pursuit at a time, on the
+  operator's word. Preview first with `--no-write` if they want to see the
+  change.
 - **stage-mismatch** → surface it and ask; local `stage` is the operator's
   judgment (see the `pursuit-advance` skill for gate checks).
 - **overdue / closing-14d / sf-closed-local-open** → surface for a close/slip
@@ -116,8 +119,9 @@ Propose, then wait:
 ## Constraints
 
 - **Read-only by default** — the only writes are `scratch/out/sf-reconcile.json`
-  and `sf_*` frontmatter via `fieldkit sf opportunity`, and only after the
-  operator approves a specific pursuit.
+  and, via `fieldkit sf opportunity`, that pursuit's `sf_*` frontmatter, Key
+  Fields table and the opportunity's cache file, only after the operator
+  approves that specific pursuit.
 - **Leave local `stage` to the operator** — surface mismatches and ask.
 - **One pursuit at a time on approval** — batch syncs need explicit
   per-pursuit confirmation.

@@ -133,4 +133,5 @@ if [ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" = true ]; then
   [ -z "$(git ls-files scratch/ | head -n 1)" ] \
     || { echo "scratch/ holds tracked files, so ignoring it protects nothing; do not write artifacts there." >&2; exit 3; }
 fi
+mkdir -p scratch/waypoints scratch/out/waypoint
 ```
