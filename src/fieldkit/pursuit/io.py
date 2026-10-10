@@ -232,6 +232,7 @@ class ReportAssessment:
     included: int = 0
     excluded: int = 0
     failures: list[ReportFailure] = field(default_factory=list)
+    reserved: list[str] = field(default_factory=list)
 
     @property
     def complete(self) -> bool:
@@ -243,7 +244,23 @@ class ReportAssessment:
         self.excluded = self.scanned - included - len(self.failures)
 
 
-NON_PURSUIT_FILES = frozenset({"gmail-intel.md", "template.md"})
+# Slugs that name account-level artifacts, never pursuits. This is the only definition of them.
+GMAIL_INTEL_SLUG = "gmail-intel"
+TEMPLATE_SLUG = "template"
+RESERVED_PURSUIT_SLUGS = frozenset({GMAIL_INTEL_SLUG, TEMPLATE_SLUG})
+NON_PURSUIT_FILES = frozenset(f"{slug}.md" for slug in RESERVED_PURSUIT_SLUGS)
+
+
+def is_reserved_pursuit_path(path: Path) -> bool:
+    """Return True when the file name, and only the file name, is a reserved pursuit name."""
+    return path.name in NON_PURSUIT_FILES
+
+
+def find_reserved_pursuit_files(root: Path, account_filter: str | None) -> list[str]:
+    """List reserved files under ``root/accounts/*/pursuits`` as paths relative to ``accounts``."""
+    accounts_dir = root / "accounts"
+    pattern = f"{account_filter}/pursuits/*.md" if account_filter else "*/pursuits/*.md"
+    return [str(p.relative_to(accounts_dir)) for p in sorted(accounts_dir.glob(pattern)) if is_reserved_pursuit_path(p)]
 
 
 @dataclass(frozen=True)
@@ -258,7 +275,7 @@ class ReportInput:
 def scan_report_inputs(root: Path, account_filter: str | None, assessment: ReportAssessment) -> Iterator[ReportInput]:
     """Yield readable pursuit inputs under ``root/accounts`` in path order.
 
-    Every matched file counts as scanned. Non-pursuit files are skipped as exclusions, and
+    Every matched file counts as scanned. Reserved file names are skipped as exclusions and recorded in ``assessment.reserved``, and
     unreadable or invalid files are recorded as failures instead of being dropped. Consume
     the iterator fully, then call ``assessment.finish()`` with the number the report kept.
     """
@@ -266,9 +283,10 @@ def scan_report_inputs(root: Path, account_filter: str | None, assessment: Repor
     pattern = f"{account_filter}/pursuits/*.md" if account_filter else "*/pursuits/*.md"
     for path in sorted(accounts_dir.glob(pattern)):
         assessment.scanned += 1
-        if path.name in NON_PURSUIT_FILES:
-            continue
         relative = str(path.relative_to(accounts_dir))
+        if is_reserved_pursuit_path(path):
+            assessment.reserved.append(relative)
+            continue
         outcome = read_pursuit_for_report(path)
         if outcome.frontmatter is None:
             assessment.failures.append(ReportFailure(relative, outcome.error or "invalid frontmatter"))

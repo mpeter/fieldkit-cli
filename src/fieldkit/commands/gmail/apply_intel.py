@@ -14,6 +14,7 @@ from typing import Any
 
 from fieldkit.config import get_accounts_config, get_internal_domains
 from fieldkit.gmail.discover import get_gmail_db_path
+from fieldkit.pursuit.io import GMAIL_INTEL_SLUG
 
 
 def _internal_domains() -> list[str]:
@@ -364,7 +365,7 @@ def _render_blindspots(
 def build_signals(pursuit_path: str | Path, account: str, db: sqlite3.Connection) -> str | None:
     """Build a Gmail signals markdown section for a pursuit file based on thread activity."""
     path = Path(pursuit_path)
-    if path.stem == "gmail-intel":
+    if path.stem == GMAIL_INTEL_SLUG:
         return None
 
     text = path.read_text(encoding="utf-8")

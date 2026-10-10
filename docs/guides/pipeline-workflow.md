@@ -442,3 +442,17 @@ not failures. Account filters limit both report rows and assessment counts.
 Human output shows the same failed files and an incomplete-assessment summary.
 Current qualification remains unavailable; damaged records receive no invented
 risk classification. Audit distinguishes malformed YAML from missing frontmatter.
+
+## Reserved pursuit names
+
+`template` and `gmail-intel` name account-level artifacts, so reports never
+treat `template.md` or `gmail-intel.md` in a `pursuits/` directory as a pursuit.
+Only the exact file name is reserved: `gmail-intel-rollout.md` is an ordinary
+pursuit. `fieldkit pursuit create --name` and `fieldkit pursuit rename --to`
+refuse a reserved name with exit `3` and change nothing; with `--json`, create
+and rename print an error object whose `error` is `reserved_name`.
+
+When forecast, health, or a compliance audit (`pursuit audit` without
+`--check-yaml`) skips a reserved file that already exists, stderr names it as
+`WARNING: <account>/pursuits/<file>: skipped — reserved pursuit file name`. The exit status is unchanged, and forecast JSON lists the
+paths in `assessment.reserved`.

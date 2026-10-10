@@ -31,7 +31,7 @@ from fieldkit.config import (
     get_sf_rest_base_url,
     get_sf_session_id,
 )
-from fieldkit.pursuit.io import extract_frontmatter_text
+from fieldkit.pursuit.io import extract_frontmatter_text, is_reserved_pursuit_path
 from fieldkit.pursuit.stages import CLOSED_STAGES as _CLOSED_STAGES
 from fieldkit.sf.client import SFAPIError as _SFAPIError
 from fieldkit.sf.client import reauth_hint_message as _reauth_hint
@@ -294,7 +294,7 @@ def _collect_local_opp_ids(pursuit_dir: Path) -> frozenset[str]:
     if not pursuit_dir.is_dir():
         return frozenset()
     for pf in pursuit_dir.glob("*.md"):
-        if pf.name in {"gmail-intel.md", "template.md"}:
+        if is_reserved_pursuit_path(pf):
             continue
         try:
             text = pf.read_text(encoding="utf-8")
@@ -382,7 +382,7 @@ def _print_local_pursuits(pursuit_dir: Path) -> None:
     active_files: list[str] = []
     closed_files: list[str] = []
     for pf in sorted(pursuit_dir.glob("*.md")) if pursuit_dir.is_dir() else []:
-        if pf.name in {"gmail-intel.md", "template.md"}:
+        if is_reserved_pursuit_path(pf):
             continue
         try:
             text = pf.read_text(encoding="utf-8")

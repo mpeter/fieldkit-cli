@@ -25,10 +25,12 @@ from fieldkit.commands.pursuit.audit import (
     apply_fixes,
     audit_directory,
     check_yaml_duplicates_directory,
+    echo_reserved_skips,
     no_files_message,
 )
 from fieldkit.config import get_fieldkit_home
 from fieldkit.pursuit.enums import Stage
+from fieldkit.pursuit.io import find_reserved_pursuit_files, is_reserved_pursuit_path
 from fieldkit.pursuit.stages import CLOSED_STAGES
 
 LOG_PREFIX = "[pursuit-audit]"
@@ -202,7 +204,7 @@ def _run_fix(accounts_dir: Path, account: str | None, *, dry_run: bool = False, 
 
 def _fix_one_pursuit(path: Path, accounts_dir: Path, *, dry_run: bool, as_json: bool) -> int:
     """Apply or preview corrections for one pursuit and return its change count."""
-    if path.name == "gmail-intel.md":
+    if is_reserved_pursuit_path(path):
         return 0
     try:
         fix_result = apply_fixes(path, dry_run=dry_run)
@@ -400,6 +402,7 @@ def cli(
         raise SystemExit(EXIT_DATA) from None
 
     results = audit_directory(root, account_filter=account, today=today)
+    echo_reserved_skips(find_reserved_pursuit_files(root, account))
 
     if not results:
         click.echo(no_files_message("pursuit", account), err=True)

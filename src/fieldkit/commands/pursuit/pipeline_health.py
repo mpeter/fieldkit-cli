@@ -27,6 +27,7 @@ from fieldkit.commands.pursuit.audit import (
     _parse_sf_date,
     assessment_failure_warnings,
     assessment_summary_line,
+    echo_reserved_skips,
     no_files_message,
 )
 from fieldkit.config import get_fieldkit_home
@@ -354,8 +355,11 @@ def cli(account: str | None, include_prospect: bool, as_json: bool, strict: bool
     items = health_check(
         root, account_filter=account, today=today, include_prospect=include_prospect, assessment=assessment
     )
+    for failure in assessment.failures:
+        click.echo(f"WARNING: {failure.relative_path}: {failure.reason} — assessment incomplete", err=True)
     for warning in assessment_failure_warnings(assessment):
         click.echo(warning, err=True)
+    echo_reserved_skips(assessment.reserved)
 
     if not items and not assessment.failures:
         click.echo(no_files_message("pursuit", account), err=True)
