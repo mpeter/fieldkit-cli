@@ -1,7 +1,7 @@
 """Private configuration accessors for the ShadowBot integration."""
 
+import difflib
 import logging
-import re
 from collections.abc import Mapping
 from ipaddress import ip_address
 from pathlib import Path
@@ -132,16 +132,17 @@ def get_shadowbot_chrome_cookies_path() -> Path | None:
 SHADOWBOT_TOKEN_KEY = "shadowbot_token"
 
 
-_SAFE_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}")
+_TYPO_CUTOFF = 0.8
 
 
-def _display_key(key: str) -> str:
-    """Return ``key`` when it is a plain identifier, else a generic label.
+def _is_likely_typo(name: str, known: frozenset[str]) -> bool:
+    """Return whether ``name`` is a near miss of a defined setting.
 
-    Config keys are user-controlled text; echoing one verbatim could disclose a
-    personal identifier or forge a log line through embedded newlines.
+    Config keys are user-controlled text: an arbitrary one can carry a personal
+    identifier or, with embedded newlines, forge a log line. Only a near miss of
+    a schema name is safe and useful to echo, so everything else stays generic.
     """
-    return key if _SAFE_KEY.fullmatch(key) else "an unrecognized key"
+    return bool(difflib.get_close_matches(name, known, n=1, cutoff=_TYPO_CUTOFF))
 
 
 def shadowbot_config_warnings(data: Mapping[str, object]) -> tuple[str, ...]:
@@ -157,11 +158,13 @@ def shadowbot_config_warnings(data: Mapping[str, object]) -> tuple[str, ...]:
     warnings: list[str] = []
     section = data.get("shadowbot")
     if isinstance(section, Mapping):
-        warnings.extend(
-            f"shadowbot.{_display_key(key)} is not a recognized ShadowBot setting and is ignored."
-            for key in section
-            if isinstance(key, str) and key not in known
-        )
+        for key in section:
+            if not isinstance(key, str) or key in known:
+                continue
+            subject = (
+                f"shadowbot.{key}" if _is_likely_typo(key, known) else "An unrecognized key in the shadowbot section"
+            )
+            warnings.append(f"{subject} is not a recognized ShadowBot setting and is ignored.")
     prefix = "shadowbot_"
     for key in data:
         if not isinstance(key, str) or not key.startswith(prefix) or key == SHADOWBOT_TOKEN_KEY:
@@ -170,9 +173,9 @@ def shadowbot_config_warnings(data: Mapping[str, object]) -> tuple[str, ...]:
         if suffix in known:
             warnings.append(f"{key} is ignored; the expected location is shadowbot.{suffix}.")
         else:
+            subject = key if _is_likely_typo(suffix, known) else "An unrecognized top-level shadowbot_ key"
             warnings.append(
-                f"{_display_key(key)} is not a recognized setting and is ignored; "
-                "ShadowBot settings belong under 'shadowbot:'."
+                f"{subject} is not a recognized setting and is ignored; ShadowBot settings belong under 'shadowbot:'."
             )
     return tuple(warnings)
 

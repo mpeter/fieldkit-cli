@@ -28,9 +28,9 @@ _LOADER_MODULE = "fieldkit.config._loader"
             id="misspelled-in-section",
         ),
         pytest.param(
-            {"shadowbot_unknown": 1},
-            ["shadowbot_unknown", "not a recognized"],
-            id="top-level-unknown-suffix",
+            {"shadowbot_client_idd": 1},
+            ["shadowbot_client_idd", "not a recognized"],
+            id="top-level-near-miss-suffix",
         ),
         pytest.param({"fieldkit_home": "home", "other_key": 1}, [], id="unrelated-top-level"),
         pytest.param({"shadowbot": {"chrome_cookies_path": "Cookies", "client_id": "c"}}, [], id="correct"),
@@ -54,6 +54,7 @@ _SENSITIVE_KEYS = [
     pytest.param("alice@example.com", id="email-like"),
     pytest.param("bad\nWARNING forged log line", id="newline"),
     pytest.param("k" * 65, id="over-long"),
+    pytest.param("alice_smith", id="identifier-shaped-name"),
 ]
 
 
@@ -65,7 +66,7 @@ def test_unsafe_config_keys_are_not_echoed(key: str, location: str) -> None:
     warnings = shadowbot_config_warnings(data)
 
     assert len(warnings) == 1
-    assert "an unrecognized key" in warnings[0]
+    assert "nrecognized" in warnings[0]
     assert key not in warnings[0]
     assert key.split("\n")[0] not in warnings[0]
 
@@ -78,7 +79,7 @@ def test_unsafe_config_key_is_not_logged(caplog: pytest.LogCaptureFixture) -> No
     ):
         log_shadowbot_config_warnings_once()
 
-    assert "an unrecognized key" in caplog.text
+    assert "nrecognized" in caplog.text
     assert "alice@example.com" not in caplog.text
 
 
