@@ -14,7 +14,6 @@ When a pursuit opportunity name changes, run this command to:
 import json
 import shlex
 from pathlib import Path
-from typing import NoReturn
 
 import click
 
@@ -26,8 +25,10 @@ from fieldkit.pursuit.io import is_reserved_pursuit_path
 LOG_PREFIX = "[pursuit-rename]"
 
 
-def _refuse_reserved(slug: str, *, as_json: bool) -> NoReturn:
-    """Exit with a data error before any write: reports would skip a pursuit with this name."""
+def _refuse_if_reserved(slug: str, *, as_json: bool) -> None:
+    """Exit with a data error before any write when reports would skip a pursuit with this name."""
+    if not is_reserved_pursuit_path(Path(f"{slug}.md")):
+        return
     message = f"{slug!r} is a reserved pursuit name; reports skip {slug}.md. Choose a different --to."
     if as_json:
         click.echo(json.dumps({"error": "reserved_name", "slug": slug, "message": message}))
@@ -108,8 +109,7 @@ def cli(account: str, from_slug: str, to_slug: str, dry_run: bool, as_json: bool
     Run after a Salesforce opportunity name change to keep the local pursuit
     file slug aligned with the SF record name.
     """
-    if is_reserved_pursuit_path(Path(f"{to_slug}.md")):
-        _refuse_reserved(to_slug, as_json=as_json)
+    _refuse_if_reserved(to_slug, as_json=as_json)
 
     data_root = _data_root()
     pursuits_dir = data_root / "accounts" / account / "pursuits"
