@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -416,6 +417,16 @@ def test_pr_ci_gates_crap_regressions_in_changed_functions_within_budget() -> No
     assert "scripts/gaze_changed.py --coverprofile coverage-changed.json --base HEAD^1" in check["run"]
     assert '--child "CRAP (changed functions)=$CRAP_RESULT"' in workflow
     assert "--cov-report=json:coverage.json" not in workflow
+
+
+def test_required_checks_rollup_names_match_the_evidence_script() -> None:
+    """Every rollup child the workflow passes must be one ci_evidence.py accepts, and none may be missing."""
+    import ci_evidence
+
+    workflow = (_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    passed = re.findall(r'--child "([^"=]+)=', workflow)
+
+    assert tuple(passed) == ci_evidence._REQUIRED_CHILDREN
 
 
 def test_pr_ci_exposes_stable_bounded_aggregate_and_keeps_compatibility_dispatchable() -> None:
