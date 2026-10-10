@@ -36,6 +36,7 @@ _LOADER_MODULE = "fieldkit.config._loader"
         pytest.param({"shadowbot": {"chrome_cookies_path": "Cookies", "client_id": "c"}}, [], id="correct"),
         pytest.param({"shadowbot": {"redirect_uri": "https://example.com/cb"}}, [], id="redirect-uri-is-known"),
         pytest.param({"shadowbot_token": "tokens/shadowbot.json"}, [], id="honored-token-key"),
+        pytest.param({"shadowbot_assistant_id": "a"}, ["shadowbot_assistant_id"], id="normal-key-still-named"),
         pytest.param({}, [], id="absent-section"),
         pytest.param({"shadowbot": "not-a-mapping"}, [], id="non-mapping-section"),
     ],
@@ -47,6 +48,38 @@ def test_shadowbot_config_warnings(data: Mapping[str, object], expected_fragment
     assert len(warnings) == (1 if expected_fragments else 0)
     for fragment in expected_fragments:
         assert fragment in warnings[0]
+
+
+_SENSITIVE_KEYS = [
+    pytest.param("alice@example.com", id="email-like"),
+    pytest.param("bad\nWARNING forged log line", id="newline"),
+    pytest.param("k" * 65, id="over-long"),
+]
+
+
+@pytest.mark.parametrize("key", _SENSITIVE_KEYS)
+@pytest.mark.parametrize("location", ["section", "top-level"])
+def test_unsafe_config_keys_are_not_echoed(key: str, location: str) -> None:
+    data: Mapping[str, object] = {"shadowbot": {key: 1}} if location == "section" else {f"shadowbot_{key}": 1}
+
+    warnings = shadowbot_config_warnings(data)
+
+    assert len(warnings) == 1
+    assert "an unrecognized key" in warnings[0]
+    assert key not in warnings[0]
+    assert key.split("\n")[0] not in warnings[0]
+
+
+def test_unsafe_config_key_is_not_logged(caplog: pytest.LogCaptureFixture) -> None:
+    clear_config_caches()
+    with (
+        patch(f"{_LOADER_MODULE}._load_raw_config", return_value={"shadowbot": {"alice@example.com": 1}}),
+        caplog.at_level(logging.WARNING),
+    ):
+        log_shadowbot_config_warnings_once()
+
+    assert "an unrecognized key" in caplog.text
+    assert "alice@example.com" not in caplog.text
 
 
 def test_get_shadowbot_config_warnings_reads_loaded_config() -> None:

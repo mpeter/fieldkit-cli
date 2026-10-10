@@ -1,6 +1,7 @@
 """Private configuration accessors for the ShadowBot integration."""
 
 import logging
+import re
 from collections.abc import Mapping
 from ipaddress import ip_address
 from pathlib import Path
@@ -131,6 +132,18 @@ def get_shadowbot_chrome_cookies_path() -> Path | None:
 SHADOWBOT_TOKEN_KEY = "shadowbot_token"
 
 
+_SAFE_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}")
+
+
+def _display_key(key: str) -> str:
+    """Return ``key`` when it is a plain identifier, else a generic label.
+
+    Config keys are user-controlled text; echoing one verbatim could disclose a
+    personal identifier or forge a log line through embedded newlines.
+    """
+    return key if _SAFE_KEY.fullmatch(key) else "an unrecognized key"
+
+
 def shadowbot_config_warnings(data: Mapping[str, object]) -> tuple[str, ...]:
     """Report ShadowBot keys that are present but ignored.
 
@@ -145,7 +158,7 @@ def shadowbot_config_warnings(data: Mapping[str, object]) -> tuple[str, ...]:
     section = data.get("shadowbot")
     if isinstance(section, Mapping):
         warnings.extend(
-            f"shadowbot.{key} is not a recognized ShadowBot setting and is ignored."
+            f"shadowbot.{_display_key(key)} is not a recognized ShadowBot setting and is ignored."
             for key in section
             if isinstance(key, str) and key not in known
         )
@@ -158,7 +171,8 @@ def shadowbot_config_warnings(data: Mapping[str, object]) -> tuple[str, ...]:
             warnings.append(f"{key} is ignored; the expected location is shadowbot.{suffix}.")
         else:
             warnings.append(
-                f"{key} is not a recognized setting and is ignored; ShadowBot settings belong under 'shadowbot:'."
+                f"{_display_key(key)} is not a recognized setting and is ignored; "
+                "ShadowBot settings belong under 'shadowbot:'."
             )
     return tuple(warnings)
 
