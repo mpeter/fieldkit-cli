@@ -288,8 +288,9 @@ fieldkit sf drift
 fieldkit sf drift --account acme-corp --json
 ```
 
-Every active pursuit that links an opportunity is fetched live and compared with
-its stored `sf_*` snapshot. The report lists unreadable pursuit files first, then
+Every pursuit that links an opportunity and is in pipeline-review scope (not
+closed or pre-pipeline, and not prospect unless you pass `--include-prospect`) is
+fetched live and compared with its stored `sf_*` snapshot. The report lists unreadable pursuit files first, then
 each opportunity RED, YELLOW or GREEN:
 
 - **RED** — the close date has passed or is within 14 days, Salesforce shows the
@@ -303,9 +304,11 @@ The command writes nothing. To bring one pursuit's snapshot up to date, run
 `fieldkit sf opportunity <id> <pursuit-file>`. A placeholder ID such as `TBD`
 counts as not linked. The command exits `1` when the report is incomplete (an
 unreadable file, an ID that is not a Salesforce record ID, a linked pursuit
-without a recognized `stage`, or a failed request), `2` when the Salesforce
-session needs `fieldkit auth sf`, and `3` when `--account` names no account
-directory or `sf_org_url` is not configured. Only underscore-keyed `sf_*` fields
+without a recognized `stage`, or a failed request), `2` when at least one
+pursuit needs fetching and the Salesforce session needs `fieldkit auth sf`, and `3`
+when the workspace has no `accounts` directory, `--account` names no account
+directory, or, when at least one pursuit needs fetching, `sf_org_url` is not
+configured. Only underscore-keyed `sf_*` fields
 are read.
 
 ## Pipeline review

@@ -208,11 +208,12 @@ Usage: fieldkit sf drift [OPTIONS]
 
   Exit codes:
     0 — complete report (drift is reported, not an error)
-    1 — incomplete: unreadable pursuit files, invalid opportunity ids, or
-        failed Salesforce requests
-    2 — Salesforce session missing or expired; run: fieldkit auth sf
-    3 — no workspace or accounts directory, unknown --account, or no
-        sf_org_url configured
+    1 — incomplete: unreadable pursuit files, linked pursuits with an invalid
+        opportunity id or an unrecognized stage, or failed Salesforce requests
+    2 — a pursuit needs fetching and the Salesforce session is missing or
+        expired; run: fieldkit auth sf
+    3 — no workspace or accounts directory, unknown --account, or a pursuit
+        needs fetching and no sf_org_url is configured
 
 Options:
   -a, --account TEXT  Limit to a single account directory name.

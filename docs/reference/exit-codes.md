@@ -74,8 +74,9 @@ These commands exit `1` when they produce a partial result or report findings:
   again.
 - **`fieldkit sf drift`**: the drift report is incomplete because a pursuit file
   could not be read, an `sf_opportunity_id` is not a Salesforce record ID, a
-  linked pursuit has no recognized `stage`, or a Salesforce request failed. Drift, including an opportunity Salesforce no longer
-  has, is reported with exit `0`.
+  linked pursuit has no recognized `stage`, or a Salesforce request failed.
+  Drift, including an opportunity Salesforce no longer has, is reported with exit
+  `0`.
 
 ---
 
@@ -85,8 +86,9 @@ These commands exit `2` when their required credential is absent or expired:
 
 - **`fieldkit sf session-check`** — Salesforce session cookie (`sf-cookies.json`) is
   missing or the `sid` has expired. Run `fieldkit auth sf` to refresh.
-- **`fieldkit sf drift`** — the Salesforce session is missing or expired. The run
-  stops instead of reporting partial results. Run `fieldkit auth sf` to refresh.
+- **`fieldkit sf drift`** — the Salesforce session is missing or expired and at
+  least one pursuit needs fetching. The run stops instead of reporting partial
+  results. Run `fieldkit auth sf` to refresh.
 - **`fieldkit auth shadowbot`** — ShadowBot Chrome cookie is missing or the session
   has expired. Run `fieldkit auth shadowbot` to re-authenticate.
 - **`fieldkit gmail sync`** — Interactive Google OAuth consent is required but stdin
@@ -103,7 +105,8 @@ These commands exit `3` when data is invalid and a retry without a fix will not 
   missing, or the selected scope contains no pursuit files. Initialize or correct
   the workspace, then run the audit again.
 - **`fieldkit sf drift`**: the workspace has no `accounts` directory, `--account`
-  names a directory that does not exist, or no `sf_org_url` is configured. Run
+  names a directory that does not exist, or, when at least one pursuit needs
+  fetching, no `sf_org_url` is configured. Run
   `fieldkit init` or correct the configuration, then run it again.
 - Any command that reads `config.yaml` when the file is absent, malformed, or missing a
   required setting — fix the local configuration or run `fieldkit init`, then re-run.

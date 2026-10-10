@@ -304,7 +304,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Choose the canonical safe write mechanism for persistent state.",
-      "source_fingerprint": "sha256:85b70d9defd9e5a8bd8a952284f86be00348667b919980f2ab8840fe19385223",
+      "source_fingerprint": "sha256:49aca75fc27a606f866749466a679060e470e1a28eedb667bc8afbe6c0774fd9",
       "sources": [
         "src/fieldkit/**/*.py"
       ]
@@ -382,7 +382,7 @@
           "classification": "generated_reference",
           "id": "docs.cli.reference.md.block-145",
           "language": "",
-          "sha256": "c68c28871d823ccdcb1daa261b9ec55478db5414a069348da86ce01b7fd6a477",
+          "sha256": "0e457ebe8dc4ee3ae76da92e1267e216c7d0619455e20e338cae6e6acf76a75e",
           "verification_id": "automated.generated-reference"
         },
         {
@@ -1157,7 +1157,7 @@
         }
       ],
       "reader_action": "Look up command syntax and options.",
-      "source_fingerprint": "sha256:d3d5c810e4f1e47252e5d578689d5403f18dd0cad71ea4ed61c31b9f903693f4",
+      "source_fingerprint": "sha256:e534e7cac329a5e537a2af8081537fc9675d6a717fda4a03a1306868d61fb61c",
       "sources": [
         "src/fieldkit/commands/**/*.py",
         "src/fieldkit/__main__.py"
@@ -1240,7 +1240,7 @@
         }
       ],
       "reader_action": "Inspect the generated module dependency graph.",
-      "source_fingerprint": "sha256:c0e5d0c7138ad2c10c58fcfd5889fd3293d52cbb58de5f76ffdc94ace9b29c14",
+      "source_fingerprint": "sha256:fbb8ed76cd0f673c4ad040d1c51b547912d246050b50caf19fabbe7cb06739cc",
       "sources": [
         "tach.toml",
         "src/fieldkit/**/*.py",
@@ -1673,7 +1673,7 @@
         }
       ],
       "reader_action": "Run supported pipeline workflows.",
-      "source_fingerprint": "sha256:776cfb67cd9a3052dac650b3f0ae74919bccc14b14fa57d681a4aba7661228d2",
+      "source_fingerprint": "sha256:399bd6377316bb6c54e7f79440aac393e7baabe08d10df17c1c2de1c9b112111",
       "sources": [
         "src/fieldkit/commands/pipeline/**/*.py",
         "src/fieldkit/commands/datasync/**/*.py",
@@ -1898,7 +1898,7 @@
       "content_type": "how-to",
       "fenced_blocks": [],
       "reader_action": "Find the canonical implementation pattern before adding a repeated solution.",
-      "source_fingerprint": "sha256:279ad3b26902c7ec299054e3f7cecacad9c4af6512dcf83c7b867dc4b0d26a39",
+      "source_fingerprint": "sha256:73e2823b45a128b3136cac01e8a35ba743abbc4489152153c961c4b82e637b39",
       "sources": [
         "AGENTS.md",
         "src/fieldkit/commands/sf/**/*.py",
@@ -1909,7 +1909,7 @@
       "content_type": "concept",
       "fenced_blocks": [],
       "reader_action": "Understand local storage and external data flows.",
-      "source_fingerprint": "sha256:85b70d9defd9e5a8bd8a952284f86be00348667b919980f2ab8840fe19385223",
+      "source_fingerprint": "sha256:49aca75fc27a606f866749466a679060e470e1a28eedb667bc8afbe6c0774fd9",
       "sources": [
         "src/fieldkit/**/*.py"
       ],
@@ -2065,7 +2065,7 @@
         }
       ],
       "reader_action": "Interpret process exit status.",
-      "source_fingerprint": "sha256:48a7f61769a13e9805b416b53ca3cecc5d2526e2f4418f9796d766921ddf794b",
+      "source_fingerprint": "sha256:2c98b9d7d1b3f5f789ade55c2d88b323828101b4f06e924bea296965944c0e21",
       "sources": [
         "src/fieldkit/cli_exit.py",
         "src/fieldkit/__main__.py",
@@ -2183,7 +2183,7 @@
         }
       ],
       "reader_action": "Choose a supported fieldkit workflow.",
-      "source_fingerprint": "sha256:1936b88520c378ac8ed1dafc87f1982938055e22c61d6245601debb46a891e11",
+      "source_fingerprint": "sha256:45e3b2aeefdeccb1770aee7e76fc9dabb6d80345b672299261703d7c0ba464f8",
       "sources": [
         "src/fieldkit/__main__.py",
         "src/fieldkit/commands/**/*.py",
