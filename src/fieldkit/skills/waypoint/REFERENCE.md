@@ -125,9 +125,12 @@ if [ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" = true ]; then
     exclude=$(git rev-parse --git-path info/exclude) \
       && mkdir -p "$(dirname "$exclude")" \
       && printf 'scratch/\n' >> "$exclude" \
+      && git check-ignore -q scratch/ \
       || { echo "Cannot git-ignore scratch/; do not write artifacts there." >&2; exit 3; }
   elif [ "$rc" -ne 0 ]; then
     echo "git check-ignore -q scratch/ failed (exit $rc); do not write artifacts under scratch/." >&2; exit 3
   fi
+  [ -z "$(git ls-files scratch/ | head -n 1)" ] \
+    || { echo "scratch/ holds tracked files, so ignoring it protects nothing; do not write artifacts there." >&2; exit 3; }
 fi
 ```

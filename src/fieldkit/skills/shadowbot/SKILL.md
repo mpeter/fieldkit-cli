@@ -122,10 +122,13 @@ if [ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" = true ]; then
     exclude=$(git rev-parse --git-path info/exclude) \
       && mkdir -p "$(dirname "$exclude")" \
       && printf 'scratch/\n' >> "$exclude" \
+      && git check-ignore -q scratch/ \
       || { echo "Cannot git-ignore scratch/; do not write artifacts there." >&2; exit 3; }
   elif [ "$rc" -ne 0 ]; then
     echo "git check-ignore -q scratch/ failed (exit $rc); do not write artifacts under scratch/." >&2; exit 3
   fi
+  [ -z "$(git ls-files scratch/ | head -n 1)" ] \
+    || { echo "scratch/ holds tracked files, so ignoring it protects nothing; do not write artifacts there." >&2; exit 3; }
 fi
 ```
 
@@ -151,7 +154,7 @@ fieldkit shadowbot query --new < scratch/shadowbot-prompt.txt 2>>scratch/shadowb
   | tee scratch/shadowbot-<capability-slug>-<account-slug>-$(date +%Y%m%d).md
 status=$?   # pipefail makes this fieldkit's status, not tee's
 echo "exit: $status"
-[ "$status" -eq 0 ]   # last command carries fieldkit's status, not echo's
+(exit "$status")   # a subshell returns fieldkit's status verbatim (2 = authenticate) without closing your shell
 ```
 
 Pipe through `tee` (not `>`) to see streaming output in the terminal while
@@ -211,10 +214,15 @@ set -o pipefail && mkdir -p scratch
 # First call — always --new; prompt file written with your file tool
 fieldkit shadowbot query --new < scratch/shadowbot-prompt.txt 2>>scratch/shadowbot-stderr.log \
   | tee scratch/shadowbot-chain-<account>-$(date +%Y%m%d).md
-
-# Chained call — no --new, same thread, appended to same file
-fieldkit shadowbot query < scratch/shadowbot-prompt-2.txt 2>>scratch/shadowbot-stderr.log \
-  | tee -a scratch/shadowbot-chain-<account>-$(date +%Y%m%d).md
+status=$?
+if [ "$status" -eq 0 ]; then
+  # Chained call — only after the first succeeded; no --new, same thread, appended to same file
+  fieldkit shadowbot query < scratch/shadowbot-prompt-2.txt 2>>scratch/shadowbot-stderr.log \
+    | tee -a scratch/shadowbot-chain-<account>-$(date +%Y%m%d).md
+  status=$?
+fi
+echo "exit: $status"
+(exit "$status")   # fieldkit's status verbatim; 2 = authenticate
 ```
 
 **Always use `--new` regardless of chaining, when:**
