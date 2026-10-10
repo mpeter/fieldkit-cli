@@ -27,6 +27,7 @@ import yaml
 from fieldkit.pursuit.enums import Stage
 from fieldkit.pursuit.gate_criteria import ALLOWED_GATE_STATUSES
 from fieldkit.pursuit.io import (
+    ReportAssessment,
     detect_duplicate_yaml_keys,
     is_reserved_pursuit_path,
     parse_frontmatter_fallback,
@@ -113,6 +114,19 @@ def echo_reserved_skips(reserved: Iterable[str]) -> None:
     """Name each skipped reserved pursuit file on stderr; never changes the exit status."""
     for relative_path in reserved:
         click.echo(f"WARNING: {relative_path}: skipped — reserved pursuit file name", err=True)
+
+
+def assessment_failure_warnings(assessment: ReportAssessment) -> list[str]:
+    """One stderr warning line per failed report input, in scan order."""
+    return [f"WARNING: {f.relative_path}: {f.reason} — assessment incomplete" for f in assessment.failures]
+
+
+def assessment_summary_line(assessment: ReportAssessment) -> str:
+    """The count summary a report prints when its assessment is incomplete."""
+    return (
+        f"Assessment incomplete: {assessment.scanned} scanned, {assessment.included} included, "
+        f"{assessment.excluded} excluded, {len(assessment.failures)} failed."
+    )
 
 
 @dataclass
