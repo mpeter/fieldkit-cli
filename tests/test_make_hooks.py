@@ -404,8 +404,45 @@ def test_hooks_directory_reports_git_routing_error(tmp_path: Path, monkeypatch: 
         hook_install_runtime._hooks_directory(tmp_path, timeout_seconds=1, kill_after_seconds=1)
 
 
+class _ClockHeldUntil:
+    """A ``time`` stand-in whose ``monotonic`` stays frozen until ``ready`` exists.
+
+    The runtime measures its query deadline with ``time.monotonic``. Holding that
+    clock until the grandchild has announced itself makes the timeout fire a fixed
+    interval after the grandchild is provably running, however slowly the host
+    starts processes. ``cap_seconds`` of real time releases the clock anyway, so a
+    broken stub fails the test instead of hanging it.
+    """
+
+    def __init__(self, ready: Path, *, cap_seconds: float = 30.0) -> None:
+        self._ready = ready
+        self._frozen_at: float | None = None
+        self._offset = 0.0
+        self._released = False
+        self._cap_seconds = cap_seconds
+
+    def monotonic(self) -> float:
+        now = time.monotonic()
+        if self._released:
+            return now - self._offset
+        if self._frozen_at is None:
+            self._frozen_at = now
+        if self._ready.exists() or now - self._frozen_at >= self._cap_seconds:
+            self._released = True
+            self._offset = now - self._frozen_at
+            return self._frozen_at
+        return self._frozen_at
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(time, name)
+
+
 def test_git_query_timeout_kills_process_group(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Verify that git query timeout kills process group."""
+    """Verify that git query timeout kills process group, including a child that ignores SIGTERM.
+
+    The runtime's clock is held until the grandchild writes ``ready``, so the
+    timeout cannot fire before the process it must kill exists (#83).
+    """
     tool_bin = tmp_path / "bin"
     tool_bin.mkdir()
     ready = tmp_path / "git-child-ready"
@@ -430,6 +467,7 @@ def test_git_query_timeout_kills_process_group(tmp_path: Path, monkeypatch: pyte
     )
     git_stub.chmod(0o755)
     monkeypatch.setenv("PATH", f"{tool_bin}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setattr(hook_install_runtime, "time", _ClockHeldUntil(ready))
 
     with pytest.raises(hook_install_runtime.InstallError, match="Git query timed out"):
         hook_install_runtime._hooks_directory(tmp_path, timeout_seconds=0.5, kill_after_seconds=0.1)
