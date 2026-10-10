@@ -351,6 +351,20 @@ def test_absent_or_blank_opportunity_id_is_unlinked(workspace: Path, value: str 
 
 
 @pytest.mark.unit
+def test_glob_character_account_scans_only_that_directory(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An --account such as '*' names a literal directory and must not widen the scan to other accounts."""
+    _pursuit(workspace, "*", "star", sf_opportunity_id=_ID_A)
+    _pursuit(workspace, "acme-corp", "other", sf_opportunity_id=_ID_B)
+    _use_responses(monkeypatch, {_ID_A: _record(_ID_A), _ID_B: _record(_ID_B)})
+
+    result = _run("--json", "--account", "*")
+
+    assert result.exit_code == 0, result.output
+    assert [row["pursuit"] for row in _report(result)["opportunities"]] == ["accounts/*/pursuits/star.md"]
+    assert [opp_id for opp_id, _ in FakeClient.instances[0].fetched] == [_ID_A]
+
+
+@pytest.mark.unit
 def test_expired_session_propagates_instead_of_partial_report(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """An auth failure reaches the top-level handler so orchestrators stop instead of retrying."""
     _pursuit(workspace, "acme-corp", "clean", sf_opportunity_id="006A00000000000000")
