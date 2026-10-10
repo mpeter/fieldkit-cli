@@ -79,9 +79,13 @@ supported-platform artifact matrix run in GitHub Actions.
 Pull requests that change production Python also run `CRAP (changed functions)`. It measures
 coverage over the whole suite and fails if a function in a changed `src/fieldkit/` file scores worse
 than its entry in the base branch's `.gaze/baseline.json`, or if a new function exceeds CRAP 15. Add
-tests or simplify the function. Editing the baseline in the same pull request does not clear the check;
-a deliberate increase needs a maintainer-reviewed baseline change merged first. Run the same check
-locally with `make crap-changed`.
+tests or simplify the function. Run the same check locally with `make crap-changed`.
+
+The baseline only ratchets down. A pull request may add entries or lower scores, for example by
+running `make gaze-baseline` after moving or renaming functions so they are tracked again rather than
+held only to the threshold. The check fails if the pull request raises an entry or removes one for a
+function that still exists; restore those entries. A deliberate increase needs a maintainer-reviewed
+pull request that changes only the baseline, merged first.
 
 Use conventional commit messages such as `fix(cli): handle missing config` or
 `docs: clarify installation`. Do not commit credentials, customer data, personal email addresses,

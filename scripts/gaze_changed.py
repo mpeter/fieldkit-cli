@@ -22,6 +22,13 @@ gazepy 0.9 JSON shape relied on here::
 renamed since the baseline was recorded appear under ``new_functions``, so they
 are held to the new-function threshold rather than their old score.
 
+The baseline is a one-way ratchet. The comparison starts from the base revision's
+committed baseline and takes the change's own ``.gaze/baseline.json`` edits only
+where they add an entry or lower a score, so a pull request can re-track moved
+functions or lock in a gain by running ``make gaze-baseline``. A raised score, or a
+dropped entry for a function that still exists, fails the check: that file becomes
+the baseline scheduled enforcement reads once the change merges.
+
 Usage:
     uv run python scripts/gaze_changed.py --coverprofile coverage-changed.json --base origin/main
 
@@ -36,6 +43,7 @@ import json
 import subprocess
 import sys
 import tempfile
+from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -47,6 +55,9 @@ _GIT_TIMEOUT_SECONDS = 30
 _GAZEPY_TIMEOUT_SECONDS = 300
 # 0: comparison passed; 1: comparison failed somewhere in the tree. Both print the report.
 _GAZEPY_REPORT_EXITS = frozenset({0, 1})
+# Allowance for float noise when comparing recorded scores; gazepy's own epsilon is 0.
+_SCORE_TOLERANCE = 1e-9
+_SCORE_FIELDS = ("crap", "gaze_crap")
 _EXIT_REGRESSION = 1
 _EXIT_INVALID = 3
 
@@ -69,6 +80,18 @@ class Regression:
             )
         delta = self.crap - self.baseline_crap
         return f"{self.location} {self.function}: CRAP {self.baseline_crap:.2f} -> {self.crap:.2f} (+{delta:.2f})"
+
+
+@dataclass(frozen=True)
+class BaselineViolation:
+    """An edit to the committed baseline that would loosen the gate once merged."""
+
+    key: str
+    detail: str
+
+    def describe(self) -> str:
+        """Render the violation as one reviewable line."""
+        return f"{_BASELINE} {self.key}: {self.detail}"
 
 
 def _entries(report: Mapping[str, object], key: str) -> list[dict[str, object]]:
@@ -130,6 +153,82 @@ def changed_regressions(report: Mapping[str, object], changed_files: Iterable[st
     return failures
 
 
+def score_key(target: Mapping[str, object]) -> str:
+    """Return gazepy's baseline match key, ``package:receiver.function``."""
+    receiver = target.get("receiver")
+    qualifier = f"{receiver}." if isinstance(receiver, str) and receiver else ""
+    return f"{target.get('package', '')}:{qualifier}{target.get('function', '')}"
+
+
+def _baseline_entries(text: str, origin: str) -> dict[str, list[dict[str, object]]]:
+    """Group a baseline's entries by match key; a few same-named functions share one."""
+    data = json.loads(text)
+    if not isinstance(data, dict) or not isinstance(data.get("results"), list):
+        raise ValueError(f"{origin} baseline has no 'results' list")
+    grouped: dict[str, list[dict[str, object]]] = defaultdict(list)
+    for entry in _entries(data, "results"):
+        grouped[score_key(cast(dict[str, object], entry["target"]))].append(entry)
+    return grouped
+
+
+def _highest(entries: list[dict[str, object]], field: str) -> float | None:
+    scores = [_number(entry[field]) for entry in entries if entry.get(field) is not None]
+    return max(scores) if scores else None
+
+
+def _raised_scores(
+    key: str, base: list[dict[str, object]], proposed: list[dict[str, object]]
+) -> list[BaselineViolation]:
+    violations = []
+    for field in _SCORE_FIELDS:
+        before, after = _highest(base, field), _highest(proposed, field)
+        if before is None:
+            continue
+        if after is None:
+            violations.append(BaselineViolation(key, f"{field} {before:.2f} removed"))
+        elif after > before + _SCORE_TOLERANCE:
+            violations.append(BaselineViolation(key, f"{field} raised {before:.2f} -> {after:.2f}"))
+    return violations
+
+
+def ratchet_baseline(base_text: str, proposed_text: str) -> tuple[dict[str, object], list[BaselineViolation]]:
+    """Merge the change's baseline into the base one, accepting only tightening edits.
+
+    Returns the baseline to compare against and every score the change raised.
+    Entries the change adds are taken as recorded; a key whose scores did not
+    rise takes the change's entries, so a lowered score is held to its new
+    value; a raised key keeps the base entries and is reported.
+    """
+    base = _baseline_entries(base_text, "base")
+    proposed = _baseline_entries(proposed_text, "proposed")
+    merged = dict(base)
+    violations: list[BaselineViolation] = []
+    for key, entries in proposed.items():
+        raised = _raised_scores(key, base[key], entries) if key in base else []
+        violations.extend(raised)
+        if not raised:
+            merged[key] = entries
+    results = [entry for entries in merged.values() for entry in entries]
+    return {"results": results}, violations
+
+
+def dropped_entries(base_text: str, proposed_text: str, report: Mapping[str, object]) -> list[BaselineViolation]:
+    """Return base entries the change deleted although their function still exists.
+
+    Deleting the entry of a deleted function is ordinary cleanup; deleting a
+    live one would put it back under the new-function threshold.
+    """
+    removed = _baseline_entries(base_text, "base").keys() - _baseline_entries(proposed_text, "proposed").keys()
+    current = {
+        score_key(cast(dict[str, object], entry["target"]))
+        for key in ("results", "new_functions")
+        for entry in _entries(report, key)
+    }
+    return [
+        BaselineViolation(key, "entry removed while the function still exists") for key in sorted(removed & current)
+    ]
+
+
 def _git(*arguments: str) -> str:
     return subprocess.run(
         ["git", *arguments],
@@ -159,14 +258,9 @@ def changed_source_files(since: str) -> list[str]:
     return sorted(path[len(root) :] for path in paths)
 
 
-def write_base_baseline(since: str, destination: Path) -> None:
-    """Write the baseline as committed at ``since`` to ``destination``.
-
-    The check compares against the base revision's baseline, never the one in
-    the change under review, so a pull request cannot clear its own regression
-    by raising its baseline entry.
-    """
-    destination.write_text(_git("show", f"{since}:{_BASELINE}"), encoding="utf-8")
+def base_baseline(since: str) -> str:
+    """Return the baseline as committed at ``since``, the floor the ratchet starts from."""
+    return _git("show", f"{since}:{_BASELINE}")
 
 
 def _gazepy_report(coverprofile: Path, baseline: Path) -> dict[str, object]:
@@ -208,15 +302,21 @@ def _gazepy_report(coverprofile: Path, baseline: Path) -> dict[str, object]:
     return report
 
 
-def _evaluate(coverprofile: Path, base: str) -> tuple[list[str], list[Regression]]:
+def _evaluate(coverprofile: Path, base: str) -> tuple[list[str], list[Regression | BaselineViolation]]:
     since = merge_base(base)
     changed = changed_source_files(since)
     if not changed:
         return changed, []
+    base_text = base_baseline(since)
+    proposed_text = Path(_BASELINE).read_text(encoding="utf-8")
+    merged, violations = ratchet_baseline(base_text, proposed_text)
     with tempfile.TemporaryDirectory(prefix="gaze-changed-baseline-") as directory:
         baseline = Path(directory) / "baseline.json"
-        write_base_baseline(since, baseline)
-        return changed, changed_regressions(_gazepy_report(coverprofile, baseline), changed)
+        baseline.write_text(json.dumps(merged), encoding="utf-8")
+        report = _gazepy_report(coverprofile, baseline)
+    failures: list[Regression | BaselineViolation] = [*violations, *dropped_entries(base_text, proposed_text, report)]
+    failures.extend(changed_regressions(report, changed))
+    return changed, failures
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -241,13 +341,13 @@ def main(argv: list[str] | None = None) -> int:
     if not regressions:
         print(f"gaze-changed: PASS — no CRAP regressions in {len(changed)} changed file(s).")
         return 0
-    print(f"gaze-changed: FAIL — {len(regressions)} CRAP failure(s) in changed files:")
+    print(f"gaze-changed: FAIL — {len(regressions)} CRAP failure(s):")
     for regression in regressions:
         print(f"  {regression.describe()}")
     print(
-        "Add tests or decompose the function. This check compares against the base branch's "
-        f"{_BASELINE}, so editing it in this change does not clear a failure; a deliberate increase "
-        "needs a maintainer-reviewed baseline change merged first."
+        f"Add tests or decompose the function. {_BASELINE} only ratchets down here: this change may "
+        "add entries or lower scores, but a deliberate increase needs a maintainer-reviewed "
+        "baseline-only change merged first."
     )
     return _EXIT_REGRESSION
 

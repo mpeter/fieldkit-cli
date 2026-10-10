@@ -1,5 +1,6 @@
 """Tests for scripts/gaze_changed.py, the pull-request CRAP regression filter."""
 
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -108,25 +109,168 @@ def test_changed_regressions_rejects_a_report_without_results() -> None:
         gaze_changed.changed_regressions({"summary": {}}, ["a.py"])
 
 
-def test_main_fails_on_regression_in_changed_file(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def _entry(function: str, crap: float, gaze_crap: float | None = None, package: str = "io.py") -> dict[str, object]:
+    return {
+        "target": {"package": package, "function": function, "receiver": None},
+        "crap": crap,
+        "gaze_crap": gaze_crap,
+    }
+
+
+def _baseline(*entries: dict[str, object]) -> str:
+    return json.dumps({"summary": {}, "results": list(entries)})
+
+
+def _scores(merged: dict[str, object]) -> dict[str, object]:
+    results = merged["results"]
+    assert isinstance(results, list)
+    return {r["target"]["function"]: r["crap"] for r in results}
+
+
+def _run_main(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, proposed: str, gazepy: object) -> int:
     coverage = tmp_path / "coverage.json"
     coverage.write_text("{}", encoding="utf-8")
-    report = {"results": [_result("contact/enrich.py:10", "regression")]}
-
+    (tmp_path / ".gaze").mkdir()
+    (tmp_path / ".gaze" / "baseline.json").write_text(proposed, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
     with (
         patch("gaze_changed.merge_base", return_value="abc123"),
         patch("gaze_changed.changed_source_files", return_value=["contact/enrich.py"]),
-        patch("gaze_changed.write_base_baseline") as write_baseline,
-        patch("gaze_changed._gazepy_report", return_value=report) as gazepy,
+        patch("gaze_changed.base_baseline", return_value=_baseline(_entry("kept", 5.0))) as base,
+        patch("gaze_changed._gazepy_report", side_effect=gazepy),
     ):
         status = gaze_changed.main(["--coverprofile", str(coverage), "--base", "origin/main"])
+    assert base.call_args.args == ("abc123",)
+    return status
+
+
+def test_main_fails_on_regression_in_changed_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    report = {"results": [_result("contact/enrich.py:10", "regression")]}
+
+    status = _run_main(tmp_path, monkeypatch, _baseline(_entry("kept", 5.0)), lambda *_: report)
 
     assert status == 1
     output = capsys.readouterr().out
     assert "contact/enrich.py:10 enrich: CRAP 6.00 -> 12.00 (+6.00)" in output
-    assert "does not clear a failure" in output
-    assert write_baseline.call_args.args[0] == "abc123"
-    assert gazepy.call_args.args[1] == write_baseline.call_args.args[1]
+    assert "only ratchets down" in output
+
+
+def test_main_compares_against_the_ratcheted_baseline_and_reports_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A raised entry fails the check and gazepy still sees the base score, not the raised one."""
+    seen: list[dict[str, object]] = []
+
+    def gazepy(_coverage: Path, baseline: Path) -> dict[str, object]:
+        seen.append(json.loads(baseline.read_text(encoding="utf-8")))
+        return {"results": []}
+
+    status = _run_main(tmp_path, monkeypatch, _baseline(_entry("kept", 9.0)), gazepy)
+
+    assert status == 1
+    assert _scores(seen[0]) == {"kept": 5.0}
+    assert ".gaze/baseline.json io.py:kept: crap raised 5.00 -> 9.00" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("base", "proposed", "expected_scores", "expected_violations"),
+    [
+        pytest.param(
+            [_entry("f", 5.0)],
+            [_entry("f", 5.0), _entry("moved", 7.0)],
+            {"f": 5.0, "moved": 7.0},
+            [],
+            id="added-entry-is-tracked",
+        ),
+        pytest.param([_entry("f", 5.0)], [_entry("f", 3.0)], {"f": 3.0}, [], id="lowered-score-is-held"),
+        pytest.param(
+            [_entry("f", 5.0)],
+            [_entry("f", 6.0)],
+            {"f": 5.0},
+            ["io.py:f: crap raised 5.00 -> 6.00"],
+            id="raised-score-is-rejected",
+        ),
+        pytest.param(
+            [_entry("f", 5.0, 8.0)],
+            [_entry("f", 5.0, 9.0)],
+            {"f": 5.0},
+            ["io.py:f: gaze_crap raised 8.00 -> 9.00"],
+            id="raised-gaze-crap-is-rejected",
+        ),
+        pytest.param(
+            [_entry("f", 5.0, 8.0)],
+            [_entry("f", 5.0)],
+            {"f": 5.0},
+            ["io.py:f: gaze_crap 8.00 removed"],
+            id="removed-gaze-crap-is-rejected",
+        ),
+        pytest.param([_entry("f", 5.0)], [_entry("f", 5.0, 4.0)], {"f": 5.0}, [], id="added-gaze-crap-is-tracked"),
+        pytest.param(
+            [_entry("f", 5.0), _entry("gone", 4.0)],
+            [_entry("f", 5.0)],
+            {"f": 5.0, "gone": 4.0},
+            [],
+            id="dropped-entry-keeps-base-for-comparison",
+        ),
+    ],
+)
+def test_ratchet_baseline_accepts_only_tightening_edits(
+    base: list[dict[str, object]],
+    proposed: list[dict[str, object]],
+    expected_scores: dict[str, float],
+    expected_violations: list[str],
+) -> None:
+    merged, violations = gaze_changed.ratchet_baseline(_baseline(*base), _baseline(*proposed))
+
+    assert _scores(merged) == expected_scores
+    assert [f"{v.key}: {v.detail}" for v in violations] == expected_violations
+
+
+def test_ratchet_baseline_compares_same_named_functions_by_their_highest_score() -> None:
+    """gazepy keys a few same-named functions in one file alike; a raise on either is caught."""
+    base = _baseline(_entry("query", 4.0), _entry("query", 9.0))
+
+    _, accepted = gaze_changed.ratchet_baseline(base, _baseline(_entry("query", 9.0), _entry("query", 3.0)))
+    _, raised = gaze_changed.ratchet_baseline(base, _baseline(_entry("query", 4.0), _entry("query", 11.0)))
+
+    assert accepted == []
+    assert raised == [gaze_changed.BaselineViolation("io.py:query", "crap raised 9.00 -> 11.00")]
+
+
+def test_ratchet_baseline_rejects_a_baseline_without_results() -> None:
+    with pytest.raises(ValueError, match="proposed baseline has no 'results' list"):
+        gaze_changed.ratchet_baseline(_baseline(), json.dumps({"summary": {}}))
+
+
+@pytest.mark.parametrize(
+    ("report_key", "expected"),
+    [
+        pytest.param("results", ["io.py:live: entry removed while the function still exists"], id="tracked-function"),
+        pytest.param(
+            "new_functions", ["io.py:live: entry removed while the function still exists"], id="untracked-function"
+        ),
+        pytest.param(None, [], id="deleted-function"),
+    ],
+)
+def test_dropped_entries_flags_only_functions_that_still_exist(report_key: str | None, expected: list[str]) -> None:
+    report: dict[str, object] = {"results": [], "new_functions": []}
+    if report_key is not None:
+        report[report_key] = [{"target": {"package": "io.py", "function": "live", "receiver": None}}]
+
+    dropped = gaze_changed.dropped_entries(
+        _baseline(_entry("live", 4.0), _entry("kept", 2.0)), _baseline(_entry("kept", 2.0)), report
+    )
+
+    assert [v.describe().removeprefix(".gaze/baseline.json ") for v in dropped] == expected
+
+
+def test_score_key_qualifies_methods_with_their_receiver() -> None:
+    assert (
+        gaze_changed.score_key({"package": "io.py", "receiver": "Client", "function": "query"}) == "io.py:Client.query"
+    )
+    assert gaze_changed.score_key({"package": "io.py", "receiver": None, "function": "query"}) == "io.py:query"
 
 
 def test_main_skips_gazepy_when_no_source_changed(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -177,15 +321,12 @@ def test_merge_base_asks_git_for_the_divergence_point() -> None:
     assert run.call_args.args[0] == ["git", "merge-base", "origin/main", "HEAD"]
 
 
-def test_write_base_baseline_reads_the_committed_baseline_not_the_working_copy(tmp_path: Path) -> None:
-    """A change cannot clear its own regression by raising its local baseline entry."""
-    destination = tmp_path / "baseline.json"
-
+def test_base_baseline_reads_the_committed_baseline_not_the_working_copy() -> None:
+    """The ratchet's floor comes from the base revision, so a change cannot raise it."""
     with patch("gaze_changed.subprocess.run", return_value=_completed('{"results": []}')) as run:
-        gaze_changed.write_base_baseline("abc123", destination)
+        assert gaze_changed.base_baseline("abc123") == '{"results": []}'
 
     assert run.call_args.args[0] == ["git", "show", "abc123:.gaze/baseline.json"]
-    assert destination.read_text(encoding="utf-8") == '{"results": []}'
 
 
 @pytest.mark.parametrize(("returncode", "accepted"), [(0, True), (1, True), (2, False)])

@@ -59,12 +59,16 @@ single file would therefore produce keys that never match the baseline.
    worsens only GazeCRAP (lower contract coverage with unchanged line coverage
    and complexity) is therefore caught by the scheduled complete run, not the
    pull request.
-3. **No bypass, including through the baseline.** The check compares against
-   `.gaze/baseline.json` as committed at the merge base, never the copy in the
-   change under review, so raising a baseline entry in the same pull request
-   cannot clear a failure. A deliberate increase is a maintainer-reviewed
-   baseline change merged on its own first. This preserves the rule that gates
-   are not weakened to make a change pass.
+3. **No bypass; the baseline is a one-way ratchet.** The check starts from
+   `.gaze/baseline.json` as committed at the merge base and takes the change's
+   own edits to it only where they add an entry or lower a score. A raised
+   score, or a removed entry for a function that still exists, fails the check,
+   because that file becomes the baseline scheduled enforcement reads once the
+   change merges. Additions let a refactor re-track moved or renamed functions
+   without a scheduled regeneration job; lowered scores lock in gains. A
+   deliberate increase is a maintainer-reviewed pull request that changes only
+   the baseline, which this job does not run on, merged first. Same-named
+   functions that gazepy keys alike are compared by their highest score.
 4. **Fix main first.** `run_enrichment_pipeline` regains its baseline score
    by moving the five-clause resume condition into a typed helper,
    `_checkpoint_resume_index(checkpoint, account, fingerprint, total) -> int`.

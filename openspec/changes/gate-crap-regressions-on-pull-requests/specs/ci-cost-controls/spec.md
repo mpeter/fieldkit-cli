@@ -43,3 +43,16 @@ and contract-coverage gates unchanged.
 - **WHEN** pull-request CI runs
 - **THEN** `CRAP (changed functions)` SHALL pass without requiring a baseline
   update
+
+#### Scenario: A pull request re-tracks moved functions
+- **GIVEN** a pull request whose `.gaze/baseline.json` adds entries or lowers
+  scores
+- **WHEN** pull-request CI runs
+- **THEN** `CRAP (changed functions)` SHALL compare against those entries
+
+#### Scenario: A pull request loosens the baseline
+- **GIVEN** a pull request whose `.gaze/baseline.json` raises a score, or
+  removes the entry of a function that still exists
+- **WHEN** pull-request CI runs
+- **THEN** `CRAP (changed functions)` SHALL fail, name the entry, and keep
+  comparing against the base revision's score
