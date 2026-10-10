@@ -20274,8 +20274,8 @@
    }
   },
   {
-   "crap": null,
-   "gaze_crap": null,
+   "crap": 2.0,
+   "gaze_crap": 2.0,
    "target": {
     "function": "json_default",
     "location": "util/jsonio.py:19",
