@@ -5,7 +5,8 @@ problem.
 
 - New command adapter: see `src/fieldkit/commands/meeting/link_cmd.py` for
   parsing CLI input, calling domain behavior in `src/fieldkit/meeting/`,
-  rendering output, and returning the domain exit status.
+  rendering text or JSON, and running inside `cli_main()` so domain exceptions
+  map to the shared exit codes in `fieldkit.cli_exit`.
 - Configured filesystem write: see `src/fieldkit/config/` for resolving a
   configured root, and `src/fieldkit/util/atomic.py` for the established atomic
   write helpers.
