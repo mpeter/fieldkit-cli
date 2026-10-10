@@ -111,6 +111,10 @@ def test_changed_regressions_rejects_a_report_without_results() -> None:
         gaze_changed.changed_regressions({"summary": {}}, ["a.py"])
 
 
+def _target(function: str, package: str = "io.py") -> dict[str, object]:
+    return {"package": package, "function": function, "receiver": None}
+
+
 def _entry(function: str, crap: float, gaze_crap: float | None = None, package: str = "io.py") -> dict[str, object]:
     return {
         "target": {"package": package, "function": function, "receiver": None},
@@ -462,6 +466,31 @@ def test_changed_regressions_matches_an_edited_legacy_method_key() -> None:
     regressions = gaze_changed.changed_regressions({"results": [result]}, [], ["io.py:query"])
 
     assert [r.location for r in regressions] == ["io.py:9"]
+
+
+@pytest.mark.parametrize(
+    ("base_entries", "expected"),
+    [
+        pytest.param(
+            [_entry("query", 4.0)], ["io.py:query: entry removed while the function still exists"], id="bare-fallback"
+        ),
+        pytest.param(
+            [_entry("query", 4.0), {**_entry("query", 6.0), "target": {**_target("query"), "receiver": "Client"}}],
+            [],
+            id="qualified-match-leaves-the-module-function-deletable",
+        ),
+    ],
+)
+def test_dropped_entries_counts_methods_under_gazepys_fallback_key(
+    base_entries: list[dict[str, object]], expected: list[str]
+) -> None:
+    """A live method matched by its pre-0.9.1 bare key keeps that entry; one matched qualified does not."""
+    method = {"target": {**_target("query"), "receiver": "Client"}}
+    kept = [e for e in base_entries if isinstance(e["target"], dict) and e["target"].get("receiver")]
+
+    dropped = gaze_changed.dropped_entries(_baseline(*base_entries), _baseline(*kept), {"results": [method]})
+
+    assert [f"{v.key}: {v.detail}" for v in dropped] == expected
 
 
 def test_score_key_qualifies_methods_with_their_receiver() -> None:

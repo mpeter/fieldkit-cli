@@ -177,6 +177,13 @@ def _match_keys(target: Mapping[str, object]) -> set[str]:
     return {score_key(target), f"{target.get('package', '')}:{target.get('function', '')}"}
 
 
+def _matched_key(target: Mapping[str, object], base: Mapping[str, object]) -> str:
+    """Return the baseline key gazepy matches ``target`` by: qualified, else the bare fallback."""
+    qualified = score_key(target)
+    bare = f"{target.get('package', '')}:{target.get('function', '')}"
+    return qualified if qualified in base or bare not in base else bare
+
+
 def score_key(target: Mapping[str, object]) -> str:
     """Return gazepy's baseline match key, ``package:receiver.function``."""
     receiver = target.get("receiver")
@@ -298,11 +305,10 @@ def dropped_entries(base_text: str, proposed_text: str, report: Mapping[str, obj
     """
     base = _baseline_entries(base_text, "base")
     proposed = _baseline_entries(proposed_text, "proposed")
-    live = Counter(
-        score_key(cast(dict[str, object], entry["target"]))
-        for key in ("results", "new_functions")
-        for entry in _entries(report, key)
-    )
+    live: Counter[str] = Counter()
+    for report_key in ("results", "new_functions"):
+        for entry in _entries(report, report_key):
+            live[_matched_key(cast(dict[str, object], entry["target"]), base)] += 1
     violations = []
     for key, entries in sorted(base.items()):
         lost = min(len(entries), live[key]) - len(proposed.get(key, []))
