@@ -9,7 +9,7 @@ from click.testing import CliRunner
 import fieldkit.commands.skill._runner as runner
 from fieldkit.__main__ import cli as fieldkit_cli
 from fieldkit.commands.skill._runner import _cmd_install
-from fieldkit.commands.skill._target_resolution import validate_global_install_request
+from fieldkit.commands.skill._target_resolution import resolve_install_targets, validate_global_install_request
 
 pytestmark = pytest.mark.unit
 
@@ -190,6 +190,24 @@ def test_global_root_symlink_loop_returns_validation_error(
 
     assert result == 1
     assert "Could not validate registered skill root" in capsys.readouterr().err
+
+
+def test_project_root_symlink_loop_returns_validation_error(tmp_path: Path) -> None:
+    (tmp_path / ".opencode").mkdir()
+    (tmp_path / ".opencode" / "skills").symlink_to("skills", target_is_directory=True)
+
+    targets, error = resolve_install_targets(["opencode"], tmp_path, global_install=False)
+
+    assert targets == []
+    assert error is not None
+    assert error.startswith("Could not validate registered skill root")
+
+
+def test_missing_project_root_resolves_for_first_install(tmp_path: Path) -> None:
+    targets, error = resolve_install_targets(["opencode"], tmp_path, global_install=False)
+
+    assert error is None
+    assert [target.skill_root for target in targets] == [tmp_path.resolve() / ".opencode" / "skills"]
 
 
 def test_global_candidate_symlink_escape_is_rejected_even_with_force(
