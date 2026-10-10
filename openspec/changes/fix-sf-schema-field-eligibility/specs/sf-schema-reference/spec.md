@@ -30,12 +30,12 @@ be `not-sampled`.
 
 ### Requirement: An empty eligible field set is a data error
 
-The command MUST exit with the data-error outcome when the describe response contains a
-non-empty `fields` list but no field is eligible. It MUST NOT render an empty reference as success
+The command MUST exit with the data-error outcome when the describe response contains no
+eligible field, including an empty `fields` list. It MUST NOT render an empty reference as success
 and MUST NOT substitute a fallback field list for the record requests.
 
 #### Scenario: every described field is ineligible
-- **GIVEN** a describe response whose fields are all `deprecatedAndHidden: true`
+- **GIVEN** a describe response whose fields are all `deprecatedAndHidden: true`, or whose `fields` list is empty
 - **WHEN** the operator runs the schema command
 - **THEN** the CLI SHALL exit 3 with a message stating that no eligible fields were described
 - **AND** no record request SHALL be made

@@ -22,8 +22,8 @@ Three things let this ship:
 1. Define eligibility from attributes that exist per field: every described
    field with a string `name`, excluding fields marked
    `deprecatedAndHidden: true`.
-2. Treat "describe returned fields but none were eligible" as a data error
-   (exit 3) instead of an empty success.
+2. Treat an empty eligible set, including an empty `fields` list, as a data
+   error (exit 3) instead of an empty success.
 3. Replace the synthetic fixtures with a describe shape matching the real
    response structure (object-level `queryable`, per-field `name`, `label`,
    `type`, `deprecatedAndHidden`, `compoundFieldName`), using fictional values.
