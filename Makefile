@@ -273,6 +273,10 @@ gazepy: coverage.json
 # Optional and slower than `make pr-check` (coverage instruments the full suite); the hosted
 # `CRAP (changed functions)` job runs the same check on every production-code pull request.
 crap-changed:
+	@if [ -z "$(QUALITY_BASE)" ]; then \
+		echo "ERROR: crap-changed requires QUALITY_BASE or origin/main" >&2; \
+		exit 2; \
+	fi
 	uv run pytest tests/ -p no:tach -q -n $(PYTEST_XDIST_WORKERS) --cov --cov-fail-under=0 --cov-report=json:coverage-changed.json
 	uv run python scripts/gaze_changed.py --coverprofile coverage-changed.json --base $(QUALITY_BASE)
 

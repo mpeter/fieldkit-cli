@@ -4,7 +4,7 @@ Runs ``gazepy crap`` over the whole ``src/fieldkit/`` tree against the committed
 ``.gaze/baseline.json`` so every target's ``location`` key matches the baseline,
 then applies the baseline gate's two failure rules to files changed relative to
 ``--base``: a tracked function whose CRAP rose (a regression), and a function the
-baseline does not track whose CRAP reaches the new-function threshold (a new
+baseline does not track whose CRAP exceeds the new-function threshold (a new
 violation). The
 complete baseline, ceiling and contract-coverage gates stay in
 ``make quality-full``; this check reports the subset a pull request introduced.
@@ -65,7 +65,7 @@ class Regression:
         """Render the failure as one reviewable line."""
         if self.baseline_crap is None:
             return (
-                f"{self.location} {self.function}: new function CRAP {self.crap:.2f} >= threshold {self.threshold:.2f}"
+                f"{self.location} {self.function}: new function CRAP {self.crap:.2f} > threshold {self.threshold:.2f}"
             )
         delta = self.crap - self.baseline_crap
         return f"{self.location} {self.function}: CRAP {self.baseline_crap:.2f} -> {self.crap:.2f} (+{delta:.2f})"
@@ -122,7 +122,8 @@ def changed_regressions(report: Mapping[str, object], changed_files: Iterable[st
         target = cast(dict[str, object], result["target"])
         location = str(target.get("location", ""))
         crap = _number(result.get("crap"))
-        if crap >= threshold and location.rpartition(":")[0] in changed:
+        # Strictly above, as gazepy's baseline comparison classifies a new violation.
+        if crap > threshold and location.rpartition(":")[0] in changed:
             failures.append(
                 Regression(location=location, function=str(target.get("function", "")), crap=crap, threshold=threshold)
             )

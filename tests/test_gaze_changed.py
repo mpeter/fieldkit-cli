@@ -54,15 +54,15 @@ def test_changed_regressions_keeps_only_regressions_in_changed_files(
 @pytest.mark.parametrize(
     ("crap", "changed", "expected_locations"),
     [
-        pytest.param(15.0, ["io/new.py"], ["io/new.py:3"], id="new-function-at-threshold-fails"),
-        pytest.param(14.9, ["io/new.py"], [], id="new-function-below-threshold-passes"),
+        pytest.param(15.01, ["io/new.py"], ["io/new.py:3"], id="new-function-above-threshold-fails"),
+        pytest.param(15.0, ["io/new.py"], [], id="new-function-at-threshold-passes"),
         pytest.param(40.0, ["other.py"], [], id="new-function-in-unchanged-file-passes"),
     ],
 )
 def test_changed_regressions_holds_untracked_functions_to_the_new_function_threshold(
     crap: float, changed: list[str], expected_locations: list[str]
 ) -> None:
-    """Functions absent from the baseline (new, moved or renamed) fail at the threshold, as the full gate does."""
+    """Functions absent from the baseline (new, moved or renamed) fail above the threshold, as the full gate does."""
     report = {
         "results": [],
         "new_functions": [{"target": {"location": "io/new.py:3", "function": "build"}, "status": "new", "crap": crap}],
@@ -84,7 +84,7 @@ def test_new_function_failure_description_names_the_threshold() -> None:
     failures = gaze_changed.changed_regressions(report, ["io/new.py"])
 
     assert failures == [gaze_changed.Regression("io/new.py:3", "build", 20.0, threshold=15.0)]
-    assert failures[0].describe() == "io/new.py:3 build: new function CRAP 20.00 >= threshold 15.00"
+    assert failures[0].describe() == "io/new.py:3 build: new function CRAP 20.00 > threshold 15.00"
 
 
 def test_changed_regressions_requires_the_threshold_when_new_functions_exist() -> None:
