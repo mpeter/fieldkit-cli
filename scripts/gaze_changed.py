@@ -75,6 +75,7 @@ class Regression:
     crap: float
     baseline_crap: float | None = None
     threshold: float | None = None
+    metric: str = "CRAP"
 
     def describe(self) -> str:
         """Render the failure as one reviewable line."""
@@ -83,7 +84,9 @@ class Regression:
                 f"{self.location} {self.function}: new function CRAP {self.crap:.2f} > threshold {self.threshold:.2f}"
             )
         delta = self.crap - self.baseline_crap
-        return f"{self.location} {self.function}: CRAP {self.baseline_crap:.2f} -> {self.crap:.2f} (+{delta:.2f})"
+        return (
+            f"{self.location} {self.function}: {self.metric} {self.baseline_crap:.2f} -> {self.crap:.2f} (+{delta:.2f})"
+        )
 
 
 @dataclass(frozen=True)
@@ -139,16 +142,9 @@ def changed_regressions(
     for result in _entries(report, "results"):
         target = cast(dict[str, object], result["target"])
         location = str(target.get("location", ""))
-        relevant = location.rpartition(":")[0] in changed or score_key(target) in edited
+        relevant = location.rpartition(":")[0] in changed or bool(_match_keys(target) & edited)
         if result.get("status") == "regression" and relevant:
-            failures.append(
-                Regression(
-                    location=location,
-                    function=str(target.get("function", "")),
-                    crap=_number(result.get("crap")),
-                    baseline_crap=_number(result.get("baseline_crap")),
-                )
-            )
+            failures.append(_regression(result, target, location))
     new_functions = _entries(report, "new_functions")
     if not new_functions:
         return failures
@@ -163,6 +159,22 @@ def changed_regressions(
                 Regression(location=location, function=str(target.get("function", "")), crap=crap, threshold=threshold)
             )
     return failures
+
+
+def _regression(result: Mapping[str, object], target: Mapping[str, object], location: str) -> Regression:
+    """Describe a gazepy regression by the metric that rose; CRAP wins when both did."""
+    function = str(target.get("function", ""))
+    crap, baseline_crap = _number(result.get("crap")), _number(result.get("baseline_crap"))
+    gaze_delta = result.get("gaze_crap_delta")
+    if crap <= baseline_crap + _SCORE_TOLERANCE and isinstance(gaze_delta, int | float) and gaze_delta > 0:
+        gaze = _number(result.get("gaze_crap"))
+        return Regression(location, function, gaze, baseline_crap=gaze - float(gaze_delta), metric="GazeCRAP")
+    return Regression(location, function, crap, baseline_crap=baseline_crap)
+
+
+def _match_keys(target: Mapping[str, object]) -> set[str]:
+    """Return the keys gazepy may match ``target`` by: qualified, then the pre-0.9.1 bare form."""
+    return {score_key(target), f"{target.get('package', '')}:{target.get('function', '')}"}
 
 
 def score_key(target: Mapping[str, object]) -> str:
@@ -231,6 +243,21 @@ def edited_keys(base_text: str, proposed_text: str) -> set[str]:
     base = _baseline_entries(base_text, "base")
     proposed = _baseline_entries(proposed_text, "proposed")
     return {key for key in base.keys() | proposed.keys() if base.get(key) != proposed.get(key)}
+
+
+def gaze_scores_edited(base_text: str, proposed_text: str) -> bool:
+    """Return whether the change recorded a GazeCRAP score that differs from the base.
+
+    Such a score can only be verified by measuring contract coverage, which
+    the check otherwise skips for speed.
+    """
+    base = _baseline_entries(base_text, "base")
+    for key, entries in _baseline_entries(proposed_text, "proposed").items():
+        before = [entry.get("gaze_crap") for entry in base.get(key, [])]
+        after = [entry.get("gaze_crap") for entry in entries]
+        if after != before[: len(after)] and any(score is not None for score in after):
+            return True
+    return False
 
 
 def ratchet_baseline(base_text: str, proposed_text: str) -> tuple[dict[str, object], list[BaselineViolation]]:
@@ -346,18 +373,21 @@ def base_baseline(since: str) -> str:
     return _git("show", f"{since}:{_BASELINE}")
 
 
-def _gazepy_report(coverprofile: Path, baseline: Path) -> dict[str, object]:
+def _gazepy_report(coverprofile: Path, baseline: Path, measure_contracts: bool = False) -> dict[str, object]:
     """Run gazepy against ``baseline`` and return its JSON report.
 
     gazepy exits 1 when the whole-tree comparison fails but still prints the
     report, so exit 1 is a result to filter rather than an error.
 
-    ``--tests`` points at an empty directory. Test analysis only feeds contract
-    coverage and GazeCRAP, which this check does not gate, and skipping it cuts
-    the scan from about 110 s to 10 s with identical CRAP scores. GazeCRAP stays
-    gated by the complete baseline run in ``make quality-full``.
+    ``--tests`` points at an empty directory unless ``measure_contracts``. Test
+    analysis only feeds contract coverage and GazeCRAP, and skipping it cuts the
+    scan from about 110 s to 10 s with identical CRAP scores. GazeCRAP stays
+    gated by the complete baseline run in ``make quality-full``; it is measured
+    here only when the change edits recorded GazeCRAP scores, so a score lowered
+    below the measurement fails before merge.
     """
     with tempfile.TemporaryDirectory(prefix="gaze-changed-no-tests-") as no_tests:
+        tests = "tests" if measure_contracts else no_tests
         completed = subprocess.run(
             [
                 "gazepy",
@@ -368,7 +398,7 @@ def _gazepy_report(coverprofile: Path, baseline: Path) -> dict[str, object]:
                 "--baseline",
                 str(baseline),
                 "--tests",
-                no_tests,
+                tests,
                 "--format",
                 "json",
             ],
@@ -407,7 +437,7 @@ def _evaluate(coverprofile: Path, base: str) -> Evaluation:
     with tempfile.TemporaryDirectory(prefix="gaze-changed-baseline-") as directory:
         baseline = Path(directory) / "baseline.json"
         baseline.write_text(json.dumps(merged), encoding="utf-8")
-        report = _gazepy_report(coverprofile, baseline)
+        report = _gazepy_report(coverprofile, baseline, gaze_scores_edited(base_text, proposed_text))
     failures: list[Regression | BaselineViolation] = [*violations, *dropped_entries(base_text, proposed_text, report)]
     failures.extend(added_above_threshold(base_text, proposed_text, _new_function_threshold(report)))
     failures.extend(changed_regressions(report, changed, edited_keys(base_text, proposed_text)))

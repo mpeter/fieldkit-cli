@@ -171,7 +171,7 @@ def test_main_compares_against_the_ratcheted_baseline_and_reports_raises(
     """A raised entry fails the check and gazepy still sees the base score, not the raised one."""
     seen: list[dict[str, object]] = []
 
-    def gazepy(_coverage: Path, baseline: Path) -> dict[str, object]:
+    def gazepy(_coverage: Path, baseline: Path, _measure_contracts: bool) -> dict[str, object]:
         seen.append(json.loads(baseline.read_text(encoding="utf-8")))
         return {"results": [], "comparison": _COMPARISON}
 
@@ -413,6 +413,55 @@ def test_ratchet_baseline_rejects_entries_gazepy_cannot_load(entry: object) -> N
 
     with pytest.raises(ValueError, match="proposed baseline entry 1 needs a target with package and function"):
         gaze_changed.ratchet_baseline(_baseline(_entry("f", 1.0)), proposed)
+
+
+@pytest.mark.parametrize(
+    ("proposed", "expected"),
+    [
+        pytest.param(_baseline(_entry("f", 5.0, 8.0)), False, id="unchanged"),
+        pytest.param(_baseline(_entry("f", 4.0, 8.0)), False, id="crap-only-edit"),
+        pytest.param(_baseline(_entry("f", 5.0, 6.0)), True, id="lowered-gaze"),
+        pytest.param(_baseline(_entry("f", 5.0, 8.0), _entry("g", 2.0, 3.0)), True, id="added-entry-with-gaze"),
+        pytest.param(_baseline(_entry("f", 5.0, 8.0), _entry("g", 2.0)), False, id="added-entry-without-gaze"),
+        pytest.param(_baseline(), False, id="removed-entry"),
+    ],
+)
+def test_gaze_scores_edited_detects_scores_only_contract_analysis_can_verify(proposed: str, expected: bool) -> None:
+    assert gaze_changed.gaze_scores_edited(_baseline(_entry("f", 5.0, 8.0)), proposed) is expected
+
+
+@pytest.mark.parametrize(("measure", "expected_tests"), [(True, "tests"), (False, None)])
+def test_gazepy_report_measures_contracts_only_when_asked(
+    tmp_path: Path, measure: bool, expected_tests: str | None
+) -> None:
+    completed = gaze_changed.subprocess.CompletedProcess(args=[], returncode=0, stdout='{"results": []}', stderr="")
+
+    with patch("gaze_changed.subprocess.run", return_value=completed) as run:
+        gaze_changed._gazepy_report(tmp_path / "coverage.json", tmp_path / "baseline.json", measure)
+
+    command = run.call_args.args[0]
+    tests = command[command.index("--tests") + 1]
+    assert tests == expected_tests if expected_tests else tests != "tests"
+
+
+def test_changed_regressions_names_a_gaze_crap_regression() -> None:
+    target = {"location": "io.py:9", "package": "io.py", "function": "f", "receiver": None}
+    result = {"target": target, "status": "regression", "crap": 5.0, "baseline_crap": 5.0}
+    result |= {"gaze_crap": 8.0, "gaze_crap_delta": 2.0}
+
+    regressions = gaze_changed.changed_regressions({"results": [result]}, [], ["io.py:f"])
+
+    assert [r.describe() for r in regressions] == ["io.py:9 f: GazeCRAP 6.00 -> 8.00 (+2.00)"]
+
+
+def test_changed_regressions_matches_an_edited_legacy_method_key() -> None:
+    """gazepy falls back to the bare package:function key for methods, so an edit there counts too."""
+    target = {"location": "io.py:9", "package": "io.py", "function": "query", "receiver": "Client"}
+    result = {"target": target, "status": "regression", "crap": 6.0, "baseline_crap": 2.0}
+
+    regressions = gaze_changed.changed_regressions({"results": [result]}, [], ["io.py:query"])
+
+    assert [r.location for r in regressions] == ["io.py:9"]
 
 
 def test_score_key_qualifies_methods_with_their_receiver() -> None:
