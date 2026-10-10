@@ -24,18 +24,20 @@ import importlib.util
 import json
 import logging
 import os
+import re
 import sqlite3
 import tempfile
 import time
 import urllib.parse
 import warnings
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 import httpx
 
-from fieldkit.config import CONFIG_PATH, TIMEOUT_OIDC_HTTP, get_fieldkit_data, get_fieldkit_home
+from fieldkit.config import CONFIG_PATH, SHADOWBOT_TOKEN_KEY, TIMEOUT_OIDC_HTTP, get_fieldkit_data, get_fieldkit_home
 from fieldkit.config import get_shadowbot_auth_endpoint as _get_auth_endpoint
 from fieldkit.config import get_shadowbot_client_id as _get_client_id
 from fieldkit.config import get_shadowbot_redirect_uri as _get_redirect_uri
@@ -139,8 +141,8 @@ def get_state_dir() -> Path:
 
     try:
         data = _read_config_dict(CONFIG_PATH)
-        if data is not None and "shadowbot_token" in data:
-            token_path = Path(str(data["shadowbot_token"])).expanduser()
+        if data is not None and SHADOWBOT_TOKEN_KEY in data:
+            token_path = Path(str(data[SHADOWBOT_TOKEN_KEY])).expanduser()
             candidate = token_path.parent
     except Exception:  # noqa: BLE001
         pass  # preserve the existing fallback for unreadable config and invalid override values
@@ -473,7 +475,30 @@ def _cookie_path_matches_request_path(cookie_path: str, request_path: str) -> bo
 # ---------------------------------------------------------------------------
 
 
-def _validate_chrome_cookie_path(cookie_path: Path) -> None:
+CookieSource = Literal["default", "configured"]
+
+_CHROME_PROFILE_DIR = re.compile(r"Default|Profile [0-9]+|Guest Profile|System Profile")
+
+
+def _cookie_db_label(cookie_path: Path, source: CookieSource) -> str:
+    """Describe a Chrome cookie database without echoing arbitrary path components.
+
+    The parent directory name is shown only when it follows Chrome's own profile
+    naming; any other configured location gets a generic label because its
+    directory names may identify a person or customer.
+    """
+    profile = cookie_path.parent.name
+    if _CHROME_PROFILE_DIR.fullmatch(profile):
+        return f"Chrome profile '{profile}' ({source})"
+    return f"configured Chrome cookie database ({source})"
+
+
+def _cookie_source(configured_path: Path | None) -> CookieSource:
+    """Return ``configured`` when the user set a cookie path, else ``default``."""
+    return "default" if configured_path is None else "configured"
+
+
+def _validate_chrome_cookie_path(cookie_path: Path, source: CookieSource) -> None:
     """Validate that the configured Chrome cookie database is safe to open."""
     if not _HAS_CHROME_AUTH:
         raise MissingOptionalDependencyError(
@@ -483,14 +508,15 @@ def _validate_chrome_cookie_path(cookie_path: Path) -> None:
         )
 
     # Security: symlink check BEFORE anything else (pre-resolve)
+    label = _cookie_db_label(cookie_path, source)
     if cookie_path.is_symlink():
         raise ShadowbotAuthError(
-            f"Chrome Cookies path is a symlink: {cookie_path}. Symlinks are not permitted for security reasons."
+            f"Chrome Cookies path is a symlink: {label}. Symlinks are not permitted for security reasons."
         )
 
     if not cookie_path.is_file():
         raise ShadowbotAuthError(
-            f"Chrome Cookies file not found or not a regular file: {cookie_path}\n"
+            f"Chrome Cookies file not found or not a regular file: {label}\n"
             "Set shadowbot.chrome_cookies_path in ~/.config/fieldkit/config.yaml "
             "to point to your Chrome profile's Cookies file."
         )
@@ -600,9 +626,9 @@ def _decrypt_chrome_cookie_rows(
     return result
 
 
-def _decrypt_chrome_cookies(cookie_path: Path) -> dict[str, str]:
+def _decrypt_chrome_cookies(cookie_path: Path, source: CookieSource = "configured") -> dict[str, str]:
     """Decrypt applicable Chrome cookies for the exact trusted OIDC endpoint."""
-    _validate_chrome_cookie_path(cookie_path)
+    _validate_chrome_cookie_path(cookie_path, source)
     auth_endpoint = _get_trusted_auth_endpoint()
     assert auth_endpoint.hostname is not None
     rows = _load_chrome_cookie_rows(cookie_path, auth_endpoint.hostname)
@@ -671,7 +697,7 @@ def _request_silent_oidc_authorization(auth_url: str, session_cookies: dict[str,
     raise AssertionError("silent OIDC retry loop must return or raise")  # pragma: no cover
 
 
-def _authorization_code_from_response(response: httpx.Response) -> str:
+def _authorization_code_from_response(response: httpx.Response, cookie_label: str | None = None) -> str:
     """Validate a redirect response and return its authorization code without reflecting query values."""
     if response.status_code != 302:
         raise ShadowbotAuthError(
@@ -689,7 +715,7 @@ def _authorization_code_from_response(response: httpx.Response) -> str:
         if error_values == ["login_required"]:
             raise ShadowbotAuthError(
                 "Chrome session has expired (login_required). "
-                "Log into your ShadowBot URL in Chrome (Default profile or configured path), "
+                f"Log into your ShadowBot URL in Chrome (read {cookie_label or 'the Chrome cookie database'}), "
                 "then retry. Or use: fieldkit auth shadowbot --refresh-token-file PATH"
             )
         raise ShadowbotAuthError(
@@ -700,9 +726,7 @@ def _authorization_code_from_response(response: httpx.Response) -> str:
     codes = query.get("code", [])
     if not codes:
         raise ShadowbotAuthError("OIDC auth 302 Location did not contain a 'code' parameter.")
-    code = codes[0]
-    if not isinstance(code, str):
-        raise ShadowbotAuthError("OIDC auth 302 Location did not contain a valid 'code' parameter.")
+    code: str = codes[0]
     return code
 
 
@@ -717,7 +741,7 @@ def _authorization_tokens_from_response(response: httpx.Response) -> tuple[str, 
     return access_token, refresh_token or ""
 
 
-def _silent_oidc(session_cookies: dict[str, str]) -> tuple[str, str]:
+def _silent_oidc(session_cookies: dict[str, str], cookie_label: str | None = None) -> tuple[str, str]:
     """Perform a silent OIDC auth-code flow using Chrome Keycloak session cookies.
 
     Sends a ``GET /auth?...&prompt=none`` request with the Chrome session cookies
@@ -726,6 +750,7 @@ def _silent_oidc(session_cookies: dict[str, str]) -> tuple[str, str]:
 
     Args:
         session_cookies: Decrypted allowlisted Chrome cookies for the OIDC request.
+        cookie_label: Profile and source of the cookie database, for error messages.
 
     Returns:
         ``(access_token, refresh_token)``
@@ -748,7 +773,7 @@ def _silent_oidc(session_cookies: dict[str, str]) -> tuple[str, str]:
     auth_url = f"{auth_endpoint.geturl()}?{auth_params}"
 
     auth_resp = _request_silent_oidc_authorization(auth_url, session_cookies)
-    code = _authorization_code_from_response(auth_resp)
+    code = _authorization_code_from_response(auth_resp, cookie_label)
     token_response = _request_token_grant(
         _get_trusted_token_endpoint().geturl(),
         {
@@ -766,6 +791,28 @@ def _silent_oidc(session_cookies: dict[str, str]) -> tuple[str, str]:
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
+
+@contextlib.contextmanager
+def _cookie_labelled(label: str) -> Iterator[None]:
+    """Add the cookie source to any ``ShadowbotAuthError`` that does not already name it."""
+    try:
+        yield
+    except ShadowbotAuthError as exc:
+        if label in str(exc):
+            raise
+        raise ShadowbotAuthError(f"{exc} (while reading {label})") from exc
+
+
+def _decrypt_labelled(cookie_path: Path, source: CookieSource, label: str) -> dict[str, str]:
+    """Decrypt Chrome cookies; every failure names the cookie source."""
+    with _cookie_labelled(label):
+        try:
+            return _decrypt_chrome_cookies(cookie_path, source)
+        except ShadowbotAuthError:
+            raise
+        except Exception as exc:
+            raise ShadowbotAuthError(f"cookie decryption failed: {type(exc).__name__}") from exc
 
 
 def acquire_from_chrome(profile_path: Path | None = None) -> None:
@@ -792,19 +839,18 @@ def acquire_from_chrome(profile_path: Path | None = None) -> None:
         )
 
     # Resolve cookie path: config accessor (shadowbot.chrome_cookies_path) or default.
-    from fieldkit.config import get_shadowbot_chrome_cookies_path
+    from fieldkit.config import get_shadowbot_chrome_cookies_path, log_shadowbot_config_warnings_once
 
+    log_shadowbot_config_warnings_once()
     configured_path = get_shadowbot_chrome_cookies_path()
     cookies_path = configured_path if configured_path is not None else _DEFAULT_COOKIES_PATH
+    cookie_source = _cookie_source(configured_path)
+    cookie_label = _cookie_db_label(cookies_path, cookie_source)
 
-    try:
-        session_cookies = _decrypt_chrome_cookies(cookies_path)
-    except ShadowbotAuthError:
-        raise
-    except Exception as exc:
-        raise ShadowbotAuthError(f"cookie decryption failed: {type(exc).__name__}") from exc
+    session_cookies = _decrypt_labelled(cookies_path, cookie_source, cookie_label)
 
-    access_token, refresh_token = _silent_oidc(session_cookies)
+    with _cookie_labelled(cookie_label):
+        access_token, refresh_token = _silent_oidc(session_cookies, cookie_label)
 
     # Load existing token data to preserve any extra fields
     existing: dict[str, str] = {}
