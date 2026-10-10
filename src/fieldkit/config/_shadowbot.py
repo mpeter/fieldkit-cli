@@ -1,11 +1,14 @@
 """Private configuration accessors for the ShadowBot integration."""
 
+import difflib
 import logging
+from collections.abc import Mapping
 from ipaddress import ip_address
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from fieldkit.config import _loader
+from fieldkit.config._schema import _ShadowbotConfig
 
 logger = logging.getLogger(__name__)
 
@@ -123,3 +126,84 @@ def get_shadowbot_chrome_cookies_path() -> Path | None:
     resolved = Path(value.strip()).expanduser()
     logger.debug("shadowbot: chrome_cookies_path=%s (from config)", resolved)
     return resolved
+
+
+# Top-level key that relocates the ShadowBot token directory; read by ``shadowbot.auth.get_state_dir``.
+SHADOWBOT_TOKEN_KEY = "shadowbot_token"
+
+
+_TYPO_CUTOFF = 0.8
+
+
+def _resembled_setting(name: str, known: frozenset[str]) -> str | None:
+    """Return the defined setting that ``name`` closely resembles, if any.
+
+    Config keys are user-controlled text: an arbitrary one can carry a personal
+    identifier or, with embedded newlines, forge a log line. Warnings therefore
+    never print a user key; at most they name the schema field it resembles.
+    """
+    matches = difflib.get_close_matches(name, known, n=1, cutoff=_TYPO_CUTOFF)
+    return matches[0] if matches else None
+
+
+def _unrecognized_key_warning(subject: str, match: str | None, hint: str) -> str:
+    """Describe an ignored key by its schema near-match, never by the key itself."""
+    resembles = f" resembles '{match}'; check its spelling" if match else ""
+    return f"{subject}{resembles}. It is not a recognized setting and is ignored; {hint}."
+
+
+def shadowbot_config_warnings(data: Mapping[str, object]) -> tuple[str, ...]:
+    """Report ShadowBot keys that are present but ignored.
+
+    Flags unrecognized keys inside the ``shadowbot:`` section and top-level
+    ``shadowbot_*`` keys other than the honored ``shadowbot_token``. A top-level
+    key whose suffix names a defined ShadowBot key points at the expected
+    ``shadowbot.<key>`` location. Unrecognized keys are never echoed; a near
+    miss is reported by the schema field it resembles. Unknown keys stay valid
+    configuration; the result is advisory only.
+    """
+    known = frozenset(_ShadowbotConfig.model_fields)
+    warnings: list[str] = []
+    section = data.get("shadowbot")
+    if isinstance(section, Mapping):
+        for key in section:
+            if key in known:
+                continue
+            match = _resembled_setting(key, known) if isinstance(key, str) else None
+            warnings.append(
+                _unrecognized_key_warning(
+                    "An unrecognized key under 'shadowbot:'", match, "check the setting names in the guide"
+                )
+            )
+    prefix = "shadowbot_"
+    for key in data:
+        if not isinstance(key, str) or not key.startswith(prefix) or key == SHADOWBOT_TOKEN_KEY:
+            continue
+        suffix = key[len(prefix) :]
+        if suffix in known:
+            warnings.append(f"{prefix}{suffix} is ignored; the expected location is shadowbot.{suffix}.")
+        else:
+            warnings.append(
+                _unrecognized_key_warning(
+                    "An unrecognized top-level shadowbot_ key",
+                    _resembled_setting(suffix, known),
+                    "ShadowBot settings belong under 'shadowbot:'",
+                )
+            )
+    return tuple(warnings)
+
+
+def get_shadowbot_config_warnings() -> tuple[str, ...]:
+    """Return warnings for the loaded configuration, or none when it is absent."""
+    data = _loader._load_raw_config()
+    return shadowbot_config_warnings(data) if data is not None else ()
+
+
+@_loader._config_cache
+def log_shadowbot_config_warnings_once() -> None:
+    """Log ShadowBot configuration warnings once per process.
+
+    The cache registers with ``clear_config_caches()``, which re-arms the log for tests.
+    """
+    for warning in get_shadowbot_config_warnings():
+        logger.warning("shadowbot config: %s", warning)
