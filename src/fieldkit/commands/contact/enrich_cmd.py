@@ -20,6 +20,7 @@ import click
 
 from fieldkit.cli_exit import cli_main
 from fieldkit.contact.enrich import apply_web, discover, enrich_records
+from fieldkit.enrich._io import WEB_SEARCH_RESULTS
 
 
 @click.command("enrich")
@@ -58,7 +59,7 @@ def cli(run_discover: bool, run_apply_web: bool, account: str | None, output_jso
                 return
             if aw_result.web_results_applied == 0:
                 click.echo(
-                    "No web search results found. Populate web_search_results.json first "
+                    f"No web search results found. Populate {WEB_SEARCH_RESULTS} first "
                     "(see src/fieldkit/skills/contact/ops/contact-enrich.md for the schema and pipeline steps)."
                 )
                 return

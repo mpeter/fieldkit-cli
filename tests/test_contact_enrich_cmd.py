@@ -199,6 +199,18 @@ def test_apply_web_zero_results_message_and_no_applied_line() -> None:
     assert "Applied" not in result.output
 
 
+def test_apply_web_zero_results_message_names_the_file_apply_web_reads() -> None:
+    """The guidance names the file ``apply_web`` reads, not a lookalike (#115)."""
+    runner = CliRunner()
+    sample = _apply_web_result(web_results_applied=0, updated_fields=0, total_raw_contacts=10)
+    with patch(f"{_MOD}.apply_web", return_value=sample):
+        result = runner.invoke(cli, ["--apply-web"])
+
+    assert result.exit_code == 0
+    assert "Populate web-search-results.json first" in result.output
+    assert "web_search_results.json" not in result.output
+
+
 def test_apply_web_nonzero_results_message() -> None:
     runner = CliRunner()
     sample = _apply_web_result(web_results_applied=3, updated_fields=7, total_raw_contacts=10)
