@@ -107,6 +107,10 @@ These commands exit `3` when data is invalid and a retry without a fix will not 
 - **`fieldkit pursuit create`** and **`fieldkit pursuit rename`**: the name would
   produce a reserved pursuit file name (`template` or `gmail-intel`), which
   reports skip. Nothing is written; choose a different name.
+- **`fieldkit pursuit rename`**: `--to` is not already a pursuit slug (lowercase
+  letters, digits and single hyphens, as `pursuit create` produces), or
+  `--account` or `--from` contains a path separator or is empty, `.` or `..`.
+  Nothing is written; the message suggests the slug form of `--to`.
 - **`fieldkit sf schema`**: the Salesforce describe response contains no eligible
   field. No record is requested; check the object name and its field permissions.
 - **`fieldkit sf drift`**: the workspace has no `accounts` directory, `--account`

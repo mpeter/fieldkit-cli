@@ -20,9 +20,42 @@ import click
 from fieldkit.cli_exit import EXIT_DATA, EXIT_PARTIAL
 from fieldkit.cli_registry import declare_write
 from fieldkit.config import get_fieldkit_home
-from fieldkit.pursuit.io import is_reserved_pursuit_path
+from fieldkit.pursuit.io import (
+    is_pursuit_path_component,
+    is_pursuit_slug,
+    is_reserved_pursuit_path,
+    slugify_pursuit_name,
+)
 
 LOG_PREFIX = "[pursuit-rename]"
+
+
+def _refuse(error: str, message: str, *, as_json: bool, **detail: str) -> None:
+    """Exit with a data error before any file or watcher-state write."""
+    if as_json:
+        click.echo(json.dumps({"error": error, **detail, "message": message}))
+    else:
+        click.echo(f"{LOG_PREFIX} {message}", err=True)
+    raise SystemExit(EXIT_DATA) from None
+
+
+def _refuse_unsafe_names(account: str, from_slug: str, to_slug: str, *, as_json: bool) -> None:
+    """Reject names that would read or write outside the account's pursuits directory.
+
+    ``--to`` must already be a slug, the rule ``pursuit create`` applies, since
+    it becomes a new file name and watcher-state key. ``--account`` and
+    ``--from`` name things that already exist and may predate that rule, so
+    they only need to stay inside their directory.
+    """
+    for option, value in (("--account", account), ("--from", from_slug)):
+        if not is_pursuit_path_component(value):
+            message = f"{option} {value!r} must name a single file or directory, without a path separator."
+            _refuse("invalid_name", message, as_json=as_json, option=option, value=value)
+    if not is_pursuit_slug(to_slug):
+        suggestion = slugify_pursuit_name(to_slug)
+        hint = f" Use {suggestion!r}." if suggestion else ""
+        message = f"--to {to_slug!r} is not a pursuit slug (lowercase letters, digits and single hyphens).{hint}"
+        _refuse("invalid_slug", message, as_json=as_json, option="--to", value=to_slug)
 
 
 def _refuse_if_reserved(slug: str, *, as_json: bool) -> None:
@@ -109,6 +142,7 @@ def cli(account: str, from_slug: str, to_slug: str, dry_run: bool, as_json: bool
     Run after a Salesforce opportunity name change to keep the local pursuit
     file slug aligned with the SF record name.
     """
+    _refuse_unsafe_names(account, from_slug, to_slug, as_json=as_json)
     _refuse_if_reserved(to_slug, as_json=as_json)
 
     data_root = _data_root()
