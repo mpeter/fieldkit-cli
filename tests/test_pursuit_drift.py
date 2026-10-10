@@ -185,6 +185,8 @@ def test_drift_status(levels: list[str], expected: str) -> None:
         pytest.param("inf", id="inf-string"),
         pytest.param("1e400", id="overflow"),
         pytest.param("TBD", id="placeholder-text"),
+        pytest.param(False, id="bool-false"),
+        pytest.param(True, id="bool-true"),
     ],
 )
 def test_unusable_stored_amount_is_flagged_not_crashed(stored: object) -> None:

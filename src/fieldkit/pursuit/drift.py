@@ -78,9 +78,11 @@ def _field(frontmatter: Mapping[str, Any], key: str) -> Any:
 
 
 def _whole_dollars(value: object) -> int | None:
-    """Parse an amount to whole dollars: blank reads as 0, non-numeric or non-finite as None."""
+    """Parse an amount to whole dollars: blank reads as 0, non-numeric, boolean or non-finite as None."""
     if value is None or value == "":
         return 0
+    if isinstance(value, bool):
+        return None
     parsed = _parse_monetary(value) if isinstance(value, (str, int, float)) else None
     if parsed is None:
         return 0
