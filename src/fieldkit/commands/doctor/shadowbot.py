@@ -4,10 +4,11 @@ import click
 
 from fieldkit.cli_exit import EXIT_AUTH, EXIT_SUCCESS
 from fieldkit.commands.doctor._result import DoctorResult
+from fieldkit.config import get_shadowbot_config_warnings
 from fieldkit.shadowbot.auth import ShadowbotAuthError, get_token, get_token_path
 
 
-def _live_token_result() -> DoctorResult:
+def _live_token_result(warnings: tuple[str, ...]) -> DoctorResult:
     """Return the health result for an already-configured ShadowBot token."""
     try:
         get_token()
@@ -17,16 +18,24 @@ def _live_token_result() -> DoctorResult:
             healthy=False,
             configured=True,
             message=f"{exc} — run 'fieldkit auth shadowbot'",
+            warnings=warnings,
         )
-    return DoctorResult("shadowbot", healthy=True, configured=True, message="token valid")
+    return DoctorResult("shadowbot", healthy=True, configured=True, message="token valid", warnings=warnings)
 
 
 def check_shadowbot() -> DoctorResult:
     """Check ShadowBot auth by resolving a live access token (refreshing if needed)."""
+    warnings = get_shadowbot_config_warnings()
     token_path = get_token_path()
     if not token_path.exists():
-        return DoctorResult("shadowbot", healthy=False, configured=False, message="run 'fieldkit auth shadowbot'")
-    return _live_token_result()
+        return DoctorResult(
+            "shadowbot",
+            healthy=False,
+            configured=False,
+            message="run 'fieldkit auth shadowbot'",
+            warnings=warnings,
+        )
+    return _live_token_result(warnings)
 
 
 @click.command(name="shadowbot", context_settings={"help_option_names": ["-h", "--help"]})
@@ -47,6 +56,7 @@ def doctor_shadowbot_cmd(as_json: bool) -> None:
                     "healthy": result.healthy,
                     "configured": result.configured,
                     "message": result.message,
+                    "warnings": list(result.warnings),
                 }
             )
         )

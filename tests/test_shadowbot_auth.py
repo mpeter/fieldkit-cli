@@ -5,6 +5,7 @@ No real network calls, Chrome access, or keyring access are made.
 """
 
 import json
+import logging
 import os
 import sqlite3
 import sys
@@ -1441,3 +1442,95 @@ def test_refresh_access_token_does_not_retry_server_error() -> None:
         _refresh_access_token("old-refresh")
 
     assert call_count["n"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Chrome-fallback errors name the profile, never an absolute path (#95)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("profile", ["Default", "Profile 2"])
+def test_missing_cookie_file_error_names_configured_profile_without_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, profile: str
+) -> None:
+    monkeypatch.setattr("fieldkit.shadowbot.auth._HAS_CHROME_AUTH", True)
+    missing = tmp_path / profile / "Cookies"
+
+    with pytest.raises(ShadowbotAuthError) as excinfo:
+        _decrypt_chrome_cookies(missing)
+
+    message = str(excinfo.value)
+    assert f"'{profile}' (configured)" in message
+    assert str(tmp_path) not in message
+
+
+@pytest.mark.unit
+def test_symlinked_cookie_file_error_names_profile_without_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr("fieldkit.shadowbot.auth._HAS_CHROME_AUTH", True)
+    real = tmp_path / "real"
+    real.touch()
+    link = tmp_path / "Profile 2" / "Cookies"
+    link.parent.mkdir()
+    link.symlink_to(real)
+
+    with pytest.raises(ShadowbotAuthError) as excinfo:
+        _decrypt_chrome_cookies(link)
+
+    message = str(excinfo.value)
+    assert "'Profile 2' (configured)" in message
+    assert str(tmp_path) not in message
+
+
+@pytest.mark.unit
+def test_default_cookie_path_is_reported_as_default_source(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    default = tmp_path / "Default" / "Cookies"
+    monkeypatch.setattr("fieldkit.shadowbot.auth._HAS_CHROME_AUTH", True)
+    monkeypatch.setattr("fieldkit.shadowbot.auth._DEFAULT_COOKIES_PATH", default)
+
+    with pytest.raises(ShadowbotAuthError) as excinfo:
+        _decrypt_chrome_cookies(default)
+
+    message = str(excinfo.value)
+    assert "'Default' (default)" in message
+    assert str(tmp_path) not in message
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("label_profile", ["Default", "Profile 2"])
+def test_login_required_error_names_profile_read(tmp_path: Path, label_profile: str) -> None:
+    response = MagicMock()
+    response.status_code = 302
+    response.headers = {"Location": "https://shadowbot.example.test/callback?error=login_required"}
+    label = auth_mod._cookie_db_label(tmp_path / label_profile / "Cookies", "configured")
+
+    with pytest.raises(ShadowbotAuthError) as excinfo:
+        auth_mod._authorization_code_from_response(response, label)
+
+    message = str(excinfo.value)
+    assert f"'{label_profile}' (configured)" in message
+    assert str(tmp_path) not in message
+    assert "Default profile or configured path" not in message
+
+
+@pytest.mark.unit
+def test_acquire_from_chrome_logs_misplaced_key_warning_once(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    _patch_state_dir(monkeypatch, tmp_path)
+    monkeypatch.setattr("fieldkit.shadowbot.auth._HAS_CHROME_AUTH", True)
+
+    with (
+        patch("fieldkit.shadowbot.auth._decrypt_chrome_cookies", return_value={"AUTH_SESSION_ID": "s"}),
+        patch("fieldkit.shadowbot.auth._silent_oidc", return_value=("a", "r")),
+        patch("fieldkit.config._loader._load_raw_config", return_value={"shadowbot_chrome_cookies_path": "x"}),
+        caplog.at_level(logging.WARNING),
+    ):
+        acquire_from_chrome()
+        acquire_from_chrome()
+
+    records = [r for r in caplog.records if "shadowbot.chrome_cookies_path" in r.getMessage()]
+    assert len(records) == 1
+    assert records[0].levelno == logging.WARNING

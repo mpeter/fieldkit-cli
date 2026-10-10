@@ -1,11 +1,13 @@
 """Private configuration accessors for the ShadowBot integration."""
 
 import logging
+from collections.abc import Mapping
 from ipaddress import ip_address
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from fieldkit.config import _loader
+from fieldkit.config._schema import _ShadowbotConfig
 
 logger = logging.getLogger(__name__)
 
@@ -123,3 +125,50 @@ def get_shadowbot_chrome_cookies_path() -> Path | None:
     resolved = Path(value.strip()).expanduser()
     logger.debug("shadowbot: chrome_cookies_path=%s (from config)", resolved)
     return resolved
+
+
+def shadowbot_config_warnings(data: Mapping[str, object]) -> tuple[str, ...]:
+    """Report ShadowBot keys that are present but ignored.
+
+    Flags unrecognized keys inside the ``shadowbot:`` section and top-level
+    ``shadowbot_*`` keys. A top-level key whose suffix names a defined ShadowBot
+    key points at the expected ``shadowbot.<key>`` location. Unknown keys stay
+    valid configuration; the result is advisory only.
+    """
+    known = frozenset(_ShadowbotConfig.model_fields)
+    warnings: list[str] = []
+    section = data.get("shadowbot")
+    if isinstance(section, Mapping):
+        warnings.extend(
+            f"shadowbot.{key} is not a recognized ShadowBot setting and is ignored."
+            for key in section
+            if isinstance(key, str) and key not in known
+        )
+    prefix = "shadowbot_"
+    for key in data:
+        if not isinstance(key, str) or not key.startswith(prefix):
+            continue
+        suffix = key[len(prefix) :]
+        if suffix in known:
+            warnings.append(f"{key} is ignored; the expected location is shadowbot.{suffix}.")
+        else:
+            warnings.append(
+                f"{key} is not a recognized setting and is ignored; ShadowBot settings belong under 'shadowbot:'."
+            )
+    return tuple(warnings)
+
+
+def get_shadowbot_config_warnings() -> tuple[str, ...]:
+    """Return warnings for the loaded configuration, or none when it is absent."""
+    data = _loader._load_raw_config()
+    return shadowbot_config_warnings(data) if data is not None else ()
+
+
+@_loader._config_cache
+def log_shadowbot_config_warnings_once() -> None:
+    """Log ShadowBot configuration warnings once per process.
+
+    The cache registers with ``clear_config_caches()``, which re-arms the log for tests.
+    """
+    for warning in get_shadowbot_config_warnings():
+        logger.warning("shadowbot config: %s", warning)

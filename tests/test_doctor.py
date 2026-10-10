@@ -641,3 +641,86 @@ def test_doctor_bare_dispatches_to_subcommand(tmp_path: Path) -> None:
         result = CliRunner().invoke(cli, ["sf"])
     assert "sf:" in result.output
     assert "gmail:" not in result.output
+
+
+# ---------------------------------------------------------------------------
+# doctor shadowbot: misplaced configuration warnings (#95)
+# ---------------------------------------------------------------------------
+
+_MISPLACED_CONFIG: dict[str, object] = {"shadowbot_chrome_cookies_path": "Profile 2/Cookies"}
+
+
+def test_doctor_result_warnings_do_not_change_health() -> None:
+    result = DoctorResult("shadowbot", True, True, "token valid", warnings=("careful",))
+
+    assert result.render().splitlines() == ["shadowbot: OK — token valid", "  warning: careful"]
+    assert result.healthy is True
+
+
+@pytest.mark.parametrize("token_exists", [True, False], ids=["configured", "not-configured"])
+def test_check_shadowbot_includes_config_warnings(tmp_path: Path, token_exists: bool) -> None:
+    token_path = tmp_path / "shadowbot-token.json"
+    if token_exists:
+        token_path.write_text('{"refresh_token": "rt"}', encoding="utf-8")
+    with (
+        patch("fieldkit.commands.doctor.shadowbot.get_token_path", return_value=token_path),
+        patch("fieldkit.commands.doctor.shadowbot.get_token", return_value="access-token"),
+        patch("fieldkit.config._loader._load_raw_config", return_value=_MISPLACED_CONFIG),
+    ):
+        result = check_shadowbot()
+
+    assert result.configured is token_exists
+    assert len(result.warnings) == 1
+    assert "shadowbot.chrome_cookies_path" in result.warnings[0]
+
+
+def test_doctor_shadowbot_cmd_json_warns_without_changing_exit_status(tmp_path: Path) -> None:
+    token_path = tmp_path / "shadowbot-token.json"
+    token_path.write_text('{"refresh_token": "rt"}', encoding="utf-8")
+    exit_codes = []
+    payloads = []
+    for config in (_MISPLACED_CONFIG, {}):
+        with (
+            patch("fieldkit.commands.doctor.shadowbot.get_token_path", return_value=token_path),
+            patch("fieldkit.commands.doctor.shadowbot.get_token", return_value="access-token"),
+            patch("fieldkit.config._loader._load_raw_config", return_value=config),
+        ):
+            result = CliRunner().invoke(doctor_shadowbot_cmd, ["--json"])
+        exit_codes.append(result.exit_code)
+        payloads.append(json.loads(result.output))
+
+    assert exit_codes == [0, 0]
+    assert "shadowbot.chrome_cookies_path" in payloads[0]["warnings"][0]
+    assert payloads[1]["warnings"] == []
+
+
+def test_doctor_all_shows_shadowbot_warning_and_keeps_exit_status() -> None:
+    results = [
+        DoctorResult("sf", True, True, "session active"),
+        DoctorResult("shadowbot", True, True, "token valid", warnings=("shadowbot.chrome_cookie_path is typo",)),
+    ]
+    with (
+        patch("fieldkit.commands.doctor.cli._run_all", return_value=results),
+        patch("fieldkit.commands.doctor.cli._configuration_state", return_value="enabled"),
+    ):
+        text = CliRunner().invoke(cli, [])
+        as_json = CliRunner().invoke(cli, ["--json"])
+
+    assert text.exit_code == 0
+    assert "  warning: shadowbot.chrome_cookie_path is typo" in text.output.splitlines()
+    assert as_json.exit_code == 0
+    payload = {entry["service"]: entry for entry in json.loads(as_json.output)}
+    assert payload["shadowbot"]["warnings"] == ["shadowbot.chrome_cookie_path is typo"]
+    assert payload["sf"]["warnings"] == []
+
+
+def test_doctor_all_prints_warnings_beneath_auth_required_line() -> None:
+    results = [DoctorResult("shadowbot", False, False, "run 'fieldkit auth shadowbot'", warnings=("w1",))]
+    with (
+        patch("fieldkit.commands.doctor.cli._run_all", return_value=results),
+        patch("fieldkit.commands.doctor.cli._configuration_state", return_value="enabled"),
+    ):
+        result = CliRunner().invoke(cli, [])
+
+    assert result.exit_code == 2
+    assert result.output.splitlines() == ["shadowbot: AUTH REQUIRED — run 'fieldkit auth shadowbot'", "  warning: w1"]

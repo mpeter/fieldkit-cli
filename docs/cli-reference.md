@@ -9,7 +9,7 @@ generated_by: scripts/generate_cli_docs.py
 
 > **Derived document — generated exhaust, not a system of record.** Verify facts against the sources listed in `derived_from`.
 
-> Auto-generated 2026-10-09 from `fieldkit --help`. Do not edit manually.
+> Auto-generated 2026-10-10 from `fieldkit --help`. Do not edit manually.
 > Re-generate: `uv run python scripts/generate_cli_docs.py`
 
 ## Quick reference
