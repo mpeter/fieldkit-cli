@@ -48,8 +48,8 @@ Keep each pull request focused on one problem. Preserve the architecture documen
 Bug fixes and behavior changes need tests that demonstrate the observable contract. Documentation-only
 and test-only improvements are welcome and do not need invented runtime changes.
 
-Every public module, class, function, and method under `src/` needs a docstring that states its
-contract. Ruff enforces this (rules D100–D104) in `make pr-check` and the pre-commit hook. Docstrings
+Every public module, package, class, function, and method under `src/` needs a docstring that states
+its contract; `__init__` and other dunder methods are exempt. Ruff enforces this (rules D100–D104) in `make pr-check` and the pre-commit hook. Docstrings
 in tests, scripts, and hooks are welcome but not required.
 
 If the CLI surface changes, run `make docs` and include the generated reference update. User-visible
