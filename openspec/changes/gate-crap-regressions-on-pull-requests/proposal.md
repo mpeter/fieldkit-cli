@@ -19,11 +19,12 @@ regression doesn't show up as a new failure, and a release cannot be cut.
 1. Restore the baseline on `main` by decomposing the checkpoint-resume decision
    that #90 added inline to `run_enrichment_pipeline`, without changing its
    behavior.
-2. Add a bounded `gazepy-changed` stage to `make quality` (and therefore
-   `make pr-check` and the `Required checks` pull-request rollup). It reports a
-   CRAP regression against `.gaze/baseline.json` only for functions defined in
-   `src/fieldkit/` files changed relative to `QUALITY_BASE`, using coverage
-   from the existing impact-selected pytest run.
+2. Add a `CRAP (changed functions)` child to the pull-request `Required checks`
+   rollup. It runs in parallel with the other children, only when production
+   Python changes, measures coverage over the whole suite with Python 3.13's
+   low-overhead `sys.monitoring` core, and applies the baseline gate's failure
+   rules to functions in `src/fieldkit/` files the pull request changed.
+   `make pr-check` is unchanged; `make crap-changed` runs the same check locally.
 3. Keep the complete `gazepy-baseline`, `gazepy-ceiling`, and
    `gazepy-contract-coverage` stages in `make quality-full` unchanged. The new
    stage adds coverage earlier; it does not replace or relax the full gate.
@@ -34,20 +35,21 @@ regression doesn't show up as a new failure, and a release cannot be cut.
 - None.
 
 ### Modified Capabilities
-- `ci-cost-controls`: pull-request quality gains a bounded, changed-file CRAP
-  regression stage.
+- `ci-cost-controls`: pull-request CI gains a parallel, changed-file CRAP
+  check.
 
 ### Removed Capabilities
 - None.
 
 ## Impact
 
-- `Makefile` (`quality` target), `scripts/` (new changed-function filter),
-  `tests/test_quality_contract.py`, contributor documentation for
-  `make pr-check`.
+- `.github/workflows/ci.yml` (new job and rollup child), `Makefile`
+  (optional `crap-changed` target), `scripts/gaze_changed.py`,
+  `tests/test_quality_contract.py`, and contributor documentation.
 - `src/fieldkit/contact/_enrich_helpers.py` (behavior-preserving refactor).
-- Pull-request wall time grows by one coverage-instrumented impact run and one
-  gazepy AST pass, roughly 30 to 60 seconds.
+- Cost: none on this public repository's standard runners. Wall time: the job
+  runs in parallel and is expected to finish within the existing slowest child
+  (`Lint (ruff)`, about 100 to 130 seconds); local `make pr-check` is unchanged.
 - This is a quality-policy change. The repository contract requires explicit
   maintainer review before merge.
 

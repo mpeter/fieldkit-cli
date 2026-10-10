@@ -14,6 +14,7 @@ _REQUIRED_CHILDREN = (
     "Commit-message PII guard",
     "Lint (ruff)",
     "Test (pytest)",
+    "CRAP (changed functions)",
     "Skillsaw (skill lint)",
     "AgentReady score gate",
 )

@@ -38,16 +38,33 @@ single file would therefore produce keys that never match the baseline.
    carries the baseline comparison. If it doesn't, the script performs the
    comparison itself, keyed by `(package, receiver, function)`, using the same
    CRAP-delta rule gazepy applies.
-2. **Coverage comes from the impact run.** `impact-pytest` gains
-   `--cov --cov-report=json:coverage-impact.json`. Tach selects tests that
-   import changed modules, so functions in changed files are covered by the
-   tests most likely to exercise them. Functions outside changed files may
-   show inflated CRAP from partial coverage; the filter discards them, which
-   is why the filter is required rather than optional.
-3. **No bypass flag.** A legitimate complexity increase is recorded by
-   updating `.gaze/baseline.json` for that function in the same pull request,
-   which is visible in review. This preserves the rule that gates are not
-   weakened to make a change pass.
+2. **Coverage comes from a parallel full-suite run on Python 3.13.** The
+   original plan instrumented the local impact run, but measurement showed
+   3.11's coverage tracer adds about 75% to suite time, which would slow
+   `make pr-check` and, in CI, make the coverage job the slowest child. Python
+   3.13's `sys.monitoring` core adds about 25%. A 3.13 full-suite coverage run
+   reported zero baseline regressions on `main` and matched 3.11 line coverage
+   in 811 of 812 files, so it is a faithful input to the 3.11-recorded
+   baseline. The whole suite removes the partial-coverage false positives an
+   impact selection would cause. Test failures are gated by `Test (pytest)`;
+   this job evaluates coverage even when a test fails.
+2a. **Both baseline failure rules apply.** gazepy reports functions that moved
+   or were renamed since the baseline as new; it fails those only at the
+   new-function threshold (15). The filter applies the same rule to new
+   functions in changed files, matching `gazepy-baseline`.
+2b. **CRAP only; skip test analysis.** gazepy's default run analyzes the test
+   suite for contract coverage, which feeds GazeCRAP and took about 58 s in CI.
+   The filter passes an empty `--tests` directory: CRAP scores were identical
+   for all 2160 functions, and the scan drops to about 10 s. A change that
+   worsens only GazeCRAP (lower contract coverage with unchanged line coverage
+   and complexity) is therefore caught by the scheduled complete run, not the
+   pull request.
+3. **No bypass, including through the baseline.** The check compares against
+   `.gaze/baseline.json` as committed at the merge base, never the copy in the
+   change under review, so raising a baseline entry in the same pull request
+   cannot clear a failure. A deliberate increase is a maintainer-reviewed
+   baseline change merged on its own first. This preserves the rule that gates
+   are not weakened to make a change pass.
 4. **Fix main first.** `run_enrichment_pipeline` regains its baseline score
    by moving the five-clause resume condition into a typed helper,
    `_checkpoint_resume_index(checkpoint, account, fingerprint, total) -> int`.
@@ -66,5 +83,9 @@ single file would therefore produce keys that never match the baseline.
   stage ignores them; the ceiling continues to bound them in full enforcement.
   Regenerating the baseline is out of scope and must only ever be done from a
   green `main`.
-- **Added PR time.** Coverage instrumentation and one AST pass add roughly 30
-  to 60 seconds to the bounded gate.
+- **Added PR time.** The job runs in parallel; its expected duration is close
+  to the existing slowest child. Local `make pr-check` is unchanged.
+- **Python version skew.** Coverage is measured on 3.13 against a baseline
+  recorded on 3.11. One file differed (slightly higher on 3.13). Two tests fail
+  on 3.13 (symlink-loop handling, #119); they do not affect this
+  job's result.
