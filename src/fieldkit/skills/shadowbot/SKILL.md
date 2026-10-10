@@ -155,7 +155,7 @@ Then send it on stdin:
 set -o pipefail   # report fieldkit's exit status, not tee's (bash and zsh)
 mkdir -p scratch  # fieldkit init does not create it
 fieldkit shadowbot query --new < scratch/shadowbot-prompt.txt 2>>scratch/shadowbot-stderr.log \
-  | tee scratch/shadowbot-<capability-slug>-<account-slug>-$(date +%Y%m%d).md
+  | tee scratch/shadowbot-<capability-slug>-<account-slug>-$(date +%Y%m%d-%H%M%S).md
 status=$?   # pipefail makes this fieldkit's status, not tee's
 echo "exit: $status"
 (exit "$status")   # a subshell returns fieldkit's status verbatim (2 = authenticate) without closing your shell
@@ -215,14 +215,15 @@ confirmed-safe chains in your local routing reference as you discover them.
 **Pattern (if your assistant supports thread continuation):**
 ```bash
 set -o pipefail && mkdir -p scratch
+chain=scratch/shadowbot-chain-<account>-$(date +%Y%m%d-%H%M%S).md   # one name per chain; never reused
 # First call — always --new; prompt file written with your file tool
 fieldkit shadowbot query --new < scratch/shadowbot-prompt.txt 2>>scratch/shadowbot-stderr.log \
-  | tee scratch/shadowbot-chain-<account>-$(date +%Y%m%d).md
+  | tee "$chain"
 status=$?
 if [ "$status" -eq 0 ]; then
   # Chained call — only after the first succeeded; no --new, same thread, appended to same file
   fieldkit shadowbot query < scratch/shadowbot-prompt-2.txt 2>>scratch/shadowbot-stderr.log \
-    | tee -a scratch/shadowbot-chain-<account>-$(date +%Y%m%d).md
+    | tee -a "$chain"
   status=$?
 fi
 echo "exit: $status"
