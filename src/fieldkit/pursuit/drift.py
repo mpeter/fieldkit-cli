@@ -12,7 +12,7 @@ from datetime import date
 from typing import Any, Literal, TypedDict
 
 from fieldkit.pursuit.stages import ALL_STAGES, TERMINAL_STAGES
-from fieldkit.pursuit.utils import _parse_monetary
+from fieldkit.pursuit.utils import _parse_monetary, parse_sf_date
 
 DriftLevel = Literal["RED", "YELLOW"]
 DriftStatus = Literal["RED", "YELLOW", "GREEN"]
@@ -67,9 +67,12 @@ def _lifecycle_stage(sf_stage: str) -> str | None:
     return candidate if candidate in ALL_STAGES else None
 
 
-def _iso_day(value: object) -> str:
-    """Return the ``YYYY-MM-DD`` part of a date-like value, or ``""``."""
-    return str(value or "")[:10]
+def _day(value: object) -> date | None:
+    """Parse a close date (``M/D/YYYY``, ``YYYY-MM-DD``, a YAML date or a timestamp string), or None."""
+    parsed = parse_sf_date(value)
+    if parsed is None and isinstance(value, str):
+        parsed = parse_sf_date(value.strip()[:10])
+    return parsed
 
 
 def _field(frontmatter: Mapping[str, Any], key: str) -> Any:
@@ -110,10 +113,11 @@ def _stage_flags(frontmatter: Mapping[str, Any], live: LiveOpportunity) -> list[
 
 def _snapshot_flags(frontmatter: Mapping[str, Any], live: LiveOpportunity) -> list[DriftFlag]:
     flags: list[DriftFlag] = []
-    stored_close = _iso_day(_field(frontmatter, "sf_close_date"))
-    live_close = _iso_day(live["close_date"])
+    stored_close = _day(_field(frontmatter, "sf_close_date"))
+    live_close = _day(live["close_date"])
     if live_close and stored_close != live_close:
-        flags.append(DriftFlag("YELLOW", "close-date-drift", f"stored {stored_close or '—'} != live {live_close}"))
+        stored_text = stored_close.isoformat() if stored_close else "—"
+        flags.append(DriftFlag("YELLOW", "close-date-drift", f"stored {stored_text} != live {live_close.isoformat()}"))
     stored_acv = _whole_dollars(_field(frontmatter, "sf_consulting_acv"))
     live_acv = _whole_dollars(live["consulting_acv"])
     if stored_acv is None:
@@ -124,12 +128,10 @@ def _snapshot_flags(frontmatter: Mapping[str, Any], live: LiveOpportunity) -> li
 
 
 def _close_window_flags(live: LiveOpportunity, today: date) -> list[DriftFlag]:
-    if live["is_closed"] or not live["close_date"]:
+    close = _day(live["close_date"])
+    if live["is_closed"] or close is None:
         return []
-    try:
-        days = (date.fromisoformat(_iso_day(live["close_date"])) - today).days
-    except ValueError:
-        return []
+    days = (close - today).days
     if days < 0:
         return [DriftFlag("RED", "overdue", f"close date {-days}d past, still open")]
     if days <= RED_CLOSE_WINDOW_DAYS:

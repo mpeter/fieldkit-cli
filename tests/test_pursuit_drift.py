@@ -219,3 +219,26 @@ def test_placeholder_stored_amount_never_matches_empty_live_amount(live_acv: flo
     flags = assess_drift(_frontmatter(sf_consulting_acv="TBD"), _live(consulting_acv=live_acv), TODAY)
     assert flags == [DriftFlag("YELLOW", "acv-drift", "stored consulting ACV is not a number")]
     assert drift_status(flags) != "GREEN"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "stored",
+    [
+        pytest.param("12/31/2027", id="slash"),
+        pytest.param("2027-12-31", id="iso"),
+        pytest.param(date(2027, 12, 31), id="yaml-date"),
+        pytest.param("2027-12-31T00:00:00.000+0000", id="timestamp"),
+    ],
+)
+def test_same_close_date_in_any_stored_format_is_not_drift(stored: object) -> None:
+    """The stored close date is compared as a date, not as text, so format differences are not drift."""
+    flags = assess_drift(_frontmatter(sf_close_date=stored), _live(close_date="2027-12-31"), TODAY)
+    assert "close-date-drift" not in _codes(flags)
+
+
+@pytest.mark.unit
+def test_different_close_date_in_slash_format_still_drifts() -> None:
+    """A slash-format stored date that differs from Salesforce still reports close-date drift."""
+    flags = assess_drift(_frontmatter(sf_close_date="12/30/2027"), _live(close_date="2027-12-31"), TODAY)
+    assert flags == [DriftFlag("YELLOW", "close-date-drift", "stored 2027-12-30 != live 2027-12-31")]
