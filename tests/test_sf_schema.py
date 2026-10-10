@@ -159,12 +159,22 @@ def test_collect_schema_reference_excludes_hidden_and_nameless_fields() -> None:
     client.fetch_sobject.assert_called_once_with("Account", _RECORD_ID, "Visible,Flagged")
 
 
-def test_collect_schema_reference_rejects_describe_with_no_eligible_fields() -> None:
+@pytest.mark.parametrize(
+    "describe",
+    [
+        pytest.param(
+            _describe(
+                _describe_field("Retired__c", deprecatedAndHidden=True),
+                _describe_field("Old__c", deprecatedAndHidden=True),
+            ),
+            id="all-deprecated-and-hidden",
+        ),
+        pytest.param(_describe(), id="empty-field-list"),
+    ],
+)
+def test_collect_schema_reference_rejects_describe_with_no_eligible_fields(describe: dict[str, object]) -> None:
     client = MagicMock()
-    client.describe_sobject.return_value = _describe(
-        _describe_field("Retired__c", deprecatedAndHidden=True),
-        _describe_field("Old__c", deprecatedAndHidden=True),
-    )
+    client.describe_sobject.return_value = describe
 
     with pytest.raises(SFDataAccessError, match="no eligible fields"):
         collect_schema_reference(client, "Account", (_RECORD_ID,))

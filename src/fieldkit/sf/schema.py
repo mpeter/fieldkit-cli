@@ -125,8 +125,8 @@ def _eligible_fields(describe: Mapping[str, object]) -> tuple[SchemaField, ...]:
                 population="not-sampled",
             )
         )
-    if raw_fields and not fields:
-        raise SFDataAccessError("SF describe response listed fields but no eligible fields were described.")
+    if not fields:
+        raise SFDataAccessError("SF describe response contained no eligible fields.")
     return tuple(fields)
 
 

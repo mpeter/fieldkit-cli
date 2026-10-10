@@ -304,7 +304,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Choose the canonical safe write mechanism for persistent state.",
-      "source_fingerprint": "sha256:1bc3305ef586708b903e090f56fddeb731e6f2981227e6d26a5865b592f9ef0b",
+      "source_fingerprint": "sha256:01a4da2e565d7b94a81a56bf47f00f92485e6fb96f99d43a08c95a9625e345c1",
       "sources": [
         "src/fieldkit/**/*.py"
       ]
@@ -1233,7 +1233,7 @@
         }
       ],
       "reader_action": "Inspect the generated module dependency graph.",
-      "source_fingerprint": "sha256:1d1e73534bd418efbeadeb98a3ce619f81d6915034ee26f573dbcc2e8ab2a624",
+      "source_fingerprint": "sha256:08107953fb0d0fdaeb3f2a19fe31fbc2ed33926096efdfee9b2c6e1baf9253df",
       "sources": [
         "tach.toml",
         "src/fieldkit/**/*.py",
@@ -1659,7 +1659,7 @@
         }
       ],
       "reader_action": "Run supported pipeline workflows.",
-      "source_fingerprint": "sha256:b439134847ee8ef9aefcffe8c2a3cf986448746ab003f6dc9fab3a1590fe40fa",
+      "source_fingerprint": "sha256:f8004abcccb8cb0b55d98c076f093e42b498fb730958282ea668f3d7e4b7abdf",
       "sources": [
         "src/fieldkit/commands/pipeline/**/*.py",
         "src/fieldkit/commands/datasync/**/*.py",
@@ -1738,7 +1738,7 @@
         }
       ],
       "reader_action": "Configure and verify Salesforce authentication.",
-      "source_fingerprint": "sha256:4288a6f8083a350f2708803f62fc87a80578f96b5f6ca6be0b8eaaf5f3cad8f2",
+      "source_fingerprint": "sha256:301fe9750e59cc124f74fdd12e737b1039f27c5ecb9fdf9ee7c855bb2b005175",
       "sources": [
         "src/fieldkit/commands/auth/sf.py",
         "src/fieldkit/commands/sf/session_check.py",
@@ -1895,7 +1895,7 @@
       "content_type": "concept",
       "fenced_blocks": [],
       "reader_action": "Understand local storage and external data flows.",
-      "source_fingerprint": "sha256:1bc3305ef586708b903e090f56fddeb731e6f2981227e6d26a5865b592f9ef0b",
+      "source_fingerprint": "sha256:01a4da2e565d7b94a81a56bf47f00f92485e6fb96f99d43a08c95a9625e345c1",
       "sources": [
         "src/fieldkit/**/*.py"
       ],
