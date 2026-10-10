@@ -24,7 +24,6 @@ import click
 from fieldkit.cli_exit import EXIT_DATA, EXIT_PARTIAL
 from fieldkit.commands.pursuit.audit import (
     AuditResult,
-    _parse_sf_date,
     assessment_failure_warnings,
     assessment_summary_line,
     echo_reserved_skips,
@@ -33,16 +32,12 @@ from fieldkit.commands.pursuit.audit import (
 from fieldkit.config import get_fieldkit_home
 from fieldkit.pursuit.enums import Stage
 from fieldkit.pursuit.io import ReportAssessment, ReportInput, read_pursuit_for_report, scan_report_inputs
+from fieldkit.pursuit.stages import REVIEW_EXCLUDED_STAGES, in_review_scope
+from fieldkit.pursuit.utils import parse_sf_date
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-
-# Stages to skip in health check
-SKIP_STAGES = frozenset({Stage.CLOSED_WON, Stage.CLOSED_LOST, Stage.PRE_PIPELINE})
-# Stages omitted from health by default — too early for meaningful risk scoring.
-# Unlike SKIP_STAGES, these can be surfaced with --include-prospect.
-_EARLY_STAGES = frozenset({Stage.PROSPECT})
 
 LATE_STAGES = frozenset({Stage.PROPOSE, Stage.NEGOTIATE, Stage.CLOSED_WON})
 
@@ -116,13 +111,13 @@ def classify_pursuit(result: AuditResult, today: date, frontmatter: dict[str, An
         return None
 
     stage = str(fm.get("stage", "")).lower()
-    if stage in SKIP_STAGES:
+    if stage in REVIEW_EXCLUDED_STAGES:
         return None
-    # _EARLY_STAGES are filtered at the health_check level based on include_prospect.
+    # Opt-in stages are filtered at the health_check level based on include_prospect.
     # We store stage on the item so the caller can filter after classification.
 
     raw_close = fm.get("sf_close_date") or fm.get("sf-close-date") or ""
-    close_date = _parse_sf_date(raw_close)
+    close_date = parse_sf_date(raw_close)
     days_until: int | None = None
     if close_date:
         days_until = (close_date - today).days
@@ -131,7 +126,7 @@ def classify_pursuit(result: AuditResult, today: date, frontmatter: dict[str, An
 
     # Days in current stage — derived from last-transition date in frontmatter.
     raw_transition = str(fm.get("last-transition") or "")
-    transition_date = _parse_sf_date(raw_transition)
+    transition_date = parse_sf_date(raw_transition)
     days_in_stage: int | None = (today - transition_date).days if transition_date else None
 
     reasons: list[str] = []
@@ -158,7 +153,7 @@ def _reportable_item(report_input: ReportInput, today: date, include_prospect: b
     item = classify_pursuit(result, today, report_input.frontmatter)
     if item is None:
         return None
-    if not include_prospect and item.stage in _EARLY_STAGES:
+    if not in_review_scope(item.stage, include_prospect=include_prospect):
         return None
     return item
 

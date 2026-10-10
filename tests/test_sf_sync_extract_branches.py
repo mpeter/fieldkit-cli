@@ -12,13 +12,12 @@ from unittest.mock import patch
 import pytest
 
 from fieldkit.commands.sf.sync import (
-    PLACEHOLDER_VALUES,
     _detect_comment_artifact,
     _extract_opp_id,
     _load_known_accounts,
     _validate_opp_id,
 )
-from fieldkit.sf.opportunities import OPPORTUNITY_ID_RE
+from fieldkit.sf.opportunities import OPPORTUNITY_ID_RE, PLACEHOLDER_VALUES
 
 pytestmark = pytest.mark.unit
 

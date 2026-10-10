@@ -8,6 +8,7 @@ from fieldkit.commands._lazy import make_lazy_group
 _COMMANDS: dict[str, str] = {
     "account": "fieldkit.commands.sf.account",
     "components": "fieldkit.commands.sf.components",
+    "drift": "fieldkit.commands.sf.drift",
     "frontmatter": "fieldkit.commands.sf.frontmatter",
     "listview": "fieldkit.commands.sf.listview",
     "meddpicc": "fieldkit.commands.sf.meddpicc",
@@ -33,6 +34,6 @@ _LazyGroup = make_lazy_group(_COMMANDS)
 )
 @click.pass_context
 def cli(ctx: click.Context) -> None:
-    """Salesforce pipeline — listview, opportunity, account, quote, meddpicc, frontmatter, reconcile, field writes."""
+    """Salesforce pipeline — listview, opportunity, account, quote, meddpicc, frontmatter, reconcile, drift, field writes."""
     if ctx.invoked_subcommand is None:
         click.echo(ctx.get_help())

@@ -1,0 +1,3 @@
+### Report pursuit drift from Salesforce (#94)
+
+`fieldkit sf drift` compares every active, Salesforce-linked pursuit with its live opportunity and reports stage, close-date and consulting-ACV drift plus overdue and soon-closing deals as RED, YELLOW or GREEN. It reads only underscore-keyed `sf_*` fields, is read-only, and lists unreadable pursuit files, invalid opportunity ids and linked pursuits without a recognized `stage` as not assessed instead of skipping them. It exits `1` for an incomplete report, `2` when the Salesforce session needs `fieldkit auth sf`, and `3` when the workspace, the `--account` directory or `sf_org_url` is missing. Use `--json` for a machine-readable report.

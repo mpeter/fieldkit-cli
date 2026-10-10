@@ -10,6 +10,9 @@ logger = logging.getLogger(__name__)
 OPPORTUNITY_ID_RE = re.compile(r"[A-Za-z0-9]{15}\Z|[A-Za-z0-9]{18}\Z")
 OPPORTUNITY_NUMBER_RE = re.compile(r"[0-9]{5,12}\Z")
 
+# Values pursuit files carry in ``sf_opportunity_id`` to mean "no opportunity yet".
+PLACEHOLDER_VALUES = frozenset({"tbd", "placeholder", "todo", "xxx", "none", "n/a", "na", "null", ""})
+
 
 def is_opportunity_id(value: str) -> bool:
     """Return whether *value* is a 15- or 18-character Salesforce id."""

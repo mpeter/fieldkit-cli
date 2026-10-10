@@ -13,6 +13,7 @@ present in the original file (no extra sf_ fields added on round-trip).
 """
 
 import fcntl
+import glob
 import hashlib
 import json
 import logging
@@ -256,10 +257,15 @@ def is_reserved_pursuit_path(path: Path) -> bool:
     return path.name in NON_PURSUIT_FILES
 
 
+def _pursuit_glob(account_filter: str | None) -> str:
+    """Glob for pursuit files; an account name matches literally, never as a pattern."""
+    return f"{glob.escape(account_filter)}/pursuits/*.md" if account_filter else "*/pursuits/*.md"
+
+
 def find_reserved_pursuit_files(root: Path, account_filter: str | None) -> list[str]:
     """List reserved files under ``root/accounts/*/pursuits`` as paths relative to ``accounts``."""
     accounts_dir = root / "accounts"
-    pattern = f"{account_filter}/pursuits/*.md" if account_filter else "*/pursuits/*.md"
+    pattern = _pursuit_glob(account_filter)
     return [str(p.relative_to(accounts_dir)) for p in sorted(accounts_dir.glob(pattern)) if is_reserved_pursuit_path(p)]
 
 
@@ -275,13 +281,16 @@ class ReportInput:
 def scan_report_inputs(root: Path, account_filter: str | None, assessment: ReportAssessment) -> Iterator[ReportInput]:
     """Yield readable pursuit inputs under ``root/accounts`` in path order.
 
+    Dot-prefixed account directories (scaffolding) are skipped unless named by ``account_filter``.
     Every matched file counts as scanned. Reserved file names are skipped as exclusions and recorded in ``assessment.reserved``, and
     unreadable or invalid files are recorded as failures instead of being dropped. Consume
     the iterator fully, then call ``assessment.finish()`` with the number the report kept.
     """
     accounts_dir = root / "accounts"
-    pattern = f"{account_filter}/pursuits/*.md" if account_filter else "*/pursuits/*.md"
+    pattern = _pursuit_glob(account_filter)
     for path in sorted(accounts_dir.glob(pattern)):
+        if account_filter is None and path.parent.parent.name.startswith("."):
+            continue  # scaffolding accounts such as .template, as iterate_pursuits() skips them
         assessment.scanned += 1
         relative = str(path.relative_to(accounts_dir))
         if is_reserved_pursuit_path(path):
