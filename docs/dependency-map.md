@@ -108,7 +108,7 @@ For packages where submodule granularity affects blast radius:
 
 | Submodule | External Consumers |
 | --- | --- |
-| `fieldkit.pursuit.io` | `brief`, `ingest`, `pipeline`, `pursuit`, `sf`, `skill` |
+| `fieldkit.pursuit.io` | `brief`, `gmail`, `ingest`, `pipeline`, `pursuit`, `sf`, `skill` |
 | `fieldkit.pursuit.models` | `pursuit`, `sf` |
 | `fieldkit.pursuit.stale` | `brief` |
 | `fieldkit.pursuit.utils` | — (domain-internal) |

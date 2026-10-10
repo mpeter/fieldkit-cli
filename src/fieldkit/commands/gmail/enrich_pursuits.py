@@ -27,6 +27,7 @@ from fieldkit.gmail.address_quality import account_domains, partition_suspected_
 from fieldkit.gmail.discover import get_gmail_db_path
 from fieldkit.gmail.exceptions import GmailDbNotFoundError
 from fieldkit.gmail.query_domain import connect
+from fieldkit.pursuit.io import GMAIL_INTEL_SLUG
 
 try:
     import yaml
@@ -87,7 +88,7 @@ def _enrich_one_account(account: str, *, as_json: bool) -> tuple[EnrichAccountRe
         if not as_json:
             click.echo(f"  No pursuits found for {account}")
         return {"account": account, "status": "skipped", "path": None}, 0
-    out_path = get_accounts_root() / account / "gmail-intel.md"
+    out_path = get_accounts_root() / account / f"{GMAIL_INTEL_SLUG}.md"
     _write_report(out_path, report)
     if not as_json:
         click.echo(f"  -> {out_path}")
