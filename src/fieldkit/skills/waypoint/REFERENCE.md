@@ -44,7 +44,7 @@ sheet-read call against a Doc (or vice versa) typically 404s.
 **AI assistant** (program/policy waypoints — if your organization has one
 configured):
 ```bash
-fieldkit shadowbot query < scratch/waypoints/prompt.txt   # question written with your file tool
+fieldkit shadowbot query --new < scratch/waypoints/prompt.txt   # fresh thread per hop; question written with your file tool
 ```
 
 ## Model & token economics
