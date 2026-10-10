@@ -111,7 +111,7 @@ For packages where submodule granularity affects blast radius:
 | `fieldkit.pursuit.io` | `brief`, `gmail`, `ingest`, `pipeline`, `pursuit`, `sf`, `skill` |
 | `fieldkit.pursuit.models` | `pursuit`, `sf` |
 | `fieldkit.pursuit.stale` | `brief` |
-| `fieldkit.pursuit.utils` | — (domain-internal) |
+| `fieldkit.pursuit.utils` | `pursuit` |
 
 ### fieldkit.gmail
 

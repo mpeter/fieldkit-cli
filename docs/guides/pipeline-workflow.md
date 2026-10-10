@@ -296,7 +296,8 @@ each opportunity RED, YELLOW or GREEN:
 - **RED** — the close date has passed or is within 14 days, Salesforce shows the
   opportunity closed while the pursuit is open, Salesforce has no opportunity with
   the stored ID, or the request failed.
-- **YELLOW** — the stored stage, close date or consulting ACV differs from live
+- **YELLOW** — the stored stage, close date (compared as a date, so `12/31/2027`
+  matches `2027-12-31`) or consulting ACV differs from live
   Salesforce, the local stage differs from a Salesforce stage of the same name, or
   the close date is within 30 days.
 
