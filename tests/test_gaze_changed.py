@@ -9,6 +9,8 @@ import pytest
 
 pytestmark = pytest.mark.unit
 
+_COMPARISON = {"new_function_threshold": 15.0}
+
 
 def _result(location: str, status: str, crap: float = 12.0, baseline: float = 6.0) -> dict[str, object]:
     return {
@@ -147,7 +149,7 @@ def _run_main(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, proposed: str, ga
 def test_main_fails_on_regression_in_changed_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    report = {"results": [_result("contact/enrich.py:10", "regression")]}
+    report = {"results": [_result("contact/enrich.py:10", "regression")], "comparison": _COMPARISON}
 
     status = _run_main(tmp_path, monkeypatch, _baseline(_entry("kept", 5.0)), lambda *_: report)
 
@@ -165,7 +167,7 @@ def test_main_compares_against_the_ratcheted_baseline_and_reports_raises(
 
     def gazepy(_coverage: Path, baseline: Path) -> dict[str, object]:
         seen.append(json.loads(baseline.read_text(encoding="utf-8")))
-        return {"results": []}
+        return {"results": [], "comparison": _COMPARISON}
 
     status = _run_main(tmp_path, monkeypatch, _baseline(_entry("kept", 9.0)), gazepy)
 
@@ -264,6 +266,37 @@ def test_dropped_entries_flags_only_functions_that_still_exist(report_key: str |
     )
 
     assert [v.describe().removeprefix(".gaze/baseline.json ") for v in dropped] == expected
+
+
+@pytest.mark.parametrize(
+    ("crap", "expected"),
+    [
+        pytest.param(15.0, [], id="at-threshold-is-allowed"),
+        pytest.param(
+            15.01, ["io.py:new: entry added at CRAP 15.01 > threshold 15.00"], id="above-threshold-is-rejected"
+        ),
+    ],
+)
+def test_added_above_threshold_keeps_new_functions_under_the_threshold(crap: float, expected: list[str]) -> None:
+    """Recording a new function's score cannot exempt it from the new-function threshold."""
+    added = gaze_changed.added_above_threshold(
+        _baseline(_entry("old", 40.0)), _baseline(_entry("old", 40.0), _entry("new", crap)), 15.0
+    )
+
+    assert [f"{v.key}: {v.detail}" for v in added] == expected
+
+
+def test_main_rejects_a_new_function_recorded_above_the_threshold(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """gazepy sees the recorded function as tracked and unchanged, so only the ratchet catches it."""
+    report = {"results": [_result("io.py:3", "unchanged", crap=42.0)], "comparison": _COMPARISON}
+    proposed = _baseline(_entry("kept", 5.0), _entry("big", 42.0))
+
+    status = _run_main(tmp_path, monkeypatch, proposed, lambda *_: report)
+
+    assert status == 1
+    assert ".gaze/baseline.json io.py:big: entry added at CRAP 42.00 > threshold 15.00" in capsys.readouterr().out
 
 
 def test_score_key_qualifies_methods_with_their_receiver() -> None:

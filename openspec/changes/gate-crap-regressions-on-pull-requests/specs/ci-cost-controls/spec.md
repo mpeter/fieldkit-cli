@@ -51,8 +51,9 @@ and contract-coverage gates unchanged.
 - **THEN** `CRAP (changed functions)` SHALL compare against those entries
 
 #### Scenario: A pull request loosens the baseline
-- **GIVEN** a pull request whose `.gaze/baseline.json` raises a score, or
-  removes the entry of a function that still exists
+- **GIVEN** a pull request whose `.gaze/baseline.json` raises a score,
+  removes the entry of a function that still exists, or adds an entry above
+  the new-function threshold
 - **WHEN** pull-request CI runs
 - **THEN** `CRAP (changed functions)` SHALL fail, name the entry, and keep
   comparing against the base revision's score

@@ -83,8 +83,8 @@ tests or simplify the function. Run the same check locally with `make crap-chang
 
 The baseline only ratchets down. A pull request may add entries or lower scores, for example by
 running `make gaze-baseline` after moving or renaming functions so they are tracked again rather than
-held only to the threshold. The check fails if the pull request raises an entry or removes one for a
-function that still exists; restore those entries. A deliberate increase needs a maintainer-reviewed
+held only to the threshold. The check fails if the pull request raises an entry, removes one for a
+function that still exists, or adds one above CRAP 15; restore those entries, or simplify the function. A deliberate increase needs a maintainer-reviewed
 pull request that changes only the baseline, merged first.
 
 Use conventional commit messages such as `fix(cli): handle missing config` or

@@ -25,9 +25,11 @@ are held to the new-function threshold rather than their old score.
 The baseline is a one-way ratchet. The comparison starts from the base revision's
 committed baseline and takes the change's own ``.gaze/baseline.json`` edits only
 where they add an entry or lower a score, so a pull request can re-track moved
-functions or lock in a gain by running ``make gaze-baseline``. A raised score, or a
-dropped entry for a function that still exists, fails the check: that file becomes
-the baseline scheduled enforcement reads once the change merges.
+functions or lock in a gain by running ``make gaze-baseline``. A raised score, a
+dropped entry for a function that still exists, or an added entry above the
+new-function threshold fails the check: that file becomes the baseline scheduled
+enforcement reads once the change merges, and an added entry would otherwise
+exempt its function from the threshold.
 
 Usage:
     uv run python scripts/gaze_changed.py --coverprofile coverage-changed.json --base origin/main
@@ -229,6 +231,22 @@ def dropped_entries(base_text: str, proposed_text: str, report: Mapping[str, obj
     ]
 
 
+def added_above_threshold(base_text: str, proposed_text: str, threshold: float) -> list[BaselineViolation]:
+    """Return entries the change added whose CRAP exceeds the new-function threshold.
+
+    An untracked function is held to the threshold; recording it in the
+    baseline at a higher score would grant it an allowance the threshold
+    refuses, so only entries within it may be added.
+    """
+    base = _baseline_entries(base_text, "base")
+    violations = []
+    for key, entries in sorted(_baseline_entries(proposed_text, "proposed").items()):
+        crap = _highest(entries, "crap")
+        if key not in base and crap is not None and crap > threshold:
+            violations.append(BaselineViolation(key, f"entry added at CRAP {crap:.2f} > threshold {threshold:.2f}"))
+    return violations
+
+
 def _git(*arguments: str) -> str:
     return subprocess.run(
         ["git", *arguments],
@@ -315,6 +333,7 @@ def _evaluate(coverprofile: Path, base: str) -> tuple[list[str], list[Regression
         baseline.write_text(json.dumps(merged), encoding="utf-8")
         report = _gazepy_report(coverprofile, baseline)
     failures: list[Regression | BaselineViolation] = [*violations, *dropped_entries(base_text, proposed_text, report)]
+    failures.extend(added_above_threshold(base_text, proposed_text, _new_function_threshold(report)))
     failures.extend(changed_regressions(report, changed))
     return changed, failures
 
