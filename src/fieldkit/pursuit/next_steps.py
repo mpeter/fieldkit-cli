@@ -7,6 +7,10 @@ from typing import Literal
 from fieldkit.pursuit.enums import Stage
 from fieldkit.pursuit.stages import PIPELINE_STAGES
 
+#: Values that record no action: blank text, plus the literal ``None``/``null``
+#: strings legacy files carry from before model validation.
+MISSING_NEXT_STEP_VALUES: frozenset[str] = frozenset({"", "None", "null"})
+
 
 @dataclass(frozen=True)
 class NextStepFinding:
@@ -28,6 +32,6 @@ def check_next_steps(frontmatter: Mapping[str, object]) -> NextStepFinding | Non
     value = frontmatter.get("sf_next_steps") if "sf_next_steps" in frontmatter else frontmatter.get("sf-next-steps")
     if value is not None and not isinstance(value, str):
         return NextStepFinding("ERROR", "sf_next_steps must be text or null")
-    if value is None or not value.strip():
+    if value is None or value.strip() in MISSING_NEXT_STEP_VALUES:
         return NextStepFinding("WARNING", "Missing sf_next_steps — confirm and record the next agreed action")
     return None

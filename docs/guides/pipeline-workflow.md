@@ -128,7 +128,8 @@ does not perform a live ClosePlan read.
 Every active stage (prospect, qualify, discover, validate, propose, negotiate)
 needs a recorded next action, regardless of whether its close date is missing,
 invalid, overdue, near or distant. An absent, null, empty or whitespace-only
-`sf_next_steps` produces one warning: `Missing sf_next_steps — confirm and record
+`sf_next_steps`, or the literal text `None` or `null` that older files carry,
+produces one warning: `Missing sf_next_steps — confirm and record
 the next agreed action`. Pre-pipeline and terminal stages are excluded.
 
 When `sf_next_steps` exists, its value takes precedence even if blank or null.

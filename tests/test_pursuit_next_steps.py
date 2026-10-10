@@ -17,7 +17,14 @@ pytestmark = pytest.mark.unit
 ACTIVE_STAGES = ("prospect", "qualify", "discover", "validate", "propose", "negotiate")
 MISSING_MESSAGE = "Missing sf_next_steps — confirm and record the next agreed action"
 INVALID_MESSAGE = "sf_next_steps must be text or null"
-NEXT_FIELDS = ({}, {"sf_next_steps": None}, {"sf_next_steps": ""}, {"sf_next_steps": " \t\n"})
+NEXT_FIELDS = (
+    {},
+    {"sf_next_steps": None},
+    {"sf_next_steps": ""},
+    {"sf_next_steps": " \t\n"},
+    {"sf_next_steps": "None"},
+    {"sf_next_steps": " null "},
+)
 
 
 @pytest.mark.parametrize("stage", ACTIVE_STAGES)
