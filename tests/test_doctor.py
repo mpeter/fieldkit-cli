@@ -676,25 +676,31 @@ def test_check_shadowbot_includes_config_warnings(tmp_path: Path, token_exists: 
     assert "shadowbot.chrome_cookies_path" in result.warnings[0]
 
 
-def test_doctor_shadowbot_cmd_json_warns_without_changing_exit_status(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("config", "expect_warning"),
+    [(_MISPLACED_CONFIG, True), ({}, False)],
+    ids=["misplaced-key", "clean-config"],
+)
+def test_doctor_shadowbot_cmd_json_warns_without_changing_exit_status(
+    tmp_path: Path, config: dict[str, object], expect_warning: bool
+) -> None:
     """Scripts parse doctor --json, so warnings must appear in the payload without altering the exit status."""
     token_path = tmp_path / "shadowbot-token.json"
     token_path.write_text('{"refresh_token": "rt"}', encoding="utf-8")
-    exit_codes = []
-    payloads = []
-    for config in (_MISPLACED_CONFIG, {}):
-        with (
-            patch("fieldkit.commands.doctor.shadowbot.get_token_path", return_value=token_path),
-            patch("fieldkit.commands.doctor.shadowbot.get_token", return_value="access-token"),
-            patch("fieldkit.config._loader._load_raw_config", return_value=config),
-        ):
-            result = CliRunner().invoke(doctor_shadowbot_cmd, ["--json"])
-        exit_codes.append(result.exit_code)
-        payloads.append(json.loads(result.output))
+    with (
+        patch("fieldkit.commands.doctor.shadowbot.get_token_path", return_value=token_path),
+        patch("fieldkit.commands.doctor.shadowbot.get_token", return_value="access-token"),
+        patch("fieldkit.config._loader._load_raw_config", return_value=config),
+    ):
+        result = CliRunner().invoke(doctor_shadowbot_cmd, ["--json"])
 
-    assert exit_codes == [0, 0]
-    assert "shadowbot.chrome_cookies_path" in payloads[0]["warnings"][0]
-    assert payloads[1]["warnings"] == []
+    assert result.exit_code == 0
+    warnings = json.loads(result.output)["warnings"]
+    if expect_warning:
+        assert len(warnings) == 1
+        assert "shadowbot.chrome_cookies_path" in warnings[0]
+    else:
+        assert warnings == []
 
 
 def test_doctor_all_shows_shadowbot_warning_and_keeps_exit_status() -> None:
