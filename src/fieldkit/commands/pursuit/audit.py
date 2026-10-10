@@ -326,6 +326,14 @@ def _check_historical_qualification(fm: dict[str, Any]) -> list[Finding]:
     return []
 
 
+def _check_next_steps(fm: dict[str, Any]) -> list[Finding]:
+    """Adapt the typed domain observation to the audit's existing finding shape."""
+    finding = check_next_steps(fm)
+    if finding is None:
+        return []
+    return [Finding(finding.level, finding.message)]
+
+
 def _check_close_date_upcoming(
     days_until: int,
     sf_stage_str: str,
@@ -415,9 +423,7 @@ def audit_file(path: Path, today: date | None = None) -> AuditResult:
     result.findings.extend(_check_backstory(fm, body))
     result.findings.extend(_check_historical_qualification(fm))
     result.findings.extend(_check_close_date(fm, today))
-    next_step_finding = check_next_steps(fm)
-    if next_step_finding is not None:
-        result.findings.append(Finding(next_step_finding.level, next_step_finding.message))
+    result.findings.extend(_check_next_steps(fm))
 
     return result
 
