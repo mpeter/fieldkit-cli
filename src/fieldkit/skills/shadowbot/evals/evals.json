@@ -1,0 +1,89 @@
+{
+  "skill_name": "shadowbot",
+  "static_checks": [
+    {
+      "id": "commands_exist",
+      "type": "commands_exist",
+      "commands": [
+        "fieldkit shadowbot query",
+        "fieldkit auth shadowbot",
+        "fieldkit sf meddpicc"
+      ]
+    },
+    {
+      "id": "portable_exit_status",
+      "type": "not_contains",
+      "pattern": "PIPESTATUS",
+      "message": "PIPESTATUS is bash-only; use set -o pipefail so zsh reports the right status"
+    },
+    {
+      "id": "stderr_kept",
+      "type": "not_contains",
+      "pattern": "2>/dev/null | tee",
+      "message": "Discarding stderr hides the auth failure the skill tells the operator to look for"
+    },
+    {
+      "id": "new_thread_default",
+      "type": "contains",
+      "pattern": "--new",
+      "message": "Must default to a fresh thread"
+    },
+    {
+      "id": "scratch_only",
+      "type": "contains",
+      "pattern": "scratch/",
+      "message": "Assistant output belongs in scratch/"
+    },
+    {
+      "id": "draft_review_gate",
+      "type": "contains",
+      "pattern": "draft-review",
+      "message": "Customer-facing output must route through draft-review"
+    },
+    {
+      "id": "no_pursuit_note_writes",
+      "type": "not_contains",
+      "pattern": "update the pursuit note",
+      "message": "Assistant output must not become pursuit-note or qualification state"
+    },
+    {
+      "id": "prompt_not_shell_interpolated",
+      "type": "contains",
+      "pattern": "query --new < scratch/shadowbot-prompt.txt",
+      "message": "Prompt text comes from customer-controlled files; it is written with the file tool and sent on stdin, never placed in shell syntax"
+    },
+    {
+      "id": "scratch_created",
+      "type": "contains",
+      "pattern": "mkdir -p scratch",
+      "message": "fieldkit init does not create scratch/; redirections fail before the query runs"
+    },
+    {
+      "id": "no_prompt_heredoc",
+      "type": "not_contains",
+      "pattern": "<<'PROMPT'",
+      "message": "A heredoc closes early on a line equal to its delimiter; untrusted prompts go through a file"
+    }
+  ],
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "ask shadowbot for an account summary of {{primary_account}}",
+      "expected_behavior": "Resolves the account, assembles context, runs a --new query teed to scratch/",
+      "assertions": [
+        "Runs fieldkit shadowbot query with --new",
+        "Saves the output under scratch/",
+        "Labels the output as unverified rather than Salesforce fact"
+      ]
+    },
+    {
+      "id": 1,
+      "prompt": "shadowbot says the close date for {{primary_pursuit}} moved — update the pursuit",
+      "expected_behavior": "Refuses to treat assistant output as system-of-record and verifies via fieldkit sf",
+      "assertions": [
+        "Verifies the close date with fieldkit sf before any change",
+        "Does not write the assistant's output into the pursuit note"
+      ]
+    }
+  ]
+}

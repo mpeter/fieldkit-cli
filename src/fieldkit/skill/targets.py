@@ -106,7 +106,10 @@ SKILL_CATEGORIES: dict[str, list[str]] = {
     "ACCOUNT INTELLIGENCE": [
         "grill",
         "pipeline",
+        "sf-reconcile",
         "sf-sync",
+        "shadowbot",
+        "waypoint",
     ],
     "MEETING & PURSUIT": [
         "followup-draft",
@@ -116,6 +119,7 @@ SKILL_CATEGORIES: dict[str, list[str]] = {
     ],
     "CONTENT & PROPOSALS": [
         "contract",
+        "exec-review-deck",
     ],
     "CONTACTS & ENGAGEMENT": [
         "contact",
@@ -125,6 +129,7 @@ SKILL_CATEGORIES: dict[str, list[str]] = {
         "companion",
         "ingest",
         "memory-management",
+        "sweep",
         "task-management",
         "task-sync",
         "tool-routing",
