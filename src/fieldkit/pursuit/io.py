@@ -221,6 +221,8 @@ class PursuitReadResult:
 
 @dataclass(frozen=True)
 class ReportFailure:
+    """A pursuit file a report could not read, with the reason."""
+
     relative_path: str
     reason: str
 
@@ -237,6 +239,7 @@ class ReportAssessment:
 
     @property
     def complete(self) -> bool:
+        """Return True when no input failed to load."""
         return not self.failures
 
     def finish(self, included: int) -> None:
@@ -255,6 +258,34 @@ NON_PURSUIT_FILES = frozenset(f"{slug}.md" for slug in RESERVED_PURSUIT_SLUGS)
 def is_reserved_pursuit_path(path: Path) -> bool:
     """Return True when the file name, and only the file name, is a reserved pursuit name."""
     return path.name in NON_PURSUIT_FILES
+
+
+# Runs of anything other than lowercase ASCII letters and digits become one hyphen.
+_PURSUIT_SLUG_SEPARATORS_RE = re.compile(r"[^a-z0-9]+")
+
+
+def slugify_pursuit_name(name: str) -> str:
+    """Return the pursuit file slug for ``name``: ``'New Deal'`` becomes ``'new-deal'``.
+
+    This is the only slug rule; ``pursuit create`` applies it to a name and
+    ``pursuit rename`` requires its target to already satisfy it.
+    """
+    return _PURSUIT_SLUG_SEPARATORS_RE.sub("-", name.lower()).strip("-")
+
+
+def is_pursuit_slug(value: str) -> bool:
+    """Return True when ``value`` is non-empty and already in slug form, so it is safe as a file stem."""
+    return bool(value) and slugify_pursuit_name(value) == value
+
+
+def is_pursuit_path_component(value: str) -> bool:
+    """Return True when ``value`` names one entry inside its parent directory.
+
+    Existing pursuit and account names may predate the slug rule, so this only
+    rejects what could leave the directory: an empty value, ``.`` or ``..``, a
+    path separator, or a NUL byte.
+    """
+    return value not in {"", ".", ".."} and not any(char in value for char in ("/", "\\", "\0"))
 
 
 def _pursuit_glob(account_filter: str | None) -> str:

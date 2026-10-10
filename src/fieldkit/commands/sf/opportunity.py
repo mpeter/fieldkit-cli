@@ -30,6 +30,7 @@ from fieldkit.sf.client import SFAuthError, SFDirectClient
 from fieldkit.sf.components import ContractType, opp_contract_type
 from fieldkit.sf.opportunities import PLACEHOLDER_VALUES, is_opportunity_number, resolve_opportunity_reference
 from fieldkit.sf.types import DealSplitRecord, OpportunitySObject
+from fieldkit.util.jsonio import json_default
 
 LOG_PREFIX = "[sf-opportunity]"
 
@@ -433,7 +434,7 @@ def cli(opp_id: str, pursuit_file: str | None, no_write: bool, as_json: bool) ->
         payload["deal_splits"] = [
             {"offering": s.get("offering_group", ""), "pct": s.get("services_pct", 0.0)} for s in splits
         ]
-        click.echo(json.dumps(payload, indent=2, default=str))
+        click.echo(json.dumps(payload, indent=2, default=json_default))
         return
 
     code = run_opportunity(opp_id, pursuit_file, write=not no_write)

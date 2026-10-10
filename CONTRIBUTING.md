@@ -48,6 +48,10 @@ Keep each pull request focused on one problem. Preserve the architecture documen
 Bug fixes and behavior changes need tests that demonstrate the observable contract. Documentation-only
 and test-only improvements are welcome and do not need invented runtime changes.
 
+Every public module, package, class, function, and method under `src/` needs a docstring that states
+its contract; `__init__` and other dunder methods are exempt. Ruff enforces this (rules D100–D104) in `make pr-check` and the pre-commit hook. Docstrings
+in tests, scripts, and hooks are welcome but not required.
+
 If the CLI surface changes, run `make docs` and include the generated reference update. User-visible
 changes need one descriptive Markdown file under `changelog.d/`; documentation-only, test-only,
 refactor-only, and CI-only changes may be exempt when the change has no user-facing effect. Follow
@@ -71,6 +75,20 @@ with `uv run pytest tests/ -p no:tach -q -n 4`.
 The command reports each failing stage separately. You can run focused tests and linters while
 iterating, but `make pr-check` is the supported local readiness signal. Complete enforcement and the
 supported-platform artifact matrix run in GitHub Actions.
+
+Pull requests that change production Python also run `CRAP (changed functions)`. It measures
+coverage over the whole suite and fails if a function in a changed `src/fieldkit/` file scores worse
+than its entry in the base branch's `.gaze/baseline.json`, or if a new function exceeds CRAP 15. Add
+tests or simplify the function. Run the same check locally with `make crap-changed`.
+
+The baseline only ratchets down. A pull request may add entries or lower scores, for example by
+running `make gaze-baseline` after moving or renaming functions so they are tracked again rather than
+held only to the threshold. The check fails if the pull request raises an entry, removes one for a
+function that still exists, or adds one above CRAP 15; restore those entries, or simplify the function.
+An entry whose CRAP is `null` was never measured; when you add its first tests, record the measured
+score (at most 15) in the same pull request, because gazepy compares a null score as zero. The
+check also runs on pull requests that change only the baseline, so no score is ever raised: test or
+decompose a function that must grow.
 
 Use conventional commit messages such as `fix(cli): handle missing config` or
 `docs: clarify installation`. Do not commit credentials, customer data, personal email addresses,

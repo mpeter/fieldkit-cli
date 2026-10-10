@@ -16,6 +16,7 @@ from fieldkit.config.migrate import (
     MigrationResult,
     migrate_config,
 )
+from fieldkit.util.jsonio import json_default
 
 LOG_PREFIX = "[init-migrate]"
 
@@ -52,7 +53,7 @@ def migrate_cmd(as_json: bool) -> None:
         raise SystemExit(EXIT_PARTIAL) from None
 
     if as_json:
-        click.echo(json.dumps(_payload(result), indent=2, default=str))
+        click.echo(json.dumps(_payload(result), indent=2, default=json_default))
         return
 
     if result.outcome == "migrated":

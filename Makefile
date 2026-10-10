@@ -1,4 +1,4 @@
-.PHONY: verify test lint bootstrap contributor-hooks pr-check install reinstall install-health artifact-check release-check release-policy-check release-workflow-policy-check public-tree-safety quality quality-full gazepy gaze-baseline gaze-report audit-check hooks update-schema eval-skills install-skills docs docs-site changelog changelog-preview mutation-report
+.PHONY: verify test lint bootstrap contributor-hooks pr-check install reinstall install-health artifact-check release-check release-policy-check release-workflow-policy-check public-tree-safety quality quality-full gazepy crap-changed gaze-baseline gaze-report audit-check hooks update-schema eval-skills install-skills docs docs-site changelog changelog-preview mutation-report
 
 # Broad pytest targets use four workers by default so a developer workstation retains
 # memory for its interactive services. Override deliberately for a larger host, e.g.
@@ -267,6 +267,18 @@ gazepy: coverage.json
 	uv run gazepy crap src/fieldkit/ --coverprofile coverage.json --baseline .gaze/baseline.json
 	uv run gazepy crap src/fieldkit/ --coverprofile coverage.json --max-crapload 67
 	uv run gazepy quality src/fieldkit/ --min-contract-coverage 50
+
+# crap-changed — the pull-request CRAP check run locally: the whole suite with coverage, then
+# gaze_changed.py fails on a regression in any src/fieldkit file changed since QUALITY_BASE.
+# Optional and slower than `make pr-check` (coverage instruments the full suite); the hosted
+# `CRAP (changed functions)` job runs the same check on every production-code pull request.
+crap-changed:
+	@if [ -z "$(QUALITY_BASE)" ]; then \
+		echo "ERROR: crap-changed requires QUALITY_BASE or origin/main" >&2; \
+		exit 2; \
+	fi
+	uv run pytest tests/ -p no:tach -q -n $(PYTEST_XDIST_WORKERS) --cov --cov-fail-under=0 --cov-report=json:coverage-changed.json
+	uv run python scripts/gaze_changed.py --coverprofile coverage-changed.json --base $(QUALITY_BASE)
 
 # gaze-baseline — regenerate the committed lean CRAP baseline (.gaze/baseline.json).
 # `gazepy crap --format json` emits a ~4MB payload; the baseline comparator only reads

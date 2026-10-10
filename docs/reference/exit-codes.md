@@ -53,10 +53,12 @@ typed exceptions; the dispatcher is the final process boundary.
 | `LLMError(category="auth")` | Vertex AI credential failure | `2` |
 | `LLMError(category="rate-limit")` | Provider rate limit hit | `1` |
 | `LLMError(category="general")` | Any other LLM failure | `3` |
-| `click.exceptions.Exit` | Used by `--help`, `--version` | code from exc (`Exit(None)` → `1`) |
 | `click.ClickException` (including usage errors) | Invalid invocation or missing target; concise stderr | `3` |
 | Companion malformed watcher status | Repair watcher state; concise stderr | `3` |
 | Any other `Exception` | Unhandled error | `3` |
+
+`click.exceptions.Exit`, which `--help` and `--version` raise, never reaches
+`cli_main()`: Click converts it to a returned exit code, so both exit `0`.
 
 `KeyboardInterrupt` is not caught by either application boundary. The shell
 reports an interrupted command as exit `130`.
@@ -104,6 +106,15 @@ These commands exit `3` when data is invalid and a retry without a fix will not 
 - **`fieldkit pursuit audit`**: the configured root or account directory is
   missing, or the selected scope contains no pursuit files. Initialize or correct
   the workspace, then run the audit again.
+- **`fieldkit pursuit create`** and **`fieldkit pursuit rename`**: the name would
+  produce a reserved pursuit file name (`template` or `gmail-intel`), which
+  reports skip. Nothing is written; choose a different name.
+- **`fieldkit pursuit rename`**: `--to` is not already a pursuit slug (lowercase
+  letters, digits and single hyphens, as `pursuit create` produces), or
+  `--account` or `--from` contains a path separator or is empty, `.` or `..`.
+  Nothing is written; the message suggests the slug form of `--to`.
+- **`fieldkit sf schema`**: the Salesforce describe response contains no eligible
+  field. No record is requested; check the object name and its field permissions.
 - **`fieldkit sf drift`**: the workspace has no `accounts` directory, `--account`
   is not the name of an existing directory directly under `accounts/` (a path
   such as `..` or `a/b` is rejected), or, when at least one pursuit needs

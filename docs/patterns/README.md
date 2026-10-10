@@ -3,10 +3,13 @@
 Use these current examples before introducing a second way to solve the same
 problem.
 
-- New command adapter: see `src/fieldkit/commands/sf/` for parsing CLI input,
-  calling domain behavior, rendering output, and returning the domain exit status.
+- New command adapter: see `src/fieldkit/commands/meeting/link_cmd.py` for
+  parsing CLI input, calling domain behavior in `src/fieldkit/meeting/`,
+  rendering text or JSON, and running inside `cli_main()` so domain exceptions
+  map to the shared exit codes in `fieldkit.cli_exit`.
 - Configured filesystem write: see `src/fieldkit/config/` for resolving a
-  configured root and using the established atomic write helper.
+  configured root, and `src/fieldkit/util/atomic.py` for the established atomic
+  write helpers.
 - Optional integration: see `src/fieldkit/commands/gmail/` for delaying imports
   until command invocation and presenting a clear missing-profile error.
 - Persistent pursuit data: see `src/fieldkit/pursuit/` for the canonical

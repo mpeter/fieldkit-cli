@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -333,16 +334,19 @@ def test_pr_ci_runs_the_full_suite_and_preserves_required_contexts() -> None:
 
 
 @pytest.mark.parametrize(
-    ("changed_file", "expected_code"),
+    ("changed_file", "expected_code", "expected_crap"),
     [
-        ("uv.lock", "true"),
-        ("pyproject.toml", "true"),
-        ("src/fieldkit/example.py", "true"),
-        ("docs/example.md", "false"),
+        ("uv.lock", "true", "false"),
+        ("pyproject.toml", "true", "false"),
+        ("src/fieldkit/example.py", "true", "true"),
+        ("src/fieldkit/skills/brief/SKILL.md", "false", "false"),
+        ("tests/test_example.py", "true", "false"),
+        ("docs/example.md", "false", "false"),
+        (".gaze/baseline.json", "true", "true"),
     ],
 )
 def test_pr_ci_classifies_dependency_source_and_documentation_changes(
-    tmp_path: Path, changed_file: str, expected_code: str
+    tmp_path: Path, changed_file: str, expected_code: str, expected_crap: str
 ) -> None:
     """Dependency-only and source changes take the full-suite path; ordinary prose retains no-impact handling."""
     workflow = yaml.load((_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
@@ -384,10 +388,46 @@ def test_pr_ci_classifies_dependency_source_and_documentation_changes(
     )
 
     assert result.returncode == 0, result.stderr
-    assert output.read_text(encoding="utf-8").strip() == f"code={expected_code}"
+    assert output.read_text(encoding="utf-8").splitlines() == [f"code={expected_code}", f"crap={expected_crap}"]
     test_step = next(step for step in workflow["jobs"]["test"]["steps"] if step.get("name") == "Run pytest")
     assert test_step["if"] == "needs.changes.outputs.code == 'true'"
     assert "uv run pytest tests/ -p no:tach -q -n 4" in test_step["run"]
+
+
+def test_pr_ci_gates_crap_regressions_in_changed_functions_within_budget() -> None:
+    """Pull requests catch CRAP regressions in changed functions without slowing the slowest child.
+
+    The job runs only for production Python or baseline changes, in parallel with the other
+    children, using the low-overhead sys.monitoring coverage core; complete Gaze
+    enforcement stays in the scheduled ``make quality-full`` run.
+    """
+    workflow = (_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    jobs = yaml.load(workflow, Loader=yaml.BaseLoader)["jobs"]
+    job = jobs["crap-changed"]
+
+    assert job["name"] == "CRAP (changed functions)"
+    assert job["needs"] == "changes"
+    assert job["env"]["COVERAGE_CORE"] == "sysmon"
+    gated = [step for step in job["steps"] if "uses: actions/checkout" not in str(step) and step.get("if")]
+    assert gated and all(step["if"] == "needs.changes.outputs.crap == 'true'" for step in gated)
+    setup = next(step for step in job["steps"] if str(step.get("uses", "")).startswith("astral-sh/setup-uv@"))
+    assert setup["with"]["python-version"] == "3.13"
+    check = next(
+        step for step in job["steps"] if step.get("name") == "Check changed functions against the CRAP baseline"
+    )
+    assert "scripts/gaze_changed.py --coverprofile coverage-changed.json --base HEAD^1" in check["run"]
+    assert '--child "CRAP (changed functions)=$CRAP_RESULT"' in workflow
+    assert "--cov-report=json:coverage.json" not in workflow
+
+
+def test_required_checks_rollup_names_match_the_evidence_script() -> None:
+    """Every rollup child the workflow passes must be one ci_evidence.py accepts, and none may be missing."""
+    import ci_evidence
+
+    workflow = (_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    passed = re.findall(r'--child "([^"=]+)=', workflow)
+
+    assert tuple(passed) == ci_evidence._REQUIRED_CHILDREN
 
 
 def test_pr_ci_exposes_stable_bounded_aggregate_and_keeps_compatibility_dispatchable() -> None:
@@ -407,6 +447,7 @@ def test_pr_ci_exposes_stable_bounded_aggregate_and_keeps_compatibility_dispatch
         "commit-msg-pii",
         "fast-checks",
         "test",
+        "crap-changed",
         "skillsaw",
         "agentready",
     ]

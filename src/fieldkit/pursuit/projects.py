@@ -33,6 +33,8 @@ COMPLETED_STAGES = frozenset({"Completed", "Closed", "completed", "closed"})
 
 @dataclass
 class ProjectRow:
+    """One project pursuit's contract-end timing and health classification."""
+
     relative_path: str
     name: str
     sf_stage: str

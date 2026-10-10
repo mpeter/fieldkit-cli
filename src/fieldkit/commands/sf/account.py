@@ -36,6 +36,7 @@ from fieldkit.pursuit.stages import CLOSED_STAGES as _CLOSED_STAGES
 from fieldkit.sf.client import SFAPIError as _SFAPIError
 from fieldkit.sf.client import reauth_hint_message as _reauth_hint
 from fieldkit.sf.components import effective_net_consulting_acv, opp_contract_type
+from fieldkit.util.jsonio import json_default
 
 LOG_PREFIX = "[sf-account]"
 
@@ -578,7 +579,7 @@ def cli(account_name: str, no_write: bool, as_json: bool) -> None:
 
         payload = _build_account_write_payload(account_name, acct_rec, open_opps)
         payload["opportunities"] = open_opps
-        click.echo(json.dumps(payload, indent=2, default=str))
+        click.echo(json.dumps(payload, indent=2, default=json_default))
         return
 
     code = run_account(account_name, write=not no_write)

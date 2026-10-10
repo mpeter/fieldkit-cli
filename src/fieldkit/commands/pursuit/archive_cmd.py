@@ -17,16 +17,21 @@ from fieldkit.cli_registry import declare_write
 from fieldkit.config import get_fieldkit_home
 from fieldkit.pursuit.io import is_reserved_pursuit_path, load_pursuit
 from fieldkit.pursuit.stages import CLOSED_STAGES as _CLOSED_STAGES
+from fieldkit.util.jsonio import json_default
 
 LOG_PREFIX = "[pursuit-archive]"
 
 
 class ArchiveError(TypedDict):
+    """Machine-readable error code and the operation that failed during an archive."""
+
     code: str
     operation: str
 
 
 class ArchiveRecord(TypedDict):
+    """Per-pursuit result of an archive run, including outcome and whether the archive directory was created."""
+
     pursuit: str
     source: str
     dest: str | None
@@ -210,7 +215,7 @@ def cli(account: str, name: str | None, all_closed: bool, dry_run: bool, as_json
                     "error": error,
                 },
                 indent=2,
-                default=str,
+                default=json_default,
             )
         )
 

@@ -1028,11 +1028,11 @@ Commands:
 ```
 
 
-> **Auth:** ShadowBot uses silent Chrome-cookie OIDC auth (Linux; requires `fieldkit-cli[chrome-auth]`).
-> - **Primary:** Chrome Default profile must be logged into your configured ShadowBot host.
-> - **Fallback (Linux/SSH/headless):** `fieldkit auth shadowbot --refresh-token-file PATH`
+> **Auth:** ShadowBot uses a stored Keycloak refresh token: `fieldkit auth shadowbot --refresh-token-file PATH`
 >   Get JWT: Chrome DevTools → Network → filter `openid-connect/token` → Response → `refresh_token`
-> - **Config override:** `shadowbot.chrome_cookies_path` in `~/.config/fieldkit/config.yaml`
+> - **Optional Chrome recovery (Linux, off by default):** install `fieldkit-cli[chrome-auth]` and set
+>   `shadowbot.chrome_recovery: true` to renew a rejected token from your logged-in Chrome session.
+> - **Profile override:** `shadowbot.chrome_cookies_path` in `~/.config/fieldkit/config.yaml`
 > - **Session expiry:** determined by the configured identity provider; recover by logging in again.
 
 ### `fieldkit shadowbot query`
@@ -2430,12 +2430,11 @@ fieldkit sf session-check
 
 ### Refresh ShadowBot auth
 ```bash
-# Primary: Chrome Default profile must be logged into your configured ShadowBot host
-fieldkit auth shadowbot   # checks auth status; auto-refreshes via Chrome cookies (Linux)
-
-# Fallback (SSH/headless/macOS): inject refresh token from DevTools
+# Store a refresh token from DevTools
 # Chrome DevTools → Network → filter openid-connect/token → Response → refresh_token
 fieldkit auth shadowbot --refresh-token-file PATH
+fieldkit auth shadowbot   # checks auth status and refreshes the stored token
+# Optional (Linux): renew a rejected token from Chrome by setting shadowbot.chrome_recovery: true
 fieldkit shadowbot query 'test query'
 ```
 

@@ -33,7 +33,7 @@ listview — add `--sf` to include it.
 
 Key flags:
 
-- `--quick` — skip the Gmail sync phases (SF and ingest only)
+- `--quick` — skip the Gmail sync phase; ingest and watchers still run
 - `--sf` — include `fieldkit sf listview` as a final step
 - `--dry-run` — show what would run without executing
 - `--account SLUG` — scope to a single account
@@ -272,15 +272,22 @@ pipeline:
     period: "2026-H2"
 ```
 
-Expected output:
+Expected output with the default `--source pursuits`:
 
 ```
-Quota Gap (2026-H2)
-  Target      : $5,000,000
-  Closed-won  : $620,000
-  Weighted    : $685,000
-  Gap         : $4,315,000
+Quota Gap (2026-H2, ends 2026-12-31, <N> days remaining)
+  Weighted pipeline                     : $685,000
+  Closed-won (configured pursuits only) : $620,000
+  Quota target                          : $5,000,000
+
+  Attainment gap: n/a — pursuit-scope closed-won is not comparable
+  to a full-book quota. Pass --source sf to pull live
+  territory-scoped attainment from Salesforce.
 ```
+
+With `--source sf`, the closed-won line comes from Salesforce (territory-scoped,
+fiscal year) and the report adds a `Gap` line: target minus closed-won minus
+weighted pipeline.
 
 ## SF listview
 
@@ -485,12 +492,19 @@ risk classification. Audit distinguishes malformed YAML from missing frontmatter
 
 ## Reserved pursuit names
 
-`template` and `gmail-intel` name account-level artifacts, so reports never
-treat `template.md` or `gmail-intel.md` in a `pursuits/` directory as a pursuit.
-Only the exact file name is reserved: `gmail-intel-rollout.md` is an ordinary
-pursuit. `fieldkit pursuit create --name` and `fieldkit pursuit rename --to`
+`template` and `gmail-intel` name account-level artifacts, so reports and ingest
+routing never treat `template.md` or `gmail-intel.md` in a `pursuits/` directory
+as a pursuit. Only the exact file name is reserved: `gmail-intel-rollout.md` is
+an ordinary pursuit and can receive routed material. `fieldkit pursuit create --name` and `fieldkit pursuit rename --to`
 refuse a reserved name with exit `3` and change nothing; with `--json`, create
 and rename print an error object whose `error` is `reserved_name`.
+
+`pursuit rename --to` must already be a slug, such as `new-deal`; rename does not
+slugify it the way create slugifies `--name`. A value like `New Deal`, `a/b` or
+`../moved` exits `3` without moving the file or touching watcher state, and the
+message suggests the slug form. `--account` and `--from` may keep older names but
+cannot contain a path separator. With `--json`, the error object's `error` is
+`invalid_slug` for `--to` or `invalid_name` for the others, and `option` names the flag.
 
 When forecast, health, or a compliance audit (`pursuit audit` without
 `--check-yaml`) skips a reserved file that already exists, stderr names it as

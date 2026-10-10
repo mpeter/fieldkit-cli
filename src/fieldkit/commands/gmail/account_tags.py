@@ -10,6 +10,7 @@ import click
 
 from fieldkit.cli_exit import EXIT_PARTIAL
 from fieldkit.gmail.discover import get_gmail_db_path
+from fieldkit.util.jsonio import json_default
 
 
 def _emit_json(account_threads: dict[str, int], account_filter: str | None) -> None:
@@ -27,7 +28,7 @@ def _emit_json(account_threads: dict[str, int], account_filter: str | None) -> N
                 "filters": {"account": account_filter},
             },
             indent=2,
-            default=str,
+            default=json_default,
         )
     )
 

@@ -25,6 +25,7 @@ from fieldkit.cli_registry import declare_write
 from fieldkit.commands.sf._util import stdin_is_interactive
 from fieldkit.config import get_sf_rest_base_url, get_sf_session_id
 from fieldkit.sf.client import SFAPIError, SFAuthError, SFDirectClient, SFNotFoundError
+from fieldkit.util.jsonio import json_default
 
 LOG_PREFIX = "[sf-set-field]"
 
@@ -249,7 +250,7 @@ def cli(
     """
     if list_fields:
         if as_json:
-            click.echo(json.dumps({"allowed_fields": ALLOWED_FIELDS}, indent=2, default=str))
+            click.echo(json.dumps({"allowed_fields": ALLOWED_FIELDS}, indent=2, default=json_default))
             return
         _print_field_list()
         return
@@ -301,7 +302,7 @@ def cli(
                         "outcome": outcome,
                     },
                     indent=2,
-                    default=str,
+                    default=json_default,
                 )
             )
 

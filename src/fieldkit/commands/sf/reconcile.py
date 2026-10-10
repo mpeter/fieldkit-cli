@@ -23,6 +23,7 @@ import yaml
 from fieldkit.cli_exit import EXIT_PARTIAL
 from fieldkit.cli_registry import declare_write
 from fieldkit.pursuit.io import extract_frontmatter_text, load_pursuit
+from fieldkit.util.jsonio import json_default
 
 log = logging.getLogger(__name__)
 
@@ -191,7 +192,7 @@ def cli(pursuit_file: str, dry_run: bool, as_json: bool) -> None:
             json.dumps(
                 {"file": pursuit_file, "status": status, "dry_run": dry_run, "changed": status == "updated"},
                 indent=2,
-                default=str,
+                default=json_default,
             )
         )
     if status == "error":

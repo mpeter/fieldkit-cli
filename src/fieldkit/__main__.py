@@ -1,3 +1,5 @@
+"""Allow ``python -m fieldkit`` to run the CLI."""
+
 import importlib
 import logging
 import sys

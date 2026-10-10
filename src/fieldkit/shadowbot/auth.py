@@ -39,6 +39,7 @@ import httpx
 
 from fieldkit.config import CONFIG_PATH, SHADOWBOT_TOKEN_KEY, TIMEOUT_OIDC_HTTP, get_fieldkit_data, get_fieldkit_home
 from fieldkit.config import get_shadowbot_auth_endpoint as _get_auth_endpoint
+from fieldkit.config import get_shadowbot_chrome_recovery_enabled as _get_chrome_recovery_enabled
 from fieldkit.config import get_shadowbot_client_id as _get_client_id
 from fieldkit.config import get_shadowbot_redirect_uri as _get_redirect_uri
 from fieldkit.config import get_shadowbot_token_endpoint as _get_token_endpoint
@@ -905,14 +906,35 @@ def inject_refresh_token(refresh_token: str) -> None:
     _cache = None
 
 
+_CHROME_RECOVERY_OFF_HINT = (
+    "Chrome recovery is off; to let fieldkit read your Chrome session cookies instead, "
+    "set 'chrome_recovery: true' under 'shadowbot:' in config.yaml."
+)
+
+
+def _token_from_chrome() -> str | None:
+    """Acquire a token from the Chrome session, returning None when recovery fails.
+
+    ``acquire_from_chrome`` saves to disk and clears the cache, so the new token
+    is reloaded from the token file.
+    """
+    try:
+        acquire_from_chrome()
+        access_token = _load_token_file().get("access_token", "")
+    except ShadowbotAuthError as chrome_exc:
+        warnings.warn(f"Chrome cookie auth fallback failed: {chrome_exc}", stacklevel=3)
+        return None
+    return access_token or None
+
+
 def get_token() -> str:
     """Return a valid ShadowBot access token, refreshing if needed.
 
     Resolution order:
       1. In-memory cache (240 s TTL).
       2. Refresh token from disk file.
-      3. Chrome cookie acquisition (if ``_HAS_CHROME_AUTH`` and refresh fails
-         with ``invalid_grant``).
+      3. Chrome cookie acquisition (if ``_HAS_CHROME_AUTH``, the operator set
+         ``shadowbot.chrome_recovery: true``, and refresh fails with ``invalid_grant``).
 
     Returns:
         A valid access token string.
@@ -952,25 +974,19 @@ def get_token() -> str:
         exc_str = str(refresh_exc)
         is_invalid_grant = "expired or revoked" in exc_str or "invalid_grant" in exc_str
 
-        # 3. Try Chrome fallback if refresh token is invalid/expired
+        # 3. Try Chrome fallback if refresh token is invalid/expired and the operator opted in
         if is_invalid_grant and _HAS_CHROME_AUTH:
-            try:
-                acquire_from_chrome()
-                # acquire_from_chrome saves to disk and clears cache;
-                # reload from disk to get the new token
-                token_data = _load_token_file()
-                access_token = token_data.get("access_token", "")
-                if access_token:
-                    _cache = TokenCache(
-                        token=access_token,
-                        expires_at=time.monotonic() + TokenCache.TTL_SECONDS,
-                    )
-                    return access_token
-            except ShadowbotAuthError as chrome_exc:
-                warnings.warn(
-                    f"Chrome cookie auth fallback failed: {chrome_exc}",
-                    stacklevel=2,
+            if not _get_chrome_recovery_enabled():
+                raise ShadowbotAuthError(
+                    f"ShadowBot authentication failed: {str(refresh_exc).rstrip('.')}. {_CHROME_RECOVERY_OFF_HINT}"
+                ) from refresh_exc
+            recovered = _token_from_chrome()
+            if recovered:
+                _cache = TokenCache(
+                    token=recovered,
+                    expires_at=time.monotonic() + TokenCache.TTL_SECONDS,
                 )
+                return recovered
 
         # historic regression: the inner exception already contains the "Re-authenticate with:" hint
         # (from _refresh_access_token). Wrapping it again produces a duplicate.

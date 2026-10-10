@@ -27,6 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.filter.outputs.code }}
+      crap: ${{ steps.filter.outputs.crap }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -38,8 +39,10 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           code=false
+          crap=false
           while IFS= read -r f; do
             [ -z "$f" ] && continue
+            case "$f" in src/fieldkit/*.py|.gaze/baseline.json) crap=true ;; esac
             case "$f" in
               docs/documentation-contract.json|docs/release-readiness/*.json) code=true ;;
               docs/*|openspec/*|.opencode/*|.specify/*|*.md) ;;
@@ -47,7 +50,9 @@ jobs:
             esac
           done < <(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
           echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "crap=$crap" >> "$GITHUB_OUTPUT"
           echo "Non-doc files changed: $code"
+          echo "Production Python or the CRAP baseline changed: $crap"
 
   # Scan every commit message in the PR range for PII. Runs even on
   # doc-only PRs — a real account slug in a commit message lands on main
@@ -286,10 +291,48 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  # Catch a CRAP regression in the pull request that introduces it rather than in
+  # the next scheduled Full enforcement run. It runs in parallel with the other
+  # children, only when production Python or the CRAP baseline changed. Python 3.13's
+  # sys.monitoring coverage core keeps instrumentation overhead near a quarter of the suite time,
+  # where 3.11's tracer nearly doubles it; line coverage matches 3.11 for the
+  # baseline comparison. Test failures are reported by Test (pytest), not here.
+  crap-changed:
+    name: CRAP (changed functions)
+    needs: changes
+    runs-on: ubuntu-latest
+    env:
+      COVERAGE_CORE: sysmon
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # The pull-request merge commit and its first parent, the base tip, so the
+          # changed-file list is exactly what this pull request adds to main.
+          fetch-depth: 2
+      - if: needs.changes.outputs.crap == 'true'
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+        with:
+          enable-cache: true
+          cache-python: true
+          prune-cache: true
+          python-version: "3.13"
+      - name: Install dependencies
+        if: needs.changes.outputs.crap == 'true'
+        run: uv sync --locked --all-extras --dev
+      - name: Measure suite coverage
+        if: needs.changes.outputs.crap == 'true'
+        run: |
+          uv run pytest tests/ -p no:tach -q -n 4 --cov --cov-fail-under=0 \
+            --cov-report=json:coverage-changed.json \
+            || echo "pytest reported failures; Test (pytest) gates them. Coverage is still evaluated."
+      - name: Check changed functions against the CRAP baseline
+        if: needs.changes.outputs.crap == 'true'
+        run: uv run python scripts/gaze_changed.py --coverprofile coverage-changed.json --base HEAD^1
+
   required-checks:
     name: Required checks
     if: always()
-    needs: [changes, commit-msg-pii, fast-checks, test, skillsaw, agentready]
+    needs: [changes, commit-msg-pii, fast-checks, test, crap-changed, skillsaw, agentready]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -302,6 +345,7 @@ jobs:
           COMMIT_MSG_RESULT: ${{ needs.commit-msg-pii.result }}
           FAST_CHECKS_RESULT: ${{ needs.fast-checks.result }}
           TEST_RESULT: ${{ needs.test.result }}
+          CRAP_RESULT: ${{ needs.crap-changed.result }}
           SKILLSAW_RESULT: ${{ needs.skillsaw.result }}
           AGENTREADY_RESULT: ${{ needs.agentready.result }}
         run: |
@@ -318,6 +362,7 @@ jobs:
             --child "Commit-message PII guard=$COMMIT_MSG_RESULT" \
             --child "Lint (ruff)=$FAST_CHECKS_RESULT" \
             --child "Test (pytest)=$TEST_RESULT" \
+            --child "CRAP (changed functions)=$CRAP_RESULT" \
             --child "Skillsaw (skill lint)=$SKILLSAW_RESULT" \
             --child "AgentReady score gate=$AGENTREADY_RESULT"
       - name: Upload required-check evidence

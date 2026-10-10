@@ -35,6 +35,7 @@ class StateTarget:
     filename: str
 
     def close(self) -> None:
+        """Close the pinned state directory descriptor, raising ``ShadowbotStateError`` on failure."""
         try:
             os.close(self.root_fd)
         except OSError as exc:

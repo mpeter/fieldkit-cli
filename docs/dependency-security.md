@@ -60,9 +60,9 @@ shipped exposure.
 
 Pull-request review and vulnerability auditing do not establish license evidence for every package
 in a release candidate. `make release-check` therefore exports a CycloneDX inventory from the
-candidate's committed `uv.lock` for the default runtime profile: it excludes the QA-only `dev`
-dependency group and does not enable optional extras. It creates a fresh isolated environment from
-that same runtime lock and records each installed distribution's exact-version PyPI URL and SPDX
+candidate's committed `uv.lock` for the `runtime-all-extras` scope: it excludes the QA-only `dev`
+dependency group and includes every optional extra, so integration dependencies carry license
+evidence too. It creates a fresh isolated environment from that same lock and scope, and records each installed distribution's exact-version PyPI URL and SPDX
 license expression. The observed package URLs must exactly equal the SBOM's component URLs and the
 report binds both inventories to the verified export revision and policy digest, including the
 SBOM's SHA-256 digest. Missing, extra, duplicate, unknown, malformed, or disallowed entries make

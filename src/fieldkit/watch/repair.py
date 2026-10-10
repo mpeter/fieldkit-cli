@@ -16,11 +16,14 @@ from typing import TypedDict
 
 from fieldkit.config import TIMEOUT_REPAIR, get_fieldkit_home
 from fieldkit.pursuit.io import load_pursuit, write_frontmatter
+from fieldkit.util.jsonio import json_default
 
 _log = logging.getLogger(__name__)
 
 
 class RepairReport(TypedDict):
+    """One proposed or written close-date repair for a pursuit."""
+
     path: Path
     account: str
     pursuit: str
@@ -31,6 +34,8 @@ class RepairReport(TypedDict):
 
 @dataclass(frozen=True)
 class RepairRunResult:
+    """Repairs produced by a run and the paths it skipped."""
+
     repairs: tuple[RepairReport, ...]
     skipped: tuple[Path, ...]
 
@@ -237,7 +242,7 @@ def _run_repair(*, dry_run: bool, verbose: bool, account: str | None = None, as_
                     "skipped_count": len(result.skipped),
                     "account": account,
                 },
-                default=str,
+                default=json_default,
                 sort_keys=True,
             )
         )

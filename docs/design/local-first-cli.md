@@ -82,7 +82,7 @@ and forecast. It retains either frontmatter/body or a sanitized failure reason.
 Report consumers partition scanned files into included rows, intentional
 exclusions, and failed inputs. An unreadable record cannot become an absent deal
 in a successful report. Partial reports exit 1 and carry failure paths relative
-to the account root; source YAML and OS error details are never copied into
+to the accounts directory; source YAML and OS error details are never copied into
 parse diagnostics. This contract adds forecast assessment metadata. Health
 JSON keeps its array format in every case, because the web dashboard and
 reconciliation scripts parse it as one; incompleteness shows on stderr and in

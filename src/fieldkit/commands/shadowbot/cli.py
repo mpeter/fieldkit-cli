@@ -19,6 +19,7 @@ from fieldkit.shadowbot import auth
 from fieldkit.shadowbot import client as client_module
 from fieldkit.shadowbot.auth import ShadowbotAuthError
 from fieldkit.shadowbot.client import ShadowbotQueryError
+from fieldkit.util.jsonio import json_default
 
 # ---------------------------------------------------------------------------
 # Display constants
@@ -128,7 +129,7 @@ def cmd_query(prompt: tuple[str, ...], timeout: float, new_thread: bool, as_json
                     "new_thread": new_thread,
                 },
                 indent=2,
-                default=str,
+                default=json_default,
             )
         )
         return

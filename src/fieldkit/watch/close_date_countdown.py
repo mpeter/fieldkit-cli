@@ -29,6 +29,7 @@ from fieldkit.pursuit import extract_champion_name, iterate_pursuits
 from fieldkit.pursuit.io import load_pursuit
 from fieldkit.pursuit.qualification import native_qualification_status
 from fieldkit.pursuit.stages import CLOSED_STAGES as _CLOSED_STAGES
+from fieldkit.util.jsonio import json_default
 from fieldkit.watch.dedup import alert_block_exists
 from fieldkit.watch.logging import watcher_logging
 from fieldkit.watch.state import merge_state
@@ -549,7 +550,7 @@ def _run_countdown_inner(
                     "dry_run": dry_run,
                 },
                 indent=2,
-                default=str,
+                default=json_default,
             )
         )
     return 1 if outcome == "fatal" else 0

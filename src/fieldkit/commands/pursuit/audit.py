@@ -133,6 +133,8 @@ def assessment_summary_line(assessment: ReportAssessment) -> str:
 
 @dataclass
 class Finding:
+    """A single audit finding with its severity level and message."""
+
     level: str  # "ERROR", "WARNING", "CRITICAL"
     message: str
 
@@ -142,6 +144,8 @@ class Finding:
 
 @dataclass
 class AuditResult:
+    """Audit outcome for one pursuit file: findings, parse error, and stage."""
+
     path: Path
     relative_path: str
     findings: list[Finding] = field(default_factory=list)
@@ -151,18 +155,25 @@ class AuditResult:
 
     @property
     def errors(self) -> list[Finding]:
+        """Return findings at ERROR level."""
         return [f for f in self.findings if f.level == "ERROR"]
 
     @property
     def warnings(self) -> list[Finding]:
+        """Return findings at WARNING level."""
         return [f for f in self.findings if f.level == "WARNING"]
 
     @property
     def criticals(self) -> list[Finding]:
+        """Return findings at CRITICAL level."""
         return [f for f in self.findings if f.level == "CRITICAL"]
 
     @property
     def category(self) -> str:
+        """Classify the file as ERROR, WARNING, or COMPLIANT.
+
+        A parse error or any ERROR finding wins; CRITICAL and WARNING findings both map to WARNING.
+        """
         if self.parse_error or self.errors:
             return "ERROR"
         if self.criticals or self.warnings:
@@ -172,6 +183,8 @@ class AuditResult:
 
 @dataclass
 class FixResult:
+    """Counts of automatic fixes applied to one pursuit file."""
+
     path: Path
     renames: int = 0
     fields_added: int = 0
@@ -179,6 +192,7 @@ class FixResult:
 
     @property
     def total_changes(self) -> int:
+        """Return the total number of renames, added fields, and removed legacy fields."""
         return self.renames + self.fields_added + self.legacy_removed
 
 

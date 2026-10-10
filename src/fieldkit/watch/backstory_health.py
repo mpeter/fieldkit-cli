@@ -26,6 +26,7 @@ from typing import Any
 
 from fieldkit.config import ConfigError, get_accounts_config, get_fieldkit_home, get_mcp_work_group, get_watchers_dir
 from fieldkit.config import get_mcp_gateway_base as _get_mcp_gateway_base
+from fieldkit.util.jsonio import json_default
 from fieldkit.watch.dedup import alert_block_exists
 from fieldkit.watch.logging import watcher_logging
 from fieldkit.watch.morning_brief_mcp import MCPSession as MCPSession
@@ -628,7 +629,7 @@ def _run_backstory_health(
                         "dry_run": dry_run,
                     },
                     indent=2,
-                    default=str,
+                    default=json_default,
                 )
             )
             return 1 if state_write_failed else 0

@@ -43,6 +43,7 @@ from fieldkit.pursuit.io import ReportAssessment, is_reserved_pursuit_path, read
 from fieldkit.pursuit.models import PursuitFrontmatter
 from fieldkit.pursuit.stage_weights import STAGE_WEIGHTS
 from fieldkit.sf.components import effective_net_consulting_acv
+from fieldkit.util.jsonio import json_default
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -67,6 +68,8 @@ LOG_PREFIX = "[pursuit-forecast]"
 
 @dataclass
 class DealRow:
+    """One pursuit's forecast inputs: stage, ACV in USD, close date, and probability weight."""
+
     relative_path: str
     name: str
     stage: str
@@ -77,6 +80,8 @@ class DealRow:
 
 @dataclass
 class ForecastResult:
+    """Forecast totals (commit, best case, weighted) with the deals and skipped stages behind them."""
+
     deals: list[DealRow]
     commit: float  # closed-won + negotiate
     best_case: float  # all active deals
@@ -380,7 +385,7 @@ def cli(account: str | None, quota: float | None, as_json: bool) -> None:
 
     if as_json:
         # cell-28b9dae2e9395288: machine-readable output.
-        click.echo(json.dumps(dataclasses.asdict(result), indent=2, default=str))
+        click.echo(json.dumps(dataclasses.asdict(result), indent=2, default=json_default))
         raise SystemExit(exit_code)
 
     _echo_deal_table(result.deals, today)

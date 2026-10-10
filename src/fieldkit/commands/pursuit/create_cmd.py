@@ -6,7 +6,6 @@ Usage:
 """
 
 import json
-import re
 from datetime import UTC, datetime
 from pathlib import Path
 from shlex import quote
@@ -17,16 +16,15 @@ from fieldkit.cli_exit import EXIT_DATA, EXIT_PARTIAL
 from fieldkit.cli_registry import declare_write
 from fieldkit.config import get_fieldkit_home
 from fieldkit.pursuit.enums import Stage
-from fieldkit.pursuit.io import is_reserved_pursuit_path, render_raw_key_value, write_frontmatter_raw
+from fieldkit.pursuit.io import (
+    is_reserved_pursuit_path,
+    render_raw_key_value,
+    slugify_pursuit_name,
+    write_frontmatter_raw,
+)
 from fieldkit.pursuit.stages import ALL_STAGES
 
 LOG_PREFIX = "[pursuit-create]"
-
-_SLUG_RE = re.compile(r"[^a-z0-9]+")
-
-
-def _slugify(name: str) -> str:
-    return _SLUG_RE.sub("-", name.lower()).strip("-")
 
 
 def _refuse_if_reserved(slug: str, *, as_json: bool) -> None:
@@ -148,7 +146,7 @@ def cli(
         click.echo(f"{LOG_PREFIX} Invalid stage: {stage}. Valid stages: {sorted(ALL_STAGES)}", err=True)
         raise SystemExit(EXIT_DATA) from None
 
-    slug = _slugify(name)
+    slug = slugify_pursuit_name(name)
     _refuse_if_reserved(slug, as_json=as_json)
     pursuit_title = title or name
     today = datetime.now(tz=UTC).date().isoformat()

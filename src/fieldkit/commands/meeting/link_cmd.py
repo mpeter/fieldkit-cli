@@ -8,6 +8,7 @@ import click
 
 from fieldkit.cli_exit import EXIT_DATA, cli_main
 from fieldkit.meeting.docs_domain import link
+from fieldkit.util.jsonio import json_default
 
 
 @click.command("link")
@@ -42,7 +43,7 @@ def cli(pursuit_file: Path, open_browser: bool, as_json: bool) -> None:
                         "created": not result.already_linked,
                     },
                     indent=2,
-                    default=str,
+                    default=json_default,
                 )
             )
         elif result.already_linked:

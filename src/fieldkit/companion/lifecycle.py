@@ -51,6 +51,7 @@ class PruneSkip:
     reason: PruneSkipReason
 
     def to_dict(self) -> dict[str, str]:
+        """Return the skipped item as a JSON-serializable mapping."""
         return {"name": self.name, "reason": self.reason}
 
 
@@ -68,6 +69,7 @@ class PruneResult:
     ignored_rate: float | None
 
     def to_dict(self) -> dict[str, object]:
+        """Return the prune result as a JSON-serializable mapping."""
         return {
             "confirmed": self.confirmed,
             "pending": self.pending,
@@ -88,6 +90,7 @@ class ReconcileSkip:
     reason: ReconcileSkipReason
 
     def to_dict(self) -> dict[str, str]:
+        """Return the skipped item as a JSON-serializable mapping."""
         return {"name": self.name, "reason": self.reason}
 
 
@@ -102,6 +105,7 @@ class ReconcileResult:
     skipped: tuple[ReconcileSkip, ...]
 
     def to_dict(self) -> dict[str, object]:
+        """Return the reconcile result as a JSON-serializable mapping."""
         return {
             "confirmed": self.confirmed,
             "candidates": self.candidates,

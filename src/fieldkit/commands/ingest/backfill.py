@@ -23,6 +23,7 @@ import yaml
 from fieldkit.cli_registry import declare_write
 from fieldkit.commands._account_guard import validate_account_slug
 from fieldkit.config import get_fieldkit_home
+from fieldkit.util.jsonio import json_default
 
 # ---------------------------------------------------------------------------
 # Data types
@@ -30,6 +31,8 @@ from fieldkit.config import get_fieldkit_home
 
 
 class CandidateFile(NamedTuple):
+    """A file eligible for backfill, with its account and the reason it was selected."""
+
     path: Path
     account: str
     reason: str  # human-readable explanation of why it is a candidate
@@ -163,7 +166,7 @@ def _run_backfill(*, dry_run: bool, account: str | None = None, as_json: bool = 
                     "filters": {"account": account, "dry_run": dry_run},
                 },
                 indent=2,
-                default=str,
+                default=json_default,
             )
         )
         return 0

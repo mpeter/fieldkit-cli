@@ -54,6 +54,7 @@ from fieldkit.config import (
 )
 from fieldkit.config.retry import transient_retry
 from fieldkit.errors import FieldkitError
+from fieldkit.util.jsonio import json_default
 from fieldkit.watch.dedup import alert_block_exists
 from fieldkit.watch.logging import watcher_logging
 from fieldkit.watch.slack_thread_classification import (
@@ -863,7 +864,7 @@ def _run_slack_threads(
                         "dry_run": dry_run,
                     },
                     indent=2,
-                    default=str,
+                    default=json_default,
                 )
             )
         return 1 if state_write_failed else 0

@@ -53,7 +53,8 @@ _FLOORS: dict[str, float | None] = {
     # reduced check_skill_integrity.py from 1,309 lines to an 87-line adapter with
     # cohesive modules capped below 400 lines. Remaining large files are tracked separately.
     "separation_of_concerns": 85.0,
-    "inline_documentation": 75.0,  # 80.6 today; floor below to allow fluctuation
+    # inline_documentation is excluded in .agentready-config.yaml: it averages over
+    # tests too. Ruff D100-D104 gates docstrings on public production code instead.
     "pattern_references": 35.0,  # 40 now; floor below actual to allow minor drift.
     # Root cause of prior 0-score: assessor regexes only match backtick paths
     # (see `x` for), not markdown link syntax ([x](path)). AGENTS.md:139 now

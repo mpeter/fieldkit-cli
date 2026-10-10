@@ -128,6 +128,18 @@ def get_shadowbot_chrome_cookies_path() -> Path | None:
     return resolved
 
 
+def get_shadowbot_chrome_recovery_enabled() -> bool:
+    """Return whether the operator opted in to reading Chrome cookies to recover a rejected session.
+
+    Recovery decrypts the local Chrome cookie store and sends the login domain's
+    session cookies to the authorization endpoint, so it stays off unless
+    ``shadowbot.chrome_recovery`` is exactly ``true``.
+    """
+    data = _loader._load_raw_config()
+    shadowbot_config = data.get("shadowbot") if data is not None else None
+    return isinstance(shadowbot_config, dict) and shadowbot_config.get("chrome_recovery") is True
+
+
 # Top-level key that relocates the ShadowBot token directory; read by ``shadowbot.auth.get_state_dir``.
 SHADOWBOT_TOKEN_KEY = "shadowbot_token"
 
@@ -155,7 +167,8 @@ def _unrecognized_key_warning(subject: str, match: str | None, hint: str) -> str
 def shadowbot_config_warnings(data: Mapping[str, object]) -> tuple[str, ...]:
     """Report ShadowBot keys that are present but ignored.
 
-    Flags unrecognized keys inside the ``shadowbot:`` section and top-level
+    Flags unrecognized keys inside the ``shadowbot:`` section, a Chrome cookie
+    path that has no effect because ``chrome_recovery`` is not enabled, and top-level
     ``shadowbot_*`` keys other than the honored ``shadowbot_token``. A top-level
     key whose suffix names a defined ShadowBot key points at the expected
     ``shadowbot.<key>`` location. Unrecognized keys are never echoed; a near
@@ -174,6 +187,11 @@ def shadowbot_config_warnings(data: Mapping[str, object]) -> tuple[str, ...]:
                 _unrecognized_key_warning(
                     "An unrecognized key under 'shadowbot:'", match, "check the setting names in the guide"
                 )
+            )
+        if section.get("chrome_cookies_path") and section.get("chrome_recovery") is not True:
+            warnings.append(
+                "shadowbot.chrome_cookies_path is set but Chrome recovery is off, so the path is unused; "
+                "set shadowbot.chrome_recovery: true to allow fieldkit to read Chrome session cookies."
             )
     prefix = "shadowbot_"
     for key in data:

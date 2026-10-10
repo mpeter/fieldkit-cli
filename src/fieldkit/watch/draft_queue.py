@@ -23,6 +23,7 @@ from typing import Any
 from fieldkit.config import ConfigError, get_mcp_work_group, get_user_email_from_env
 from fieldkit.config import get_mcp_gateway_base as _get_mcp_gateway_base
 from fieldkit.config import get_watchers_dir as get_watchers_dir
+from fieldkit.util.jsonio import json_default
 from fieldkit.watch.logging import watcher_logging
 from fieldkit.watch.status import WatcherOutcome, write_run_status
 
@@ -218,7 +219,7 @@ def _emit_run_json(
                 "dry_run": dry_run,
             },
             indent=2,
-            default=str,
+            default=json_default,
         )
     )
 

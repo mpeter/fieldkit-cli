@@ -43,6 +43,7 @@ import click
 from fieldkit.cli_exit import EXIT_PARTIAL
 from fieldkit.cli_registry import declare_write
 from fieldkit.config import DATASYNC_STEP_TIMEOUTS
+from fieldkit.util.jsonio import json_default
 
 LOG_PREFIX = "[sync]"
 
@@ -83,6 +84,8 @@ def _truncate_output(text: str, max_lines: int = MAX_VERBOSE_LINES) -> str:
 
 @dataclass
 class StepResult:
+    """Outcome of one executed pipeline step, including its position, argv, and elapsed seconds."""
+
     index: int
     total: int
     label: str
@@ -102,6 +105,8 @@ class _StepExecution:
 
 @dataclass
 class RunConfig:
+    """Options selecting which steps a ``fieldkit sync`` run executes and how it reports."""
+
     quick: bool = False
     sf: bool = False
     dry_run: bool = False
@@ -589,7 +594,7 @@ def cli(quick: bool, sf: bool, dry_run: bool, account: str | None, verbose: bool
                     "filters": {"quick": quick, "sf": sf, "account": account, "dry_run": dry_run},
                 },
                 indent=2,
-                default=str,
+                default=json_default,
             )
         )
 
