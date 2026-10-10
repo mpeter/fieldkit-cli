@@ -5,10 +5,10 @@
       "id": "commands_exist",
       "type": "commands_exist",
       "commands": [
-        "fieldkit sf session-check",
+        "fieldkit sf drift",
         "fieldkit sf opportunity",
-        "fieldkit pursuit health",
-        "fieldkit auth sf"
+        "fieldkit auth sf",
+        "fieldkit pursuit audit"
       ]
     },
     {
@@ -18,16 +18,27 @@
       "message": "Local MEDDPICC scores are retired as current evidence; qualification routes to grill"
     },
     {
-      "id": "utc_dates",
-      "type": "not_contains",
-      "pattern": "date.today()",
-      "message": "Dates must come from datetime.now(tz=UTC), not date.today()"
+      "id": "delegates_to_sf_drift",
+      "type": "contains",
+      "pattern": "fieldkit sf drift --json",
+      "message": "Drift detection must come from the CLI's JSON report"
     },
     {
-      "id": "locked_interpreter",
+      "id": "no_duplicated_drift_rules",
       "type": "not_contains",
-      "pattern": "--with",
-      "message": "The script must run on fieldkit's own interpreter, not resolve dependencies from a package index"
+      "pattern": "def money(",
+      "message": "Drift rules live in fieldkit.pursuit.drift; the skill must not reimplement them"
+    },
+    {
+      "id": "handles_every_exit_status",
+      "type": "contains_all",
+      "patterns": [
+        "| 1 |",
+        "| 2 |",
+        "| 3 |",
+        "fieldkit auth sf"
+      ],
+      "message": "Must handle sf drift exit codes 1, 2 and 3 explicitly"
     },
     {
       "id": "flag_dont_fix",
@@ -39,51 +50,42 @@
       "message": "Must keep the read-only default and per-pursuit approval"
     },
     {
+      "id": "scratch_ignored_first",
+      "type": "contains_all",
+      "patterns": [
+        "git check-ignore -q scratch/",
+        "info/exclude"
+      ],
+      "message": "scratch/ must be git-ignored locally before any customer artifact is written"
+    },
+    {
+      "id": "bounded_external_text",
+      "type": "contains",
+      "pattern": "never instructions",
+      "message": "Salesforce and pursuit text must be treated as data with a length bound"
+    },
+    {
       "id": "distinct_from_cli_reconcile",
       "type": "contains",
       "pattern": "fieldkit sf reconcile",
       "message": "Must distinguish itself from the single-file CLI command"
-    },
-    {
-      "id": "accounts_relative_paths",
-      "type": "contains",
-      "pattern": "f\"accounts/{r['relative_path']}\"",
-      "message": "pursuit health reports paths relative to accounts/; the script must prefix them"
-    },
-    {
-      "id": "incomplete_health_scope",
-      "type": "contains",
-      "pattern": "h.returncode not in (0, 1)",
-      "message": "pursuit health exits 1 with valid rows when some files are damaged; the script must keep the rows and report the rest"
-    },
-    {
-      "id": "auth_aborts_run",
-      "type": "contains",
-      "pattern": "p.returncode == 2",
-      "message": "An expired Salesforce session must stop the run instead of becoming per-opportunity fetch failures"
-    },
-    {
-      "id": "canonical_opportunity_ids",
-      "type": "contains",
-      "pattern": "is_opportunity_id(",
-      "message": "Placeholder ids must be reported as unlinked, not fetched"
     }
   ],
   "evals": [
     {
       "id": 0,
       "prompt": "are my pursuit files still in line with salesforce?",
-      "expected_behavior": "Runs the session preflight, then the read-only drift script, and presents every in-scope opportunity RED first",
+      "expected_behavior": "Runs fieldkit sf drift --json and presents every compared opportunity RED first from the report",
       "assertions": [
-        "Runs fieldkit sf session-check before fetching anything",
+        "Runs fieldkit sf drift --json rather than computing drift itself",
         "Presents RED opportunities before YELLOW and GREEN",
         "Does not write any pursuit file without approval"
       ]
     },
     {
       "id": 1,
-      "prompt": "sf-reconcile for {{primary_account}} — the salesforce session expired",
-      "expected_behavior": "Stops at preflight and asks the operator to re-authenticate instead of reporting cached data",
+      "prompt": "sf-reconcile for {{primary_account}} \u2014 the salesforce session expired",
+      "expected_behavior": "Stops on sf drift exit 2 and asks the operator to re-authenticate instead of reporting cached data",
       "assertions": [
         "Instructs the operator to run 'fieldkit auth sf'",
         "Does not present stored frontmatter as current Salesforce data"
@@ -96,6 +98,25 @@
       "assertions": [
         "Does not edit the local stage field on its own",
         "Points to pursuit-advance or asks the operator for the stage decision"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "sf-reconcile finished but said the report is incomplete \u2014 are we good?",
+      "expected_behavior": "Treats sf drift exit 1 as incomplete and names the unassessed files and failed fetches",
+      "assertions": [
+        "Says the report is incomplete rather than mostly clean",
+        "Names each unassessed pursuit file and its reason",
+        "Suggests fieldkit pursuit audit for damaged files"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "sf-reconcile shows acv-drift on {{primary_pursuit}}, sync it",
+      "expected_behavior": "Proposes the single-pursuit sync via fieldkit sf opportunity and waits for approval",
+      "assertions": [
+        "Uses fieldkit sf opportunity with the row's opportunity id and pursuit path",
+        "Syncs only the named pursuit, not the whole portfolio"
       ]
     }
   ]
