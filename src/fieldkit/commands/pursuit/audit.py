@@ -25,6 +25,7 @@ import yaml
 from fieldkit.pursuit.enums import Stage
 from fieldkit.pursuit.gate_criteria import ALLOWED_GATE_STATUSES
 from fieldkit.pursuit.io import (
+    ReportAssessment,
     detect_duplicate_yaml_keys,
     parse_frontmatter_fallback,
     split_frontmatter_raw,
@@ -105,6 +106,19 @@ def no_files_message(kind: Literal["pursuit", "project"], account: str | None) -
     if account:
         return f"No {kind} files found for account: {account}"
     return f"No {kind} files found."
+
+
+def assessment_failure_warnings(assessment: ReportAssessment) -> list[str]:
+    """One stderr warning line per failed report input, in scan order."""
+    return [f"WARNING: {f.relative_path}: {f.reason} — assessment incomplete" for f in assessment.failures]
+
+
+def assessment_summary_line(assessment: ReportAssessment) -> str:
+    """The count summary a report prints when its assessment is incomplete."""
+    return (
+        f"Assessment incomplete: {assessment.scanned} scanned, {assessment.included} included, "
+        f"{assessment.excluded} excluded, {len(assessment.failures)} failed."
+    )
 
 
 @dataclass
