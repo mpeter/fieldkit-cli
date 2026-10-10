@@ -32,6 +32,13 @@ src/fieldkit/              ← single package root (src/ layout)
   skill/                   ← skill template rendering
   tasks/                   ← action item classification
   shadowbot/               ← ShadowBot client (domain)
+  backstory/               ← Backstory integration helpers
+  companion/               ← attention feed and action gate for an agent companion
+  gtask/                   ← Google Tasks client
+  meeting/                 ← Pursuit Workbook (Google Docs) domain
+  review/                  ← review journal and calibration
+  web/                     ← local web dashboard and API
+  util/                    ← shared low-level utilities
   commands/                ← CLI adapters (thin wrappers over domain)
     sf/                    ← sf subcommands
     gmail/                 ← gmail subcommands
@@ -41,12 +48,19 @@ src/fieldkit/              ← single package root (src/ layout)
     ingest/                ← ingest pipeline CLI
     contact/               ← contact discovery/enrichment/report CLI
     pursuit/               ← pursuit management CLI
-    docs/                  ← docs integration CLI
     shadowbot/             ← ShadowBot CLI
     init/                  ← first-run configuration wizard CLI
     skill/                 ← skill runner CLI
     datasync/              ← ordered full data pipeline runner
-    issue/                 ← local issue tracker
+    auth/                  ← credential setup for Salesforce, Google, ShadowBot
+    doctor/                ← health checks
+    meeting/               ← Pursuit Workbook commands
+    golive/                ← go-live revenue sourcing
+    gtask/                 ← Google Tasks commands
+    companion/             ← agent companion loop CLI
+    web/                   ← local web dashboard CLI
+    completion/            ← shell completion scripts
+    commands/              ← machine-readable command registry
     version/               ← version info
   skills/                  ← agent skills (markdown + SKILL.md, not Python)
 hooks/                     ← Claude Code hooks + git pre-commit

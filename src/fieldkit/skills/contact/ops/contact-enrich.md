@@ -61,7 +61,7 @@ The report command writes `report.md` with coverage by account, source and
 confidence tier, the most-engaged contacts, failed contacts that need manual
 review, data-quality notes, Salesforce contact roles and a metric
 reconciliation. Review it before authorizing changes to account files or CRM.
-All three commands also support `--json`.
+Every command above also supports `--json`.
 
 ## Storage
 
