@@ -129,36 +129,47 @@ def changed_regressions(report: Mapping[str, object], changed_files: Iterable[st
     return failures
 
 
-def changed_source_files(base: str) -> list[str]:
-    """Return ``src/fieldkit`` Python files changed since ``base``, relative to that root.
+def _git(*arguments: str) -> str:
+    return subprocess.run(
+        ["git", *arguments],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=_GIT_TIMEOUT_SECONDS,
+    ).stdout
 
-    Compares the merge base of ``base`` and ``HEAD`` with the working tree, so a
-    local run also checks uncommitted edits; in CI the tree equals ``HEAD``.
+
+def merge_base(base: str) -> str:
+    """Return the commit where ``HEAD`` diverged from ``base``."""
+    return _git("merge-base", base, "HEAD").strip()
+
+
+def changed_source_files(since: str) -> list[str]:
+    """Return ``src/fieldkit`` Python files changed since commit ``since``, relative to that root.
+
+    Compares ``since`` with the working tree and adds untracked, non-ignored
+    files, so a local run also checks uncommitted and unstaged new files; in CI
+    the tree equals ``HEAD``.
     """
-    merge_base = subprocess.run(
-        ["git", "merge-base", base, "HEAD"],
-        capture_output=True,
-        text=True,
-        check=True,
-        timeout=_GIT_TIMEOUT_SECONDS,
-    ).stdout.strip()
-    completed = subprocess.run(
-        ["git", "diff", "--name-only", "--diff-filter=AMR", merge_base, "--", f"{_SRC_ROOT}/"],
-        capture_output=True,
-        text=True,
-        check=True,
-        timeout=_GIT_TIMEOUT_SECONDS,
-    )
-    prefix = f"{_SRC_ROOT}/"
-    return [
-        line[len(prefix) :]
-        for line in completed.stdout.splitlines()
-        if line.startswith(prefix) and line.endswith(".py")
-    ]
+    root = f"{_SRC_ROOT}/"
+    tracked = _git("diff", "--name-only", "--diff-filter=AMR", since, "--", root)
+    untracked = _git("ls-files", "--others", "--exclude-standard", "--", root)
+    paths = {line for line in (tracked + untracked).splitlines() if line.startswith(root) and line.endswith(".py")}
+    return sorted(path[len(root) :] for path in paths)
 
 
-def _gazepy_report(coverprofile: Path) -> dict[str, object]:
-    """Run gazepy against the baseline and return its JSON report.
+def write_base_baseline(since: str, destination: Path) -> None:
+    """Write the baseline as committed at ``since`` to ``destination``.
+
+    The check compares against the base revision's baseline, never the one in
+    the change under review, so a pull request cannot clear its own regression
+    by raising its baseline entry.
+    """
+    destination.write_text(_git("show", f"{since}:{_BASELINE}"), encoding="utf-8")
+
+
+def _gazepy_report(coverprofile: Path, baseline: Path) -> dict[str, object]:
+    """Run gazepy against ``baseline`` and return its JSON report.
 
     gazepy exits 1 when the whole-tree comparison fails but still prints the
     report, so exit 1 is a result to filter rather than an error.
@@ -177,7 +188,7 @@ def _gazepy_report(coverprofile: Path) -> dict[str, object]:
                 "--coverprofile",
                 str(coverprofile),
                 "--baseline",
-                _BASELINE,
+                str(baseline),
                 "--tests",
                 no_tests,
                 "--format",
@@ -196,6 +207,17 @@ def _gazepy_report(coverprofile: Path) -> dict[str, object]:
     return report
 
 
+def _evaluate(coverprofile: Path, base: str) -> tuple[list[str], list[Regression]]:
+    since = merge_base(base)
+    changed = changed_source_files(since)
+    if not changed:
+        return changed, []
+    with tempfile.TemporaryDirectory(prefix="gaze-changed-baseline-") as directory:
+        baseline = Path(directory) / "baseline.json"
+        write_base_baseline(since, baseline)
+        return changed, changed_regressions(_gazepy_report(coverprofile, baseline), changed)
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run the changed-function CRAP check and return its exit status."""
     parser = argparse.ArgumentParser(description="Fail on CRAP regressions in the functions a change touches.")
@@ -207,15 +229,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"gaze-changed: coverage report not found: {args.coverprofile}", file=sys.stderr)
         return _EXIT_INVALID
     try:
-        changed = changed_source_files(args.base)
-        if not changed:
-            print("gaze-changed: no src/fieldkit Python files changed; nothing to check.")
-            return 0
-        regressions = changed_regressions(_gazepy_report(args.coverprofile), changed)
+        changed, regressions = _evaluate(args.coverprofile, args.base)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError, ValueError) as exc:
         print(f"gaze-changed: {exc}", file=sys.stderr)
         return _EXIT_INVALID
 
+    if not changed:
+        print("gaze-changed: no src/fieldkit Python files changed; nothing to check.")
+        return 0
     if not regressions:
         print(f"gaze-changed: PASS — no CRAP regressions in {len(changed)} changed file(s).")
         return 0
@@ -223,8 +244,9 @@ def main(argv: list[str] | None = None) -> int:
     for regression in regressions:
         print(f"  {regression.describe()}")
     print(
-        "Add tests or decompose the function. If the score is intended, record it in "
-        f"{_BASELINE} in this pull request so the change is visible in review."
+        "Add tests or decompose the function. This check compares against the base branch's "
+        f"{_BASELINE}, so editing it in this change does not clear a failure; a deliberate increase "
+        "needs a maintainer-reviewed baseline change merged first."
     )
     return _EXIT_REGRESSION
 

@@ -114,13 +114,19 @@ def test_main_fails_on_regression_in_changed_file(tmp_path: Path, capsys: pytest
     report = {"results": [_result("contact/enrich.py:10", "regression")]}
 
     with (
+        patch("gaze_changed.merge_base", return_value="abc123"),
         patch("gaze_changed.changed_source_files", return_value=["contact/enrich.py"]),
-        patch("gaze_changed._gazepy_report", return_value=report),
+        patch("gaze_changed.write_base_baseline") as write_baseline,
+        patch("gaze_changed._gazepy_report", return_value=report) as gazepy,
     ):
         status = gaze_changed.main(["--coverprofile", str(coverage), "--base", "origin/main"])
 
     assert status == 1
-    assert "contact/enrich.py:10 enrich: CRAP 6.00 -> 12.00 (+6.00)" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "contact/enrich.py:10 enrich: CRAP 6.00 -> 12.00 (+6.00)" in output
+    assert "does not clear a failure" in output
+    assert write_baseline.call_args.args[0] == "abc123"
+    assert gazepy.call_args.args[1] == write_baseline.call_args.args[1]
 
 
 def test_main_skips_gazepy_when_no_source_changed(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -128,6 +134,7 @@ def test_main_skips_gazepy_when_no_source_changed(tmp_path: Path, capsys: pytest
     coverage.write_text("{}", encoding="utf-8")
 
     with (
+        patch("gaze_changed.merge_base", return_value="abc123"),
         patch("gaze_changed.changed_source_files", return_value=[]),
         patch("gaze_changed._gazepy_report") as gazepy,
     ):
@@ -145,18 +152,40 @@ def test_main_reports_missing_coverage_as_invalid_input(tmp_path: Path, capsys: 
     assert "coverage report not found" in capsys.readouterr().err
 
 
-def test_changed_source_files_diffs_the_merge_base_against_the_working_tree() -> None:
-    stdout = "src/fieldkit/contact/enrich.py\nsrc/fieldkit/skills/brief/SKILL.md\nscripts/x.py\n"
-    merge_base = gaze_changed.subprocess.CompletedProcess(args=[], returncode=0, stdout="abc123\n", stderr="")
-    diff = gaze_changed.subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr="")
+def _completed(stdout: str) -> object:
+    return gaze_changed.subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr="")
 
-    with patch("gaze_changed.subprocess.run", side_effect=[merge_base, diff]) as run:
-        files = gaze_changed.changed_source_files("origin/main")
 
-    assert files == ["contact/enrich.py"]
-    assert run.call_args_list[0].args[0] == ["git", "merge-base", "origin/main", "HEAD"]
-    assert run.call_args_list[1].args[0][:5] == ["git", "diff", "--name-only", "--diff-filter=AMR", "abc123"]
+def test_changed_source_files_includes_modified_and_untracked_python_under_src_root() -> None:
+    """Unstaged new files count as changes, so a local run cannot skip a brand-new function."""
+    tracked = "src/fieldkit/contact/enrich.py\nsrc/fieldkit/skills/brief/SKILL.md\nscripts/x.py\n"
+    untracked = "src/fieldkit/contact/new_module.py\nsrc/fieldkit/contact/enrich.py\n"
+
+    with patch("gaze_changed.subprocess.run", side_effect=[_completed(tracked), _completed(untracked)]) as run:
+        files = gaze_changed.changed_source_files("abc123")
+
+    assert files == ["contact/enrich.py", "contact/new_module.py"]
+    assert run.call_args_list[0].args[0][:5] == ["git", "diff", "--name-only", "--diff-filter=AMR", "abc123"]
+    assert run.call_args_list[1].args[0][:4] == ["git", "ls-files", "--others", "--exclude-standard"]
     assert all(call.kwargs["timeout"] == gaze_changed._GIT_TIMEOUT_SECONDS for call in run.call_args_list)
+
+
+def test_merge_base_asks_git_for_the_divergence_point() -> None:
+    with patch("gaze_changed.subprocess.run", return_value=_completed("abc123\n")) as run:
+        assert gaze_changed.merge_base("origin/main") == "abc123"
+
+    assert run.call_args.args[0] == ["git", "merge-base", "origin/main", "HEAD"]
+
+
+def test_write_base_baseline_reads_the_committed_baseline_not_the_working_copy(tmp_path: Path) -> None:
+    """A change cannot clear its own regression by raising its local baseline entry."""
+    destination = tmp_path / "baseline.json"
+
+    with patch("gaze_changed.subprocess.run", return_value=_completed('{"results": []}')) as run:
+        gaze_changed.write_base_baseline("abc123", destination)
+
+    assert run.call_args.args[0] == ["git", "show", "abc123:.gaze/baseline.json"]
+    assert destination.read_text(encoding="utf-8") == '{"results": []}'
 
 
 @pytest.mark.parametrize(("returncode", "accepted"), [(0, True), (1, True), (2, False)])
@@ -167,15 +196,16 @@ def test_gazepy_report_accepts_a_failed_comparison_but_not_a_crash(
     completed = gaze_changed.subprocess.CompletedProcess(
         args=[], returncode=returncode, stdout='{"results": []}', stderr="boom"
     )
+    baseline = tmp_path / "base-baseline.json"
 
     with patch("gaze_changed.subprocess.run", return_value=completed) as run:
         if accepted:
-            assert gaze_changed._gazepy_report(tmp_path / "coverage.json") == {"results": []}
+            assert gaze_changed._gazepy_report(tmp_path / "coverage.json", baseline) == {"results": []}
         else:
             with pytest.raises(ValueError, match="gazepy exited 2"):
-                gaze_changed._gazepy_report(tmp_path / "coverage.json")
+                gaze_changed._gazepy_report(tmp_path / "coverage.json", baseline)
 
     assert run.call_args.kwargs["timeout"] == gaze_changed._GAZEPY_TIMEOUT_SECONDS
     command = run.call_args.args[0]
     assert command[command.index("--tests") + 1] != "tests"
-    assert command[command.index("--baseline") + 1] == ".gaze/baseline.json"
+    assert command[command.index("--baseline") + 1] == str(baseline)

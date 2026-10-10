@@ -59,10 +59,12 @@ single file would therefore produce keys that never match the baseline.
    worsens only GazeCRAP (lower contract coverage with unchanged line coverage
    and complexity) is therefore caught by the scheduled complete run, not the
    pull request.
-3. **No bypass flag.** A legitimate complexity increase is recorded by
-   updating `.gaze/baseline.json` for that function in the same pull request,
-   which is visible in review. This preserves the rule that gates are not
-   weakened to make a change pass.
+3. **No bypass, including through the baseline.** The check compares against
+   `.gaze/baseline.json` as committed at the merge base, never the copy in the
+   change under review, so raising a baseline entry in the same pull request
+   cannot clear a failure. A deliberate increase is a maintainer-reviewed
+   baseline change merged on its own first. This preserves the rule that gates
+   are not weakened to make a change pass.
 4. **Fix main first.** `run_enrichment_pipeline` regains its baseline score
    by moving the five-clause resume condition into a typed helper,
    `_checkpoint_resume_index(checkpoint, account, fingerprint, total) -> int`.
