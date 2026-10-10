@@ -4,7 +4,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Provide reviewable pull-request evidence.",
-      "source_fingerprint": "sha256:468b3a692a91807d5dc3bcc9c389543814083ddf7da9ddd5d3dbf37794d6c104",
+      "source_fingerprint": "sha256:00c192890e69e8f552fd1f337bbfd18132787b3501ca6a86d06bbad0d3bc1223",
       "sources": [
         "CONTRIBUTING.md",
         ".github/workflows/ci.yml"
