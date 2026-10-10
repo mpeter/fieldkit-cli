@@ -53,6 +53,9 @@ from fieldkit.config._shadowbot import get_shadowbot_api_base as get_shadowbot_a
 from fieldkit.config._shadowbot import get_shadowbot_assistant_id as get_shadowbot_assistant_id
 from fieldkit.config._shadowbot import get_shadowbot_auth_endpoint as get_shadowbot_auth_endpoint
 from fieldkit.config._shadowbot import get_shadowbot_chrome_cookies_path as get_shadowbot_chrome_cookies_path
+from fieldkit.config._shadowbot import (
+    get_shadowbot_chrome_recovery_enabled as get_shadowbot_chrome_recovery_enabled,
+)
 from fieldkit.config._shadowbot import get_shadowbot_client_id as get_shadowbot_client_id
 from fieldkit.config._shadowbot import get_shadowbot_config_warnings as get_shadowbot_config_warnings
 from fieldkit.config._shadowbot import get_shadowbot_redirect_uri as get_shadowbot_redirect_uri

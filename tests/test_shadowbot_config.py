@@ -7,17 +7,20 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from pydantic import ValidationError
 
 from fieldkit.config import (
     get_shadowbot_api_base,
     get_shadowbot_assistant_id,
     get_shadowbot_auth_endpoint,
     get_shadowbot_chrome_cookies_path,
+    get_shadowbot_chrome_recovery_enabled,
     get_shadowbot_client_id,
     get_shadowbot_redirect_uri,
     get_shadowbot_token_endpoint,
 )
 from fieldkit.config._loader import ConfigError
+from fieldkit.config._schema import _FieldkitConfig
 
 pytestmark = pytest.mark.unit
 
@@ -263,3 +266,37 @@ def test_get_shadowbot_assistant_id_returns_default_when_section_absent() -> Non
     """assistant_id still returns default when absent (retains default per task 3.2)."""
     with patch(f"{_LOADER_MODULE}._load_raw_config", return_value=None):
         assert get_shadowbot_assistant_id() == "sales_assistant_v2"
+
+
+# ---------------------------------------------------------------------------
+# get_shadowbot_chrome_recovery_enabled()
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        None,
+        {"fieldkit_home": "/tmp/home"},
+        {"shadowbot": {"api_base": "https://example.com"}},
+        {"shadowbot": {"chrome_recovery": False}},
+        {"shadowbot": {"chrome_cookies_path": "/tmp/Cookies"}},
+    ],
+    ids=["no-config", "no-section", "key-absent", "false", "cookie-path-only"],
+)
+def test_chrome_recovery_is_off_unless_explicitly_enabled(config: dict[str, object] | None) -> None:
+    with patch(f"{_LOADER_MODULE}._load_raw_config", return_value=config):
+        assert get_shadowbot_chrome_recovery_enabled() is False
+
+
+def test_chrome_recovery_is_on_when_set_true() -> None:
+    config = {"shadowbot": {"chrome_recovery": True}}
+    with patch(f"{_LOADER_MODULE}._load_raw_config", return_value=config):
+        assert get_shadowbot_chrome_recovery_enabled() is True
+
+
+@pytest.mark.parametrize("value", ["yes", "true", 1])
+def test_chrome_recovery_rejects_non_boolean_values(value: object) -> None:
+    """A truthy non-boolean must not silently enable cookie reads; config validation rejects it."""
+    with pytest.raises(ValidationError, match="chrome_recovery"):
+        _FieldkitConfig.model_validate({"shadowbot": {"chrome_recovery": value}})

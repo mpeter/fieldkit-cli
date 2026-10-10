@@ -1,6 +1,6 @@
 """Private Pydantic schemas for validating fieldkit configuration."""
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, StrictBool
 
 
 class _ShadowbotConfig(BaseModel):
@@ -14,6 +14,7 @@ class _ShadowbotConfig(BaseModel):
     client_id: str | None = None
     assistant_id: str | None = None
     chrome_cookies_path: str | None = None
+    chrome_recovery: StrictBool | None = None
 
 
 class _FieldkitConfig(BaseModel):
