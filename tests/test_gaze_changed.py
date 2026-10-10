@@ -176,3 +176,6 @@ def test_gazepy_report_accepts_a_failed_comparison_but_not_a_crash(
                 gaze_changed._gazepy_report(tmp_path / "coverage.json")
 
     assert run.call_args.kwargs["timeout"] == gaze_changed._GAZEPY_TIMEOUT_SECONDS
+    command = run.call_args.args[0]
+    assert command[command.index("--tests") + 1] != "tests"
+    assert command[command.index("--baseline") + 1] == ".gaze/baseline.json"

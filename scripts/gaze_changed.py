@@ -35,6 +35,7 @@ import argparse
 import json
 import subprocess
 import sys
+import tempfile
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -161,24 +162,32 @@ def _gazepy_report(coverprofile: Path) -> dict[str, object]:
 
     gazepy exits 1 when the whole-tree comparison fails but still prints the
     report, so exit 1 is a result to filter rather than an error.
+
+    ``--tests`` points at an empty directory. Test analysis only feeds contract
+    coverage and GazeCRAP, which this check does not gate, and skipping it cuts
+    the scan from about 110 s to 10 s with identical CRAP scores. GazeCRAP stays
+    gated by the complete baseline run in ``make quality-full``.
     """
-    completed = subprocess.run(
-        [
-            "gazepy",
-            "crap",
-            f"{_SRC_ROOT}/",
-            "--coverprofile",
-            str(coverprofile),
-            "--baseline",
-            _BASELINE,
-            "--format",
-            "json",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=_GAZEPY_TIMEOUT_SECONDS,
-    )
+    with tempfile.TemporaryDirectory(prefix="gaze-changed-no-tests-") as no_tests:
+        completed = subprocess.run(
+            [
+                "gazepy",
+                "crap",
+                f"{_SRC_ROOT}/",
+                "--coverprofile",
+                str(coverprofile),
+                "--baseline",
+                _BASELINE,
+                "--tests",
+                no_tests,
+                "--format",
+                "json",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_GAZEPY_TIMEOUT_SECONDS,
+        )
     if completed.returncode not in _GAZEPY_REPORT_EXITS:
         raise ValueError(f"gazepy exited {completed.returncode}: {completed.stderr.strip()[:500]}")
     report = json.loads(completed.stdout)

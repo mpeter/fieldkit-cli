@@ -52,6 +52,13 @@ single file would therefore produce keys that never match the baseline.
    or were renamed since the baseline as new; it fails those only at the
    new-function threshold (15). The filter applies the same rule to new
    functions in changed files, matching `gazepy-baseline`.
+2b. **CRAP only; skip test analysis.** gazepy's default run analyzes the test
+   suite for contract coverage, which feeds GazeCRAP and took about 58 s in CI.
+   The filter passes an empty `--tests` directory: CRAP scores were identical
+   for all 2160 functions, and the scan drops to about 10 s. A change that
+   worsens only GazeCRAP (lower contract coverage with unchanged line coverage
+   and complexity) is therefore caught by the scheduled complete run, not the
+   pull request.
 3. **No bypass flag.** A legitimate complexity increase is recorded by
    updating `.gaze/baseline.json` for that function in the same pull request,
    which is visible in review. This preserves the rule that gates are not
