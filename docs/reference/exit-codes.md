@@ -105,7 +105,8 @@ These commands exit `3` when data is invalid and a retry without a fix will not 
   missing, or the selected scope contains no pursuit files. Initialize or correct
   the workspace, then run the audit again.
 - **`fieldkit sf drift`**: the workspace has no `accounts` directory, `--account`
-  names a directory that does not exist, or, when at least one pursuit needs
+  is not the name of an existing directory directly under `accounts/` (a path
+  such as `..` or `a/b` is rejected), or, when at least one pursuit needs
   fetching, no `sf_org_url` is configured. Run
   `fieldkit init` or correct the configuration, then run it again.
 - Any command that reads `config.yaml` when the file is absent, malformed, or missing a

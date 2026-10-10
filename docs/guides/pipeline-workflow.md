@@ -301,13 +301,15 @@ each opportunity RED, YELLOW or GREEN:
   the close date is within 30 days.
 
 The command writes nothing. To bring one pursuit's snapshot up to date, run
-`fieldkit sf opportunity <id> <pursuit-file>`. A placeholder ID such as `TBD`
-counts as not linked. The command exits `1` when the report is incomplete (an
+`fieldkit sf opportunity <id> <pursuit-file>`. A missing, blank or placeholder
+ID such as `TBD` counts as not linked; any other value that is not a Salesforce
+record ID string, such as `false` or a list, is reported as not assessed. Pursuits at
+`closed`, `won` or `lost` are treated as closed and skipped. The command exits `1` when the report is incomplete (an
 unreadable file, an ID that is not a Salesforce record ID, a linked pursuit
 without a recognized `stage`, or a failed request), `2` when at least one
 pursuit needs fetching and the Salesforce session needs `fieldkit auth sf`, and `3`
-when the workspace has no `accounts` directory, `--account` names no account
-directory, or, when at least one pursuit needs fetching, `sf_org_url` is not
+when the workspace has no `accounts` directory, `--account` is not the name
+of a directory under `accounts/`, or, when at least one pursuit needs fetching, `sf_org_url` is not
 configured. Only underscore-keyed `sf_*` fields
 are read.
 

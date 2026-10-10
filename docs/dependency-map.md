@@ -11,7 +11,7 @@ generated_by: scripts/generate_dep_map.py
 
 > **Derived document — generated exhaust, not a system of record.** Verify facts against the sources listed in `derived_from`.
 
-> Auto-generated 2026-10-09 from live repo analysis. Do not edit manually.
+> Auto-generated 2026-10-10 from live repo analysis. Do not edit manually.
 > Re-generate: `uv run python scripts/generate_dep_map.py`
 
 ---
