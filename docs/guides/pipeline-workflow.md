@@ -436,7 +436,7 @@ pursuit. `fieldkit pursuit create --name` and `fieldkit pursuit rename --to`
 refuse a reserved name with exit `3` and change nothing; with `--json`, create
 and rename print an error object whose `error` is `reserved_name`.
 
-When forecast, health, or audit skips a reserved file that already exists,
-stderr names it as `WARNING: <account>/pursuits/<file>: skipped — reserved
-pursuit file name`. The exit status is unchanged, and forecast JSON lists the
+When forecast, health, or a compliance audit (`pursuit audit` without
+`--check-yaml`) skips a reserved file that already exists, stderr names it as
+`WARNING: <account>/pursuits/<file>: skipped — reserved pursuit file name`. The exit status is unchanged, and forecast JSON lists the
 paths in `assessment.reserved`.
