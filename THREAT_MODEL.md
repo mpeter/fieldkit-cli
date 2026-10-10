@@ -16,8 +16,9 @@ restricted to loopback use; fieldkit is not a hosted or multi-tenant service.
 
 - Integration credentials and tokens are high sensitivity; keep them outside
   the repository and never emit them in diagnostics.
-- The local Chrome cookie store is high sensitivity; ShadowBot's optional
-  Chrome recovery decrypts it only to renew a rejected session, sends the login
+- The local Chrome cookie store is high sensitivity; ShadowBot's Chrome
+  recovery is off unless the operator sets `shadowbot.chrome_recovery: true`,
+  decrypts the store only to renew a rejected session, sends the login
   domain's session cookies only to the configured authorization endpoint, and
   never logs cookie values.
 - Workspace content and generated reports are high sensitivity; keep them under

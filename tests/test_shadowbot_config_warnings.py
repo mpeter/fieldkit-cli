@@ -33,7 +33,16 @@ _LOADER_MODULE = "fieldkit.config._loader"
             id="top-level-near-miss-suffix",
         ),
         pytest.param({"fieldkit_home": "home", "other_key": 1}, [], id="unrelated-top-level"),
-        pytest.param({"shadowbot": {"chrome_cookies_path": "Cookies", "client_id": "c"}}, [], id="correct"),
+        pytest.param(
+            {"shadowbot": {"chrome_cookies_path": "Cookies", "chrome_recovery": True, "client_id": "c"}},
+            [],
+            id="correct",
+        ),
+        pytest.param(
+            {"shadowbot": {"chrome_cookies_path": "Cookies"}},
+            ["chrome_cookies_path is set but Chrome recovery is off", "shadowbot.chrome_recovery: true"],
+            id="cookie-path-without-opt-in",
+        ),
         pytest.param({"shadowbot": {"redirect_uri": "https://example.com/cb"}}, [], id="redirect-uri-is-known"),
         pytest.param({"shadowbot_token": "tokens/shadowbot.json"}, [], id="honored-token-key"),
         pytest.param({"shadowbot_assistant_id": "a"}, ["shadowbot_assistant_id"], id="normal-key-still-named"),

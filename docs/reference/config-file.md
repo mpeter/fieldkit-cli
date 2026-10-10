@@ -107,14 +107,19 @@ Do not copy sample endpoints into a real deployment.
 private literal addresses, non-default HTTPS ports, embedded credentials, query
 parameters, and fragments before it sends an authorization bearer token.
 
-The same section also accepts `chrome_cookies_path`, a local setting rather than
-an administrator-provided value: it points Chrome session recovery at another
-profile's `Cookies` file instead of the `Default` profile. See
-[Choose the Chrome profile](../guides/shadowbot-auth.md#choose-the-chrome-profile).
+The same section also accepts two local settings rather than administrator-provided
+values. `chrome_recovery: true` opts in to Chrome session recovery, which reads your
+Chrome cookie store when a stored refresh token is rejected; it is off by default and
+must be a boolean. `chrome_cookies_path` points that recovery at another profile's
+`Cookies` file instead of the `Default` profile, and has no effect unless
+`chrome_recovery` is `true`. See
+[Enable Chrome recovery](../guides/shadowbot-auth.md#enable-chrome-recovery-on-linux)
+and [Choose the Chrome profile](../guides/shadowbot-auth.md#choose-the-chrome-profile).
 
 Keys outside this schema are ignored. `fieldkit doctor` reports a `warning:` line
-for an unrecognized key under `shadowbot:` and for a misplaced top-level
-`shadowbot_*` key such as `shadowbot_client_id`; `shadowbot_token` is a supported
+for an unrecognized key under `shadowbot:`, for a misplaced top-level
+`shadowbot_*` key such as `shadowbot_client_id`, and for a `chrome_cookies_path`
+set without `chrome_recovery: true`; `shadowbot_token` is a supported
 top-level key and is not reported. Warnings never change the doctor result or its
 exit status.
 

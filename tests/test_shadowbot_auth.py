@@ -1034,9 +1034,10 @@ def test_get_token_refresh_from_file(monkeypatch: pytest.MonkeyPatch, tmp_path: 
 
 @pytest.mark.unit
 def test_get_token_chrome_fallback(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """get_token() falls back to Chrome acquisition when refresh token is invalid_grant."""
+    """get_token() falls back to Chrome acquisition when refresh token is invalid_grant and recovery is opted in."""
     _patch_state_dir(monkeypatch, tmp_path)
     monkeypatch.setattr("fieldkit.shadowbot.auth._HAS_CHROME_AUTH", True)
+    monkeypatch.setattr("fieldkit.shadowbot.auth._get_chrome_recovery_enabled", lambda: True)
 
     # Token file with a bad refresh token
     _make_token_file(
@@ -1078,6 +1079,38 @@ def test_get_token_chrome_fallback(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
     assert result == "chrome-access-token"
     assert auth_mod._cache is not None
     assert auth_mod._cache.is_valid()
+
+
+@pytest.mark.unit
+def test_get_token_skips_chrome_recovery_unless_opted_in(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Without shadowbot.chrome_recovery, an invalid_grant never reads Chrome cookies and says how to opt in."""
+    _patch_state_dir(monkeypatch, tmp_path)
+    monkeypatch.setattr("fieldkit.shadowbot.auth._HAS_CHROME_AUTH", True)
+    monkeypatch.setattr("fieldkit.shadowbot.auth._get_chrome_recovery_enabled", lambda: False)
+    _make_token_file(
+        tmp_path,
+        {
+            "access_token": "old-access",
+            "refresh_token": "expired-refresh",
+            "token_uri": "https://auth.example.test/...",
+            "client_id": "shadowbot-ui",
+            "captured_at": str(time.time()),
+        },
+    )
+    refresh_resp = MagicMock()
+    refresh_resp.status_code = 400
+    refresh_resp.text = '{"error": "invalid_grant"}'
+    acquire = MagicMock()
+    monkeypatch.setattr("fieldkit.shadowbot.auth.acquire_from_chrome", acquire)
+
+    with (
+        patch("httpx.post", return_value=refresh_resp),
+        pytest.raises(ShadowbotAuthError, match=r"Chrome recovery is off.*chrome_recovery: true") as excinfo,
+    ):
+        get_token()
+
+    assert "--refresh-token-file" in str(excinfo.value)
+    acquire.assert_not_called()
 
 
 @pytest.mark.unit
