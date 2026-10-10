@@ -365,6 +365,19 @@ def test_glob_character_account_scans_only_that_directory(workspace: Path, monke
 
 
 @pytest.mark.unit
+def test_scaffolding_account_is_not_scanned(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A dot-prefixed scaffolding account such as .template never makes the portfolio report incomplete or fetches."""
+    _pursuit(workspace, ".template", "sample", sf_opportunity_id=_ID_B)
+    _pursuit(workspace, "acme-corp", "clean", sf_opportunity_id=_ID_A)
+    _use_responses(monkeypatch, {_ID_A: _record(_ID_A)})
+
+    result = _run("--json")
+
+    assert result.exit_code == 0, result.output
+    assert [opp_id for opp_id, _ in FakeClient.instances[0].fetched] == [_ID_A]
+
+
+@pytest.mark.unit
 def test_expired_session_propagates_instead_of_partial_report(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """An auth failure reaches the top-level handler so orchestrators stop instead of retrying."""
     _pursuit(workspace, "acme-corp", "clean", sf_opportunity_id="006A00000000000000")

@@ -184,6 +184,20 @@ def test_scan_report_inputs_treats_account_filter_as_a_literal_name(tmp_path: Pa
     assert assessment.scanned == 1
 
 
+def test_scan_report_inputs_skips_scaffolding_accounts(tmp_path: Path) -> None:
+    """Dot-prefixed scaffolding accounts are not scanned, so a malformed template cannot fail a portfolio report."""
+    for account, body in ((".template", "---\n- invalid\n---\n"), ("acme-fictional", "---\nstage: validate\n---\n")):
+        pursuits = tmp_path / "accounts" / account / "pursuits"
+        pursuits.mkdir(parents=True)
+        (pursuits / "deal.md").write_text(body, encoding="utf-8")
+
+    assessment = ReportAssessment()
+    found = [i.relative_path for i in scan_report_inputs(tmp_path, None, assessment)]
+
+    assert found == ["acme-fictional/pursuits/deal.md"]
+    assert (assessment.scanned, assessment.failures) == (1, [])
+
+
 def test_reader_and_audit_distinguish_malformed_yaml(tmp_path: Path) -> None:
     path = _portfolio(tmp_path, b"---\nstage: [invalid\n---\n", mixed=False)
     outcome = read_pursuit_for_report(path)

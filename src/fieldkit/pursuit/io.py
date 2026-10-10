@@ -281,6 +281,7 @@ class ReportInput:
 def scan_report_inputs(root: Path, account_filter: str | None, assessment: ReportAssessment) -> Iterator[ReportInput]:
     """Yield readable pursuit inputs under ``root/accounts`` in path order.
 
+    Dot-prefixed account directories (scaffolding) are skipped unless named by ``account_filter``.
     Every matched file counts as scanned. Reserved file names are skipped as exclusions and recorded in ``assessment.reserved``, and
     unreadable or invalid files are recorded as failures instead of being dropped. Consume
     the iterator fully, then call ``assessment.finish()`` with the number the report kept.
@@ -288,6 +289,8 @@ def scan_report_inputs(root: Path, account_filter: str | None, assessment: Repor
     accounts_dir = root / "accounts"
     pattern = _pursuit_glob(account_filter)
     for path in sorted(accounts_dir.glob(pattern)):
+        if account_filter is None and path.parent.parent.name.startswith("."):
+            continue  # scaffolding accounts such as .template, as iterate_pursuits() skips them
         assessment.scanned += 1
         relative = str(path.relative_to(accounts_dir))
         if is_reserved_pursuit_path(path):
