@@ -1207,7 +1207,7 @@
           "classification": "generated_reference",
           "id": "docs.dependency.map.md.block-1",
           "language": "",
-          "sha256": "78fb10a08cc8e74696f72c734d4b02ef362ab900362749a23142431700d004a0",
+          "sha256": "b614fe0fba997c2476de21463e5a88a84d49835886405cedbfb7bf870126cbd2",
           "verification_id": "automated.generated-dependency-map"
         },
         {
@@ -1240,7 +1240,7 @@
         }
       ],
       "reader_action": "Inspect the generated module dependency graph.",
-      "source_fingerprint": "sha256:c23b30383e18f57a0f72868d1865c86e0e560b539bc0caf01f4c87df995c7c26",
+      "source_fingerprint": "sha256:92e43c20435dd1086099dad7a05e39135aac87bd18b9e15f925f3a4e50bfd402",
       "sources": [
         "tach.toml",
         "src/fieldkit/**/*.py",
@@ -1626,7 +1626,7 @@
           "classification": "credentialed_manual_integration",
           "id": "docs.guides.pipeline.workflow.md.block-11",
           "language": "",
-          "sha256": "53aa8498370f4bd4d2eea28010ab098adb0deb1feb2410288e49d8c448713db2",
+          "sha256": "20d5050341c99ef4083d6095af38e2b02a8fdc6b6e19f0335e3a1ce0a7678b2b",
           "verification_id": "manual.credentialed-integration"
         },
         {
@@ -2088,7 +2088,7 @@
         {
           "classification": "structural_assertion",
           "id": "docs.reference.exit.codes.md.table-2",
-          "sha256": "50f2f4a1579b7721adcf9dde2494472b22796b1db413b888f05fa5522038a165",
+          "sha256": "68d4b62024f7deeccf4e8575763907526199c612c5d95fb0fe177dce39cfe288",
           "verification_id": "automated.exit-code-contract"
         }
       ]
