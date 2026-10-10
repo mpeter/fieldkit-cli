@@ -104,6 +104,11 @@ These commands exit `3` when data is invalid and a retry without a fix will not 
 - **`fieldkit pursuit audit`**: the configured root or account directory is
   missing, or the selected scope contains no pursuit files. Initialize or correct
   the workspace, then run the audit again.
+- **`fieldkit pursuit create`** and **`fieldkit pursuit rename`**: the name would
+  produce a reserved pursuit file name (`template` or `gmail-intel`), which
+  reports skip. Nothing is written; choose a different name.
+- **`fieldkit sf schema`**: the Salesforce describe response contains no eligible
+  field. No record is requested; check the object name and its field permissions.
 - **`fieldkit sf drift`**: the workspace has no `accounts` directory, `--account`
   is not the name of an existing directory directly under `accounts/` (a path
   such as `..` or `a/b` is rejected), or, when at least one pursuit needs

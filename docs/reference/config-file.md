@@ -107,6 +107,17 @@ Do not copy sample endpoints into a real deployment.
 private literal addresses, non-default HTTPS ports, embedded credentials, query
 parameters, and fragments before it sends an authorization bearer token.
 
+The same section also accepts `chrome_cookies_path`, a local setting rather than
+an administrator-provided value: it points Chrome session recovery at another
+profile's `Cookies` file instead of the `Default` profile. See
+[Choose the Chrome profile](../guides/shadowbot-auth.md#choose-the-chrome-profile).
+
+Keys outside this schema are ignored. `fieldkit doctor` reports a `warning:` line
+for an unrecognized key under `shadowbot:` and for a misplaced top-level
+`shadowbot_*` key such as `shadowbot_client_id`; `shadowbot_token` is a supported
+top-level key and is not reported. Warnings never change the doctor result or its
+exit status.
+
 ## Account configuration
 
 Account-specific settings live at
