@@ -73,8 +73,8 @@ These commands exit `1` when they produce a partial result or report findings:
   warnings, or malformed frontmatter. Fix the reported files, then run the audit
   again.
 - **`fieldkit sf drift`**: the drift report is incomplete because a pursuit file
-  could not be read, an `sf_opportunity_id` is not a Salesforce record ID, or a
-  Salesforce request failed. Drift, including an opportunity Salesforce no longer
+  could not be read, an `sf_opportunity_id` is not a Salesforce record ID, a
+  linked pursuit has no recognized `stage`, or a Salesforce request failed. Drift, including an opportunity Salesforce no longer
   has, is reported with exit `0`.
 
 ---
@@ -102,8 +102,9 @@ These commands exit `3` when data is invalid and a retry without a fix will not 
 - **`fieldkit pursuit audit`**: the configured root or account directory is
   missing, or the selected scope contains no pursuit files. Initialize or correct
   the workspace, then run the audit again.
-- **`fieldkit sf drift`**: the workspace has no `accounts` directory. Run
-  `fieldkit init` or correct the configured workspace, then run it again.
+- **`fieldkit sf drift`**: the workspace has no `accounts` directory, `--account`
+  names a directory that does not exist, or no `sf_org_url` is configured. Run
+  `fieldkit init` or correct the configuration, then run it again.
 - Any command that reads `config.yaml` when the file is absent, malformed, or missing a
   required setting — fix the local configuration or run `fieldkit init`, then re-run.
 - Any command that encounters an unhandled exception — the full traceback is printed to

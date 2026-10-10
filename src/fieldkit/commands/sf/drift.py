@@ -21,7 +21,7 @@ from fieldkit.commands.sf.sync import PLACEHOLDER_VALUES
 from fieldkit.config import get_fieldkit_home, get_sf_rest_base_url, get_sf_session_id
 from fieldkit.pursuit.drift import DriftFlag, DriftStatus, LiveOpportunity, assess_drift, drift_status
 from fieldkit.pursuit.io import ReportAssessment, ReportFailure, ReportInput, scan_report_inputs
-from fieldkit.pursuit.stages import in_review_scope
+from fieldkit.pursuit.stages import ALL_STAGES, TERMINAL_STAGES, in_review_scope
 from fieldkit.sf.client import SFAPIError, SFDirectClient, SFNotFoundError
 from fieldkit.sf.opportunities import is_opportunity_id
 from fieldkit.sf.types import OpportunitySObject
@@ -66,7 +66,7 @@ class DriftReport(TypedDict):
 
 
 def _opportunity_id(frontmatter: dict[str, object]) -> str:
-    return str(frontmatter.get("sf_opportunity_id") or frontmatter.get("sf-opportunity-id") or "").strip()
+    return str(frontmatter.get("sf_opportunity_id") or "").strip()
 
 
 def select_linked_pursuits(
@@ -76,14 +76,21 @@ def select_linked_pursuits(
 
     A blank or placeholder ``sf_opportunity_id`` (``TBD``) means not yet linked. Any
     other value that is not a Salesforce record id is reported as unassessed and is
-    never sent to Salesforce.
+    never sent to Salesforce. A linked pursuit whose ``stage`` is missing or not a
+    known stage cannot be placed in review scope, so it is unassessed as well.
     """
     assessment = ReportAssessment()
     linked: list[ReportInput] = []
     for report_input in scan_report_inputs(root, account, assessment):
         opp_id = _opportunity_id(report_input.frontmatter)
-        stage = str(report_input.frontmatter.get("stage", ""))
-        if not in_review_scope(stage, include_prospect=include_prospect) or opp_id.lower() in PLACEHOLDER_VALUES:
+        if opp_id.lower() in PLACEHOLDER_VALUES:
+            continue
+        stage = report_input.frontmatter.get("stage")
+        if not isinstance(stage, str) or stage.strip().lower() not in ALL_STAGES | TERMINAL_STAGES:
+            reason = "stage is missing or not a recognized pursuit stage"
+            assessment.failures.append(ReportFailure(report_input.relative_path, reason))
+            continue
+        if not in_review_scope(stage.strip(), include_prospect=include_prospect):
             continue
         if not is_opportunity_id(opp_id):
             reason = "sf_opportunity_id is not a 15- or 18-character Salesforce id"
@@ -167,9 +174,14 @@ def _echo_table(rows: list[DriftRow], report: DriftReport) -> None:
 
 
 def _open_client() -> SFDirectClient:
-    session_id = get_sf_session_id()
     base_url = get_sf_rest_base_url()
-    if not session_id or not base_url:
+    if not base_url:
+        click.echo(
+            f"{LOG_PREFIX} Salesforce org URL is not configured. Set sf_org_url in the fieldkit config.", err=True
+        )
+        raise SystemExit(EXIT_DATA)
+    session_id = get_sf_session_id()
+    if not session_id:
         click.echo(f"{LOG_PREFIX} No Salesforce session. Run: fieldkit auth sf", err=True)
         raise SystemExit(EXIT_AUTH)
     return SFDirectClient(session_id=session_id, base_url=base_url)
@@ -191,11 +203,15 @@ def cli(account: str | None, include_prospect: bool, as_json: bool) -> None:
       1 — incomplete: unreadable pursuit files, invalid opportunity ids, or
           failed Salesforce requests
       2 — Salesforce session missing or expired; run: fieldkit auth sf
-      3 — no workspace or accounts directory
+      3 — no workspace or accounts directory, unknown --account, or no
+          sf_org_url configured
     """
     root = get_fieldkit_home()
     if root is None or not (Path(root) / "accounts").is_dir():
         click.echo(f"{LOG_PREFIX} Accounts directory not found. Run 'fieldkit init' to initialize.", err=True)
+        raise SystemExit(EXIT_DATA)
+    if account is not None and not (Path(root) / "accounts" / account).is_dir():
+        click.echo(f"{LOG_PREFIX} Account directory not found: accounts/{account}", err=True)
         raise SystemExit(EXIT_DATA)
 
     linked, assessment = select_linked_pursuits(Path(root), account, include_prospect=include_prospect)

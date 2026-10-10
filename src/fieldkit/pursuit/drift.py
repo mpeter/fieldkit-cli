@@ -73,9 +73,8 @@ def _iso_day(value: object) -> str:
 
 
 def _field(frontmatter: Mapping[str, Any], key: str) -> Any:
-    """Read an ``sf_*`` field, accepting the legacy hyphenated spelling (``sf-stage``)."""
-    value = frontmatter.get(key)
-    return value if value is not None else frontmatter.get(key.replace("_", "-"))
+    """Read an underscore-keyed ``sf_*`` field; hyphenated spellings are ignored by the SF pipeline."""
+    return frontmatter.get(key)
 
 
 def _whole_dollars(value: object) -> int | None:

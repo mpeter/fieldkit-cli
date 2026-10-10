@@ -199,7 +199,8 @@ def test_non_finite_live_amount_is_not_compared() -> None:
 
 
 @pytest.mark.unit
-def test_hyphenated_legacy_keys_are_read() -> None:
+def test_hyphenated_keys_are_ignored() -> None:
+    """The SF pipeline reads only underscore-keyed ``sf_*`` fields (pursuit AGENTS.md R05)."""
     frontmatter = {
         "stage": "propose",
         "sf-stage": "Propose",
@@ -207,4 +208,12 @@ def test_hyphenated_legacy_keys_are_read() -> None:
         "sf-consulting-acv": "$100,000",
     }
     flags = assess_drift(frontmatter, _live(), TODAY)
-    assert flags == []
+    assert _codes(flags) == ["sf-stage-drift", "close-date-drift", "acv-drift"]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("live_acv", [None, 0.0], ids=["live-null", "live-zero"])
+def test_placeholder_stored_amount_never_matches_empty_live_amount(live_acv: float | None) -> None:
+    flags = assess_drift(_frontmatter(sf_consulting_acv="TBD"), _live(consulting_acv=live_acv), TODAY)
+    assert flags == [DriftFlag("YELLOW", "acv-drift", "stored consulting ACV is not a number")]
+    assert drift_status(flags) != "GREEN"

@@ -105,6 +105,8 @@ def test_pipeline_stages_is_tuple() -> None:
         ("pre-pipeline", True, False),
         ("closed-won", True, False),
         ("closed-lost", False, False),
+        ("won-lost", False, False),
+        ("Won-Lost", True, False),
     ],
 )
 def test_in_review_scope(stage: str, include_prospect: bool, expected: bool) -> None:

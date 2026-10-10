@@ -302,8 +302,11 @@ each opportunity RED, YELLOW or GREEN:
 The command writes nothing. To bring one pursuit's snapshot up to date, run
 `fieldkit sf opportunity <id> <pursuit-file>`. A placeholder ID such as `TBD`
 counts as not linked. The command exits `1` when the report is incomplete (an
-unreadable file, an ID that is not a Salesforce record ID, or a failed request)
-and `2` when the Salesforce session needs `fieldkit auth sf`.
+unreadable file, an ID that is not a Salesforce record ID, a linked pursuit
+without a recognized `stage`, or a failed request), `2` when the Salesforce
+session needs `fieldkit auth sf`, and `3` when `--account` names no account
+directory or `sf_org_url` is not configured. Only underscore-keyed `sf_*` fields
+are read.
 
 ## Pipeline review
 

@@ -213,20 +213,79 @@ def test_placeholder_ids_are_unlinked_and_malformed_ids_unassessed(
 
 
 @pytest.mark.unit
-def test_hyphenated_legacy_id_key_links_the_pursuit(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_hyphenated_id_key_does_not_link_the_pursuit(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     directory = workspace / "accounts" / "acme-corp" / "pursuits"
     directory.mkdir(parents=True)
-    (directory / "legacy.md").write_text(
-        f"---\nstage: propose\nsf-opportunity-id: {_ID_A}\nsf-stage: Propose\nsf-close-date: {_FAR}\n"
-        "sf-consulting-acv: $100,000\n---\n",
-        encoding="utf-8",
-    )
+    (directory / "legacy.md").write_text(f"---\nstage: propose\nsf-opportunity-id: {_ID_A}\n---\n", encoding="utf-8")
     _use_responses(monkeypatch, {_ID_A: _record(_ID_A)})
 
     result = _run("--json")
 
     assert result.exit_code == 0, result.output
-    assert _report(result)["counts"] == {"red": 0, "yellow": 0, "green": 1, "total": 1}
+    assert _report(result)["counts"]["total"] == 0
+    assert FakeClient.instances == []
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "stage",
+    [pytest.param(None, id="missing"), pytest.param("", id="blank"), pytest.param("negotiation", id="unknown")],
+)
+def test_linked_pursuit_without_valid_stage_is_unassessed(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch, stage: str | None
+) -> None:
+    _pursuit(workspace, "acme-corp", "nostage", stage=stage, sf_opportunity_id=_ID_A)
+    _use_responses(monkeypatch, {_ID_A: _record(_ID_A)})
+
+    result = _run("--json")
+
+    assert result.exit_code == 1
+    report = _report(result)
+    assert report["unassessed"] == [
+        {
+            "pursuit": "accounts/acme-corp/pursuits/nostage.md",
+            "reason": "stage is missing or not a recognized pursuit stage",
+        }
+    ]
+    assert report["counts"]["total"] == 0
+    assert FakeClient.instances == []
+
+
+@pytest.mark.unit
+def test_legacy_won_lost_pursuit_is_out_of_scope(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _pursuit(workspace, "acme-corp", "old", stage="won-lost", sf_opportunity_id=_ID_A)
+
+    result = _run("--json")
+
+    assert result.exit_code == 0, result.output
+    assert _report(result)["counts"]["total"] == 0
+    assert FakeClient.instances == []
+
+
+@pytest.mark.unit
+def test_unconfigured_org_url_is_a_data_error_naming_the_key(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _pursuit(workspace, "acme-corp", "clean", sf_opportunity_id=_ID_A)
+    _use_responses(monkeypatch, {_ID_A: _record(_ID_A)})
+    monkeypatch.setattr(drift, "get_sf_rest_base_url", lambda: "")
+
+    result = _run("--json")
+
+    assert result.exit_code == 3
+    assert "sf_org_url" in result.stderr
+    assert "No Salesforce session" not in result.stderr
+    assert result.stdout == ""
+    assert FakeClient.instances == []
+
+
+@pytest.mark.unit
+def test_unknown_account_is_a_data_error(workspace: Path) -> None:
+    _pursuit(workspace, "acme-corp", "clean", sf_opportunity_id=_ID_A)
+
+    result = _run("--json", "--account", "no-such-corp")
+
+    assert result.exit_code == 3
+    assert "no-such-corp" in result.stderr
+    assert result.stdout == ""
 
 
 @pytest.mark.unit

@@ -58,7 +58,7 @@ ALL_STAGES: frozenset[str] = frozenset(PIPELINE_STAGES) | CLOSED_STAGES
 
 # Stages that pipeline reviews (health, Salesforce drift) never assess:
 # closed deals and pre-pipeline ideas.
-REVIEW_EXCLUDED_STAGES: frozenset[str] = frozenset({Stage.CLOSED_WON, Stage.CLOSED_LOST, Stage.PRE_PIPELINE})
+REVIEW_EXCLUDED_STAGES: frozenset[str] = CLOSED_STAGES | {Stage.PRE_PIPELINE}
 
 # Stages too early for risk review unless the caller opts in (--include-prospect).
 REVIEW_OPT_IN_STAGES: frozenset[str] = frozenset({Stage.PROSPECT})

@@ -9,7 +9,7 @@ generated_by: scripts/generate_cli_docs.py
 
 > **Derived document — generated exhaust, not a system of record.** Verify facts against the sources listed in `derived_from`.
 
-> Auto-generated 2026-10-09 from `fieldkit --help`. Do not edit manually.
+> Auto-generated 2026-10-10 from `fieldkit --help`. Do not edit manually.
 > Re-generate: `uv run python scripts/generate_cli_docs.py`
 
 ## Quick reference
@@ -211,7 +211,8 @@ Usage: fieldkit sf drift [OPTIONS]
     1 — incomplete: unreadable pursuit files, invalid opportunity ids, or
         failed Salesforce requests
     2 — Salesforce session missing or expired; run: fieldkit auth sf
-    3 — no workspace or accounts directory
+    3 — no workspace or accounts directory, unknown --account, or no
+        sf_org_url configured
 
 Options:
   -a, --account TEXT  Limit to a single account directory name.
