@@ -304,7 +304,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Choose the canonical safe write mechanism for persistent state.",
-      "source_fingerprint": "sha256:2152a3460b4d2ae7120c9b5af9692108b9b628c09605b7b3944aee2a5c8fdc3f",
+      "source_fingerprint": "sha256:bcea5eddae07c1fba8ef27e10a3b66c2f92df34d0414308df09954e409b060fe",
       "sources": [
         "src/fieldkit/**/*.py"
       ]
@@ -1233,7 +1233,7 @@
         }
       ],
       "reader_action": "Inspect the generated module dependency graph.",
-      "source_fingerprint": "sha256:0a824262bc348f2a0599cafa08d6c2ec12361b0c143954de2f5a1e7b390bd064",
+      "source_fingerprint": "sha256:45d311ca04afc7ca643e78f76a564a5ac2fac44f6bfb26575ce7e5f80004a659",
       "sources": [
         "tach.toml",
         "src/fieldkit/**/*.py",
@@ -1778,7 +1778,7 @@
         }
       ],
       "reader_action": "Configure and verify ShadowBot authentication.",
-      "source_fingerprint": "sha256:7010f98554406e418eb421d14b8afc31f4fbc15d8a9e548520c4a57921cbfbe2",
+      "source_fingerprint": "sha256:68ef2260c5b99d714726b3f2f1407e4b5792322db123f42698e6f12b22ce369d",
       "sources": [
         "src/fieldkit/commands/auth/shadowbot.py",
         "src/fieldkit/shadowbot/**/*.py"
@@ -1895,7 +1895,7 @@
       "content_type": "concept",
       "fenced_blocks": [],
       "reader_action": "Understand local storage and external data flows.",
-      "source_fingerprint": "sha256:2152a3460b4d2ae7120c9b5af9692108b9b628c09605b7b3944aee2a5c8fdc3f",
+      "source_fingerprint": "sha256:bcea5eddae07c1fba8ef27e10a3b66c2f92df34d0414308df09954e409b060fe",
       "sources": [
         "src/fieldkit/**/*.py"
       ],

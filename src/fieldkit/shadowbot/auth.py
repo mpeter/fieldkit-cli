@@ -792,6 +792,18 @@ def _silent_oidc(session_cookies: dict[str, str], cookie_label: str | None = Non
 # ---------------------------------------------------------------------------
 
 
+def _decrypt_labelled(cookie_path: Path, source: CookieSource, label: str) -> dict[str, str]:
+    """Decrypt Chrome cookies, adding the cookie source to any failure that does not name it."""
+    try:
+        return _decrypt_chrome_cookies(cookie_path, source)
+    except ShadowbotAuthError as exc:
+        if label in str(exc):
+            raise
+        raise ShadowbotAuthError(f"{exc} (while reading {label})") from exc
+    except Exception as exc:
+        raise ShadowbotAuthError(f"cookie decryption failed: {type(exc).__name__} (while reading {label})") from exc
+
+
 def acquire_from_chrome(profile_path: Path | None = None) -> None:
     """Acquire a ShadowBot token from the live Chrome session.
 
@@ -824,16 +836,7 @@ def acquire_from_chrome(profile_path: Path | None = None) -> None:
     cookie_source = _cookie_source(configured_path)
     cookie_label = _cookie_db_label(cookies_path, cookie_source)
 
-    try:
-        session_cookies = _decrypt_chrome_cookies(cookies_path, cookie_source)
-    except ShadowbotAuthError as exc:
-        if cookie_label in str(exc):
-            raise
-        raise ShadowbotAuthError(f"{exc} (while reading {cookie_label})") from exc
-    except Exception as exc:
-        raise ShadowbotAuthError(
-            f"cookie decryption failed: {type(exc).__name__} (while reading {cookie_label})"
-        ) from exc
+    session_cookies = _decrypt_labelled(cookies_path, cookie_source, cookie_label)
 
     access_token, refresh_token = _silent_oidc(session_cookies, cookie_label)
 
