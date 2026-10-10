@@ -61,6 +61,42 @@ def cli() -> None:
     """Agent companion loop — feed, allowed, run."""
 
 
+def _load_feed_items(show_all: bool, account_slug: str | None) -> "list[AttentionItem]":
+    """Fetch undelivered attention items, translating malformed watcher state into a repair instruction."""
+    from fieldkit.companion.feed import FeedParseError, get_feed
+    from fieldkit.companion.suppress import retired_item_ids
+    from fieldkit.config import get_fieldkit_data, get_fieldkit_home
+    from fieldkit.errors import FieldkitError
+
+    home = get_fieldkit_home()
+    data_path = get_fieldkit_data()
+    try:
+        return get_feed(
+            home,
+            data_path,
+            since_cursor=not show_all,
+            account_slug=account_slug,
+            suppressed=retired_item_ids(data_path),
+        )
+    except FeedParseError:
+        raise FieldkitError(
+            "Malformed watcher-run-status.json. Repair the watcher state or rerun the watcher."
+        ) from None
+
+
+def _echo_markdown_feed(items: "list[AttentionItem]") -> None:
+    """Render attention items as markdown bullets, or a single line when there are none."""
+    if not items:
+        click.echo("No new attention items.")
+        return
+    click.echo("# Attention feed\n")
+    for item in items:
+        account = f" `{item.account}`" if item.account else ""
+        skill = f" → `{item.suggested_skill}`" if item.suggested_skill else ""
+        click.echo(f"- **{item.severity.upper()}**{account} {item.summary}{skill}")
+        click.echo(f"  evidence: {item.evidence_path}")
+
+
 @cli.command("feed")
 @click.option("--json", "as_json", is_flag=True, default=False, help="Emit JSON lines (one item per line).")
 @click.option("--markdown", "as_markdown", is_flag=True, default=False, help="Render as markdown for human reading.")
@@ -79,36 +115,10 @@ def feed(as_json: bool, as_markdown: bool, show_all: bool, account_slug: str | N
     3 — malformed upstream state (unparseable status JSON).
     """
     with cli_main():
-        from fieldkit.companion.feed import FeedParseError, get_feed
-        from fieldkit.companion.suppress import retired_item_ids
-        from fieldkit.config import get_fieldkit_data, get_fieldkit_home
-        from fieldkit.errors import FieldkitError
-
-        home = get_fieldkit_home()
-        data_path = get_fieldkit_data()
-        try:
-            items = get_feed(
-                home,
-                data_path,
-                since_cursor=not show_all,
-                account_slug=account_slug,
-                suppressed=retired_item_ids(data_path),
-            )
-        except FeedParseError:
-            raise FieldkitError(
-                "Malformed watcher-run-status.json. Repair the watcher state or rerun the watcher."
-            ) from None
+        items = _load_feed_items(show_all, account_slug)
 
         if as_markdown:
-            if not items:
-                click.echo("No new attention items.")
-                return
-            click.echo("# Attention feed\n")
-            for item in items:
-                account = f" `{item.account}`" if item.account else ""
-                skill = f" → `{item.suggested_skill}`" if item.suggested_skill else ""
-                click.echo(f"- **{item.severity.upper()}**{account} {item.summary}{skill}")
-                click.echo(f"  evidence: {item.evidence_path}")
+            _echo_markdown_feed(items)
             return
 
         # JSON lines is the default contract (as_json flag kept for explicitness).

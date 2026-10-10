@@ -256,7 +256,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Assess the supported security boundary before enabling an integration or reporting a vulnerability.",
-      "source_fingerprint": "sha256:3acabe2b9462e03272afe35bdfc0951d972a36306761ccac0c7acad540fc18cb",
+      "source_fingerprint": "sha256:c7e1a313c18cb23234f84df016b36851e74defcdd3c3cace35ea0ab252819329",
       "sources": [
         "SECURITY.md",
         "docs/privacy.md",
@@ -294,7 +294,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Implement a command with the established command-to-domain boundary.",
-      "source_fingerprint": "sha256:4ab815d99f8aaf81a50a09ebaed0e98b1ef0aaae7862ac133389fa1d1c17bbb7",
+      "source_fingerprint": "sha256:a384355e156745544471ab9cd7fadc3d770c46670572c591befbfb68aa4ea841",
       "sources": [
         "src/fieldkit/__main__.py",
         "src/fieldkit/cli_exit.py"
@@ -1277,7 +1277,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Review dependency trust and update requirements.",
-      "source_fingerprint": "sha256:f5a9e4573591663e084c9adf9e393fa1155619a20996dbb2846e42f20403f1e6",
+      "source_fingerprint": "sha256:7b30f48277575169b2f3352f40a934beba5be9c519de6c83ec9b0cfa8865d470",
       "sources": [
         "docs/release-readiness/dependency-security-policy.json",
         "pyproject.toml",
@@ -1290,7 +1290,7 @@
       "content_type": "concept",
       "fenced_blocks": [],
       "reader_action": "Preserve local-first command, persistence, and integration invariants in a contribution.",
-      "source_fingerprint": "sha256:2d14c4c50719fdc6a4f71b42574734448ebef0d6850d530dafe9d93d8cb25e03",
+      "source_fingerprint": "sha256:ae9d0794d4d8b0dd201cc2878495bba7a419c5dc6f2be24d5e50a8f1f0bfc40f",
       "sources": [
         "AGENTS.md",
         "src/fieldkit/__main__.py",
@@ -1752,7 +1752,7 @@
         }
       ],
       "reader_action": "Configure and verify Salesforce authentication.",
-      "source_fingerprint": "sha256:47ea2660b6278f28f8134e75ee4419a77e8ba1a6fbcb0a40494f746e4b21163f",
+      "source_fingerprint": "sha256:301fe9750e59cc124f74fdd12e737b1039f27c5ecb9fdf9ee7c855bb2b005175",
       "sources": [
         "src/fieldkit/commands/auth/sf.py",
         "src/fieldkit/commands/sf/session_check.py",
@@ -2226,7 +2226,7 @@
         }
       ],
       "reader_action": "Discover contacts and apply reviewed enrichment results.",
-      "source_fingerprint": "sha256:83ca9a4b0bf90b2535c02e6122b841a56a89bf4c99640021021520a950dc3dc4",
+      "source_fingerprint": "sha256:42f35bb3a4a85d66a6c730f1a1d250e8dab36b2c191388e1ad647cab9d9d3de5",
       "sources": [
         "src/fieldkit/commands/contact/enrich_cmd.py",
         "src/fieldkit/commands/contact/report_cmd.py",

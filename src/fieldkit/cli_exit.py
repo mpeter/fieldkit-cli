@@ -195,6 +195,20 @@ def handle_cli_exception(exc: BaseException) -> int:
 # ---------------------------------------------------------------------------
 
 
+def _exit_code_for(exc: Exception) -> int:
+    """Return the exit code for ``exc``, reporting it on stderr.
+
+    Click's own errors (bad parameter, usage) are expected user mistakes: print Click's
+    one-line message and exit EXIT_DATA, as the top-level normalizer does. Click's default
+    code 2 would collide with EXIT_AUTH. Looked up lazily: this module does not import click.
+    """
+    click = sys.modules.get("click")
+    if click is not None and isinstance(exc, click.ClickException):
+        exc.show()
+        return EXIT_DATA
+    return handle_cli_exception(exc)
+
+
 @contextmanager
 def cli_main() -> Generator[None, None, None]:
     """Context manager that maps exceptions to canonical exit codes.
@@ -227,11 +241,4 @@ def cli_main() -> Generator[None, None, None]:
     try:
         yield
     except Exception as exc:  # noqa: BLE001  # broad catch is intentional: this is the per-command boundary
-        # Click's own errors (bad parameter, usage) are expected user mistakes: print Click's
-        # one-line message and exit EXIT_DATA, as the top-level normalizer does. Click's default
-        # code 2 would collide with EXIT_AUTH. Looked up lazily: this module does not import click.
-        click = sys.modules.get("click")
-        if click is not None and isinstance(exc, click.ClickException):
-            exc.show()
-            sys.exit(EXIT_DATA)
-        sys.exit(handle_cli_exception(exc))
+        sys.exit(_exit_code_for(exc))

@@ -25,11 +25,13 @@ from fieldkit.cli_exit import EXIT_DATA, EXIT_PARTIAL
 from fieldkit.commands.pursuit.audit import (
     AuditResult,
     _parse_sf_date,
+    assessment_failure_warnings,
+    assessment_summary_line,
     no_files_message,
 )
 from fieldkit.config import get_fieldkit_home
 from fieldkit.pursuit.enums import Stage
-from fieldkit.pursuit.io import ReportAssessment, read_pursuit_for_report, scan_report_inputs
+from fieldkit.pursuit.io import ReportAssessment, ReportInput, read_pursuit_for_report, scan_report_inputs
 from fieldkit.pursuit.stages import REVIEW_EXCLUDED_STAGES, in_review_scope
 
 # ---------------------------------------------------------------------------
@@ -44,6 +46,9 @@ LOG_PREFIX = "[pursuit-health]"
 # ---------------------------------------------------------------------------
 # Data classes
 # ---------------------------------------------------------------------------
+
+
+RiskTier = Literal["HIGH", "MEDIUM", "LOW"]
 
 
 @dataclass
@@ -141,6 +146,17 @@ def classify_pursuit(result: AuditResult, today: date, frontmatter: dict[str, An
     )
 
 
+def _reportable_item(report_input: ReportInput, today: date, include_prospect: bool) -> RiskItem | None:
+    """Classify one scanned input, or return None when the report excludes it."""
+    result = AuditResult(path=report_input.path, relative_path=report_input.relative_path)
+    item = classify_pursuit(result, today, report_input.frontmatter)
+    if item is None:
+        return None
+    if not in_review_scope(item.stage, include_prospect=include_prospect):
+        return None
+    return item
+
+
 def health_check(
     root: Path,
     account_filter: str | None = None,
@@ -169,13 +185,9 @@ def health_check(
     items: list[RiskItem] = []
 
     for report_input in scan_report_inputs(root, account_filter, assessment):
-        result = AuditResult(path=report_input.path, relative_path=report_input.relative_path)
-        item = classify_pursuit(result, today, report_input.frontmatter)
-        if item is None:
-            continue
-        if not in_review_scope(item.stage, include_prospect=include_prospect):
-            continue
-        items.append(item)
+        item = _reportable_item(report_input, today, include_prospect)
+        if item is not None:
+            items.append(item)
     assessment.finish(len(items))
 
     # Sort: HIGH → MEDIUM → LOW, then by days_until_close ascending (None = far future)
@@ -191,6 +203,40 @@ def health_check(
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
+
+
+def _close_label(item: RiskItem) -> str:
+    """Close date with an overdue or due-soon day count appended."""
+    close_str = item.close_date_str or "—"
+    days = item.days_until_close
+    if days is None:
+        return close_str
+    if days < 0:
+        return f"{close_str} ({abs(days)}d OVR)"
+    if days <= 30:
+        return f"{close_str} ({days}d)"
+    return close_str
+
+
+def _health_row(item: RiskItem) -> str:
+    """Format one pursuit as a health-table row."""
+    days_str = f"{item.days_in_stage}d" if item.days_in_stage is not None else "—"
+    reasons_str = "; ".join(item.risk_reasons) if item.risk_reasons else "—"
+    tier_icon = {"HIGH": "✗", "MEDIUM": "⚠", "LOW": "✓"}.get(item.risk_tier, "?")
+    name = item.relative_path.replace("/pursuits/", "/").replace(".md", "")
+    return (
+        f"{name:<45} {item.stage:<12} {days_str:>5} {item.qualification_status:>13} "
+        f"{_close_label(item):>10} {tier_icon} {item.risk_tier:<6} {reasons_str}"
+    )
+
+
+def _health_exit_code(high: list[RiskItem], strict: bool, assessment: ReportAssessment | None) -> int:
+    """EXIT_PARTIAL for an incomplete assessment or HIGH-risk items under --strict, else 0."""
+    if assessment is not None and assessment.failures:
+        return EXIT_PARTIAL
+    if strict and high:
+        return EXIT_PARTIAL
+    return 0
 
 
 def _emit_health_results(
@@ -221,11 +267,7 @@ def _emit_health_results(
         # The JSON contract stays a list; consumers (web dashboard, sf-reconcile) parse it as
         # one. An incomplete assessment is disclosed on stderr and by EXIT_PARTIAL instead.
         click.echo(json.dumps([dataclasses.asdict(i) for i in items], indent=2, default=str))
-        if assessment is not None and assessment.failures:
-            raise SystemExit(EXIT_PARTIAL)
-        if strict and high:
-            raise SystemExit(EXIT_PARTIAL)
-        raise SystemExit(0)
+        raise SystemExit(_health_exit_code(high, strict, assessment))
 
     # Print table
     click.echo(f"\nPipeline Health — {today}")
@@ -235,20 +277,7 @@ def _emit_health_results(
     click.echo("-" * 124)
 
     for item in items:
-        close_str = item.close_date_str or "—"
-        if item.days_until_close is not None:
-            if item.days_until_close < 0:
-                close_str = f"{close_str} ({abs(item.days_until_close)}d OVR)"
-            elif item.days_until_close <= 30:
-                close_str = f"{close_str} ({item.days_until_close}d)"
-        days_str = f"{item.days_in_stage}d" if item.days_in_stage is not None else "—"
-        reasons_str = "; ".join(item.risk_reasons) if item.risk_reasons else "—"
-        tier_icon = {"HIGH": "✗", "MEDIUM": "⚠", "LOW": "✓"}.get(item.risk_tier, "?")
-        name = item.relative_path.replace("/pursuits/", "/").replace(".md", "")
-        line = (
-            f"{name:<45} {item.stage:<12} {days_str:>5} {item.qualification_status:>13} "
-            f"{close_str:>10} {tier_icon} {item.risk_tier:<6} {reasons_str}"
-        )
+        line = _health_row(item)
         # implementation change: --compact truncates to 80 chars
         click.echo(line[:80] if compact else line)
 
@@ -259,14 +288,12 @@ def _emit_health_results(
     #   0 — valid report by default; no HIGH-risk items in strict mode
     #   1 — one or more HIGH-risk items with --strict
     if assessment is not None and assessment.failures:
-        click.echo(
-            f"Assessment incomplete: {assessment.scanned} scanned, {assessment.included} included, "
-            f"{assessment.excluded} excluded, {len(assessment.failures)} failed."
-        )
-        raise SystemExit(EXIT_PARTIAL)
-    if strict and high:
-        raise SystemExit(EXIT_PARTIAL)
-    raise SystemExit(0)
+        click.echo(assessment_summary_line(assessment))
+    raise SystemExit(_health_exit_code(high, strict, assessment))
+
+
+def _items_in_tier(items: list[RiskItem], tier: RiskTier) -> list[RiskItem]:
+    return [i for i in items if i.risk_tier == tier]
 
 
 @click.command(name="health")
@@ -322,16 +349,16 @@ def cli(account: str | None, include_prospect: bool, as_json: bool, strict: bool
     items = health_check(
         root, account_filter=account, today=today, include_prospect=include_prospect, assessment=assessment
     )
-    for failure in assessment.failures:
-        click.echo(f"WARNING: {failure.relative_path}: {failure.reason} — assessment incomplete", err=True)
+    for warning in assessment_failure_warnings(assessment):
+        click.echo(warning, err=True)
 
     if not items and not assessment.failures:
         click.echo(no_files_message("pursuit", account), err=True)
         raise SystemExit(EXIT_DATA) from None
 
-    high = [i for i in items if i.risk_tier == "HIGH"]
-    medium = [i for i in items if i.risk_tier == "MEDIUM"]
-    low = [i for i in items if i.risk_tier == "LOW"]
+    high = _items_in_tier(items, "HIGH")
+    medium = _items_in_tier(items, "MEDIUM")
+    low = _items_in_tier(items, "LOW")
 
     _emit_health_results(
         items,
