@@ -24,12 +24,12 @@ _LOADER_MODULE = "fieldkit.config._loader"
         ),
         pytest.param(
             {"shadowbot": {"chrome_cookie_path": "Cookies"}},
-            ["shadowbot.chrome_cookie_path", "not a recognized"],
+            ["resembles 'chrome_cookies_path'", "not a recognized"],
             id="misspelled-in-section",
         ),
         pytest.param(
             {"shadowbot_client_idd": 1},
-            ["shadowbot_client_idd", "not a recognized"],
+            ["resembles 'client_id'", "not a recognized"],
             id="top-level-near-miss-suffix",
         ),
         pytest.param({"fieldkit_home": "home", "other_key": 1}, [], id="unrelated-top-level"),
@@ -56,6 +56,7 @@ _SENSITIVE_KEYS = [
     pytest.param("bad\nWARNING forged log line", id="newline"),
     pytest.param("k" * 65, id="over-long"),
     pytest.param("alice_smith", id="identifier-shaped-name"),
+    pytest.param("chrome_cookies_path_alice", id="near-miss-with-identifier"),
 ]
 
 
@@ -71,6 +72,25 @@ def test_unsafe_config_keys_are_not_echoed(key: str, location: str) -> None:
     assert "nrecognized" in warnings[0]
     assert key not in warnings[0]
     assert key.split("\n")[0] not in warnings[0]
+
+
+@pytest.mark.parametrize("key", [123, None], ids=["int", "none"])
+def test_non_string_section_keys_get_the_generic_warning(key: object) -> None:
+    """YAML allows non-string keys; they are ignored by fieldkit, so the user must still be told."""
+    warnings = shadowbot_config_warnings({"shadowbot": {key: 1}})
+
+    assert len(warnings) == 1
+    assert "An unrecognized key under 'shadowbot:'" in warnings[0]
+    assert "resembles" not in warnings[0]
+
+
+def test_near_miss_names_only_the_schema_field() -> None:
+    """A typo is explained by the schema field it resembles, so no user text reaches the warning."""
+    warnings = shadowbot_config_warnings({"shadowbot": {"chrome_cookies_path_alice": 1}})
+
+    assert len(warnings) == 1
+    assert "resembles 'chrome_cookies_path'" in warnings[0]
+    assert "alice" not in warnings[0]
 
 
 def test_unsafe_config_key_is_not_logged(caplog: pytest.LogCaptureFixture) -> None:

@@ -135,14 +135,21 @@ SHADOWBOT_TOKEN_KEY = "shadowbot_token"
 _TYPO_CUTOFF = 0.8
 
 
-def _is_likely_typo(name: str, known: frozenset[str]) -> bool:
-    """Return whether ``name`` is a near miss of a defined setting.
+def _resembled_setting(name: str, known: frozenset[str]) -> str | None:
+    """Return the defined setting that ``name`` closely resembles, if any.
 
     Config keys are user-controlled text: an arbitrary one can carry a personal
-    identifier or, with embedded newlines, forge a log line. Only a near miss of
-    a schema name is safe and useful to echo, so everything else stays generic.
+    identifier or, with embedded newlines, forge a log line. Warnings therefore
+    never print a user key; at most they name the schema field it resembles.
     """
-    return bool(difflib.get_close_matches(name, known, n=1, cutoff=_TYPO_CUTOFF))
+    matches = difflib.get_close_matches(name, known, n=1, cutoff=_TYPO_CUTOFF)
+    return matches[0] if matches else None
+
+
+def _unrecognized_key_warning(subject: str, match: str | None, hint: str) -> str:
+    """Describe an ignored key by its schema near-match, never by the key itself."""
+    resembles = f" resembles '{match}'; check its spelling" if match else ""
+    return f"{subject}{resembles}. It is not a recognized setting and is ignored; {hint}."
 
 
 def shadowbot_config_warnings(data: Mapping[str, object]) -> tuple[str, ...]:
@@ -151,31 +158,37 @@ def shadowbot_config_warnings(data: Mapping[str, object]) -> tuple[str, ...]:
     Flags unrecognized keys inside the ``shadowbot:`` section and top-level
     ``shadowbot_*`` keys other than the honored ``shadowbot_token``. A top-level
     key whose suffix names a defined ShadowBot key points at the expected
-    ``shadowbot.<key>`` location. Unknown keys stay valid configuration; the
-    result is advisory only.
+    ``shadowbot.<key>`` location. Unrecognized keys are never echoed; a near
+    miss is reported by the schema field it resembles. Unknown keys stay valid
+    configuration; the result is advisory only.
     """
     known = frozenset(_ShadowbotConfig.model_fields)
     warnings: list[str] = []
     section = data.get("shadowbot")
     if isinstance(section, Mapping):
         for key in section:
-            if not isinstance(key, str) or key in known:
+            if key in known:
                 continue
-            subject = (
-                f"shadowbot.{key}" if _is_likely_typo(key, known) else "An unrecognized key in the shadowbot section"
+            match = _resembled_setting(key, known) if isinstance(key, str) else None
+            warnings.append(
+                _unrecognized_key_warning(
+                    "An unrecognized key under 'shadowbot:'", match, "check the setting names in the guide"
+                )
             )
-            warnings.append(f"{subject} is not a recognized ShadowBot setting and is ignored.")
     prefix = "shadowbot_"
     for key in data:
         if not isinstance(key, str) or not key.startswith(prefix) or key == SHADOWBOT_TOKEN_KEY:
             continue
         suffix = key[len(prefix) :]
         if suffix in known:
-            warnings.append(f"{key} is ignored; the expected location is shadowbot.{suffix}.")
+            warnings.append(f"{prefix}{suffix} is ignored; the expected location is shadowbot.{suffix}.")
         else:
-            subject = key if _is_likely_typo(suffix, known) else "An unrecognized top-level shadowbot_ key"
             warnings.append(
-                f"{subject} is not a recognized setting and is ignored; ShadowBot settings belong under 'shadowbot:'."
+                _unrecognized_key_warning(
+                    "An unrecognized top-level shadowbot_ key",
+                    _resembled_setting(suffix, known),
+                    "ShadowBot settings belong under 'shadowbot:'",
+                )
             )
     return tuple(warnings)
 
