@@ -24,6 +24,7 @@ import importlib.util
 import json
 import logging
 import os
+import re
 import sqlite3
 import tempfile
 import time
@@ -31,7 +32,7 @@ import urllib.parse
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 import httpx
 
@@ -473,17 +474,30 @@ def _cookie_path_matches_request_path(cookie_path: str, request_path: str) -> bo
 # ---------------------------------------------------------------------------
 
 
-def _cookie_db_label(cookie_path: Path, source: str) -> str:
-    """Name a Chrome cookie database by profile directory and source, never by absolute path."""
-    return f"Chrome profile '{cookie_path.parent.name}' ({source})"
+CookieSource = Literal["default", "configured"]
+
+_CHROME_PROFILE_DIR = re.compile(r"Default|Profile [0-9]+|Guest Profile|System Profile")
 
 
-def _cookie_source(cookie_path: Path) -> str:
-    """Return ``default`` for the built-in cookie path and ``configured`` otherwise."""
-    return "default" if cookie_path == _DEFAULT_COOKIES_PATH else "configured"
+def _cookie_db_label(cookie_path: Path, source: CookieSource) -> str:
+    """Describe a Chrome cookie database without echoing arbitrary path components.
+
+    The parent directory name is shown only when it follows Chrome's own profile
+    naming; any other configured location gets a generic label because its
+    directory names may identify a person or customer.
+    """
+    profile = cookie_path.parent.name
+    if _CHROME_PROFILE_DIR.fullmatch(profile):
+        return f"Chrome profile '{profile}' ({source})"
+    return f"configured Chrome cookie database ({source})"
 
 
-def _validate_chrome_cookie_path(cookie_path: Path) -> None:
+def _cookie_source(configured_path: Path | None) -> CookieSource:
+    """Return ``configured`` when the user set a cookie path, else ``default``."""
+    return "default" if configured_path is None else "configured"
+
+
+def _validate_chrome_cookie_path(cookie_path: Path, source: CookieSource) -> None:
     """Validate that the configured Chrome cookie database is safe to open."""
     if not _HAS_CHROME_AUTH:
         raise MissingOptionalDependencyError(
@@ -493,7 +507,7 @@ def _validate_chrome_cookie_path(cookie_path: Path) -> None:
         )
 
     # Security: symlink check BEFORE anything else (pre-resolve)
-    label = _cookie_db_label(cookie_path, _cookie_source(cookie_path))
+    label = _cookie_db_label(cookie_path, source)
     if cookie_path.is_symlink():
         raise ShadowbotAuthError(
             f"Chrome Cookies path is a symlink: {label}. Symlinks are not permitted for security reasons."
@@ -611,9 +625,9 @@ def _decrypt_chrome_cookie_rows(
     return result
 
 
-def _decrypt_chrome_cookies(cookie_path: Path) -> dict[str, str]:
+def _decrypt_chrome_cookies(cookie_path: Path, source: CookieSource = "configured") -> dict[str, str]:
     """Decrypt applicable Chrome cookies for the exact trusted OIDC endpoint."""
-    _validate_chrome_cookie_path(cookie_path)
+    _validate_chrome_cookie_path(cookie_path, source)
     auth_endpoint = _get_trusted_auth_endpoint()
     assert auth_endpoint.hostname is not None
     rows = _load_chrome_cookie_rows(cookie_path, auth_endpoint.hostname)
@@ -711,9 +725,7 @@ def _authorization_code_from_response(response: httpx.Response, cookie_label: st
     codes = query.get("code", [])
     if not codes:
         raise ShadowbotAuthError("OIDC auth 302 Location did not contain a 'code' parameter.")
-    code = codes[0]
-    if not isinstance(code, str):
-        raise ShadowbotAuthError("OIDC auth 302 Location did not contain a valid 'code' parameter.")
+    code: str = codes[0]
     return code
 
 
@@ -809,10 +821,11 @@ def acquire_from_chrome(profile_path: Path | None = None) -> None:
     log_shadowbot_config_warnings_once()
     configured_path = get_shadowbot_chrome_cookies_path()
     cookies_path = configured_path if configured_path is not None else _DEFAULT_COOKIES_PATH
-    cookie_label = _cookie_db_label(cookies_path, _cookie_source(cookies_path))
+    cookie_source = _cookie_source(configured_path)
+    cookie_label = _cookie_db_label(cookies_path, cookie_source)
 
     try:
-        session_cookies = _decrypt_chrome_cookies(cookies_path)
+        session_cookies = _decrypt_chrome_cookies(cookies_path, cookie_source)
     except ShadowbotAuthError:
         raise
     except Exception as exc:

@@ -1190,7 +1190,7 @@ def test_acquire_from_chrome_uses_configured_cookies_path(monkeypatch: pytest.Mo
 
     captured: list[Path] = []
 
-    def _capture_path(path: Path) -> dict[str, str]:
+    def _capture_path(path: Path, source: str) -> dict[str, str]:
         captured.append(path)
         return session_cookies
 
@@ -1491,11 +1491,67 @@ def test_default_cookie_path_is_reported_as_default_source(monkeypatch: pytest.M
     monkeypatch.setattr("fieldkit.shadowbot.auth._DEFAULT_COOKIES_PATH", default)
 
     with pytest.raises(ShadowbotAuthError) as excinfo:
-        _decrypt_chrome_cookies(default)
+        _decrypt_chrome_cookies(default, "default")
 
     message = str(excinfo.value)
     assert "'Default' (default)" in message
     assert str(tmp_path) not in message
+
+
+@pytest.mark.unit
+def test_explicitly_configured_default_path_is_reported_as_configured(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    default = tmp_path / "Default" / "Cookies"
+    monkeypatch.setattr("fieldkit.shadowbot.auth._HAS_CHROME_AUTH", True)
+    monkeypatch.setattr("fieldkit.shadowbot.auth._DEFAULT_COOKIES_PATH", default)
+    _patch_state_dir(monkeypatch, tmp_path)
+
+    with (
+        patch("fieldkit.config.get_shadowbot_chrome_cookies_path", return_value=default),
+        pytest.raises(ShadowbotAuthError) as excinfo,
+    ):
+        acquire_from_chrome()
+
+    assert "'Default' (configured)" in str(excinfo.value)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [(None, "default"), (Path("Default/Cookies"), "configured")],
+)
+def test_cookie_source_follows_whether_a_path_was_configured(configured: Path | None, expected: str) -> None:
+    assert auth_mod._cookie_source(configured) == expected
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("profile", ["Default", "Profile 12", "Guest Profile", "System Profile"])
+def test_cookie_db_label_names_chrome_profile_directories(tmp_path: Path, profile: str) -> None:
+    label = auth_mod._cookie_db_label(tmp_path / profile / "Cookies", "configured")
+
+    assert label == f"Chrome profile '{profile}' (configured)"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("parent", ["jdoe-fictional", "Profile", "Profile 2 extra", "default"])
+def test_cookie_db_label_omits_non_chrome_parent_names(tmp_path: Path, parent: str) -> None:
+    label = auth_mod._cookie_db_label(tmp_path / parent / "Cookies", "configured")
+
+    assert label == "configured Chrome cookie database (configured)"
+    assert parent not in label
+
+
+@pytest.mark.unit
+def test_missing_cookie_file_error_hides_sensitive_parent_name(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("fieldkit.shadowbot.auth._HAS_CHROME_AUTH", True)
+
+    with pytest.raises(ShadowbotAuthError) as excinfo:
+        _decrypt_chrome_cookies(tmp_path / "jdoe-fictional" / "Cookies")
+
+    message = str(excinfo.value)
+    assert "jdoe-fictional" not in message
+    assert "configured Chrome cookie database" in message
 
 
 @pytest.mark.unit
