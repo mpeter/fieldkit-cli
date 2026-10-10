@@ -304,7 +304,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Choose the canonical safe write mechanism for persistent state.",
-      "source_fingerprint": "sha256:477f568bbe1d5923ae11b6b1c9b6ad264fbe51cf02404d3eb26c445da42bd15d",
+      "source_fingerprint": "sha256:64cc1f6c1acb1e11ed520d26c9a8ed321ccb2609b2c159f5b7a8da08b8d005e0",
       "sources": [
         "src/fieldkit/**/*.py"
       ]
@@ -1194,7 +1194,7 @@
       "content_type": "concept",
       "fenced_blocks": [],
       "reader_action": "Understand fieldkit's product and data model.",
-      "source_fingerprint": "sha256:27f6fe3eea6ccb41ef62c49444c1df95f4a9fe186b1d91867288935908d0fdac",
+      "source_fingerprint": "sha256:fc83fc3da7b97ec69cd6e4f2ee72e55f258e8485651e25841bf267065966ce01",
       "sources": [
         "src/fieldkit/config/**/*.py",
         "src/fieldkit/pursuit/io.py"
@@ -1240,7 +1240,7 @@
         }
       ],
       "reader_action": "Inspect the generated module dependency graph.",
-      "source_fingerprint": "sha256:cf9ae9b16751237d7ae832f6ebc85e821f79ba0ecf109a6340d59c1947b0c358",
+      "source_fingerprint": "sha256:9f830d6a2bc5d92727b42d25602c998132fbeda2348453f282595b18c29a43f1",
       "sources": [
         "tach.toml",
         "src/fieldkit/**/*.py",
@@ -1673,7 +1673,7 @@
         }
       ],
       "reader_action": "Run supported pipeline workflows.",
-      "source_fingerprint": "sha256:18684fc94fcc33d9b5692c8794533e6c047d4223904fd3f3b1acc5d1d4d5c3b7",
+      "source_fingerprint": "sha256:aa7d5878d8c3101e29cb292e4a6be788db9db0578f46472294b8beaf5ef3b3d6",
       "sources": [
         "src/fieldkit/commands/pipeline/**/*.py",
         "src/fieldkit/commands/datasync/**/*.py",
@@ -1898,7 +1898,7 @@
       "content_type": "how-to",
       "fenced_blocks": [],
       "reader_action": "Find the canonical implementation pattern before adding a repeated solution.",
-      "source_fingerprint": "sha256:f2a82870033d5a45d771326c4ae7a5ec062f9414249d254554c206c21acc34f4",
+      "source_fingerprint": "sha256:83f7186edc755b807a080fa6d5da1b33261f9cce94a5e2e3adfb1501a4702af1",
       "sources": [
         "AGENTS.md",
         "src/fieldkit/commands/sf/**/*.py",
@@ -1909,7 +1909,7 @@
       "content_type": "concept",
       "fenced_blocks": [],
       "reader_action": "Understand local storage and external data flows.",
-      "source_fingerprint": "sha256:477f568bbe1d5923ae11b6b1c9b6ad264fbe51cf02404d3eb26c445da42bd15d",
+      "source_fingerprint": "sha256:64cc1f6c1acb1e11ed520d26c9a8ed321ccb2609b2c159f5b7a8da08b8d005e0",
       "sources": [
         "src/fieldkit/**/*.py"
       ],

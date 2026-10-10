@@ -289,7 +289,8 @@ fieldkit sf drift --account acme-corp --json
 ```
 
 Every pursuit that links an opportunity and is in pipeline-review scope (not
-closed or pre-pipeline, and not prospect unless you pass `--include-prospect`) is
+closed or pre-pipeline, not prospect unless you pass `--include-prospect`, and not under a
+dot-prefixed scaffolding account such as `.template`) is
 fetched live and compared with its stored `sf_*` snapshot. The report lists unreadable pursuit files first, then
 each opportunity RED, YELLOW or GREEN:
 
