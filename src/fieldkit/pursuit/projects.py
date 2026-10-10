@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
 
-from fieldkit.pursuit.io import parse_frontmatter_fallback
+from fieldkit.pursuit.io import is_reserved_pursuit_path, parse_frontmatter_fallback
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -161,7 +161,7 @@ def health_check(
     for path in sorted(
         p
         for p in accounts_dir.glob(pattern)
-        if not p.parts[len(accounts_dir.parts)].startswith(".") and p.stem != "template"
+        if not p.parts[len(accounts_dir.parts)].startswith(".") and not is_reserved_pursuit_path(p)
     ):
         row = classify_project(path, accounts_dir, today)
         if row is not None:

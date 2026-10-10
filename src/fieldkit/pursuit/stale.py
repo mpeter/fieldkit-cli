@@ -17,7 +17,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from fieldkit.errors import PursuitStaleError
-from fieldkit.pursuit.io import extract_frontmatter_text
+from fieldkit.pursuit.io import extract_frontmatter_text, is_reserved_pursuit_path
 
 # Each check: (description, frontmatter_condition_fn, prose_pattern)
 # frontmatter_condition_fn(fm) → True means the fm state makes the prose stale.
@@ -105,8 +105,7 @@ def main() -> None:
             # glob pattern
             paths.extend(Path().glob(arg))
 
-    # Exclude template and gmail-intel files
-    paths = [p for p in paths if p.stem not in ("template", "gmail-intel")]
+    paths = [p for p in paths if not is_reserved_pursuit_path(p)]
 
     found_any = False
     for path in paths:

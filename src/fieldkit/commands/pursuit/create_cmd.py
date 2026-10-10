@@ -10,6 +10,7 @@ import re
 from datetime import UTC, datetime
 from pathlib import Path
 from shlex import quote
+from typing import NoReturn
 
 import click
 
@@ -17,7 +18,7 @@ from fieldkit.cli_exit import EXIT_DATA, EXIT_PARTIAL
 from fieldkit.cli_registry import declare_write
 from fieldkit.config import get_fieldkit_home
 from fieldkit.pursuit.enums import Stage
-from fieldkit.pursuit.io import render_raw_key_value, write_frontmatter_raw
+from fieldkit.pursuit.io import is_reserved_pursuit_path, render_raw_key_value, write_frontmatter_raw
 from fieldkit.pursuit.stages import ALL_STAGES
 
 LOG_PREFIX = "[pursuit-create]"
@@ -27,6 +28,16 @@ _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
 def _slugify(name: str) -> str:
     return _SLUG_RE.sub("-", name.lower()).strip("-")
+
+
+def _refuse_reserved(slug: str, *, as_json: bool) -> NoReturn:
+    """Exit with a data error before any write: reports would skip a pursuit with this name."""
+    message = f"{slug!r} is a reserved pursuit name; reports skip {slug}.md. Choose a different name."
+    if as_json:
+        click.echo(json.dumps({"error": "reserved_name", "slug": slug, "message": message}))
+    else:
+        click.echo(f"{LOG_PREFIX} {message}", err=True)
+    raise SystemExit(EXIT_DATA) from None
 
 
 def _data_root() -> Path:
@@ -137,6 +148,8 @@ def cli(
         raise SystemExit(EXIT_DATA) from None
 
     slug = _slugify(name)
+    if is_reserved_pursuit_path(Path(f"{slug}.md")):
+        _refuse_reserved(slug, as_json=as_json)
     pursuit_title = title or name
     today = datetime.now(tz=UTC).date().isoformat()
 

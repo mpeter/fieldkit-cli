@@ -24,6 +24,7 @@ from fieldkit.cli_registry import declare_write
 from fieldkit.errors import FieldkitError
 from fieldkit.pursuit.io import detect_duplicate_yaml_keys as _detect_duplicate_yaml_keys_fm
 from fieldkit.pursuit.io import (
+    is_reserved_pursuit_path,
     load_pursuit,
     parse_frontmatter,
     render_frontmatter_raw,
@@ -970,7 +971,7 @@ def _dispatch_validate(file_opt: str | None, as_json: bool = False) -> None:
     # fail schema validation (e.g. "TBD", empty required fields).
     # historic regression: also skip any file inside a .template/ directory, not just template.md.
     path_obj = Path(pursuit_path)
-    if path_obj.name == "template.md" or ".template" in str(path_obj):
+    if is_reserved_pursuit_path(path_obj) or ".template" in str(path_obj):
         click.echo(f"SKIP: {pursuit_path} (template file — not validated)", err=True)
         if as_json:
             _emit_json({"mode": "validate", "file": pursuit_path, "status": "skipped", "errors": []})

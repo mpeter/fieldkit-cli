@@ -25,6 +25,7 @@ from fieldkit.cli_exit import EXIT_DATA, EXIT_PARTIAL
 from fieldkit.commands.pursuit.audit import (
     AuditResult,
     _parse_sf_date,
+    echo_reserved_skips,
     no_files_message,
 )
 from fieldkit.config import get_fieldkit_home
@@ -329,6 +330,7 @@ def cli(account: str | None, include_prospect: bool, as_json: bool, strict: bool
     )
     for failure in assessment.failures:
         click.echo(f"WARNING: {failure.relative_path}: {failure.reason} — assessment incomplete", err=True)
+    echo_reserved_skips(assessment.reserved)
 
     if not items and not assessment.failures:
         click.echo(no_files_message("pursuit", account), err=True)
