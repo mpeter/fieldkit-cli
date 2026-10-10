@@ -71,7 +71,10 @@ single file would therefore produce keys that never match the baseline.
    the baseline changes, so no pull request raises a score: a function that
    must grow is tested or decomposed instead. Entries are paired by key and
    position, as gazepy matches same-named functions one-to-one, and a
-   non-finite score is invalid input.
+   non-finite score or an entry gazepy cannot load is invalid input. A
+   function whose entry the change edited is checked wherever it lives, so a
+   score lowered below the current measurement fails here rather than in
+   scheduled enforcement after merge.
 4. **Fix main first.** `run_enrichment_pipeline` regains its baseline score
    by moving the five-clause resume condition into a typed helper,
    `_checkpoint_resume_index(checkpoint, account, fingerprint, total) -> int`.

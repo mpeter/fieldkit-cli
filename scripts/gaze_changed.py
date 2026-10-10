@@ -120,20 +120,27 @@ def _new_function_threshold(report: Mapping[str, object]) -> float:
     return float(threshold)
 
 
-def changed_regressions(report: Mapping[str, object], changed_files: Iterable[str]) -> list[Regression]:
+def changed_regressions(
+    report: Mapping[str, object], changed_files: Iterable[str], edited_keys: Iterable[str] = ()
+) -> list[Regression]:
     """Return baseline-gate failures in ``report`` whose file is one of ``changed_files``.
 
     ``changed_files`` are paths relative to ``src/fieldkit/``, the root gazepy
     scanned, so they compare directly with the file part of each ``location``.
+    A regression in a function whose baseline entry the change edited counts
+    wherever the function lives: a score lowered below the current measurement
+    would otherwise fail scheduled enforcement after merge.
     """
     changed = set(changed_files)
+    edited = set(edited_keys)
     if "results" not in report:
         raise ValueError("gazepy report has no 'results' list")
     failures: list[Regression] = []
     for result in _entries(report, "results"):
         target = cast(dict[str, object], result["target"])
         location = str(target.get("location", ""))
-        if result.get("status") == "regression" and location.rpartition(":")[0] in changed:
+        relevant = location.rpartition(":")[0] in changed or score_key(target) in edited
+        if result.get("status") == "regression" and relevant:
             failures.append(
                 Regression(
                     location=location,
@@ -180,7 +187,11 @@ def _baseline_entries(text: str, origin: str) -> dict[str, list[dict[str, object
     if not isinstance(data, dict) or not isinstance(data.get("results"), list):
         raise ValueError(f"{origin} baseline has no 'results' list")
     grouped: dict[str, list[dict[str, object]]] = defaultdict(list)
-    for entry in _entries(data, "results"):
+    for index, entry in enumerate(cast(list[object], data["results"])):
+        # gazepy's loader rejects these, so filtering them would pass a file scheduled enforcement cannot read.
+        target = entry.get("target") if isinstance(entry, dict) else None
+        if not isinstance(entry, dict) or not isinstance(target, dict) or not {"package", "function"} <= target.keys():
+            raise ValueError(f"{origin} baseline entry {index} needs a target with package and function")
         try:
             for field in _SCORE_FIELDS:
                 _score(entry, field)
@@ -213,6 +224,13 @@ def _loosened(label: str, base: Mapping[str, object], proposed: Mapping[str, obj
     elif gaze_before is not None and gaze_after is not None and gaze_after > gaze_before + _SCORE_TOLERANCE:
         violations.append(BaselineViolation(label, f"gaze_crap raised {gaze_before:.2f} -> {gaze_after:.2f}"))
     return violations
+
+
+def edited_keys(base_text: str, proposed_text: str) -> set[str]:
+    """Return the keys whose entries the change added, removed or rescored."""
+    base = _baseline_entries(base_text, "base")
+    proposed = _baseline_entries(proposed_text, "proposed")
+    return {key for key in base.keys() | proposed.keys() if base.get(key) != proposed.get(key)}
 
 
 def ratchet_baseline(base_text: str, proposed_text: str) -> tuple[dict[str, object], list[BaselineViolation]]:
@@ -392,7 +410,7 @@ def _evaluate(coverprofile: Path, base: str) -> Evaluation:
         report = _gazepy_report(coverprofile, baseline)
     failures: list[Regression | BaselineViolation] = [*violations, *dropped_entries(base_text, proposed_text, report)]
     failures.extend(added_above_threshold(base_text, proposed_text, _new_function_threshold(report)))
-    failures.extend(changed_regressions(report, changed))
+    failures.extend(changed_regressions(report, changed, edited_keys(base_text, proposed_text)))
     return Evaluation(changed, baseline_changed, failures)
 
 

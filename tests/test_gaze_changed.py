@@ -378,6 +378,43 @@ def test_main_rejects_a_new_function_recorded_above_the_threshold(
     assert ".gaze/baseline.json io.py:big: entry added at CRAP 42.00 > threshold 15.00" in capsys.readouterr().out
 
 
+def test_changed_regressions_counts_edited_entries_outside_changed_files() -> None:
+    """A score lowered below the current measurement fails here, not in scheduled enforcement after merge."""
+    target = {"location": "watch/repair.py:40", "package": "watch/repair.py", "function": "repair", "receiver": None}
+    result = {"target": target, "status": "regression", "crap": 10.0, "baseline_crap": 5.0}
+
+    edited = gaze_changed.changed_regressions({"results": [result]}, [], ["watch/repair.py:repair"])
+    untouched = gaze_changed.changed_regressions({"results": [result]}, [], ["watch/other.py:repair"])
+
+    assert [r.location for r in edited] == ["watch/repair.py:40"]
+    assert untouched == []
+
+
+def test_edited_keys_names_added_removed_and_rescored_entries() -> None:
+    base = _baseline(_entry("same", 2.0), _entry("lowered", 5.0), _entry("removed", 3.0))
+    proposed = _baseline(_entry("same", 2.0), _entry("lowered", 4.0), _entry("added", 1.0))
+
+    assert gaze_changed.edited_keys(base, proposed) == {"io.py:lowered", "io.py:removed", "io.py:added"}
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        pytest.param("not-an-object", id="non-object"),
+        pytest.param({"crap": 1.0}, id="missing-target"),
+        pytest.param({"target": "io.py:f", "crap": 1.0}, id="non-object-target"),
+        pytest.param({"target": {"function": "f"}, "crap": 1.0}, id="missing-package"),
+        pytest.param({"target": {"package": "io.py"}, "crap": 1.0}, id="missing-function"),
+    ],
+)
+def test_ratchet_baseline_rejects_entries_gazepy_cannot_load(entry: object) -> None:
+    """Filtering them would pass a file the scheduled gazepy run then refuses to read."""
+    proposed = json.dumps({"results": [_entry("f", 1.0), entry]})
+
+    with pytest.raises(ValueError, match="proposed baseline entry 1 needs a target with package and function"):
+        gaze_changed.ratchet_baseline(_baseline(_entry("f", 1.0)), proposed)
+
+
 def test_score_key_qualifies_methods_with_their_receiver() -> None:
     assert (
         gaze_changed.score_key({"package": "io.py", "receiver": "Client", "function": "query"}) == "io.py:Client.query"
