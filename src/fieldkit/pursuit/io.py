@@ -242,6 +242,17 @@ class ReportAssessment:
         self.included = included
         self.excluded = self.scanned - included - len(self.failures)
 
+    def failure_warnings(self) -> list[str]:
+        """One stderr warning line per failed input, in scan order."""
+        return [f"WARNING: {f.relative_path}: {f.reason} — assessment incomplete" for f in self.failures]
+
+    def summary_line(self) -> str:
+        """The human-readable count summary shown when the assessment is incomplete."""
+        return (
+            f"Assessment incomplete: {self.scanned} scanned, {self.included} included, "
+            f"{self.excluded} excluded, {len(self.failures)} failed."
+        )
+
 
 NON_PURSUIT_FILES = frozenset({"gmail-intel.md", "template.md"})
 
