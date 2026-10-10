@@ -15,7 +15,7 @@ import click
 from fieldkit.cli_exit import EXIT_DATA, EXIT_PARTIAL
 from fieldkit.cli_registry import declare_write
 from fieldkit.config import get_fieldkit_home
-from fieldkit.pursuit.io import load_pursuit
+from fieldkit.pursuit.io import is_reserved_pursuit_path, load_pursuit
 from fieldkit.pursuit.stages import CLOSED_STAGES as _CLOSED_STAGES
 
 LOG_PREFIX = "[pursuit-archive]"
@@ -247,7 +247,7 @@ def cli(account: str, name: str | None, all_closed: bool, dry_run: bool, as_json
     skipped = 0
     errors = 0
     for md_file in sorted(pursuits_dir.glob("*.md")):
-        if md_file.stem == "template":
+        if is_reserved_pursuit_path(md_file):
             continue
         try:
             fm, _body, _mtime = load_pursuit(md_file)

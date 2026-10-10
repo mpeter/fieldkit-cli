@@ -28,7 +28,7 @@ from fieldkit.config import (
 )
 from fieldkit.sf.client import SFAuthError, SFDirectClient
 from fieldkit.sf.components import ContractType, opp_contract_type
-from fieldkit.sf.opportunities import is_opportunity_number, resolve_opportunity_reference
+from fieldkit.sf.opportunities import PLACEHOLDER_VALUES, is_opportunity_number, resolve_opportunity_reference
 from fieldkit.sf.types import DealSplitRecord, OpportunitySObject
 
 LOG_PREFIX = "[sf-opportunity]"
@@ -327,7 +327,7 @@ def run_opportunity(opp_id: str, pursuit_file: str | None, *, write: bool = True
     """
     import logging
 
-    from fieldkit.commands.sf.sync import PLACEHOLDER_VALUES, _validate_opp_id
+    from fieldkit.commands.sf.sync import _validate_opp_id
 
     if opp_id.strip().lower() in PLACEHOLDER_VALUES:
         logging.warning(
@@ -421,7 +421,7 @@ def cli(opp_id: str, pursuit_file: str | None, no_write: bool, as_json: bool) ->
 
     if as_json:
         # cell-28b9dae2e9395288: machine-readable output.
-        from fieldkit.commands.sf.sync import PLACEHOLDER_VALUES, _validate_opp_id
+        from fieldkit.commands.sf.sync import _validate_opp_id
 
         if opp_id.strip().lower() in PLACEHOLDER_VALUES or not _validate_opp_id(opp_id):
             _log(f"ERROR: Invalid or placeholder opportunity ID: {opp_id!r}")

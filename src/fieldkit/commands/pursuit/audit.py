@@ -15,17 +15,21 @@ Public API:
 
 import contextlib
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, Literal
 
+import click
 import yaml
 
 from fieldkit.pursuit.enums import Stage
 from fieldkit.pursuit.gate_criteria import ALLOWED_GATE_STATUSES
 from fieldkit.pursuit.io import (
+    ReportAssessment,
     detect_duplicate_yaml_keys,
+    is_reserved_pursuit_path,
     parse_frontmatter_fallback,
     split_frontmatter_raw,
     write_frontmatter_raw,
@@ -33,6 +37,7 @@ from fieldkit.pursuit.io import (
 from fieldkit.pursuit.models import canonicalize_legacy_meddpicc
 from fieldkit.pursuit.stages import ALL_STAGES as ALLOWED_STAGES
 from fieldkit.pursuit.stages import CLOSED_STAGES
+from fieldkit.pursuit.utils import parse_sf_date
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -106,6 +111,25 @@ def no_files_message(kind: Literal["pursuit", "project"], account: str | None) -
     return f"No {kind} files found."
 
 
+def echo_reserved_skips(reserved: Iterable[str]) -> None:
+    """Name each skipped reserved pursuit file on stderr; never changes the exit status."""
+    for relative_path in reserved:
+        click.echo(f"WARNING: {relative_path}: skipped — reserved pursuit file name", err=True)
+
+
+def assessment_failure_warnings(assessment: ReportAssessment) -> list[str]:
+    """One stderr warning line per failed report input, in scan order."""
+    return [f"WARNING: {f.relative_path}: {f.reason} — assessment incomplete" for f in assessment.failures]
+
+
+def assessment_summary_line(assessment: ReportAssessment) -> str:
+    """The count summary a report prints when its assessment is incomplete."""
+    return (
+        f"Assessment incomplete: {assessment.scanned} scanned, {assessment.included} included, "
+        f"{assessment.excluded} excluded, {len(assessment.failures)} failed."
+    )
+
+
 @dataclass
 class Finding:
     level: str  # "ERROR", "WARNING", "CRITICAL"
@@ -160,46 +184,6 @@ class FixResult:
 # ---------------------------------------------------------------------------
 # Parsing helpers
 # ---------------------------------------------------------------------------
-
-
-def _parse_sf_date(raw: Any) -> date | None:
-    """Parse M/D/YYYY or YYYY-MM-DD SF date string into a date object."""
-    date_value = _date_input_value(raw)
-    if date_value is not None:
-        return date_value
-    return _parse_sf_date_string(raw)
-
-
-def _parse_sf_date_string(raw: Any) -> date | None:
-    """Parse a string Salesforce close date into a date object."""
-    if not raw or not isinstance(raw, str):
-        return None
-    raw = raw.strip()
-    if not raw:
-        return None
-    # M/D/YYYY
-    if "/" in raw:
-        parts = raw.split("/")
-        if len(parts) == 3:
-            try:
-                m, d, y = int(parts[0]), int(parts[1]), int(parts[2])
-                return date(y, m, d)
-            except (ValueError, TypeError):
-                return None
-    # YYYY-MM-DD
-    try:
-        return datetime.strptime(raw, "%Y-%m-%d").date()
-    except ValueError:
-        return None
-
-
-def _date_input_value(raw: Any) -> date | None:
-    """Return native YAML date values before string parsing."""
-    if isinstance(raw, datetime):
-        return raw.date()
-    if isinstance(raw, date):
-        return raw
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -346,7 +330,7 @@ def _check_close_date(fm: dict[str, Any], today: date) -> list[Finding]:
     if _skip_close_date_check(fm_stage):
         return findings
 
-    close_date = _parse_sf_date(raw_date)
+    close_date = parse_sf_date(raw_date)
     if close_date is None:
         return findings  # No date, no checks
 
@@ -440,7 +424,7 @@ def audit_directory(
     results: list[AuditResult] = []
 
     for path in sorted(accounts_dir.glob(pattern)):
-        if path.name in {"gmail-intel.md", "template.md"}:
+        if is_reserved_pursuit_path(path):
             continue
         result = audit_file(path, today)
         # Compute relative path from accounts_dir for cleaner display
@@ -508,7 +492,7 @@ def check_yaml_duplicates_directory(
     results: list[AuditResult] = []
 
     for path in sorted(accounts_dir.glob(pattern)):
-        if path.name in {"gmail-intel.md", "template.md"}:
+        if is_reserved_pursuit_path(path):
             continue
         result = check_yaml_duplicates(path)
         with contextlib.suppress(ValueError):

@@ -48,13 +48,16 @@ from fieldkit.config._settings import get_user_email_from_env as get_user_email_
 from fieldkit.config._settings import get_user_name as get_user_name
 from fieldkit.config._settings import llm_disabled as llm_disabled
 from fieldkit.config._shadowbot import SHADOWBOT_DEFAULT_CLIENT_ID as SHADOWBOT_DEFAULT_CLIENT_ID
+from fieldkit.config._shadowbot import SHADOWBOT_TOKEN_KEY as SHADOWBOT_TOKEN_KEY
 from fieldkit.config._shadowbot import get_shadowbot_api_base as get_shadowbot_api_base
 from fieldkit.config._shadowbot import get_shadowbot_assistant_id as get_shadowbot_assistant_id
 from fieldkit.config._shadowbot import get_shadowbot_auth_endpoint as get_shadowbot_auth_endpoint
 from fieldkit.config._shadowbot import get_shadowbot_chrome_cookies_path as get_shadowbot_chrome_cookies_path
 from fieldkit.config._shadowbot import get_shadowbot_client_id as get_shadowbot_client_id
+from fieldkit.config._shadowbot import get_shadowbot_config_warnings as get_shadowbot_config_warnings
 from fieldkit.config._shadowbot import get_shadowbot_redirect_uri as get_shadowbot_redirect_uri
 from fieldkit.config._shadowbot import get_shadowbot_token_endpoint as get_shadowbot_token_endpoint
+from fieldkit.config._shadowbot import log_shadowbot_config_warnings_once as log_shadowbot_config_warnings_once
 from fieldkit.config._timeouts import DATASYNC_STEP_TIMEOUTS as DATASYNC_STEP_TIMEOUTS
 from fieldkit.config._timeouts import TIMEOUT_COMPANION_ACTION as TIMEOUT_COMPANION_ACTION
 from fieldkit.config._timeouts import TIMEOUT_CRON as TIMEOUT_CRON
@@ -75,6 +78,7 @@ __all__ = [
     "DATASYNC_STEP_TIMEOUTS",
     "GOOGLE_OAUTH_SCOPES",
     "SHADOWBOT_DEFAULT_CLIENT_ID",
+    "SHADOWBOT_TOKEN_KEY",
     "TIMEOUT_COMPANION_ACTION",
     "TIMEOUT_CRON",
     "TIMEOUT_EVAL",
@@ -123,6 +127,7 @@ __all__ = [
     "get_shadowbot_auth_endpoint",
     "get_shadowbot_chrome_cookies_path",
     "get_shadowbot_client_id",
+    "get_shadowbot_config_warnings",
     "get_shadowbot_redirect_uri",
     "get_shadowbot_token_endpoint",
     "get_territory_account_map",
@@ -131,6 +136,7 @@ __all__ = [
     "get_user_name",
     "get_watchers_dir",
     "llm_disabled",
+    "log_shadowbot_config_warnings_once",
     "set_sf_territory_id_for_account",
     "write_pipeline_quota",
 ]

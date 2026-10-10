@@ -23,7 +23,7 @@ from fieldkit.pursuit import (
     read_accounts_config,
 )
 from fieldkit.pursuit.enums import Stage
-from fieldkit.pursuit.io import load_pursuit
+from fieldkit.pursuit.io import is_reserved_pursuit_path, load_pursuit
 from fieldkit.pursuit.qualification import NativeQualificationStatus, native_qualification_status
 from fieldkit.pursuit.stages import CLOSED_STAGES
 from fieldkit.pursuit.stages import STAGE_ORDER as _STAGE_ORDER_LIST
@@ -366,7 +366,7 @@ def collect_all_pursuit_data(
         pursuit_paths = sorted(
             (data_root / "accounts" / account_filter / "pursuits").glob("*.md"),
         )
-        paths_iter = (p for p in pursuit_paths if ".template" not in str(p) and "gmail-intel" not in str(p))
+        paths_iter = (p for p in pursuit_paths if not is_reserved_pursuit_path(p))
     else:
         paths_iter = iterate_pursuits(data_root)
 

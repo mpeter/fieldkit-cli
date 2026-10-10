@@ -7,9 +7,10 @@ monetary field values.
 
 import re
 from collections.abc import Generator
-from datetime import date
+from datetime import date, datetime
 from functools import cache
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -61,13 +62,17 @@ def _parse_monetary(value: str | float | int | None) -> float | str | None:
 
 
 def iterate_pursuits(data_root: Path) -> Generator[Path, None, None]:
-    """Yield each non-template, non-gmail-intel pursuit file path.
+    """Yield each pursuit file path, skipping reserved file names and scaffolding accounts.
 
-    Yields paths under data_root/accounts/*/pursuits/*.md, skipping
-    any path containing '.template' or 'gmail-intel'.
+    Yields paths under data_root/accounts/*/pursuits/*.md. Only the exact file name is
+    tested, so ``gmail-intel-rollout.md`` is a pursuit and ``template.md`` is not. Dot-prefixed
+    account directories such as ``.template`` hold scaffolding and are skipped whole.
     """
+    # Deferred: pursuit.io imports pursuit.models, which imports this module.
+    from fieldkit.pursuit.io import is_reserved_pursuit_path
+
     for path in sorted(data_root.glob("accounts/*/pursuits/*.md")):
-        if ".template" in str(path) or "gmail-intel" in str(path):
+        if path.parent.parent.name.startswith(".") or is_reserved_pursuit_path(path):
             continue
         yield path
 
@@ -120,3 +125,43 @@ def clear_pursuit_caches() -> None:
     """Clear cached pursuit values. Call in test fixtures for isolation."""
     extract_champion_name.cache_clear()
     read_accounts_config.cache_clear()
+
+
+def parse_sf_date(raw: Any) -> date | None:
+    """Parse M/D/YYYY or YYYY-MM-DD SF date string into a date object."""
+    date_value = _date_input_value(raw)
+    if date_value is not None:
+        return date_value
+    return _parse_sf_date_string(raw)
+
+
+def _parse_sf_date_string(raw: Any) -> date | None:
+    """Parse a string Salesforce close date into a date object."""
+    if not raw or not isinstance(raw, str):
+        return None
+    raw = raw.strip()
+    if not raw:
+        return None
+    # M/D/YYYY
+    if "/" in raw:
+        parts = raw.split("/")
+        if len(parts) == 3:
+            try:
+                m, d, y = int(parts[0]), int(parts[1]), int(parts[2])
+                return date(y, m, d)
+            except (ValueError, TypeError):
+                return None
+    # YYYY-MM-DD
+    try:
+        return datetime.strptime(raw, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def _date_input_value(raw: Any) -> date | None:
+    """Return native YAML date values before string parsing."""
+    if isinstance(raw, datetime):
+        return raw.date()
+    if isinstance(raw, date):
+        return raw
+    return None

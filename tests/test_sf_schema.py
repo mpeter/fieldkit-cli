@@ -16,6 +16,24 @@ pytestmark = pytest.mark.unit
 _RECORD_ID = "001000000000000AAA"
 
 
+def _describe_field(name: str, **overrides: object) -> dict[str, object]:
+    """Return a field entry shaped like a real describe response (no per-field ``queryable``)."""
+    entry: dict[str, object] = {
+        "name": name,
+        "label": f"{name} label",
+        "type": "string",
+        "deprecatedAndHidden": False,
+        "compoundFieldName": None,
+    }
+    entry.update(overrides)
+    return entry
+
+
+def _describe(*fields: object) -> dict[str, object]:
+    """Return a describe response; ``queryable`` is reported on the object only."""
+    return {"name": "Account", "queryable": True, "fields": list(fields)}
+
+
 @pytest.fixture(autouse=True)
 def _zero_retry_waits(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep retry counts and error paths while avoiding real backoff in unit tests."""
@@ -77,9 +95,7 @@ def test_classify_observed_population_handles_falsey_values_and_nulls() -> None:
 
 def test_collect_schema_reference_chunks_and_omits_values() -> None:
     client = MagicMock()
-    client.describe_sobject.return_value = {
-        "fields": [{"name": f"Field{i}", "label": f"Field {i}", "type": "string", "queryable": True} for i in range(51)]
-    }
+    client.describe_sobject.return_value = _describe(*[_describe_field(f"Field{i}") for i in range(51)])
     client.fetch_sobject.return_value = {"Field0": "SECRET-SENTINEL", "Field1": None}
     reference = collect_schema_reference(client, "Account", (_RECORD_ID,))
     assert len(reference.fields) == 51
@@ -103,28 +119,87 @@ def test_collect_schema_reference_rejects_describe_without_field_list() -> None:
         collect_schema_reference(client, "Account", (_RECORD_ID,))
 
 
-def test_collect_schema_reference_ignores_nonqueryable_and_nameless_fields() -> None:
+def test_collect_schema_reference_lists_fields_without_per_field_queryable() -> None:
+    """Regression for #87: real describe entries carry no per-field ``queryable``."""
     client = MagicMock()
-    client.describe_sobject.return_value = {
-        "fields": [
-            "not-field-metadata",
-            {"name": "Private", "queryable": False},
-            {"name": 42, "queryable": True},
-        ]
-    }
-    client.fetch_sobject.return_value = {"Id": _RECORD_ID}
+    client.describe_sobject.return_value = _describe(
+        _describe_field("Id", type="id"),
+        _describe_field("Name"),
+        _describe_field("BillingStreet", compoundFieldName="BillingAddress"),
+        _describe_field("BillingAddress", type="address"),
+    )
+    client.fetch_sobject.return_value = {"Id": _RECORD_ID, "Name": None, "BillingAddress": {"city": "Springfield"}}
 
     reference = collect_schema_reference(client, "Account", (_RECORD_ID,))
 
-    assert reference.fields == ()
-    client.fetch_sobject.assert_called_once_with("Account", _RECORD_ID, "Id")
+    assert [field.name for field in reference.fields] == ["Id", "Name", "BillingStreet", "BillingAddress"]
+    assert [field.population for field in reference.fields] == [
+        "observed-populated",
+        "observed-null",
+        "not-sampled",
+        "observed-populated",
+    ]
+    client.fetch_sobject.assert_called_once_with("Account", _RECORD_ID, "Id,Name,BillingStreet,BillingAddress")
+
+
+def test_collect_schema_reference_excludes_hidden_and_nameless_fields() -> None:
+    client = MagicMock()
+    client.describe_sobject.return_value = _describe(
+        "not-field-metadata",
+        _describe_field("Visible"),
+        _describe_field("Retired__c", deprecatedAndHidden=True),
+        _describe_field("Flagged", deprecatedAndHidden=False),
+        {"name": 42, "label": "Numeric name"},
+    )
+    client.fetch_sobject.return_value = {"Visible": "x"}
+
+    reference = collect_schema_reference(client, "Account", (_RECORD_ID,))
+
+    assert [field.name for field in reference.fields] == ["Visible", "Flagged"]
+    client.fetch_sobject.assert_called_once_with("Account", _RECORD_ID, "Visible,Flagged")
+
+
+@pytest.mark.parametrize(
+    "describe",
+    [
+        pytest.param(
+            _describe(
+                _describe_field("Retired__c", deprecatedAndHidden=True),
+                _describe_field("Old__c", deprecatedAndHidden=True),
+            ),
+            id="all-deprecated-and-hidden",
+        ),
+        pytest.param(_describe(), id="empty-field-list"),
+    ],
+)
+def test_collect_schema_reference_rejects_describe_with_no_eligible_fields(describe: dict[str, object]) -> None:
+    client = MagicMock()
+    client.describe_sobject.return_value = describe
+
+    with pytest.raises(SFDataAccessError, match="no eligible fields"):
+        collect_schema_reference(client, "Account", (_RECORD_ID,))
+
+    assert not client.fetch_sobject.called
+
+
+def test_cli_exits_data_error_when_no_field_is_eligible() -> None:
+    client = MagicMock()
+    client.describe_sobject.return_value = _describe(_describe_field("Retired__c", deprecatedAndHidden=True))
+    with (
+        patch("fieldkit.commands.sf.schema.get_sf_session_id", return_value="sid"),
+        patch("fieldkit.commands.sf.schema.get_sf_rest_base_url", return_value="https://sf.example.com"),
+        patch("fieldkit.commands.sf.schema.SFDirectClient") as client_class,
+    ):
+        client_class.return_value.__enter__.return_value = client
+        result = CliRunner().invoke(cli, ["Account", "--record-id", _RECORD_ID])
+    assert result.exit_code == 3
+    assert "no eligible fields" in result.output
+    assert not client.fetch_sobject.called
 
 
 def test_cli_renders_safe_deterministic_output() -> None:
     client = MagicMock()
-    client.describe_sobject.return_value = {
-        "fields": [{"name": "Name", "label": "Account Name", "type": "string", "queryable": True}]
-    }
+    client.describe_sobject.return_value = _describe(_describe_field("Name", label="Account Name"))
     client.fetch_sobject.return_value = {"Name": "SECRET-SENTINEL"}
     with (
         patch("fieldkit.commands.sf.schema.get_sf_session_id", return_value="sid"),
@@ -141,9 +216,7 @@ def test_cli_renders_safe_deterministic_output() -> None:
 
 def test_cli_json_renders_safe_structured_reference() -> None:
     client = MagicMock()
-    client.describe_sobject.return_value = {
-        "fields": [{"name": "Name", "label": "Account Name", "type": "string", "queryable": True}]
-    }
+    client.describe_sobject.return_value = _describe(_describe_field("Name", label="Account Name"))
     client.fetch_sobject.return_value = {"Name": "SECRET-SENTINEL"}
     with (
         patch("fieldkit.commands.sf.schema.get_sf_session_id", return_value="sid"),

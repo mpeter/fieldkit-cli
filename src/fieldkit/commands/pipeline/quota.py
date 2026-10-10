@@ -16,7 +16,7 @@ from pydantic import ValidationError
 from fieldkit.config import ConfigError
 from fieldkit.pursuit import iterate_pursuits
 from fieldkit.pursuit.enums import Stage
-from fieldkit.pursuit.io import load_pursuit
+from fieldkit.pursuit.io import is_reserved_pursuit_path, load_pursuit
 from fieldkit.sf.components import effective_net_consulting_acv
 
 log = logging.getLogger(__name__)
@@ -63,7 +63,7 @@ def _collect_pursuits_for_quota(
 
     if account_filter is not None:
         pursuit_paths = sorted((data_root / "accounts" / account_filter / "pursuits").glob("*.md"))
-        paths = (p for p in pursuit_paths if ".template" not in str(p) and "gmail-intel" not in str(p))
+        paths = (p for p in pursuit_paths if not is_reserved_pursuit_path(p))
     else:
         paths = iterate_pursuits(data_root)
 

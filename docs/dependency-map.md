@@ -11,7 +11,7 @@ generated_by: scripts/generate_dep_map.py
 
 > **Derived document — generated exhaust, not a system of record.** Verify facts against the sources listed in `derived_from`.
 
-> Auto-generated 2026-10-09 from live repo analysis. Do not edit manually.
+> Auto-generated 2026-10-10 from live repo analysis. Do not edit manually.
 > Re-generate: `uv run python scripts/generate_dep_map.py`
 
 ---
@@ -91,8 +91,8 @@ Which `fieldkit.commands.*` packages import which domain modules.
 
 | Module | Consumers | Notes |
 | --- | --- | --- |
-| `fieldkit.cli_exit/` | 59 | Exit code enforcement — used at every CLI entry point |
-| `fieldkit.config/` | 57 | Most-imported module; every CLI subpackage and hooks depend on it |
+| `fieldkit.cli_exit/` | 60 | Exit code enforcement — used at every CLI entry point |
+| `fieldkit.config/` | 59 | Most-imported module; every CLI subpackage and hooks depend on it |
 | `fieldkit.pursuit/` | 5 | Frontmatter models, io, MEDDPICC helpers — used by many subpackages |
 | `fieldkit.llm/` | 3 | Vertex AI synthesis — used by AI-driven watchers and morning brief |
 | `fieldkit.watch/` | 1 | Watcher status, logging, dedup — used by all watch daemons |
@@ -108,10 +108,10 @@ For packages where submodule granularity affects blast radius:
 
 | Submodule | External Consumers |
 | --- | --- |
-| `fieldkit.pursuit.io` | `brief`, `ingest`, `pipeline`, `pursuit`, `sf`, `skill` |
+| `fieldkit.pursuit.io` | `brief`, `gmail`, `ingest`, `pipeline`, `pursuit`, `sf`, `skill` |
 | `fieldkit.pursuit.models` | `pursuit`, `sf` |
 | `fieldkit.pursuit.stale` | `brief` |
-| `fieldkit.pursuit.utils` | — (domain-internal) |
+| `fieldkit.pursuit.utils` | `pursuit` |
 
 ### fieldkit.gmail
 

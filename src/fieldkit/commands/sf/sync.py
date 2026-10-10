@@ -25,8 +25,8 @@ from fieldkit.cli_exit import EXIT_DATA, EXIT_PARTIAL
 from fieldkit.commands.sf.frontmatter import _run_sf_mode
 from fieldkit.commands.sf.reconcile import _run_reconcile as _reconcile_with_path
 from fieldkit.config import get_fieldkit_home
-from fieldkit.pursuit.io import _split_frontmatter, load_pursuit
-from fieldkit.sf.opportunities import is_opportunity_id
+from fieldkit.pursuit.io import _split_frontmatter, is_reserved_pursuit_path, load_pursuit
+from fieldkit.sf.opportunities import PLACEHOLDER_VALUES, is_opportunity_id
 
 LOG_PREFIX = "[sf-sync]"
 
@@ -53,9 +53,6 @@ def _load_known_accounts() -> tuple[str, ...]:
     except (ImportError, OSError, ValueError):
         pass  # optional dep — fall back to hardcoded list
     return ("global-pay", "acme-bank", "shield-ins")
-
-
-PLACEHOLDER_VALUES = {"tbd", "placeholder", "todo", "xxx", "none", "n/a", "na", "null", ""}
 
 
 def _project_root() -> Path:
@@ -187,7 +184,7 @@ def do_list_pursuits(target: str) -> None:
         if not pdir.is_dir():
             continue
         for pursuit_file in sorted(pdir.glob("*.md")):
-            if pursuit_file.name in ("template.md", "gmail-intel.md"):
+            if is_reserved_pursuit_path(pursuit_file):
                 continue
             opp_id = _extract_opp_id(pursuit_file)
             if opp_id and _validate_opp_id(opp_id):

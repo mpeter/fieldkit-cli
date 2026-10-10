@@ -30,11 +30,16 @@ import click
 from pydantic import ValidationError
 
 from fieldkit.cli_exit import EXIT_DATA, EXIT_PARTIAL
-from fieldkit.commands.pursuit.audit import no_files_message
+from fieldkit.commands.pursuit.audit import (
+    assessment_failure_warnings,
+    assessment_summary_line,
+    echo_reserved_skips,
+    no_files_message,
+)
 from fieldkit.config import get_fieldkit_home, get_pipeline_quota
 from fieldkit.errors import FieldkitError
 from fieldkit.pursuit.enums import Stage
-from fieldkit.pursuit.io import NON_PURSUIT_FILES, ReportAssessment, read_pursuit_for_report, scan_report_inputs
+from fieldkit.pursuit.io import ReportAssessment, is_reserved_pursuit_path, read_pursuit_for_report, scan_report_inputs
 from fieldkit.pursuit.models import PursuitFrontmatter
 from fieldkit.pursuit.stage_weights import STAGE_WEIGHTS
 from fieldkit.sf.components import effective_net_consulting_acv
@@ -143,7 +148,7 @@ def _parse_deal_row(
                       When a deal is dropped for an unknown stage, its stage value
                       is appended so callers can surface a summary warning.
     """
-    if path.name in NON_PURSUIT_FILES:
+    if is_reserved_pursuit_path(path):
         return None
     fm = read_pursuit_for_report(path).frontmatter
     if fm is None:
@@ -254,6 +259,62 @@ def _fmt_usd(v: float) -> str:
     return f"${v:,.0f}"
 
 
+def _resolve_quota(quota: float | None) -> float | None:
+    """Return the explicit quota, else the configured pipeline target when numeric."""
+    if quota is not None:
+        return quota
+    quota_cfg = get_pipeline_quota()
+    if isinstance(quota_cfg, dict):
+        target_val = quota_cfg.get("target")
+        if isinstance(target_val, (int, float)):
+            return float(target_val)
+    return None
+
+
+def _warn_zero_acv(deals: list[DealRow]) -> None:
+    """Warn on stderr about deals with $0 ACV (data quality issue)."""
+    zero_acv_deals = [d.name for d in deals if d.acv == 0.0]
+    if not zero_acv_deals:
+        return
+    click.echo(
+        f"\nWARNING: {len(zero_acv_deals)} deal(s) have $0 ACV — update SF data:",
+        err=True,
+    )
+    for name in zero_acv_deals:
+        click.echo(f"  - {name}", err=True)
+
+
+def _echo_deal_table(deals: list[DealRow], today: date) -> None:
+    click.echo(f"\nPipeline Forecast — {today}")
+    click.echo(f"{'Deal':<45} {'Stage':<12} {'Weight':>6} {'ACV':>12} {'Close'}")
+    click.echo("-" * 90)
+    for d in deals:
+        won_marker = " (won)" if d.stage == Stage.CLOSED_WON else ""
+        click.echo(f"{d.name:<45} {d.stage:<12} {d.weight:>5.0%} {_fmt_usd(d.acv):>12} {d.close_date_str}{won_marker}")
+    click.echo("-" * 90)
+
+
+def _quota_standing(gap: float) -> str:
+    return "over quota" if gap <= 0 else "under quota"
+
+
+def _echo_scenarios(result: ForecastResult, quota: float | None) -> None:
+    click.echo("")
+    click.echo("Scenarios:")
+    click.echo(f"  Closed Won   : {_fmt_usd(result.closed_won):>12}")
+    click.echo(f"  Commit       : {_fmt_usd(result.commit):>12}  (closed-won + negotiate)")
+    click.echo(f"  Weighted     : {_fmt_usd(result.weighted):>12}  (probability-weighted)")
+    click.echo(f"  Best Case    : {_fmt_usd(result.best_case):>12}  (pipeline total, active deals excl. closed-won)")
+
+    if quota is not None:
+        gap_commit = quota - result.commit
+        gap_weighted = quota - result.weighted
+        click.echo("")
+        click.echo(f"Quota          : {_fmt_usd(quota):>12}")
+        click.echo(f"Gap (commit)   : {_fmt_usd(gap_commit):>12}  ({_quota_standing(gap_commit)})")
+        click.echo(f"Gap (weighted) : {_fmt_usd(gap_weighted):>12}  ({_quota_standing(gap_weighted)})")
+
+
 @click.command(name="forecast")
 @click.option("--account", "-a", default=None, help="Limit to a single account directory name.")
 @click.option(
@@ -300,18 +361,14 @@ def cli(account: str | None, quota: float | None, as_json: bool) -> None:
 
     # implementation change: auto-read quota from config when -q not provided.
     # get_pipeline_quota() returns None (not raises) when quota is not configured.
-    if quota is None:
-        quota_cfg = get_pipeline_quota()
-        if isinstance(quota_cfg, dict):
-            target_val = quota_cfg.get("target")
-            if isinstance(target_val, (int, float)):
-                quota = float(target_val)
+    quota = _resolve_quota(quota)
 
     today = datetime.now(tz=UTC).date()
     result = compute_forecast(root, account_filter=account, quota=quota, today=today)
 
-    for failure in result.assessment.failures:
-        click.echo(f"WARNING: {failure.relative_path}: {failure.reason} — assessment incomplete", err=True)
+    for warning in assessment_failure_warnings(result.assessment):
+        click.echo(warning, err=True)
+    echo_reserved_skips(result.assessment.reserved)
     exit_code = EXIT_PARTIAL if result.assessment.failures else 0
 
     if not result.deals and not result.assessment.failures:
@@ -319,48 +376,15 @@ def cli(account: str | None, quota: float | None, as_json: bool) -> None:
         raise SystemExit(EXIT_DATA) from None
 
     # implementation change: warn on $0 ACV deals (data quality issue).
-    zero_acv_deals = [d.name for d in result.deals if d.acv == 0.0]
-    if zero_acv_deals:
-        click.echo(
-            f"\nWARNING: {len(zero_acv_deals)} deal(s) have $0 ACV — update SF data:",
-            err=True,
-        )
-        for name in zero_acv_deals:
-            click.echo(f"  - {name}", err=True)
+    _warn_zero_acv(result.deals)
 
     if as_json:
         # cell-28b9dae2e9395288: machine-readable output.
         click.echo(json.dumps(dataclasses.asdict(result), indent=2, default=str))
         raise SystemExit(exit_code)
 
-    # Per-deal table
-    click.echo(f"\nPipeline Forecast — {today}")
-    click.echo(f"{'Deal':<45} {'Stage':<12} {'Weight':>6} {'ACV':>12} {'Close'}")
-    click.echo("-" * 90)
-    for d in result.deals:
-        won_marker = " (won)" if d.stage == Stage.CLOSED_WON else ""
-        click.echo(f"{d.name:<45} {d.stage:<12} {d.weight:>5.0%} {_fmt_usd(d.acv):>12} {d.close_date_str}{won_marker}")
-    click.echo("-" * 90)
-
-    # Scenario table
-    click.echo("")
-    click.echo("Scenarios:")
-    click.echo(f"  Closed Won   : {_fmt_usd(result.closed_won):>12}")
-    click.echo(f"  Commit       : {_fmt_usd(result.commit):>12}  (closed-won + negotiate)")
-    click.echo(f"  Weighted     : {_fmt_usd(result.weighted):>12}  (probability-weighted)")
-    click.echo(f"  Best Case    : {_fmt_usd(result.best_case):>12}  (pipeline total, active deals excl. closed-won)")
-
-    if quota is not None:
-        gap_commit = quota - result.commit
-        gap_weighted = quota - result.weighted
-        click.echo("")
-        click.echo(f"Quota          : {_fmt_usd(quota):>12}")
-        click.echo(
-            f"Gap (commit)   : {_fmt_usd(gap_commit):>12}  ({'over quota' if gap_commit <= 0 else 'under quota'})"
-        )
-        click.echo(
-            f"Gap (weighted) : {_fmt_usd(gap_weighted):>12}  ({'over quota' if gap_weighted <= 0 else 'under quota'})"
-        )
+    _echo_deal_table(result.deals, today)
+    _echo_scenarios(result, quota)
 
     # historic regression: surface deals silently dropped for unrecognized stages
     if result.skipped:
@@ -372,8 +396,5 @@ def cli(account: str | None, quota: float | None, as_json: bool) -> None:
         )
 
     if result.assessment.failures:
-        click.echo(
-            f"Assessment incomplete: {result.assessment.scanned} scanned, {result.assessment.included} included, "
-            f"{result.assessment.excluded} excluded, {len(result.assessment.failures)} failed."
-        )
+        click.echo(assessment_summary_line(result.assessment))
         raise SystemExit(exit_code)

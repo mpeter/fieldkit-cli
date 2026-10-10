@@ -50,6 +50,9 @@ def _render_result(result: DoctorResult, state: IntegrationConfigurationState) -
         click.echo(f"{result.service}: AUTH REQUIRED — {result.message}")
     else:
         click.echo(result.render())
+        return
+    for line in result.render_warnings():
+        click.echo(line)
 
 
 def _render_all(results: list[DoctorResult], configuration_states: dict[str, IntegrationConfigurationState]) -> None:
@@ -84,6 +87,7 @@ def _emit_results(
                     "enabled": configuration_states[result.service] != "disabled",
                     "configuration_state": configuration_states[result.service],
                     "message": result.message,
+                    "warnings": list(result.warnings),
                 }
                 for result in results
             ]
