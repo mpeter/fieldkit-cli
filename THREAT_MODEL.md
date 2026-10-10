@@ -7,13 +7,18 @@ the supported trust boundary intact.
 ## 1. System context
 
 fieldkit stores workspace and runtime state locally. Optional commands connect
-to services selected and configured by the operator. The optional dashboard is
+to services selected and configured by the operator; Backstory is reached
+through the operator's MCP gateway but registers a fixed upstream endpoint (see
+[Local data and privacy](docs/privacy.md)). The optional dashboard is
 restricted to loopback use; fieldkit is not a hosted or multi-tenant service.
 
 ## 2. Assets
 
 - Integration credentials and tokens are high sensitivity; keep them outside
   the repository and never emit them in diagnostics.
+- The local Chrome cookie store is high sensitivity; ShadowBot's optional
+  Chrome recovery decrypts it only to renew a rejected session, and never logs
+  cookie values.
 - Workspace content and generated reports are high sensitivity; keep them under
   configured user-controlled roots.
 - Runtime databases and logs are high sensitivity; treat them as local data and
