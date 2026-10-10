@@ -259,7 +259,7 @@ pipeline:
 Expected output with the default `--source pursuits`:
 
 ```
-Quota Gap (2026-H2, ends 2026-12-31, 82 days remaining)
+Quota Gap (2026-H2, ends 2026-12-31, <N> days remaining)
   Weighted pipeline                     : $685,000
   Closed-won (configured pursuits only) : $620,000
   Quota target                          : $5,000,000

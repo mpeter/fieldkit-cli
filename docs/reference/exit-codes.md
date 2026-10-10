@@ -57,9 +57,8 @@ typed exceptions; the dispatcher is the final process boundary.
 | Companion malformed watcher status | Repair watcher state; concise stderr | `3` |
 | Any other `Exception` | Unhandled error | `3` |
 
-The top-level dispatcher, not `cli_main()`, handles `click.exceptions.Exit`, which
-`--help` and `--version` raise: it exits with the exception's code, and
-`Exit(None)` exits `1`.
+`click.exceptions.Exit`, which `--help` and `--version` raise, never reaches
+`cli_main()`: Click converts it to a returned exit code, so both exit `0`.
 
 `KeyboardInterrupt` is not caught by either application boundary. The shell
 reports an interrupted command as exit `130`.

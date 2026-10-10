@@ -60,6 +60,7 @@ src/fieldkit/              ← single package root (src/ layout)
     companion/             ← agent companion loop CLI
     web/                   ← local web dashboard CLI
     completion/            ← shell completion scripts
+    commands/              ← machine-readable command registry
     version/               ← version info
   skills/                  ← agent skills (markdown + SKILL.md, not Python)
 hooks/                     ← Claude Code hooks + git pre-commit

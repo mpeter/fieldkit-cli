@@ -26,7 +26,9 @@ def _architecture_tree(generated: str) -> list[str]:
 
 def _package_dirs(root: Path) -> set[str]:
     return {
-        child.name for child in root.iterdir() if (child / "__init__.py").is_file() and not child.name.startswith("_")
+        child.name
+        for child in root.iterdir()
+        if child.is_dir() and not child.name.startswith("_") and any(child.glob("*.py"))
     }
 
 

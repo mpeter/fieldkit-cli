@@ -1207,7 +1207,7 @@
           "classification": "generated_reference",
           "id": "docs.dependency.map.md.block-1",
           "language": "",
-          "sha256": "1e7542a1fb5c37935492f53439dc24df3018aef12ba4b604231c70f8ad06ff0f",
+          "sha256": "b614fe0fba997c2476de21463e5a88a84d49835886405cedbfb7bf870126cbd2",
           "verification_id": "automated.generated-dependency-map"
         },
         {
@@ -1240,7 +1240,7 @@
         }
       ],
       "reader_action": "Inspect the generated module dependency graph.",
-      "source_fingerprint": "sha256:f8f1b45c533cc65d0c2f5c898ca8b33ec7a166e1ca58a3e688afa58cc850d65f",
+      "source_fingerprint": "sha256:eb1519f99a7f46f77c2bc175a88db9824c71afd69affbb049cda61db31da54c6",
       "sources": [
         "tach.toml",
         "src/fieldkit/**/*.py",
@@ -1626,7 +1626,7 @@
           "classification": "credentialed_manual_integration",
           "id": "docs.guides.pipeline.workflow.md.block-11",
           "language": "",
-          "sha256": "bfa81a1ab0d778a68fe397b4ec13e141bd54b75c7318af597cf796bec12c4834",
+          "sha256": "20d5050341c99ef4083d6095af38e2b02a8fdc6b6e19f0335e3a1ce0a7678b2b",
           "verification_id": "manual.credentialed-integration"
         },
         {
