@@ -304,7 +304,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Choose the canonical safe write mechanism for persistent state.",
-      "source_fingerprint": "sha256:e6661b8e5408a0d4619d59af842d9b16e984c2d4765cb7a654e2b914078ec7d9",
+      "source_fingerprint": "sha256:e3525237b77e4cca4f08838d231376f014eeb0c8d118c501063fbb67e3cc3878",
       "sources": [
         "src/fieldkit/**/*.py"
       ]
@@ -1157,7 +1157,7 @@
         }
       ],
       "reader_action": "Look up command syntax and options.",
-      "source_fingerprint": "sha256:14520115e425d9891811afddbd48366bfd42db57b04ca03a3088c6f35ffae7b7",
+      "source_fingerprint": "sha256:721999d9ee31a6e497788ecbe0bc5e952d45310a0bdd06101c64d993f5bce05c",
       "sources": [
         "src/fieldkit/commands/**/*.py",
         "src/fieldkit/__main__.py"
@@ -1240,7 +1240,7 @@
         }
       ],
       "reader_action": "Inspect the generated module dependency graph.",
-      "source_fingerprint": "sha256:84b699a0129e57a15b8a499754b14cf4131135c513b09adca1fd16b9dfd33789",
+      "source_fingerprint": "sha256:3cba865cebda929b98eefe01f2f3f187b5eea4b27f0bfb8b2536926821966993",
       "sources": [
         "tach.toml",
         "src/fieldkit/**/*.py",
@@ -1909,7 +1909,7 @@
       "content_type": "concept",
       "fenced_blocks": [],
       "reader_action": "Understand local storage and external data flows.",
-      "source_fingerprint": "sha256:e6661b8e5408a0d4619d59af842d9b16e984c2d4765cb7a654e2b914078ec7d9",
+      "source_fingerprint": "sha256:e3525237b77e4cca4f08838d231376f014eeb0c8d118c501063fbb67e3cc3878",
       "sources": [
         "src/fieldkit/**/*.py"
       ],
@@ -2065,7 +2065,7 @@
         }
       ],
       "reader_action": "Interpret process exit status.",
-      "source_fingerprint": "sha256:a6aac5b605a01e71ab22a85054ae825a8e7e287e7ad305bda458d11d412b953c",
+      "source_fingerprint": "sha256:e153f0a019d0c6015c848244a31847ee189d4986eb8aea7edf9e51cabde31b39",
       "sources": [
         "src/fieldkit/cli_exit.py",
         "src/fieldkit/__main__.py",
@@ -2183,7 +2183,7 @@
         }
       ],
       "reader_action": "Choose a supported fieldkit workflow.",
-      "source_fingerprint": "sha256:fa61cdd04c25fdab46e171f39e51786e8fd3459425bdc8c23f5add310c9444ef",
+      "source_fingerprint": "sha256:ddd58f4f89ed7bd04d54596d394af28e75b4cdb37071af8421f7f7d4efe2f916",
       "sources": [
         "src/fieldkit/__main__.py",
         "src/fieldkit/commands/**/*.py",
@@ -2226,7 +2226,7 @@
         }
       ],
       "reader_action": "Discover contacts and apply reviewed enrichment results.",
-      "source_fingerprint": "sha256:a584f4c52661a909393c2054be56315b89dc22a42d61c7dc88601dd1dd2d4707",
+      "source_fingerprint": "sha256:35498565d298a625e59b123f12693f8c902b985c04c82377241ea1816378f9f7",
       "sources": [
         "src/fieldkit/commands/contact/enrich_cmd.py",
         "src/fieldkit/commands/contact/report_cmd.py",
