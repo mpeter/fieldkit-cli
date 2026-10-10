@@ -189,6 +189,3 @@ def assert_nonzero_write(path: Path) -> None:
     if path.stat().st_size == 0:
         path.unlink()
         raise RuntimeError(f"File written as 0 bytes: {path}")
-
-
-# Temporary: exercises the CRAP (changed functions) job for timing; reverted before merge.
