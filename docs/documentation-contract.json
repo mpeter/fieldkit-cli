@@ -304,7 +304,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Choose the canonical safe write mechanism for persistent state.",
-      "source_fingerprint": "sha256:4e45066b6ef464972aacff15460befae169199fc8eb5ef08e511fac67b57894a",
+      "source_fingerprint": "sha256:236dd46e1b0b4765d3b2d8c0cab359a5ea70470f994595c4ab5a289f6f99a639",
       "sources": [
         "src/fieldkit/**/*.py"
       ]
@@ -1240,7 +1240,7 @@
         }
       ],
       "reader_action": "Inspect the generated module dependency graph.",
-      "source_fingerprint": "sha256:1b6528428ab4e6d95332d504d3fa68f49b87cb449352911a7953972079ae5671",
+      "source_fingerprint": "sha256:2a46b3d53b0a703ea0ca3984697cbd0c5b83eda651497511755b4e6e996daddc",
       "sources": [
         "tach.toml",
         "src/fieldkit/**/*.py",
@@ -1673,7 +1673,7 @@
         }
       ],
       "reader_action": "Run supported pipeline workflows.",
-      "source_fingerprint": "sha256:6d530e7b29fa3ad38494e28547b581f02e7dedeeb008980174d6ca8c085b7d08",
+      "source_fingerprint": "sha256:c3fde46e07dcc4f6c8854946e6987adc264fde74580f3bc56e18c5ca1f914407",
       "sources": [
         "src/fieldkit/commands/pipeline/**/*.py",
         "src/fieldkit/commands/datasync/**/*.py",
@@ -1898,7 +1898,7 @@
       "content_type": "how-to",
       "fenced_blocks": [],
       "reader_action": "Find the canonical implementation pattern before adding a repeated solution.",
-      "source_fingerprint": "sha256:0504430f3dc5821359c9c369f04ba946c44b8d4fe4aeda083466632cf3be4186",
+      "source_fingerprint": "sha256:b5b564ead071cf67a96d03bcb6465915351fab2ec1bccd51b530450a40599ff5",
       "sources": [
         "AGENTS.md",
         "src/fieldkit/commands/sf/**/*.py",
@@ -1909,7 +1909,7 @@
       "content_type": "concept",
       "fenced_blocks": [],
       "reader_action": "Understand local storage and external data flows.",
-      "source_fingerprint": "sha256:4e45066b6ef464972aacff15460befae169199fc8eb5ef08e511fac67b57894a",
+      "source_fingerprint": "sha256:236dd46e1b0b4765d3b2d8c0cab359a5ea70470f994595c4ab5a289f6f99a639",
       "sources": [
         "src/fieldkit/**/*.py"
       ],
