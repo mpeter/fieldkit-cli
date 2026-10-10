@@ -73,6 +73,19 @@ def resolve_install_targets(
         return [], f"Could not validate registered skill root: {exc}"
 
 
+def _resolve_root(path: Path) -> Path:
+    """Resolve a registered root, raising on a symlink loop on every supported Python.
+
+    Python 3.13 made non-strict ``resolve()`` return a looping path unresolved
+    instead of raising, so resolve strictly and fall back only for a root that
+    does not exist yet.
+    """
+    try:
+        return path.resolve(strict=True)
+    except FileNotFoundError:
+        return path.resolve()
+
+
 def _resolve_install_targets(tool_keys: list[str], cwd: Path, *, global_install: bool) -> list[InstallTarget]:
     """Build canonical descriptors or raise when a registered root is unsafe."""
     base = cwd.resolve()
@@ -92,7 +105,7 @@ def _resolve_install_targets(tool_keys: list[str], cwd: Path, *, global_install:
         if global_install:
             if registered.global_skill_root is None:
                 raise ValueError(f"tool {key!r} has no registered global skill root")
-            skill_root = (home / registered.global_skill_root).resolve()
+            skill_root = _resolve_root(home / registered.global_skill_root)
             if key == "opencode":
                 validate_parent(agents_parent)
                 if not skill_root.is_relative_to(agents_parent.resolve()):
@@ -104,7 +117,7 @@ def _resolve_install_targets(tool_keys: list[str], cwd: Path, *, global_install:
                     if skill_root != opencode_root:
                         raise ValueError("Claude Code global skill root escapes its registered parent")
         else:
-            skill_root = (base / registered.skill_root).resolve()
+            skill_root = _resolve_root(base / registered.skill_root)
             if not skill_root.is_relative_to(base):
                 raise ValueError(f"registered skill root escapes project directory: {registered.label}")
         if skill_root in seen_roots:
