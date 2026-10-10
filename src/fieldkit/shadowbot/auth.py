@@ -826,10 +826,14 @@ def acquire_from_chrome(profile_path: Path | None = None) -> None:
 
     try:
         session_cookies = _decrypt_chrome_cookies(cookies_path, cookie_source)
-    except ShadowbotAuthError:
-        raise
+    except ShadowbotAuthError as exc:
+        if cookie_label in str(exc):
+            raise
+        raise ShadowbotAuthError(f"{exc} (while reading {cookie_label})") from exc
     except Exception as exc:
-        raise ShadowbotAuthError(f"cookie decryption failed: {type(exc).__name__}") from exc
+        raise ShadowbotAuthError(
+            f"cookie decryption failed: {type(exc).__name__} (while reading {cookie_label})"
+        ) from exc
 
     access_token, refresh_token = _silent_oidc(session_cookies, cookie_label)
 

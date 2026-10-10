@@ -71,7 +71,9 @@ The key must be nested under `shadowbot:`. A top-level
 is ignored, so Chrome recovery would keep reading the `Default` profile.
 `fieldkit doctor` and `fieldkit doctor shadowbot` print a `warning:` line for each
 such key, and `doctor --json` lists them in a `warnings` array. Warnings do not
-change the health result or the exit status. Chrome recovery errors name
+change the health result or the exit status. A key that is not a plain identifier (letters, digits and underscores, up to 64 characters) is
+reported as `an unrecognized key` instead of being printed. Chrome recovery errors, including
+decryption and database failures, name
 the profile directory (`Chrome profile 'Profile 2' (configured)`) and whether it
 came from `configured` or `default` settings, without printing the full path.
 A configured file outside a Chrome-style profile directory (`Default`,

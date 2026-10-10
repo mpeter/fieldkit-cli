@@ -1572,6 +1572,47 @@ def test_login_required_error_names_profile_read(tmp_path: Path, label_profile: 
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("failure", [ShadowbotAuthError("Could not open Chrome Cookies database"), ValueError("x")])
+def test_acquire_from_chrome_decrypt_failure_names_cookie_source(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, failure: Exception
+) -> None:
+    _patch_state_dir(monkeypatch, tmp_path)
+    monkeypatch.setattr("fieldkit.shadowbot.auth._HAS_CHROME_AUTH", True)
+    cookies = tmp_path / "Profile 2" / "Cookies"
+
+    with (
+        patch("fieldkit.shadowbot.auth._decrypt_chrome_cookies", side_effect=failure),
+        patch("fieldkit.config.get_shadowbot_chrome_cookies_path", return_value=cookies),
+        pytest.raises(ShadowbotAuthError) as excinfo,
+    ):
+        acquire_from_chrome()
+
+    message = str(excinfo.value)
+    assert "Chrome profile 'Profile 2' (configured)" in message
+    assert str(tmp_path) not in message
+    assert excinfo.value.__cause__ is failure
+
+
+@pytest.mark.unit
+def test_acquire_from_chrome_does_not_label_an_already_labelled_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _patch_state_dir(monkeypatch, tmp_path)
+    monkeypatch.setattr("fieldkit.shadowbot.auth._HAS_CHROME_AUTH", True)
+    cookies = tmp_path / "Default" / "Cookies"
+    labelled = ShadowbotAuthError("not found: Chrome profile 'Default' (configured)")
+
+    with (
+        patch("fieldkit.shadowbot.auth._decrypt_chrome_cookies", side_effect=labelled),
+        patch("fieldkit.config.get_shadowbot_chrome_cookies_path", return_value=cookies),
+        pytest.raises(ShadowbotAuthError) as excinfo,
+    ):
+        acquire_from_chrome()
+
+    assert excinfo.value is labelled
+
+
+@pytest.mark.unit
 def test_acquire_from_chrome_logs_misplaced_key_warning_once(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
