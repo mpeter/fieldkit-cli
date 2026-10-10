@@ -10,6 +10,7 @@ class _ShadowbotConfig(BaseModel):
     api_base: str | None = None
     token_endpoint: str | None = None
     auth_endpoint: str | None = None
+    redirect_uri: str | None = None
     client_id: str | None = None
     assistant_id: str | None = None
     chrome_cookies_path: str | None = None

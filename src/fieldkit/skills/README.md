@@ -13,13 +13,17 @@ Bundled agent skills for fieldkit users.
 | Skill | Description |
 | ----- | ----------- |
 | `draft-review` | fieldkit's outbound-gate workflow. Reviews customer-facing drafts (email, proposal, deck, Slack) against the banned-word list… |
+| `exec-review-deck` | Build an executive customer-review deck: recap delivered work vs. signed scope, areas of note, case for continuing the engagement. Scope-anchored, citation-gated… |
 | `grill` | Read-only ClosePlan qualification coaching and cross-portfolio pipeline review using exact native questions and choices… |
 | `meeting` | Build a pre-meeting brief with context, agenda, questions, talking points, and objection handling; also batch-preps tomo… |
 | `post-meeting` | Capture a meeting, draft follow-up, and stage evidence against exact native ClosePlan questions without writing qualification state… |
 | `pursuit-advance` | Advance a pursuit under current stage policy; score-dependent transitions remain pending until native policy exists… |
 | `pursuit-auditor` | Audit pursuit frontmatter and timeline risks without interpreting historical local qualification values… |
+| `sf-reconcile` | Pursuit-vs-Salesforce drift detection across your active pipeline. Flags divergence (stage, close date, ACV, closing window) RED/YELLOW/GREEN and syncs only on approval… |
 | `sf-sync` | Refresh core Salesforce opportunity and account data before a call, review, or native ClosePlan qualification read… |
+| `shadowbot` | Route a request to the right capability of your organization's ShadowBot-compatible AI assistant, assemble account context, and execute via `fieldkit shadowbot query`… |
 | `slack-digest` | The fieldkit Slack deal-room monitor. Sweeps each account's Slack channels for recent customer questions, team concerns, an… |
+| `waypoint` | A document-intelligence crawler that converges on a deliverable: EXPLORE your document store, NARROW to one strategic goal, EXECUTE it into a finished work product… |
 | `win-loss` | Capture a structured win/loss debrief from a closed pursuit. Writes a dated lessons-learned entry to memory/lessons-lear… |
 | `workstream-discover` | You have an active delivery relationship and want to surface expansion opportunities or stalled workstreams before an ac… |
 
@@ -40,6 +44,7 @@ Bundled agent skills for fieldkit users.
 | `pipeline` | Pipeline and portfolio health checks across your accounts — scan for stale or at-risk deals before a leadership review,… |
 | `brief` | fieldkit's "what needs my attention" workflow — daily and weekly orientation. Refreshes live sources (SF, Gmail), collects, renders, syncs tasks, and synthesizes. On-demand ops cover week start, week close-out, mid-session refresh, and brief config.… |
 | `start` | You're setting up a fieldkit workspace for the first time, or need to reinitialise it after a fresh install. Creates TASK… |
+| `sweep` | One bounded iteration: clear 2-3 small actionable items from TASKS.md, prep each to one-keystroke-from-done, retire what's dead, surface what's blocked… |
 | `task-management` | You're mid-session and need to add, update, or review pursuit action items and daily commitments tracked in TASKS.md. Ma… |
 | `task-sync` | Reconcile the TASKS.md managed region with the Google Tasks "fieldkit" list. Google Tasks is the source of truth (operat… |
 | `tool-routing` | You need to call an external service — Google Workspace, Backstory, Tavily, Brave, Drive, Gmail, Slack, or GitHub — and … |

@@ -38,6 +38,7 @@ from fieldkit.pursuit.models import canonicalize_legacy_meddpicc
 from fieldkit.pursuit.next_steps import check_next_steps
 from fieldkit.pursuit.stages import ALL_STAGES as ALLOWED_STAGES
 from fieldkit.pursuit.stages import CLOSED_STAGES
+from fieldkit.pursuit.utils import parse_sf_date
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -186,46 +187,6 @@ class FixResult:
 # ---------------------------------------------------------------------------
 
 
-def _parse_sf_date(raw: Any) -> date | None:
-    """Parse M/D/YYYY or YYYY-MM-DD SF date string into a date object."""
-    date_value = _date_input_value(raw)
-    if date_value is not None:
-        return date_value
-    return _parse_sf_date_string(raw)
-
-
-def _parse_sf_date_string(raw: Any) -> date | None:
-    """Parse a string Salesforce close date into a date object."""
-    if not raw or not isinstance(raw, str):
-        return None
-    raw = raw.strip()
-    if not raw:
-        return None
-    # M/D/YYYY
-    if "/" in raw:
-        parts = raw.split("/")
-        if len(parts) == 3:
-            try:
-                m, d, y = int(parts[0]), int(parts[1]), int(parts[2])
-                return date(y, m, d)
-            except (ValueError, TypeError):
-                return None
-    # YYYY-MM-DD
-    try:
-        return datetime.strptime(raw, "%Y-%m-%d").date()
-    except ValueError:
-        return None
-
-
-def _date_input_value(raw: Any) -> date | None:
-    """Return native YAML date values before string parsing."""
-    if isinstance(raw, datetime):
-        return raw.date()
-    if isinstance(raw, date):
-        return raw
-    return None
-
-
 # ---------------------------------------------------------------------------
 # Validation rules
 # ---------------------------------------------------------------------------
@@ -368,7 +329,7 @@ def _check_close_date(fm: dict[str, Any], today: date) -> list[Finding]:
     if _skip_close_date_check(fm_stage):
         return findings
 
-    close_date = _parse_sf_date(raw_date)
+    close_date = parse_sf_date(raw_date)
     if close_date is None:
         return findings  # No date, no checks
 

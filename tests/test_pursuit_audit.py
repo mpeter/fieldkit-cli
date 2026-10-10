@@ -9,7 +9,6 @@ import pytest
 from fieldkit.commands.pursuit.audit import (
     _VALID_GATE_RESULTS,
     _check_transition_history,
-    _parse_sf_date,
     apply_fixes,
     audit_directory,
     audit_file,
@@ -19,6 +18,7 @@ from fieldkit.commands.pursuit.audit import (
 from fieldkit.errors import FrontmatterStalenessError
 from fieldkit.pursuit.gate_criteria import ALLOWED_GATE_STATUSES
 from fieldkit.pursuit.io import parse_frontmatter_fallback
+from fieldkit.pursuit.utils import parse_sf_date
 
 pytestmark = pytest.mark.unit
 
@@ -96,17 +96,17 @@ def test_parse_frontmatter_empty_block(tmp_path: Path) -> None:
 
 
 def test_parse_sf_date_slash_format() -> None:
-    d = _parse_sf_date("6/30/2027")
+    d = parse_sf_date("6/30/2027")
     assert d == date(2027, 6, 30)
 
 
 def test_parse_sf_date_iso_format() -> None:
-    d = _parse_sf_date("2027-06-30")
+    d = parse_sf_date("2027-06-30")
     assert d == date(2027, 6, 30)
 
 
 def test_parse_sf_date_yaml_date_object() -> None:
-    parsed = _parse_sf_date(date(2027, 6, 30))
+    parsed = parse_sf_date(date(2027, 6, 30))
     assert parsed == date(2027, 6, 30)
 
 
@@ -120,18 +120,18 @@ def test_parse_sf_date_yaml_date_object() -> None:
 )
 def test_parse_sf_date_safe_loaded_timestamp_and_invalid_values(raw: object, expected: date | None) -> None:
     """Accept YAML timestamps while safely rejecting blank and impossible dates."""
-    parsed = _parse_sf_date(raw)
+    parsed = parse_sf_date(raw)
 
     assert parsed == expected
 
 
 def test_parse_sf_date_empty() -> None:
-    assert _parse_sf_date("") is None
-    assert _parse_sf_date(None) is None
+    assert parse_sf_date("") is None
+    assert parse_sf_date(None) is None
 
 
 def test_parse_sf_date_invalid() -> None:
-    assert _parse_sf_date("not-a-date") is None
+    assert parse_sf_date("not-a-date") is None
 
 
 # ---------------------------------------------------------------------------

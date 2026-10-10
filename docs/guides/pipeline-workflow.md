@@ -294,6 +294,43 @@ but not yet tracked as pursuit files in your workspace.
 
 Add `--json` to redirect output to stdout in machine-readable format.
 
+## SF drift
+
+Check whether your pursuit files still match Salesforce before a pipeline review
+or forecast call:
+
+```bash
+fieldkit sf drift
+fieldkit sf drift --account acme-corp --json
+```
+
+Every pursuit that links an opportunity and is in pipeline-review scope (not
+closed or pre-pipeline, not prospect unless you pass `--include-prospect`, and not under a
+dot-prefixed scaffolding account such as `.template`) is
+fetched live and compared with its stored `sf_*` snapshot. The report lists unreadable pursuit files first, then
+each opportunity RED, YELLOW or GREEN:
+
+- **RED** — the close date has passed or is within 14 days, Salesforce shows the
+  opportunity closed while the pursuit is open, Salesforce has no opportunity with
+  the stored ID, or the request failed.
+- **YELLOW** — the stored stage, close date (compared as a date, so `12/31/2027`
+  matches `2027-12-31`) or consulting ACV differs from live
+  Salesforce, the local stage differs from a Salesforce stage of the same name, or
+  the close date is within 30 days.
+
+The command writes nothing. To bring one pursuit's snapshot up to date, run
+`fieldkit sf opportunity <id> <pursuit-file>`. A missing, blank or placeholder
+ID such as `TBD` counts as not linked; any other value that is not a Salesforce
+record ID string, such as `false` or a list, is reported as not assessed. Pursuits at
+`closed`, `won` or `lost` are treated as closed and skipped. The command exits `1` when the report is incomplete (an
+unreadable file, an ID that is not a Salesforce record ID, a linked pursuit
+without a recognized `stage`, or a failed request), `2` when at least one
+pursuit needs fetching and the Salesforce session needs `fieldkit auth sf`, and `3`
+when the workspace has no `accounts` directory, `--account` is not the name
+of a directory under `accounts/`, or, when at least one pursuit needs fetching, `sf_org_url` is not
+configured. Only underscore-keyed `sf_*` fields
+are read.
+
 ## Pipeline review
 
 Generate the global pipeline review and reopen its newest saved artifact:
@@ -439,6 +476,9 @@ partition all scanned files: scanned = included + excluded + number of failures.
 An empty failures array means assessment is complete. Templates, Gmail intel,
 and each command's documented excluded stages count as intentional exclusions,
 not failures. Account filters limit both report rows and assessment counts.
+Without `--account`, dot-prefixed scaffolding accounts such as `.template` are
+not scanned and do not appear in the counts; name one with `--account` to
+assess it.
 Human output shows the same failed files and an incomplete-assessment summary.
 Current qualification remains unavailable; damaged records receive no invented
 risk classification. Audit distinguishes malformed YAML from missing frontmatter.

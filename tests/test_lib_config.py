@@ -729,7 +729,7 @@ def test_get_email_domain_returns_none_when_config_missing(tmp_path: Path, monke
 
 # ── TestConfigCacheRegistry (flattened) ─────────────────────────────────────
 
-_GET_CONFIG_PATH__EXPECTED_COUNT = 7
+_GET_CONFIG_PATH__EXPECTED_COUNT = 8
 
 _GET_CONFIG_PATH__EXPECTED_NAMES: ClassVar[set[str]] = {
     "get_fieldkit_home",
@@ -739,6 +739,7 @@ _GET_CONFIG_PATH__EXPECTED_NAMES: ClassVar[set[str]] = {
     "get_watchers_dir",
     "get_fieldkit_root",
     "get_google_token_path",
+    "log_shadowbot_config_warnings_once",
 }
 
 

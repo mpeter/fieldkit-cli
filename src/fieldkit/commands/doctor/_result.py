@@ -9,16 +9,24 @@ class DoctorResult:
 
     ``configured=False`` means the service has no credentials/cache yet — reported
     as "not configured" rather than a failure (D6: partial configuration is a
-    fully supported state).
+    fully supported state). ``warnings`` carries advisory findings only and
+    never changes ``healthy`` or the exit status.
     """
 
     service: str
     healthy: bool
     configured: bool
     message: str
+    warnings: tuple[str, ...] = ()
 
     def render(self) -> str:
         if not self.configured:
-            return f"{self.service}: optional — not configured ({self.message})"
-        status = "OK" if self.healthy else "UNHEALTHY"
-        return f"{self.service}: {status} — {self.message}"
+            headline = f"{self.service}: optional — not configured ({self.message})"
+        else:
+            status = "OK" if self.healthy else "UNHEALTHY"
+            headline = f"{self.service}: {status} — {self.message}"
+        return "\n".join([headline, *self.render_warnings()])
+
+    def render_warnings(self) -> list[str]:
+        """Return advisory findings as indented lines; they never affect health."""
+        return [f"  warning: {warning}" for warning in self.warnings]

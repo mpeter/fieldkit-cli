@@ -1,5 +1,5 @@
 ---
-last_reviewed: 2026-09-13
+last_reviewed: 2026-10-10
 covers:
   - src/fieldkit/commands/shadowbot/
   - src/fieldkit/shadowbot/
@@ -58,6 +58,29 @@ This installs local browser credential-store support. When the server rejects a
 stored refresh token as expired or revoked (`invalid_grant`), fieldkit can
 attempt recovery from an existing authorized Chrome session. Chrome recovery is
 not a first-time login path: configure a refresh token first.
+
+### Choose the Chrome profile
+
+By default fieldkit reads the cookie database of Chrome's `Default` profile. If
+your organization's login lives in another profile, set `chrome_cookies_path`
+under the `shadowbot:` section of `config.yaml` to that profile's `Cookies` file
+(for example, the one in the `Profile 2` directory).
+
+The key must be nested under `shadowbot:`. A top-level
+`shadowbot_chrome_cookies_path` or a misspelled key such as `chrome_cookie_path`
+is ignored, so Chrome recovery would keep reading the `Default` profile.
+`fieldkit doctor` and `fieldkit doctor shadowbot` print a `warning:` line for each
+such key, and `doctor --json` lists them in a `warnings` array. Warnings do not
+change the health result or the exit status. An unrecognized key is never printed, because arbitrary key text can carry
+personal identifiers. A near miss is reported by the setting it resembles (for
+example, `resembles 'chrome_cookies_path'; check its spelling`), and any other
+key, including a non-text key, is reported only as an unrecognized key. Chrome recovery errors, including
+decryption and database failures, name
+the profile directory (`Chrome profile 'Profile 2' (configured)`) and whether it
+came from `configured` or `default` settings, without printing the full path.
+A configured file outside a Chrome-style profile directory (`Default`,
+`Profile <N>`, `Guest Profile`, `System Profile`) is reported as `configured
+Chrome cookie database` instead, so other directory names are never echoed.
 
 ## Troubleshoot safely
 

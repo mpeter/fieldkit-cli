@@ -46,8 +46,8 @@ def _assert_process_reaped(pid: int, *, within: float = 2.0) -> None:
             try:
                 if stat.read_text(encoding="utf-8").rsplit(")", 1)[1].split()[0] == "Z":
                     return
-            except FileNotFoundError:
-                return  # Reaped between os.kill and the read.
+            except (FileNotFoundError, ProcessLookupError):
+                return  # Reaped between os.kill and the read (procfs reports ESRCH mid-read).
         time.sleep(0.01)
     pytest.fail(f"process {pid} survived the process-group kill")
 
