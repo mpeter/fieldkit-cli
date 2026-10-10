@@ -27,7 +27,7 @@ import yaml
 
 from fieldkit.config import get_fieldkit_home, get_watchers_dir
 from fieldkit.errors import FieldkitError
-from fieldkit.pursuit.io import load_pursuit, parse_frontmatter
+from fieldkit.pursuit.io import is_reserved_pursuit_path, load_pursuit, parse_frontmatter
 from fieldkit.pursuit.stages import CLOSED_STAGES
 from fieldkit.pursuit.utils import iterate_pursuits
 from fieldkit.watch.dedup import alert_block_exists
@@ -516,7 +516,7 @@ def _run_contract_expiry_inner(
     pursuit_paths = [
         path
         for path in iterate_pursuits(get_fieldkit_home())
-        if not path.parts[len(accounts_dir.parts)].startswith(".") and path.stem != "template"
+        if not path.parts[len(accounts_dir.parts)].startswith(".") and not is_reserved_pursuit_path(path)
     ]
     if not pursuit_paths:
         log.info("No pursuit files found under %s", accounts_dir)

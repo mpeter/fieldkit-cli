@@ -61,13 +61,17 @@ def _parse_monetary(value: str | float | int | None) -> float | str | None:
 
 
 def iterate_pursuits(data_root: Path) -> Generator[Path, None, None]:
-    """Yield each non-template, non-gmail-intel pursuit file path.
+    """Yield each pursuit file path, skipping reserved file names and scaffolding accounts.
 
-    Yields paths under data_root/accounts/*/pursuits/*.md, skipping
-    any path containing '.template' or 'gmail-intel'.
+    Yields paths under data_root/accounts/*/pursuits/*.md. Only the exact file name is
+    tested, so ``gmail-intel-rollout.md`` is a pursuit and ``template.md`` is not. Dot-prefixed
+    account directories such as ``.template`` hold scaffolding and are skipped whole.
     """
+    # Deferred: pursuit.io imports pursuit.models, which imports this module.
+    from fieldkit.pursuit.io import is_reserved_pursuit_path
+
     for path in sorted(data_root.glob("accounts/*/pursuits/*.md")):
-        if ".template" in str(path) or "gmail-intel" in str(path):
+        if path.parent.parent.name.startswith(".") or is_reserved_pursuit_path(path):
             continue
         yield path
 

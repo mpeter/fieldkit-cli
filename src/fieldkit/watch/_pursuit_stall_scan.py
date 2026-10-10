@@ -10,7 +10,7 @@ import yaml
 
 from fieldkit.config import get_fieldkit_home
 from fieldkit.pursuit import extract_champion_name
-from fieldkit.pursuit.io import extract_frontmatter_text
+from fieldkit.pursuit.io import extract_frontmatter_text, is_reserved_pursuit_path
 from fieldkit.pursuit.qualification import native_qualification_status
 from fieldkit.pursuit.stages import TERMINAL_STAGES
 from fieldkit.watch import _pursuit_stall_state as stall_state
@@ -195,7 +195,7 @@ def collect_pursuit_files_details(
             continue
 
         for pursuit_file in sorted(pursuit_dir.glob("*.md")):
-            if pursuit_file.stem in ("template", "gmail-intel", "index", "README"):
+            if is_reserved_pursuit_path(pursuit_file) or pursuit_file.stem in ("index", "README"):
                 log.info("pursuit-stalls: excluding %s — template or index file", pursuit_file)
                 intentional_exclusions += 1
                 continue

@@ -78,6 +78,7 @@ def test_reports_disclose_failed_input(
             "included": 1 if mixed else 0,
             "excluded": 0,
             "failures": [{"relative_path": "acme-fictional/pursuits/broken.md", "reason": reason}],
+            "reserved": [],
         }
         assert payload["weighted"] == (25000 if mixed else 0)
     elif as_json:
