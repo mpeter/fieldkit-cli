@@ -336,3 +336,64 @@ def test_rename_grep_hint_relative_and_quoted_grep_hint_quotes_slug_with_single_
     assert expected_quoted in grep_line, (
         f"Expected shlex.quote({tricky_slug!r}) = {expected_quoted!r} in grep hint: {grep_line!r}"
     )
+
+
+# ── Name validation (#105) ──────────────────────────────────────────────────
+
+
+def _snapshot(root: Path) -> dict[str, str]:
+    return {str(p.relative_to(root)): p.read_text(encoding="utf-8") for p in sorted(root.rglob("*")) if p.is_file()}
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("account", "from_slug", "to_slug", "option"),
+    [
+        pytest.param("acme", "old-deal", "../moved", "--to", id="to-parent-traversal"),
+        pytest.param("acme", "old-deal", "a/b", "--to", id="to-nested-path"),
+        pytest.param("acme", "old-deal", "", "--to", id="to-empty"),
+        pytest.param("acme", "old-deal", "New Deal", "--to", id="to-not-slugified"),
+        pytest.param("acme", "old-deal", "-", "--to", id="to-slugifies-to-nothing"),
+        pytest.param("acme", "../acme/pursuits/old-deal", "new-deal", "--from", id="from-traversal"),
+        pytest.param("../acme", "old-deal", "new-deal", "--account", id="account-traversal"),
+    ],
+)
+def test_rename_rejects_unsafe_names_before_any_write(
+    tmp_path: Path, account: str, from_slug: str, to_slug: str, option: str
+) -> None:
+    """A user-derived name that could leave the pursuits directory exits 3 and changes nothing."""
+    _make_pursuit(tmp_path / "accounts" / "acme" / "pursuits", "old-deal")
+    _make_stall_state(tmp_path / "watchers", "acme", "old-deal")
+    _make_countdown_state(tmp_path / "watchers", "acme", "old-deal")
+    before = _snapshot(tmp_path)
+
+    result = _run(tmp_path, account=account, from_slug=from_slug, to_slug=to_slug, extra_args=["--json"])
+
+    assert result.exit_code == 3
+    payload = json.loads(result.output)
+    assert payload["option"] == option
+    assert payload["error"] == ("invalid_slug" if option == "--to" else "invalid_name")
+    assert _snapshot(tmp_path) == before
+
+
+@pytest.mark.unit
+def test_rename_suggests_the_slug_form_of_an_invalid_target(tmp_path: Path) -> None:
+    _make_pursuit(tmp_path / "accounts" / "acme" / "pursuits", "old-deal")
+
+    result = _run(tmp_path, to_slug="New Deal")
+
+    assert result.exit_code == 3
+    assert "Use 'new-deal'" in result.output
+
+
+@pytest.mark.unit
+def test_rename_accepts_a_legacy_source_name_that_predates_the_slug_rule(tmp_path: Path) -> None:
+    """--from only has to stay inside the directory; existing files may not be slugs."""
+    pursuits = tmp_path / "accounts" / "acme" / "pursuits"
+    _make_pursuit(pursuits, "Old_Deal")
+
+    result = _run(tmp_path, from_slug="Old_Deal", to_slug="old-deal")
+
+    assert result.exit_code == 0
+    assert (pursuits / "old-deal.md").is_file()
+    assert not (pursuits / "Old_Deal.md").exists()
