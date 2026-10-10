@@ -20,7 +20,7 @@ import yaml
 from pydantic import ValidationError
 
 from fieldkit.config import get_account_names, get_accounts_config, get_fieldkit_home, get_user_email_from_env
-from fieldkit.pursuit.io import load_pursuit, parse_frontmatter
+from fieldkit.pursuit.io import GMAIL_INTEL_SLUG, is_reserved_pursuit_path, load_pursuit, parse_frontmatter
 from fieldkit.pursuit.stages import CLOSED_STAGES as _CLOSED_STAGE_NAMES
 from fieldkit.watch.morning_brief_mcp import MCPSession
 
@@ -330,7 +330,7 @@ def get_latest_pursuit_files(n: int = 5) -> list[Path]:
         if not pursuits_dir.is_dir():
             continue
         for f in pursuits_dir.glob("*.md"):
-            if f.stat().st_size == 0 or f.name in {"gmail-intel.md", "template.md"}:
+            if f.stat().st_size == 0 or is_reserved_pursuit_path(f):
                 continue
             try:
                 text = f.read_text(encoding="utf-8")
@@ -652,7 +652,7 @@ def _add_account_signal_keywords(
     if slug in internal_slugs:
         log.debug("Cross-account scan: skipping internal account %s", slug)
         return
-    intel_path = data_root / "accounts" / slug / "gmail-intel.md"
+    intel_path = data_root / "accounts" / slug / f"{GMAIL_INTEL_SLUG}.md"
     log.debug("Cross-account scan: checking %s", intel_path)
     if not intel_path.exists():
         log.debug("Cross-account scan: %s not found, skipping", intel_path)

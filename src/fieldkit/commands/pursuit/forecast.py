@@ -30,11 +30,16 @@ import click
 from pydantic import ValidationError
 
 from fieldkit.cli_exit import EXIT_DATA, EXIT_PARTIAL
-from fieldkit.commands.pursuit.audit import assessment_failure_warnings, assessment_summary_line, no_files_message
+from fieldkit.commands.pursuit.audit import (
+    assessment_failure_warnings,
+    assessment_summary_line,
+    echo_reserved_skips,
+    no_files_message,
+)
 from fieldkit.config import get_fieldkit_home, get_pipeline_quota
 from fieldkit.errors import FieldkitError
 from fieldkit.pursuit.enums import Stage
-from fieldkit.pursuit.io import NON_PURSUIT_FILES, ReportAssessment, read_pursuit_for_report, scan_report_inputs
+from fieldkit.pursuit.io import ReportAssessment, is_reserved_pursuit_path, read_pursuit_for_report, scan_report_inputs
 from fieldkit.pursuit.models import PursuitFrontmatter
 from fieldkit.pursuit.stage_weights import STAGE_WEIGHTS
 from fieldkit.sf.components import effective_net_consulting_acv
@@ -143,7 +148,7 @@ def _parse_deal_row(
                       When a deal is dropped for an unknown stage, its stage value
                       is appended so callers can surface a summary warning.
     """
-    if path.name in NON_PURSUIT_FILES:
+    if is_reserved_pursuit_path(path):
         return None
     fm = read_pursuit_for_report(path).frontmatter
     if fm is None:
@@ -363,6 +368,7 @@ def cli(account: str | None, quota: float | None, as_json: bool) -> None:
 
     for warning in assessment_failure_warnings(result.assessment):
         click.echo(warning, err=True)
+    echo_reserved_skips(result.assessment.reserved)
     exit_code = EXIT_PARTIAL if result.assessment.failures else 0
 
     if not result.deals and not result.assessment.failures:

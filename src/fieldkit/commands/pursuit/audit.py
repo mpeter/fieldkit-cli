@@ -15,11 +15,13 @@ Public API:
 
 import contextlib
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, Literal
 
+import click
 import yaml
 
 from fieldkit.pursuit.enums import Stage
@@ -27,6 +29,7 @@ from fieldkit.pursuit.gate_criteria import ALLOWED_GATE_STATUSES
 from fieldkit.pursuit.io import (
     ReportAssessment,
     detect_duplicate_yaml_keys,
+    is_reserved_pursuit_path,
     parse_frontmatter_fallback,
     split_frontmatter_raw,
     write_frontmatter_raw,
@@ -105,6 +108,12 @@ def no_files_message(kind: Literal["pursuit", "project"], account: str | None) -
     if account:
         return f"No {kind} files found for account: {account}"
     return f"No {kind} files found."
+
+
+def echo_reserved_skips(reserved: Iterable[str]) -> None:
+    """Name each skipped reserved pursuit file on stderr; never changes the exit status."""
+    for relative_path in reserved:
+        click.echo(f"WARNING: {relative_path}: skipped — reserved pursuit file name", err=True)
 
 
 def assessment_failure_warnings(assessment: ReportAssessment) -> list[str]:
@@ -454,7 +463,7 @@ def audit_directory(
     results: list[AuditResult] = []
 
     for path in sorted(accounts_dir.glob(pattern)):
-        if path.name in {"gmail-intel.md", "template.md"}:
+        if is_reserved_pursuit_path(path):
             continue
         result = audit_file(path, today)
         # Compute relative path from accounts_dir for cleaner display
@@ -522,7 +531,7 @@ def check_yaml_duplicates_directory(
     results: list[AuditResult] = []
 
     for path in sorted(accounts_dir.glob(pattern)):
-        if path.name in {"gmail-intel.md", "template.md"}:
+        if is_reserved_pursuit_path(path):
             continue
         result = check_yaml_duplicates(path)
         with contextlib.suppress(ValueError):
