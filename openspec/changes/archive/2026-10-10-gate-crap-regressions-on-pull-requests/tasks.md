@@ -19,5 +19,5 @@
 - [x] 3.2 CI-only change: use the `skip-changelog` label instead of a fragment
 - [x] 3.3 Prove the gate on a throwaway branch: reintroduce an untested branch in a changed function and confirm `make pr-check` fails naming it, then confirm a docs-only change skips the stage
 - [x] 3.4 Verify constitution alignment: stage output is machine-parseable and named in the evidence summary (III); the filter is tested in isolation (IV)
-- [ ] 3.5 Request explicit maintainer review, as required for quality-policy changes
+- [x] 3.5 Request explicit maintainer review, as required for quality-policy changes
 - [x] 3.6 Make the baseline a one-way ratchet: accept added entries and lowered scores from the change, fail raised scores, removed entries for live functions and added entries above the new-function threshold, run the job on baseline-only changes, and prove each case end to end
