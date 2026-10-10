@@ -65,11 +65,12 @@ single file would therefore produce keys that never match the baseline.
    score, a removed entry for a function that still exists, or an added entry
    above the new-function threshold fails the check, because that file becomes
    the baseline scheduled enforcement reads once the change merges, and an
-   added entry would otherwise exempt its function from the threshold. Additions let a refactor re-track moved or renamed functions
-   without a scheduled regeneration job; lowered scores lock in gains. A
-   deliberate increase is a maintainer-reviewed pull request that changes only
-   the baseline, which this job does not run on, merged first. Same-named
-   functions that gazepy keys alike are compared by their highest score.
+   added entry would otherwise exempt its function from the threshold. Additions
+   let a refactor re-track moved or renamed functions without a scheduled
+   regeneration job; lowered scores lock in gains. The job also runs when only
+   the baseline changes, so no pull request raises a score: a function that
+   must grow is tested or decomposed instead. Same-named functions that gazepy
+   keys alike are compared by their highest score.
 4. **Fix main first.** `run_enrichment_pipeline` regains its baseline score
    by moving the five-clause resume condition into a typed helper,
    `_checkpoint_resume_index(checkpoint, account, fingerprint, total) -> int`.

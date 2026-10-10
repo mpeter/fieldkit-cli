@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import gaze_changed
 import pytest
@@ -129,7 +129,13 @@ def _scores(merged: dict[str, object]) -> dict[str, object]:
     return {r["target"]["function"]: r["crap"] for r in results}
 
 
-def _run_main(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, proposed: str, gazepy: object) -> int:
+def _run_main(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    proposed: str,
+    gazepy: object,
+    changed: tuple[str, ...] = ("contact/enrich.py",),
+) -> int:
     coverage = tmp_path / "coverage.json"
     coverage.write_text("{}", encoding="utf-8")
     (tmp_path / ".gaze").mkdir()
@@ -137,7 +143,7 @@ def _run_main(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, proposed: str, ga
     monkeypatch.chdir(tmp_path)
     with (
         patch("gaze_changed.merge_base", return_value="abc123"),
-        patch("gaze_changed.changed_source_files", return_value=["contact/enrich.py"]),
+        patch("gaze_changed.changed_source_files", return_value=list(changed)),
         patch("gaze_changed.base_baseline", return_value=_baseline(_entry("kept", 5.0))) as base,
         patch("gaze_changed._gazepy_report", side_effect=gazepy),
     ):
@@ -306,20 +312,61 @@ def test_score_key_qualifies_methods_with_their_receiver() -> None:
     assert gaze_changed.score_key({"package": "io.py", "receiver": None, "function": "query"}) == "io.py:query"
 
 
-def test_main_skips_gazepy_when_no_source_changed(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    coverage = tmp_path / "coverage.json"
-    coverage.write_text("{}", encoding="utf-8")
+def test_main_skips_gazepy_when_neither_source_nor_baseline_changed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    gazepy = MagicMock()
 
-    with (
-        patch("gaze_changed.merge_base", return_value="abc123"),
-        patch("gaze_changed.changed_source_files", return_value=[]),
-        patch("gaze_changed._gazepy_report") as gazepy,
-    ):
-        status = gaze_changed.main(["--coverprofile", str(coverage), "--base", "origin/main"])
+    status = _run_main(tmp_path, monkeypatch, _baseline(_entry("kept", 5.0)), gazepy, changed=())
 
     assert status == 0
     gazepy.assert_not_called()
     assert "nothing to check" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("proposed", "report", "expected_status", "expected_line"),
+    [
+        pytest.param(
+            _baseline(_entry("kept", 4.0)),
+            {"results": [], "comparison": _COMPARISON},
+            0,
+            "PASS — no CRAP regressions in 0 changed file(s) and .gaze/baseline.json",
+            id="lowered-score-passes",
+        ),
+        pytest.param(
+            _baseline(),
+            {
+                "results": [{"target": {"package": "io.py", "function": "kept", "receiver": None}}],
+                "comparison": _COMPARISON,
+            },
+            1,
+            ".gaze/baseline.json io.py:kept: entry removed while the function still exists",
+            id="dropped-live-entry-fails",
+        ),
+        pytest.param(
+            _baseline(_entry("kept", 5.0), _entry("big", 30.0)),
+            {"results": [], "comparison": _COMPARISON},
+            1,
+            ".gaze/baseline.json io.py:big: entry added at CRAP 30.00 > threshold 15.00",
+            id="oversized-addition-fails",
+        ),
+    ],
+)
+def test_main_checks_a_baseline_only_change(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    proposed: str,
+    report: dict[str, object],
+    expected_status: int,
+    expected_line: str,
+) -> None:
+    """A pull request that edits only the baseline cannot loosen it unchecked."""
+    status = _run_main(tmp_path, monkeypatch, proposed, lambda *_: report, changed=())
+
+    assert status == expected_status
+    assert expected_line in capsys.readouterr().out
 
 
 def test_main_reports_missing_coverage_as_invalid_input(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

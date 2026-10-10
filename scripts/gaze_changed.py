@@ -29,7 +29,8 @@ functions or lock in a gain by running ``make gaze-baseline``. A raised score, a
 dropped entry for a function that still exists, or an added entry above the
 new-function threshold fails the check: that file becomes the baseline scheduled
 enforcement reads once the change merges, and an added entry would otherwise
-exempt its function from the threshold.
+exempt its function from the threshold. A change to the baseline alone is checked
+the same way, so no pull request raises a score.
 
 Usage:
     uv run python scripts/gaze_changed.py --coverprofile coverage-changed.json --base origin/main
@@ -320,13 +321,24 @@ def _gazepy_report(coverprofile: Path, baseline: Path) -> dict[str, object]:
     return report
 
 
-def _evaluate(coverprofile: Path, base: str) -> tuple[list[str], list[Regression | BaselineViolation]]:
+@dataclass(frozen=True)
+class Evaluation:
+    """What the check examined and every failure it found."""
+
+    changed: list[str]
+    baseline_changed: bool
+    failures: list[Regression | BaselineViolation]
+
+
+def _evaluate(coverprofile: Path, base: str) -> Evaluation:
     since = merge_base(base)
     changed = changed_source_files(since)
-    if not changed:
-        return changed, []
     base_text = base_baseline(since)
     proposed_text = Path(_BASELINE).read_text(encoding="utf-8")
+    # A baseline-only change is checked too: it is the file scheduled enforcement reads after merge.
+    baseline_changed = proposed_text != base_text
+    if not changed and not baseline_changed:
+        return Evaluation(changed, baseline_changed, [])
     merged, violations = ratchet_baseline(base_text, proposed_text)
     with tempfile.TemporaryDirectory(prefix="gaze-changed-baseline-") as directory:
         baseline = Path(directory) / "baseline.json"
@@ -335,7 +347,7 @@ def _evaluate(coverprofile: Path, base: str) -> tuple[list[str], list[Regression
     failures: list[Regression | BaselineViolation] = [*violations, *dropped_entries(base_text, proposed_text, report)]
     failures.extend(added_above_threshold(base_text, proposed_text, _new_function_threshold(report)))
     failures.extend(changed_regressions(report, changed))
-    return changed, failures
+    return Evaluation(changed, baseline_changed, failures)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -349,24 +361,26 @@ def main(argv: list[str] | None = None) -> int:
         print(f"gaze-changed: coverage report not found: {args.coverprofile}", file=sys.stderr)
         return _EXIT_INVALID
     try:
-        changed, regressions = _evaluate(args.coverprofile, args.base)
+        evaluation = _evaluate(args.coverprofile, args.base)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError, ValueError) as exc:
         print(f"gaze-changed: {exc}", file=sys.stderr)
         return _EXIT_INVALID
 
-    if not changed:
-        print("gaze-changed: no src/fieldkit Python files changed; nothing to check.")
+    if not evaluation.changed and not evaluation.baseline_changed:
+        print(f"gaze-changed: no src/fieldkit Python files or {_BASELINE} changed; nothing to check.")
         return 0
-    if not regressions:
-        print(f"gaze-changed: PASS — no CRAP regressions in {len(changed)} changed file(s).")
+    if not evaluation.failures:
+        scope = f"{len(evaluation.changed)} changed file(s)" + (
+            f" and {_BASELINE}" if evaluation.baseline_changed else ""
+        )
+        print(f"gaze-changed: PASS — no CRAP regressions in {scope}.")
         return 0
-    print(f"gaze-changed: FAIL — {len(regressions)} CRAP failure(s):")
-    for regression in regressions:
-        print(f"  {regression.describe()}")
+    print(f"gaze-changed: FAIL — {len(evaluation.failures)} CRAP failure(s):")
+    for failure in evaluation.failures:
+        print(f"  {failure.describe()}")
     print(
-        f"Add tests or decompose the function. {_BASELINE} only ratchets down here: this change may "
-        "add entries or lower scores, but a deliberate increase needs a maintainer-reviewed "
-        "baseline-only change merged first."
+        f"Add tests or decompose the function. {_BASELINE} only ratchets down: a change may add "
+        "entries within the new-function threshold or lower scores, and nothing raises one."
     )
     return _EXIT_REGRESSION
 

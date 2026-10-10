@@ -3,7 +3,8 @@
 ### Requirement: Pull-request CI rejects CRAP failures in changed code
 
 Pull-request CI MUST run a `CRAP (changed functions)` child of `Required checks`
-whenever production Python under `src/fieldkit/` changes. It MUST apply the
+whenever production Python under `src/fieldkit/` or `.gaze/baseline.json`
+changes. It MUST apply the
 base revision's committed Gaze baseline failure rules to functions in changed files: a
 tracked function whose CRAP rose, and an untracked function whose CRAP exceeds
 the new-function threshold. It MUST NOT fail for functions in unchanged files,
@@ -25,7 +26,7 @@ and contract-coverage gates unchanged.
 - **WHEN** pull-request CI runs
 - **THEN** `CRAP (changed functions)` SHALL fail and name the function
 
-#### Scenario: A pull request changes no production Python
+#### Scenario: A pull request changes neither production Python nor the baseline
 - **GIVEN** a pull request that changes only documentation, tests, scripts, or
   configuration
 - **WHEN** pull-request CI runs
