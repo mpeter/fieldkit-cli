@@ -29,6 +29,28 @@ one keystroke or one decision.
 3. Live SF / Gmail / calendar only when prepping a specific item requires it — never a
    general sweep of them (that's `brief`'s job).
 
+## Before any write
+
+Output here is customer data and `fieldkit init` does not git-ignore `scratch/`.
+Before the first write each session, run this. It adds `scratch/` to the
+repository's local `info/exclude` (never committed, so the tracked
+`.gitignore` stays untouched). If it exits 3, write nothing under `scratch/`
+and tell the operator.
+
+```bash
+if [ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" = true ]; then
+  git check-ignore -q scratch/; rc=$?
+  if [ "$rc" -eq 1 ]; then
+    exclude=$(git rev-parse --git-path info/exclude) \
+      && mkdir -p "$(dirname "$exclude")" \
+      && printf 'scratch/\n' >> "$exclude" \
+      || { echo "Cannot git-ignore scratch/; do not write artifacts there." >&2; exit 3; }
+  elif [ "$rc" -ne 0 ]; then
+    echo "git check-ignore -q scratch/ failed (exit $rc); do not write artifacts under scratch/." >&2; exit 3
+  fi
+fi
+```
+
 ## One iteration
 
 1. **Pick 2–3 items**, ranked by: date-sensitivity first (anything due within

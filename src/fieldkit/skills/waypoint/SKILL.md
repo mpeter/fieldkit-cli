@@ -60,8 +60,8 @@ done_criteria:
 progress: <one line, updated every EXECUTE iteration>
 ```
 
-Everything lives in `scratch/`, which `fieldkit init` does not ignore. In a Git
-workspace, first run `git check-ignore -q scratch/x || echo 'scratch/' >> .gitignore`.
+Everything lives in `scratch/`. Before the first write each session, run
+"Protect `scratch/`" in `REFERENCE.md`; on exit 3, write nothing there.
 **Never commit any of this.**
 
 ## Phase logic — what one iteration does
