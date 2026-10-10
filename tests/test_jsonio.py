@@ -15,8 +15,11 @@ pytestmark = pytest.mark.unit
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
+        pytest.param(dt.datetime(2026, 7, 27, 12, 34, 56, tzinfo=dt.UTC), "2026-07-27T12:34:56Z", id="utc-datetime"),
         pytest.param(
-            dt.datetime(2026, 7, 27, 12, 34, 56, tzinfo=dt.UTC), "2026-07-27T12:34:56+00:00", id="aware-datetime"
+            dt.datetime(2026, 7, 27, 12, 34, 56, tzinfo=dt.timezone(dt.timedelta(hours=2))),
+            "2026-07-27T12:34:56+02:00",
+            id="offset-datetime",
         ),
         pytest.param(dt.datetime(2026, 7, 27, 12, 34, 56), "2026-07-27T12:34:56", id="naive-datetime"),
         pytest.param(dt.date(2026, 7, 27), "2026-07-27", id="date"),
@@ -44,5 +47,5 @@ def test_json_default_is_a_drop_in_default_for_json_dumps() -> None:
 
     rendered = json.dumps(payload, default=json_default)
 
-    assert rendered == '{"when": "2026-07-27T12:00:00+00:00", "amount": "3"}'
+    assert rendered == '{"when": "2026-07-27T12:00:00Z", "amount": "3"}'
     assert dt.datetime.fromisoformat(json.loads(rendered)["when"]).tzinfo == dt.UTC

@@ -397,7 +397,7 @@ def test_a_datetime_reaching_a_json_emitter_renders_as_iso8601() -> None:
         result = CliRunner().invoke(watch_cli.status_cmd, ["--json"])
 
     payload = _payload(result, "watch status")
-    assert "2026-07-01T06:45:01+00:00" in result.output
+    assert "2026-07-01T06:45:01Z" in result.output
     _assert_iso8601_timestamps(payload, command="watch status")
 
 
@@ -407,6 +407,8 @@ _STR_DEFAULT = re.compile(r"\bdefault=str\b(?!\()")
 _STR_DEFAULT_EXEMPT = {
     # Defines json_default and documents the pitfall it replaces.
     Path("util/jsonio.py"),
+    # Persistence, not CLI output: changing it would change stored state formats.
+    Path("util/atomic.py"),
     # Builds LLM prompt context, not CLI output; fieldkit.web may not depend on fieldkit.util.
     Path("web/chat.py"),
 }
