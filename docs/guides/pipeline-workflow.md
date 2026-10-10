@@ -476,6 +476,13 @@ pursuit. `fieldkit pursuit create --name` and `fieldkit pursuit rename --to`
 refuse a reserved name with exit `3` and change nothing; with `--json`, create
 and rename print an error object whose `error` is `reserved_name`.
 
+`pursuit rename --to` must already be a slug, such as `new-deal`; rename does not
+slugify it the way create slugifies `--name`. A value like `New Deal`, `a/b` or
+`../moved` exits `3` without moving the file or touching watcher state, and the
+message suggests the slug form. `--account` and `--from` may keep older names but
+cannot contain a path separator. With `--json`, the error object's `error` is
+`invalid_slug` for `--to` or `invalid_name` for the others, and `option` names the flag.
+
 When forecast, health, or a compliance audit (`pursuit audit` without
 `--check-yaml`) skips a reserved file that already exists, stderr names it as
 `WARNING: <account>/pursuits/<file>: skipped — reserved pursuit file name`. The exit status is unchanged, and forecast JSON lists the
