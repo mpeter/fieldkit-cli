@@ -25,9 +25,10 @@ fieldkit doctor shadowbot
 
 Without `--refresh-token-file`, `fieldkit auth shadowbot` checks the existing token.
 It never opens a browser login. If the stored refresh token is expired or revoked
-and the `chrome-auth` dependencies are installed (they are also part of the `all` profile), the check, like `fieldkit doctor
-shadowbot` and every other `shadowbot` command, attempts
-[Chrome recovery](#enable-chrome-recovery-on-linux) and reads your Chrome cookie store.
+and the `chrome-auth` dependencies are installed (they are also part of the `all`
+profile), the check attempts [Chrome recovery](#enable-chrome-recovery-on-linux),
+which reads your Chrome cookie store. So do `fieldkit doctor`, `fieldkit doctor
+shadowbot`, and every other `shadowbot` command.
 
 ## Authenticate for the first time
 
@@ -63,10 +64,10 @@ attempt recovery from an existing authorized Chrome session. Chrome recovery is
 not a first-time login path: configure a refresh token first.
 
 Recovery happens automatically whenever any `shadowbot` command, `fieldkit auth
-shadowbot` or `fieldkit doctor shadowbot` needs a token and the stored refresh token
-has been rejected. fieldkit decrypts the Chrome cookie database through the desktop
-keyring, completes a silent sign-in against the configured login endpoint, and
-stores the new tokens. Recovery is available whenever the `chrome-auth`
+shadowbot`, `fieldkit doctor`, or `fieldkit doctor shadowbot` needs a token and the
+stored refresh token has been rejected. fieldkit decrypts the Chrome cookie database
+through the desktop keyring, sends the session cookies for the login domain to the
+configured authorization endpoint in a silent sign-in, and stores the new tokens. Recovery is available whenever the `chrome-auth`
 dependencies are installed, including through the `all` profile. To prevent any
 cookie read, install a profile that does not include them.
 

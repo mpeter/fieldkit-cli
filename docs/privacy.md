@@ -30,9 +30,10 @@ Not every upstream address is yours to choose. `fieldkit auth backstory` registe
 fixed endpoint, `https://mcp.people.ai/mcp`, with your gateway; you choose the gateway, not that
 upstream service.
 
-With the `chrome-auth` dependencies installed (directly or through the `all` profile), ShadowBot commands can read your local Chrome cookie
-store to recover an expired session. That read stays on the machine, but the recovered session is
-then used against the configured ShadowBot service. See
+With the `chrome-auth` dependencies installed (directly or through the `all` profile), ShadowBot
+commands and `fieldkit doctor` can read your local Chrome cookie store to recover an expired
+session. The session cookies for the configured login domain are then sent to the configured
+ShadowBot authorization endpoint to complete a silent sign-in. See
 [Connect an organization-provided assistant](guides/shadowbot-auth.md#enable-chrome-recovery-on-linux).
 
 The base installation and minimal first-success workflow require none of these integrations after

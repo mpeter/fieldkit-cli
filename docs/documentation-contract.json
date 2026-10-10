@@ -256,7 +256,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Assess the supported security boundary before enabling an integration or reporting a vulnerability.",
-      "source_fingerprint": "sha256:037158c2df427f2cfae8d4d6598386a42f1c62a0354f3a01f40c4f9c8ffec07b",
+      "source_fingerprint": "sha256:c35aa92b7230cc7fd7f3fcf48f37e4fd409f773afeccd9b44f72666fadeb5c9b",
       "sources": [
         "SECURITY.md",
         "docs/privacy.md",
