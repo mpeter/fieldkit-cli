@@ -460,6 +460,9 @@ partition all scanned files: scanned = included + excluded + number of failures.
 An empty failures array means assessment is complete. Templates, Gmail intel,
 and each command's documented excluded stages count as intentional exclusions,
 not failures. Account filters limit both report rows and assessment counts.
+Without `--account`, dot-prefixed scaffolding accounts such as `.template` are
+not scanned and do not appear in the counts; name one with `--account` to
+assess it.
 Human output shows the same failed files and an incomplete-assessment summary.
 Current qualification remains unavailable; damaged records receive no invented
 risk classification. Audit distinguishes malformed YAML from missing frontmatter.
