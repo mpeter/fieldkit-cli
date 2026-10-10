@@ -30,7 +30,9 @@ dropped entry for a function that still exists, or an added entry above the
 new-function threshold fails the check: that file becomes the baseline scheduled
 enforcement reads once the change merges, and an added entry would otherwise
 exempt its function from the threshold. A change to the baseline alone is checked
-the same way, so no pull request raises a score.
+the same way, so no pull request raises a score. A null CRAP was never measured:
+recording its first measurement is held to the threshold like an addition, and
+clearing a measured score back to null is rejected.
 
 Usage:
     uv run python scripts/gaze_changed.py --coverprofile coverage-changed.json --base origin/main
@@ -79,6 +81,11 @@ class Regression:
 
     def describe(self) -> str:
         """Render the failure as one reviewable line."""
+        if self.baseline_crap is None and self.threshold is None:
+            return (
+                f"{self.location} {self.function}: baseline has no CRAP score (never measured); "
+                f"record the measured {self.crap:.2f} in {_BASELINE}"
+            )
         if self.baseline_crap is None:
             return (
                 f"{self.location} {self.function}: new function CRAP {self.crap:.2f} > threshold {self.threshold:.2f}"
@@ -164,7 +171,11 @@ def changed_regressions(
 def _regression(result: Mapping[str, object], target: Mapping[str, object], location: str) -> Regression:
     """Describe a gazepy regression by the metric that rose; CRAP wins when both did."""
     function = str(target.get("function", ""))
-    crap, baseline_crap = _number(result.get("crap")), _number(result.get("baseline_crap"))
+    crap = _number(result.get("crap"))
+    if result.get("baseline_crap") is None:
+        # gazepy compares an unmeasured baseline as 0.0, so any coverage of the function regresses.
+        return Regression(location, function, crap)
+    baseline_crap = _number(result.get("baseline_crap"))
     gaze_delta = result.get("gaze_crap_delta")
     if crap <= baseline_crap + _SCORE_TOLERANCE and isinstance(gaze_delta, int | float) and gaze_delta > 0:
         gaze = _number(result.get("gaze_crap"))
@@ -233,9 +244,16 @@ def _gaze_gate(entry: Mapping[str, object]) -> float | None:
 def _loosened(label: str, base: Mapping[str, object], proposed: Mapping[str, object]) -> list[BaselineViolation]:
     """Return the ways ``proposed`` would let gazepy accept a worse score than ``base``."""
     violations = []
-    # gazepy scores a missing CRAP baseline as 0.0.
-    before, after = _score(base, "crap") or 0.0, _score(proposed, "crap") or 0.0
-    if after > before + _SCORE_TOLERANCE:
+    before = _score(base, "crap")
+    # A null CRAP was never measured (no coverage data); recording a measurement is
+    # held to the new-function threshold by ``added_above_threshold``, not compared to
+    # the 0.0 gazepy substitutes, which no measured function can meet.
+    # Clearing a measured score is the reverse: it would let a later change record a
+    # fresh measurement at up to the threshold.
+    after = _score(proposed, "crap")
+    if before is not None and after is None:
+        violations.append(BaselineViolation(label, f"crap {before:.2f} removed"))
+    elif before is not None and after is not None and after > before + _SCORE_TOLERANCE:
         violations.append(BaselineViolation(label, f"crap raised {before:.2f} -> {after:.2f}"))
     gaze_before, gaze_after = _gaze_gate(base), _gaze_gate(proposed)
     if gaze_before is not None and gaze_after is None:
@@ -324,24 +342,30 @@ def dropped_entries(base_text: str, proposed_text: str, report: Mapping[str, obj
 
 
 def added_above_threshold(base_text: str, proposed_text: str, threshold: float) -> list[BaselineViolation]:
-    """Return entries the change added whose CRAP exceeds the new-function threshold.
+    """Return scores the change recorded for the first time above the new-function threshold.
 
     An untracked function is held to the threshold; recording it in the
     baseline at a higher score would grant it an allowance the threshold
     refuses, so only entries within it may be added. An entry beyond the base
-    count of a shared key is an addition too.
+    count of a shared key is an addition too, and so is a measurement recorded
+    over a base entry whose CRAP was null.
     """
     base = _baseline_entries(base_text, "base")
     violations = []
     for key, entries in sorted(_baseline_entries(proposed_text, "proposed").items()):
-        start = len(base.get(key, []))
-        for position, entry in enumerate(entries[start:], start=start):
+        base_group = base.get(key, [])
+        for position, entry in enumerate(entries):
             crap = _score(entry, "crap")
-            if crap is not None and crap > threshold:
-                label = _label(key, position, entries)
-                violations.append(
-                    BaselineViolation(label, f"entry added at CRAP {crap:.2f} > threshold {threshold:.2f}")
-                )
+            if crap is None or crap <= threshold:
+                continue
+            if position >= len(base_group):
+                what = "entry added"
+            elif _score(base_group[position], "crap") is None:
+                what = "unmeasured entry recorded"
+            else:
+                continue
+            label = _label(key, position, base_group, entries)
+            violations.append(BaselineViolation(label, f"{what} at CRAP {crap:.2f} > threshold {threshold:.2f}"))
     return violations
 
 

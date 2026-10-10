@@ -267,13 +267,13 @@ def test_ratchet_baseline_pairs_same_named_functions_by_position(proposed: list[
             id="zero-gaze-disables-the-gate",
         ),
         pytest.param(_entry("f", 5.0, 0.0), _entry("f", 5.0, 30.0), [], id="ungated-gaze-may-be-set"),
+        pytest.param({**_entry("f", 5.0), "crap": None}, _entry("f", 2.0), [], id="unmeasured-crap-may-be-recorded"),
         pytest.param(
+            _entry("f", 5.0),
             {**_entry("f", 5.0), "crap": None},
-            _entry("f", 2.0),
-            ["io.py:f: crap raised 0.00 -> 2.00"],
-            id="missing-crap-scores-zero",
+            ["io.py:f: crap 5.00 removed"],
+            id="clearing-a-measured-crap-is-rejected",
         ),
-        pytest.param(_entry("f", 5.0), {**_entry("f", 5.0), "crap": None}, [], id="clearing-crap-tightens"),
     ],
 )
 def test_ratchet_baseline_follows_gazepys_score_defaults(
@@ -491,6 +491,38 @@ def test_dropped_entries_counts_methods_under_gazepys_fallback_key(
     dropped = gaze_changed.dropped_entries(_baseline(*base_entries), _baseline(*kept), {"results": [method]})
 
     assert [f"{v.key}: {v.detail}" for v in dropped] == expected
+
+
+@pytest.mark.parametrize(
+    ("crap", "expected"),
+    [
+        pytest.param(2.0, [], id="within-threshold"),
+        pytest.param(
+            20.0, ["io.py:f: unmeasured entry recorded at CRAP 20.00 > threshold 15.00"], id="above-threshold"
+        ),
+    ],
+)
+def test_added_above_threshold_holds_a_first_measurement_to_the_threshold(crap: float, expected: list[str]) -> None:
+    """A null CRAP was never measured, so recording one is an addition, not a raise from gazepy's 0.0."""
+    base = _baseline({**_entry("f", 1.0), "crap": None})
+
+    added = gaze_changed.added_above_threshold(base, _baseline(_entry("f", crap)), 15.0)
+
+    assert [f"{v.key}: {v.detail}" for v in added] == expected
+
+
+def test_changed_regressions_explains_a_regression_against_an_unmeasured_baseline() -> None:
+    """gazepy reports baseline_crap null as a regression once the function gains coverage."""
+    target = {"location": "util/jsonio.py:19", "package": "util/jsonio.py", "function": "json_default"}
+    result = {"target": target, "status": "regression", "crap": 2.0, "baseline_crap": None}
+
+    regressions = gaze_changed.changed_regressions({"results": [result]}, ["util/jsonio.py"])
+
+    assert regressions == [gaze_changed.Regression("util/jsonio.py:19", "json_default", 2.0)]
+    assert regressions[0].describe() == (
+        "util/jsonio.py:19 json_default: baseline has no CRAP score (never measured); "
+        "record the measured 2.00 in .gaze/baseline.json"
+    )
 
 
 def test_score_key_qualifies_methods_with_their_receiver() -> None:

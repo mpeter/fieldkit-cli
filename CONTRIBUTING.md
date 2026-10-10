@@ -84,7 +84,9 @@ tests or simplify the function. Run the same check locally with `make crap-chang
 The baseline only ratchets down. A pull request may add entries or lower scores, for example by
 running `make gaze-baseline` after moving or renaming functions so they are tracked again rather than
 held only to the threshold. The check fails if the pull request raises an entry, removes one for a
-function that still exists, or adds one above CRAP 15; restore those entries, or simplify the function. The
+function that still exists, or adds one above CRAP 15; restore those entries, or simplify the function.
+An entry whose CRAP is `null` was never measured; when you add its first tests, record the measured
+score (at most 15) in the same pull request, because gazepy compares a null score as zero. The
 check also runs on pull requests that change only the baseline, so no score is ever raised: test or
 decompose a function that must grow.
 
