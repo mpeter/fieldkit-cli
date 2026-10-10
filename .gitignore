@@ -15,6 +15,7 @@ build/
 .coverage
 .coverage.*
 coverage.json
+coverage-changed.json
 node_modules/
 .agentready/
 

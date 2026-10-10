@@ -4,7 +4,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Provide reviewable pull-request evidence.",
-      "source_fingerprint": "sha256:00c192890e69e8f552fd1f337bbfd18132787b3501ca6a86d06bbad0d3bc1223",
+      "source_fingerprint": "sha256:815e39c973ab3f34273ee53dabf6a400ba8605cf4597b6cae5627ca801959b69",
       "sources": [
         "CONTRIBUTING.md",
         ".github/workflows/ci.yml"
@@ -29,7 +29,7 @@
         }
       ],
       "reader_action": "Apply repository engineering constraints.",
-      "source_fingerprint": "sha256:19e4db954fc3b22c32ef011c1fa73ee5be4a3f794ddd15adcb620d2eddaf26c5",
+      "source_fingerprint": "sha256:40cb505a34aaa05ed0fc0069047bc20884851b78e3084fb163c43bba0621e093",
       "sources": [
         "Makefile",
         "pyproject.toml",
@@ -55,7 +55,7 @@
         }
       ],
       "reader_action": "Prepare and submit a contribution.",
-      "source_fingerprint": "sha256:1c9bb83c779778af11401fa6e70c68199b0f486f174efb27df4a97fbf4517a40",
+      "source_fingerprint": "sha256:0500afc6d97e3a543de4aa25dd150f7fbb7ffe16138080b91f42af3d35986b7b",
       "sources": [
         "Makefile",
         "pyproject.toml",
@@ -159,7 +159,7 @@
         }
       ],
       "reader_action": "Prepare, assess, and recover an operator-approved release candidate.",
-      "source_fingerprint": "sha256:99a1220a2fd22b625166687bd4de5b8df885419f534c342e9905ea77eea8e699",
+      "source_fingerprint": "sha256:c82ffba0121c883860d33013575566c982b037f54d54d85a022c595e0682e7c4",
       "sources": [
         "Makefile",
         ".github/workflows/release.yml",

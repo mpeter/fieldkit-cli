@@ -76,6 +76,12 @@ The command reports each failing stage separately. You can run focused tests and
 iterating, but `make pr-check` is the supported local readiness signal. Complete enforcement and the
 supported-platform artifact matrix run in GitHub Actions.
 
+Pull requests that change production Python also run `CRAP (changed functions)`. It measures
+coverage over the whole suite and fails if a function in a changed `src/fieldkit/` file scores worse
+than its entry in `.gaze/baseline.json`. Add tests or simplify the function; when an increase is
+intended, update that function's baseline entry in the same pull request so reviewers see it. Run the
+same check locally with `make crap-changed`.
+
 Use conventional commit messages such as `fix(cli): handle missing config` or
 `docs: clarify installation`. Do not commit credentials, customer data, personal email addresses,
 private service output, absolute home paths, generated runtime files, or private issue identifiers.
