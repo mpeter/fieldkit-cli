@@ -22,8 +22,19 @@ Only commands using a configured external integration send requests beyond the w
 | Salesforce | The Salesforce organization you configure |
 | Google | Gmail, Drive, Docs, or other enabled Google APIs |
 | LLM | The configured supported model provider |
-| MCP-backed tools | The endpoint and downstream tools you configure |
+| MCP-backed tools | The MCP gateway you configure, and the downstream services registered with it |
+| Backstory | People.ai, through your MCP gateway's sales group; the `backstory-health` watcher sends configured account names and People.ai account identifiers |
 | Organization-provided services | The service endpoint configured by your operator; for example, a ShadowBot prompt, thread identifier, and returned response |
+
+Not every upstream address is yours to choose. `fieldkit auth backstory` registers People.ai's
+fixed endpoint, `https://mcp.people.ai/mcp`, with your gateway; you choose the gateway, not that
+upstream service.
+
+With the `chrome-auth` dependencies installed (directly or through the `all` profile), ShadowBot
+commands and `fieldkit doctor` can read your local Chrome cookie store to recover an expired
+session. The session cookies for the configured login domain are then sent to the configured
+ShadowBot authorization endpoint to complete a silent sign-in. See
+[Connect an organization-provided assistant](guides/shadowbot-auth.md#enable-chrome-recovery-on-linux).
 
 The base installation and minimal first-success workflow require none of these integrations after
 the package is installed.

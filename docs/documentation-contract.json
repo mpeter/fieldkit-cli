@@ -256,7 +256,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Assess the supported security boundary before enabling an integration or reporting a vulnerability.",
-      "source_fingerprint": "sha256:c7e1a313c18cb23234f84df016b36851e74defcdd3c3cace35ea0ab252819329",
+      "source_fingerprint": "sha256:c35aa92b7230cc7fd7f3fcf48f37e4fd409f773afeccd9b44f72666fadeb5c9b",
       "sources": [
         "SECURITY.md",
         "docs/privacy.md",
@@ -1917,7 +1917,7 @@
         {
           "classification": "public_rehearsal_proof",
           "id": "docs.privacy.md.table-1",
-          "sha256": "8172af414ba215d91f20799ada760f4078bf7b7b5811bead53dcace94ebbbe1b",
+          "sha256": "ea038308025d848197b7b397a77b41493cd687f5d442314451b35b0e68e21e9d",
           "verification_id": "manual.public-rehearsal"
         }
       ]
