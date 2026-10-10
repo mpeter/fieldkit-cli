@@ -134,6 +134,14 @@ def _source_liveness_items(path: Path, status: dict[str, Any] | None, *, now: da
     ]
 
 
+def _failure_count(entry: dict[str, Any], path: Path) -> int:
+    """Read a watcher entry's failure count, rejecting a non-numeric value as malformed state."""
+    try:
+        return int(entry.get("failures", 0) or 0)
+    except (TypeError, ValueError) as exc:
+        raise FeedParseError(f"watcher run-status has a non-numeric failure count: {path}") from exc
+
+
 def _parse_status_json(path: Path, status: dict[str, Any] | None) -> list[AttentionItem]:
     """Surface non-ok watcher outcomes and failure counts from run-status JSON.
 
@@ -149,10 +157,7 @@ def _parse_status_json(path: Path, status: dict[str, Any] | None) -> list[Attent
         if not isinstance(entry, dict):
             continue
         outcome = str(entry.get("outcome", ""))
-        try:
-            failures = int(entry.get("failures", 0) or 0)
-        except (TypeError, ValueError) as exc:
-            raise FeedParseError(f"watcher run-status has a non-numeric failure count: {path}") from exc
+        failures = _failure_count(entry, path)
         last_run = str(entry.get("last_run", ""))
         if outcome in ("ok", "") and failures == 0:
             continue

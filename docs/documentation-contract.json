@@ -256,7 +256,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Assess the supported security boundary before enabling an integration or reporting a vulnerability.",
-      "source_fingerprint": "sha256:3acabe2b9462e03272afe35bdfc0951d972a36306761ccac0c7acad540fc18cb",
+      "source_fingerprint": "sha256:c7e1a313c18cb23234f84df016b36851e74defcdd3c3cace35ea0ab252819329",
       "sources": [
         "SECURITY.md",
         "docs/privacy.md",
@@ -294,7 +294,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Implement a command with the established command-to-domain boundary.",
-      "source_fingerprint": "sha256:4ab815d99f8aaf81a50a09ebaed0e98b1ef0aaae7862ac133389fa1d1c17bbb7",
+      "source_fingerprint": "sha256:a384355e156745544471ab9cd7fadc3d770c46670572c591befbfb68aa4ea841",
       "sources": [
         "src/fieldkit/__main__.py",
         "src/fieldkit/cli_exit.py"
@@ -304,7 +304,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Choose the canonical safe write mechanism for persistent state.",
-      "source_fingerprint": "sha256:01a4da2e565d7b94a81a56bf47f00f92485e6fb96f99d43a08c95a9625e345c1",
+      "source_fingerprint": "sha256:ae8227faa7d500199e6452f757f836c94f04bf21787cca193149353843b44c7c",
       "sources": [
         "src/fieldkit/**/*.py"
       ]
@@ -1150,7 +1150,7 @@
         }
       ],
       "reader_action": "Look up command syntax and options.",
-      "source_fingerprint": "sha256:214131fe94c91146945463d8aa895cf8ab99f16c5eef2addcc618631b8244cbd",
+      "source_fingerprint": "sha256:506337a02a9f361431b984af417e7844922627479fc0d50b6ec60b11fade1e20",
       "sources": [
         "src/fieldkit/commands/**/*.py",
         "src/fieldkit/__main__.py"
@@ -1233,7 +1233,7 @@
         }
       ],
       "reader_action": "Inspect the generated module dependency graph.",
-      "source_fingerprint": "sha256:08107953fb0d0fdaeb3f2a19fe31fbc2ed33926096efdfee9b2c6e1baf9253df",
+      "source_fingerprint": "sha256:e1ce7f3be1c53b840306532c3e76397249aa3cc23b2ad0e2926f0af74acd147d",
       "sources": [
         "tach.toml",
         "src/fieldkit/**/*.py",
@@ -1283,7 +1283,7 @@
       "content_type": "concept",
       "fenced_blocks": [],
       "reader_action": "Preserve local-first command, persistence, and integration invariants in a contribution.",
-      "source_fingerprint": "sha256:2d14c4c50719fdc6a4f71b42574734448ebef0d6850d530dafe9d93d8cb25e03",
+      "source_fingerprint": "sha256:ae9d0794d4d8b0dd201cc2878495bba7a419c5dc6f2be24d5e50a8f1f0bfc40f",
       "sources": [
         "AGENTS.md",
         "src/fieldkit/__main__.py",
@@ -1659,7 +1659,7 @@
         }
       ],
       "reader_action": "Run supported pipeline workflows.",
-      "source_fingerprint": "sha256:f8004abcccb8cb0b55d98c076f093e42b498fb730958282ea668f3d7e4b7abdf",
+      "source_fingerprint": "sha256:37c671a215912ba39ef2151173e706cf750165e11853c538b0f366425422a808",
       "sources": [
         "src/fieldkit/commands/pipeline/**/*.py",
         "src/fieldkit/commands/datasync/**/*.py",
@@ -1895,7 +1895,7 @@
       "content_type": "concept",
       "fenced_blocks": [],
       "reader_action": "Understand local storage and external data flows.",
-      "source_fingerprint": "sha256:01a4da2e565d7b94a81a56bf47f00f92485e6fb96f99d43a08c95a9625e345c1",
+      "source_fingerprint": "sha256:ae8227faa7d500199e6452f757f836c94f04bf21787cca193149353843b44c7c",
       "sources": [
         "src/fieldkit/**/*.py"
       ],
@@ -2051,7 +2051,7 @@
         }
       ],
       "reader_action": "Interpret process exit status.",
-      "source_fingerprint": "sha256:9d9bc086b0bf3dd7514ca91e860305e4b8cf1ddad22a9f93cd17d9c7d703826c",
+      "source_fingerprint": "sha256:e19697bd02505714e8822b83203b5d3b65acfc2e1e9800f02152a1591180960d",
       "sources": [
         "src/fieldkit/cli_exit.py",
         "src/fieldkit/__main__.py",
@@ -2169,7 +2169,7 @@
         }
       ],
       "reader_action": "Choose a supported fieldkit workflow.",
-      "source_fingerprint": "sha256:952bfdbc2357e5e12c513af55de9c657e130435e5c776edf78518c2c25f8aa61",
+      "source_fingerprint": "sha256:b9e7318e394fa6867ccc98d1a5a66a66f1a6fdd7dfb7750b24341d390d4ec408",
       "sources": [
         "src/fieldkit/__main__.py",
         "src/fieldkit/commands/**/*.py",
