@@ -30,6 +30,7 @@ from fieldkit.errors import FieldkitError
 from fieldkit.pursuit.io import is_reserved_pursuit_path, load_pursuit, parse_frontmatter
 from fieldkit.pursuit.stages import CLOSED_STAGES
 from fieldkit.pursuit.utils import iterate_pursuits
+from fieldkit.util.jsonio import json_default
 from fieldkit.watch.dedup import alert_block_exists
 from fieldkit.watch.logging import watcher_logging
 from fieldkit.watch.state import merge_state
@@ -595,7 +596,7 @@ def _run_contract_expiry_inner(
                     "dry_run": dry_run,
                 },
                 indent=2,
-                default=str,
+                default=json_default,
             )
         )
         return 1 if outcome != "ok" else 0

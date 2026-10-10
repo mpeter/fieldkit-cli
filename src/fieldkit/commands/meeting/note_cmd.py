@@ -10,6 +10,7 @@ import click
 
 from fieldkit.cli_exit import EXIT_DATA, cli_main
 from fieldkit.meeting.docs_domain import add_note
+from fieldkit.util.jsonio import json_default
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +63,7 @@ def cli(pursuit_file: Path, meeting_title: str, content: str, open_browser: bool
                         "added": True,
                     },
                     indent=2,
-                    default=str,
+                    default=json_default,
                 )
             )
         else:

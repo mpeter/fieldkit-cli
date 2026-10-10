@@ -43,6 +43,7 @@ import click
 from fieldkit.cli_exit import EXIT_PARTIAL
 from fieldkit.cli_registry import declare_write
 from fieldkit.config import DATASYNC_STEP_TIMEOUTS
+from fieldkit.util.jsonio import json_default
 
 LOG_PREFIX = "[sync]"
 
@@ -593,7 +594,7 @@ def cli(quick: bool, sf: bool, dry_run: bool, account: str | None, verbose: bool
                     "filters": {"quick": quick, "sf": sf, "account": account, "dry_run": dry_run},
                 },
                 indent=2,
-                default=str,
+                default=json_default,
             )
         )
 

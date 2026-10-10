@@ -32,6 +32,7 @@ from fieldkit.pursuit.io import (
     write_frontmatter_raw,
 )
 from fieldkit.pursuit.models import SF_FIELD_NAMES, canonicalize_legacy_meddpicc
+from fieldkit.util.jsonio import json_default
 
 logger = logging.getLogger(__name__)
 
@@ -676,7 +677,7 @@ def _warn_duplicate_keys_after_write(new_content: str, pursuit_path: str) -> Non
 
 def _emit_json(payload: dict[str, Any]) -> None:
     """Emit a frontmatter result document on stdout."""
-    click.echo(json.dumps(payload, indent=2, default=str))
+    click.echo(json.dumps(payload, indent=2, default=json_default))
 
 
 def _prepare_legacy_migration(

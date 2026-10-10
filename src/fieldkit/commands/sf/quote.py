@@ -23,6 +23,7 @@ import click
 from fieldkit.cli_exit import EXIT_AUTH, EXIT_DATA, EXIT_PARTIAL
 from fieldkit.config import get_sf_rest_base_url, get_sf_session_id
 from fieldkit.sf.components import QUOTE_LINES_RELATED_LIST, _field_value
+from fieldkit.util.jsonio import json_default
 
 LOG_PREFIX = "[sf-quote]"
 
@@ -250,7 +251,7 @@ def cli(quote_id: str, as_json: bool) -> None:
     if as_json:
         rec = _fetch_quote(quote_id)
         lines = _fetch_quote_lines(quote_id)
-        click.echo(json.dumps(_build_payload(rec, lines), indent=2, default=str))
+        click.echo(json.dumps(_build_payload(rec, lines), indent=2, default=json_default))
         return
 
     raise SystemExit(run_quote(quote_id))

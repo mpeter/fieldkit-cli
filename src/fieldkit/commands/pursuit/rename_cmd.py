@@ -26,6 +26,7 @@ from fieldkit.pursuit.io import (
     is_reserved_pursuit_path,
     slugify_pursuit_name,
 )
+from fieldkit.util.jsonio import json_default
 
 LOG_PREFIX = "[pursuit-rename]"
 
@@ -214,7 +215,7 @@ def cli(account: str, from_slug: str, to_slug: str, dry_run: bool, as_json: bool
                     "new_key": new_key,
                 },
                 indent=2,
-                default=str,
+                default=json_default,
             )
         )
         return

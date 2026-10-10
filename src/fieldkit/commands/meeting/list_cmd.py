@@ -8,6 +8,7 @@ from fieldkit.cli_exit import cli_main
 from fieldkit.commands._account_guard import validate_account_slug
 from fieldkit.config import get_fieldkit_home
 from fieldkit.meeting.docs_domain import list_meetings
+from fieldkit.util.jsonio import json_default
 
 
 @click.command("list")
@@ -41,7 +42,9 @@ def cli(account: str | None, as_json: bool) -> None:
             ]
             click.echo(
                 json.dumps(
-                    {"items": items, "count": len(items), "filters": {"account": account}}, indent=2, default=str
+                    {"items": items, "count": len(items), "filters": {"account": account}},
+                    indent=2,
+                    default=json_default,
                 )
             )
             return

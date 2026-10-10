@@ -18,6 +18,7 @@ from fieldkit.cli_registry import declare_write
 from fieldkit.commands.sf._util import stdin_is_interactive
 from fieldkit.config import get_sf_rest_base_url, get_sf_session_id
 from fieldkit.sf.client import SFAPIError, SFAuthError, SFDirectClient, SFNotFoundError
+from fieldkit.util.jsonio import json_default
 
 LOG_PREFIX = "[sf-set-next-steps]"
 
@@ -91,7 +92,7 @@ def cli(opp_id: str, text: tuple[str, ...], confirm: bool, as_json: bool) -> Non
                         "outcome": outcome,
                     },
                     indent=2,
-                    default=str,
+                    default=json_default,
                 )
             )
 

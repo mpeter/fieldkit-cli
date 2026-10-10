@@ -62,6 +62,7 @@ from fieldkit.gmail.query_domain import (
 from fieldkit.gmail.query_domain import (
     query_champion_signals as query_champion_signals,
 )
+from fieldkit.util.jsonio import json_default
 
 console = Console()
 
@@ -181,7 +182,9 @@ def _emit_json(items: list[dict[str, Any]], filters: dict[str, Any], **extra: An
     what the query actually ran with, and the two differ for ``--before``
     (exclusive upper bound, shifted a day forward).
     """
-    click.echo(json.dumps({"items": items, "count": len(items), **extra, "filters": filters}, indent=2, default=str))
+    click.echo(
+        json.dumps({"items": items, "count": len(items), **extra, "filters": filters}, indent=2, default=json_default)
+    )
 
 
 def _shared_options(f: Any) -> Any:
@@ -817,7 +820,7 @@ def cmd_champion_click(name: str, since: int | None, before: int | None, limit: 
                         "filters": {"name": name, "since": since, "before": before, "limit": limit},
                     },
                     indent=2,
-                    default=str,
+                    default=json_default,
                 )
             )
         else:

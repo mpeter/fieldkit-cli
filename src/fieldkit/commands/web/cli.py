@@ -13,6 +13,7 @@ from pathlib import Path
 import click
 
 from fieldkit.cli_exit import cli_main
+from fieldkit.util.jsonio import json_default
 
 _DEFAULT_TOKEN_PATH = Path("~/.config/fieldkit/web-token").expanduser()
 
@@ -76,7 +77,9 @@ def token(as_json: bool) -> None:
         if as_json:
             # The path, never the token: the 0600 file is the one place the
             # secret lives, and stdout is logged, piped, and scrolled back.
-            click.echo(json.dumps({"token_path": str(_DEFAULT_TOKEN_PATH), "mode": "0600"}, indent=2, default=str))
+            click.echo(
+                json.dumps({"token_path": str(_DEFAULT_TOKEN_PATH), "mode": "0600"}, indent=2, default=json_default)
+            )
             return
         click.echo(f"Token written to {_DEFAULT_TOKEN_PATH} (mode 600).")
         click.echo("Serve with:  fieldkit web serve --token-file ~/.config/fieldkit/web-token")

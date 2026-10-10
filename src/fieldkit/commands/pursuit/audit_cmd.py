@@ -32,6 +32,7 @@ from fieldkit.config import get_fieldkit_home
 from fieldkit.pursuit.enums import Stage
 from fieldkit.pursuit.io import find_reserved_pursuit_files, is_reserved_pursuit_path
 from fieldkit.pursuit.stages import CLOSED_STAGES
+from fieldkit.util.jsonio import json_default
 
 LOG_PREFIX = "[pursuit-audit]"
 log = logging.getLogger(__name__)
@@ -269,7 +270,7 @@ def _emit_results(
     """
     if as_json:
         # cell-28b9dae2e9395288: machine-readable output suppresses table and report write.
-        click.echo(json.dumps([dataclasses.asdict(r) for r in results], indent=2, default=str))
+        click.echo(json.dumps([dataclasses.asdict(r) for r in results], indent=2, default=json_default))
         errors_j = sum(1 for r in results if r.category == "ERROR")
         warnings_j = sum(1 for r in results if r.category == "WARNING")
         criticals_j = sum(len(r.criticals) for r in results)

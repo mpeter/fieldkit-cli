@@ -13,6 +13,7 @@ from pathlib import Path
 import click
 
 from fieldkit.cli_registry import declare_write
+from fieldkit.util.jsonio import json_default
 
 # ---------------------------------------------------------------------------
 # Click command
@@ -264,7 +265,7 @@ def _dry_run_transcript_ingest(
                     "filters": {"account": account, "limit": limit},
                 },
                 indent=2,
-                default=str,
+                default=json_default,
             )
         )
         return 0
@@ -342,7 +343,7 @@ def _live_run_transcript_ingest(
                         "filters": {"account": account, "limit": limit},
                     },
                     indent=2,
-                    default=str,
+                    default=json_default,
                 )
             )
         else:
@@ -419,7 +420,7 @@ def _report_stub_pipeline(pipeline_id: str, prefix: str, as_json: bool = False) 
                             "registered_sources": count,
                         },
                         indent=2,
-                        default=str,
+                        default=json_default,
                     )
                 )
             else:
@@ -439,7 +440,7 @@ def _report_stub_pipeline(pipeline_id: str, prefix: str, as_json: bool = False) 
                         "note": "pipeline.db not initialized. Run: fieldkit ingest status",
                     },
                     indent=2,
-                    default=str,
+                    default=json_default,
                 )
             )
         else:

@@ -8,12 +8,23 @@ space, so a Python-only test suite never notices; Go's
 ``fromdate`` all reject or misparse it.
 
 ``json_default`` is the ``default=`` callable every ``--json`` emitter should
-pass instead of ``str``: it renders dates and datetimes via ``.isoformat()`` and
+pass instead of ``str``: it renders dates, datetimes and times as ISO-8601,
+writes a UTC offset as ``Z`` (the only zone ``jq``'s ``fromdate`` accepts), and
 falls back to ``str`` for everything else, so it is a drop-in replacement.
 """
 
 import datetime as _dt
 from typing import Any
+
+_UTC_OFFSET = "+00:00"
+
+
+def _isoformat(value: _dt.date | _dt.time) -> str:
+    """Render ISO-8601, writing a UTC offset as ``Z`` as ``jq``'s ``fromdate`` requires."""
+    rendered = value.isoformat()
+    if isinstance(value, _dt.datetime) and value.utcoffset() == _dt.timedelta(0):
+        return rendered.removesuffix(_UTC_OFFSET) + "Z"
+    return rendered
 
 
 def json_default(obj: Any) -> str:
@@ -23,10 +34,9 @@ def json_default(obj: Any) -> str:
         obj: The value ``json.dumps`` failed to serialize natively.
 
     Returns:
-        ``obj.isoformat()`` for :class:`datetime.date` and
-        :class:`datetime.datetime` (``datetime`` is a ``date`` subclass, so one
-        check covers both), otherwise ``str(obj)``.
+        ISO-8601 for dates, datetimes and times (a UTC datetime ends in
+        ``Z``), otherwise ``str(obj)``.
     """
     if isinstance(obj, (_dt.datetime, _dt.date, _dt.time)):
-        return obj.isoformat()
+        return _isoformat(obj)
     return str(obj)

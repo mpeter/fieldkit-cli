@@ -17,6 +17,7 @@ from fieldkit.cli_registry import declare_write
 from fieldkit.config import get_fieldkit_home
 from fieldkit.pursuit.io import is_reserved_pursuit_path, load_pursuit
 from fieldkit.pursuit.stages import CLOSED_STAGES as _CLOSED_STAGES
+from fieldkit.util.jsonio import json_default
 
 LOG_PREFIX = "[pursuit-archive]"
 
@@ -214,7 +215,7 @@ def cli(account: str, name: str | None, all_closed: bool, dry_run: bool, as_json
                     "error": error,
                 },
                 indent=2,
-                default=str,
+                default=json_default,
             )
         )
 

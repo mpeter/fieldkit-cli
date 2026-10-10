@@ -30,6 +30,7 @@ import fieldkit.watch.status as _watch_status
 from fieldkit.cli_exit import EXIT_DATA, EXIT_PARTIAL
 from fieldkit.config import TIMEOUT_CRON, ConfigError
 from fieldkit.errors import AuthError
+from fieldkit.util.jsonio import json_default
 from fieldkit.watch.status import WatcherOutcome, get_last_run_outcome
 
 
@@ -164,7 +165,7 @@ def status_cmd(as_json: bool) -> None:
             }
             for name in sorted(statuses)
         ]
-        click.echo(json.dumps({"items": items, "count": len(items), "filters": {}}, indent=2, default=str))
+        click.echo(json.dumps({"items": items, "count": len(items), "filters": {}}, indent=2, default=json_default))
         return
 
     if not statuses:

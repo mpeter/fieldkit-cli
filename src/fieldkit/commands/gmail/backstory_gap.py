@@ -25,6 +25,7 @@ import yaml
 from fieldkit.cli_exit import EXIT_PARTIAL
 from fieldkit.config import get_fieldkit_home
 from fieldkit.gmail.discover import NOISE_REGEX, get_gmail_db_path
+from fieldkit.util.jsonio import json_default
 
 
 @cache
@@ -173,7 +174,7 @@ def _emit_json(
                 "filters": {"account": account_filter, "min_messages": min_messages},
             },
             indent=2,
-            default=str,
+            default=json_default,
         )
     )
 

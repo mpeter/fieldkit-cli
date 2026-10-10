@@ -32,6 +32,7 @@ from fieldkit.pursuit.gate_criteria import ALLOWED_GATE_STATUSES, GatePolicyDeci
 from fieldkit.pursuit.stages import ALL_STAGES as ALLOWED_STAGES
 from fieldkit.pursuit.stages import CLOSED_STAGES
 from fieldkit.pursuit.stages import PIPELINE_STAGES as _STAGE_ORDER
+from fieldkit.util.jsonio import json_default
 
 LOG_PREFIX = "[pursuit-advance]"
 _BACKWARD_OVERRIDE_REASON = "Backward transitions require an explicit override reason"
@@ -411,7 +412,7 @@ def advance_cmd(
                     "note": note,
                 },
                 indent=2,
-                default=str,
+                default=json_default,
             )
         )
 
