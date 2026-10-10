@@ -48,6 +48,10 @@ Keep each pull request focused on one problem. Preserve the architecture documen
 Bug fixes and behavior changes need tests that demonstrate the observable contract. Documentation-only
 and test-only improvements are welcome and do not need invented runtime changes.
 
+Every public module, class, function, and method under `src/` needs a docstring that states its
+contract. Ruff enforces this (rules D100–D104) in `make pr-check` and the pre-commit hook. Docstrings
+in tests, scripts, and hooks are welcome but not required.
+
 If the CLI surface changes, run `make docs` and include the generated reference update. User-visible
 changes need one descriptive Markdown file under `changelog.d/`; documentation-only, test-only,
 refactor-only, and CI-only changes may be exempt when the change has no user-facing effect. Follow

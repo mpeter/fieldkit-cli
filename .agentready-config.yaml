@@ -4,3 +4,7 @@
 excluded_attributes:
   # fieldkit is a CLI tool with no HTTP API surface.
   - openapi_specs
+  # inline_documentation counts every tracked .py file, tests included, so it
+  # measures test docstrings as much as production ones. Ruff D100-D104 in
+  # pyproject.toml enforces docstrings on every public production item instead.
+  - inline_documentation
