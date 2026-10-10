@@ -13,6 +13,7 @@ import click
 
 from fieldkit.cli_exit import EXIT_AUTH, EXIT_DATA, EXIT_PARTIAL
 from fieldkit.config import ConfigError, get_fieldkit_home, get_pipeline_quota, write_pipeline_quota
+from fieldkit.util.jsonio import json_default
 
 # Accepted period formats: YYYY-H1, YYYY-H2, YYYY-Q1 … YYYY-Q4
 _PERIOD_RE = re.compile(r"\d{4}-[HQ][1-4]")
@@ -206,7 +207,7 @@ def cmd_quota(
         if sf_closed_won is not None:
             payload["sf_closed_won"] = sf_closed_won
             payload["gap"] = target - sf_closed_won - weighted_val
-        click.echo(json.dumps(payload, indent=2, default=str))
+        click.echo(json.dumps(payload, indent=2, default=json_default))
         return
 
     def _fmt(v: float) -> str:

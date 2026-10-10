@@ -4,6 +4,8 @@ import json
 
 import click
 
+from fieldkit.util.jsonio import json_default
+
 # ---------------------------------------------------------------------------
 # Core logic
 # ---------------------------------------------------------------------------
@@ -54,7 +56,7 @@ def _run_status(account: str | None = None, as_json: bool = False) -> None:
                     "filters": {"account": account},
                 },
                 indent=2,
-                default=str,
+                default=json_default,
             )
         )
         return

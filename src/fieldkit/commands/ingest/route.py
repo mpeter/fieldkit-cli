@@ -18,6 +18,7 @@ from fieldkit.ingest.route_batch import (
     _route_one_file,
 )
 from fieldkit.pursuit.io import split_frontmatter_raw, write_frontmatter_raw
+from fieldkit.util.jsonio import json_default
 
 
 @declare_write("workspace")
@@ -121,7 +122,7 @@ def cli(
                     "error": error,
                 },
                 indent=2,
-                default=str,
+                default=json_default,
             )
         )
 

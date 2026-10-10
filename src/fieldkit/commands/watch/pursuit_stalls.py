@@ -23,6 +23,7 @@ import logging
 import click
 
 from fieldkit.cli_exit import EXIT_DATA
+from fieldkit.util.jsonio import json_default
 from fieldkit.watch._pursuit_stall_render import _alerts_file
 from fieldkit.watch._pursuit_stall_state import _SNOOZE_DAYS, snooze_pursuit
 from fieldkit.watch.dedup import scrub_duplicate_alerts
@@ -144,7 +145,7 @@ def ack_cmd(pursuit_key: str, days: int, as_json: bool) -> None:
             json.dumps(
                 {"pursuit": pursuit_key, "snoozed_until": until, "days": days, "snoozed": True},
                 indent=2,
-                default=str,
+                default=json_default,
             )
         )
         return

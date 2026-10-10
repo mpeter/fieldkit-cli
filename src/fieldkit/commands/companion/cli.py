@@ -19,6 +19,7 @@ import click
 from fieldkit.cli_exit import EXIT_AUTH, EXIT_DATA, EXIT_PARTIAL, cli_main
 from fieldkit.cli_registry import declare_write
 from fieldkit.companion.gate import TIER_ORDER, Tier
+from fieldkit.util.jsonio import json_default
 
 if TYPE_CHECKING:
     from fieldkit.companion.decide import ProposedAction
@@ -240,7 +241,7 @@ def allowed(command: tuple[str, ...], as_json: bool) -> None:
                     json.dumps(
                         {"allowed": False, "tier": tier, "command": argv, "error": problems},
                         indent=2,
-                        default=str,
+                        default=json_default,
                     )
                 )
             else:
@@ -253,7 +254,9 @@ def allowed(command: tuple[str, ...], as_json: bool) -> None:
         if as_json:
             # Denial is an answer, not a failure, so the document is emitted on
             # both paths; the exit code still distinguishes them.
-            click.echo(json.dumps({"allowed": permitted, "tier": tier, "command": argv}, indent=2, default=str))
+            click.echo(
+                json.dumps({"allowed": permitted, "tier": tier, "command": argv}, indent=2, default=json_default)
+            )
         elif permitted:
             click.echo(f"allowed (tier: {tier})")
         else:

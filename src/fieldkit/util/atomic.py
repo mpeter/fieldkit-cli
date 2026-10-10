@@ -39,6 +39,8 @@ from typing import Any
 import yaml
 from ruamel.yaml import YAML
 
+from fieldkit.util.jsonio import json_default
+
 
 def _atomic_text_replace(path: Path, content: str) -> None:
     """Replace *path* from an exclusively created same-directory temporary file."""
@@ -109,7 +111,7 @@ def locked_json_update(path: Path) -> Generator[dict[str, Any], None, None]:
     with exclusive_path_lock(path):
         data: dict[str, Any] = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
         yield data
-        _atomic_text_replace(path, json.dumps(data, default=str, indent=2, sort_keys=True))
+        _atomic_text_replace(path, json.dumps(data, default=json_default, indent=2, sort_keys=True))
 
 
 def atomic_yaml_write(path: Path, data: dict[str, Any]) -> None:

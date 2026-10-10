@@ -17,6 +17,7 @@ from rich.table import Table
 from fieldkit.cli_exit import EXIT_PARTIAL, cli_main
 from fieldkit.config import get_accounts_root
 from fieldkit.contact.resolver import resolve, scan_pursuit_affiliations
+from fieldkit.util.jsonio import json_default
 
 logger = logging.getLogger(__name__)
 
@@ -190,6 +191,6 @@ def cli(query: str, db: str | None, affiliations: bool, output_json: bool) -> No
             payload = dict(result)
             if affil_data is not None:
                 payload["affiliations"] = affil_data
-            click.echo(json.dumps(payload, indent=2, default=str))
+            click.echo(json.dumps(payload, indent=2, default=json_default))
         else:
             _print_human(result, affil_data)

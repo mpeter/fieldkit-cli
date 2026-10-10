@@ -17,6 +17,7 @@ from typing import Any
 
 from fieldkit.config import get_fieldkit_home
 from fieldkit.config import get_watchers_dir as get_watchers_dir
+from fieldkit.util.jsonio import json_default
 from fieldkit.watch.logging import watcher_logging
 from fieldkit.watch.state import merge_state
 from fieldkit.watch.state import state_write_failed as _state_write_failed
@@ -206,7 +207,7 @@ def _emit_run_json(
                 "dry_run": dry_run,
             },
             indent=2,
-            default=str,
+            default=json_default,
         )
     )
 

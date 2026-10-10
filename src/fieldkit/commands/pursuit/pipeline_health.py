@@ -34,6 +34,7 @@ from fieldkit.pursuit.enums import Stage
 from fieldkit.pursuit.io import ReportAssessment, ReportInput, read_pursuit_for_report, scan_report_inputs
 from fieldkit.pursuit.stages import REVIEW_EXCLUDED_STAGES, in_review_scope
 from fieldkit.pursuit.utils import parse_sf_date
+from fieldkit.util.jsonio import json_default
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -269,7 +270,7 @@ def _emit_health_results(
 
         # The JSON contract stays a list; consumers (web dashboard, sf-reconcile) parse it as
         # one. An incomplete assessment is disclosed on stderr and by EXIT_PARTIAL instead.
-        click.echo(json.dumps([dataclasses.asdict(i) for i in items], indent=2, default=str))
+        click.echo(json.dumps([dataclasses.asdict(i) for i in items], indent=2, default=json_default))
         raise SystemExit(_health_exit_code(high, strict, assessment))
 
     # Print table

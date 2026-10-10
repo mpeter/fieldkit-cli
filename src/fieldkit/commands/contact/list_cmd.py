@@ -13,6 +13,7 @@ import click
 from fieldkit.cli_exit import EXIT_PARTIAL, cli_main
 from fieldkit.contact.people_query import list_people
 from fieldkit.gmail.discover import get_gmail_db_path
+from fieldkit.util.jsonio import json_default
 
 
 @click.command("list")
@@ -37,7 +38,7 @@ def cli(account: str | None, limit: int | None, output_json: bool) -> None:
             raise
 
         if output_json:
-            click.echo(json.dumps(people, indent=2, default=str))
+            click.echo(json.dumps(people, indent=2, default=json_default))
             return
 
         if not people:

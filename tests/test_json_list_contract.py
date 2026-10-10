@@ -387,3 +387,54 @@ def test_the_timestamp_check_accepts_isoformat_and_bare_dates() -> None:
     }
 
     _assert_iso8601_timestamps(correct, command="regression probe")
+
+
+def test_a_datetime_reaching_a_json_emitter_renders_as_iso8601() -> None:
+    """A real --json command renders a raw datetime with the 'T' separator."""
+    statuses = {"slack-threads": {"outcome": "ok", "last_run": datetime(2026, 7, 1, 6, 45, 1, tzinfo=UTC)}}
+    watch_cli = importlib.import_module("fieldkit.commands.watch.cli")
+    with patch.object(watch_cli._watch_status, "load_all_statuses", return_value=statuses):
+        result = CliRunner().invoke(watch_cli.status_cmd, ["--json"])
+
+    payload = _payload(result, "watch status")
+    assert "2026-07-01T06:45:01+00:00" in result.output
+    _assert_iso8601_timestamps(payload, command="watch status")
+
+
+_STR_DEFAULT = re.compile(r"\bdefault=str\b(?!\()")
+
+#: Modules that serialize with ``default=str`` outside the ``--json`` surface.
+_STR_DEFAULT_EXEMPT = {
+    # Defines json_default and documents the pitfall it replaces.
+    Path("util/jsonio.py"),
+    # Builds LLM prompt context, not CLI output; fieldkit.web may not depend on fieldkit.util.
+    Path("web/chat.py"),
+}
+
+
+def test_no_json_emitter_falls_back_to_str() -> None:
+    """``default=str`` renders datetimes with a space; emitters use ``json_default``."""
+    package_root = Path(__file__).resolve().parents[1] / "src" / "fieldkit"
+    offenders = [
+        f"{path.relative_to(package_root)}:{number}"
+        for path in sorted(package_root.rglob("*.py"))
+        if path.relative_to(package_root) not in _STR_DEFAULT_EXEMPT
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1)
+        if _STR_DEFAULT.search(line)
+    ]
+
+    assert offenders == []
+
+
+@pytest.mark.parametrize(
+    ("line", "flagged"),
+    [
+        ("json.dumps(payload, default=str)", True),
+        ("    default=str,", True),
+        ('_prompt("Role", default=str(role))', False),
+        ("json.dumps(payload, default=json_default)", False),
+    ],
+)
+def test_the_str_default_guard_matches_only_the_fallback(line: str, flagged: bool) -> None:
+    result = _STR_DEFAULT.search(line)
+    assert (result is not None) is flagged

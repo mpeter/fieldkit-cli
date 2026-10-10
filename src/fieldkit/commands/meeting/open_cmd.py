@@ -8,6 +8,7 @@ import click
 
 from fieldkit.cli_exit import EXIT_DATA, cli_main
 from fieldkit.meeting.docs_domain import open_doc
+from fieldkit.util.jsonio import json_default
 
 
 @click.command("open")
@@ -28,7 +29,9 @@ def cli(pursuit_file: Path, as_json: bool) -> None:
 
         if as_json:
             click.echo(
-                json.dumps({"pursuit_file": str(pursuit_file), "url": url, "opened": True}, indent=2, default=str)
+                json.dumps(
+                    {"pursuit_file": str(pursuit_file), "url": url, "opened": True}, indent=2, default=json_default
+                )
             )
         else:
             click.echo(f"Opening: {url}")

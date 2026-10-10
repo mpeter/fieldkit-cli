@@ -21,6 +21,7 @@ from fieldkit.cli_exit import EXIT_DATA, cli_main
 from fieldkit.config import get_sf_rest_base_url, get_sf_session_id
 from fieldkit.sf.meddpicc import CANONICAL_ELEMENTS, read_meddpicc
 from fieldkit.sf.types import MeddpiccDeal, MeddpiccElement, MeddpiccQuestion, MeddpiccReadResult
+from fieldkit.util.jsonio import json_default
 
 # Salesforce record IDs are 15 or 18 alphanumeric characters.
 # NOTE: a copy of this pattern also exists in account.py and quote.py.
@@ -251,7 +252,7 @@ def cli(opp_id: str, deal_id: str | None, as_json: bool) -> None:
         scorecard = fetch_meddpicc_scorecard(opp_id, deal_id=deal_id)
 
         if as_json:
-            click.echo(json.dumps(scorecard, indent=2, default=str))
+            click.echo(json.dumps(scorecard, indent=2, default=json_default))
         else:
             print_scorecard(scorecard)
 

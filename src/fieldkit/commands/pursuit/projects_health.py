@@ -9,6 +9,7 @@ from fieldkit.cli_exit import EXIT_DATA, EXIT_PARTIAL
 from fieldkit.commands.pursuit.audit import no_files_message
 from fieldkit.config import get_fieldkit_home
 from fieldkit.pursuit.projects import ProjectRow, health_check
+from fieldkit.util.jsonio import json_default
 
 LOG_PREFIX = "[pursuit-projects]"
 
@@ -101,7 +102,7 @@ def cli(account: str | None, as_json: bool, strict: bool) -> None:
         import dataclasses
         import json
 
-        click.echo(json.dumps([dataclasses.asdict(r) for r in rows], indent=2, default=str))
+        click.echo(json.dumps([dataclasses.asdict(r) for r in rows], indent=2, default=json_default))
         if strict and (counts["ZOMBIE"] > 0 or counts["UNKNOWN"] > 0):
             raise SystemExit(EXIT_PARTIAL)
         raise SystemExit(0)
