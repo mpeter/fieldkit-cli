@@ -21,7 +21,7 @@ regression doesn't show up as a new failure, and a release cannot be cut.
    behavior.
 2. Add a `CRAP (changed functions)` child to the pull-request `Required checks`
    rollup. It runs in parallel with the other children, only when production
-   Python changes, measures coverage over the whole suite with Python 3.13's
+   Python or `.gaze/baseline.json` changes, measures coverage over the whole suite with Python 3.13's
    low-overhead `sys.monitoring` core, and applies the baseline gate's failure
    rules to functions in `src/fieldkit/` files the pull request changed.
    `make pr-check` is unchanged; `make crap-changed` runs the same check locally.

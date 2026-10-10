@@ -4,7 +4,7 @@
       "content_type": "policy",
       "fenced_blocks": [],
       "reader_action": "Provide reviewable pull-request evidence.",
-      "source_fingerprint": "sha256:c1aeca56487122aa7ecf2ee79d7a50adc52021c7650bac1a09142dfa9ed644c1",
+      "source_fingerprint": "sha256:f103c81d599704cdd12c8605ddb1f5608e5c4dc92280d3ae746ebb666dd1fc5b",
       "sources": [
         "CONTRIBUTING.md",
         ".github/workflows/ci.yml"
@@ -55,7 +55,7 @@
         }
       ],
       "reader_action": "Prepare and submit a contribution.",
-      "source_fingerprint": "sha256:56a880617422780d13474fb1766a361fb626a0c69da31ba96635e80a2b9767b3",
+      "source_fingerprint": "sha256:42077e3123d15bc2065f4e8b1f6d6314849c25f7697d3f7abe93a30c11abe1c2",
       "sources": [
         "Makefile",
         "pyproject.toml",
