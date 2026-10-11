@@ -219,6 +219,15 @@ def test_base_baseline_is_none_before_the_baseline_existed(tmp_path: Path, monke
     assert check_exit_sites.base_baseline("HEAD") is None
 
 
+@pytest.mark.parametrize("count", [-1, 0, 1.5, True, "2"])
+def test_load_baseline_rejects_counts_that_are_not_positive_integers(tmp_path: Path, count: object) -> None:
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text(json.dumps({"files": {"commands/demo.py": {"cli": 2, "ghost": count}}}), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="positive integer counts"):
+        check_exit_sites.load_baseline(baseline)
+
+
 def test_repository_exit_sites_match_the_committed_baseline() -> None:
     """No function gains an exit site and every removal lowers the committed baseline."""
     sites = check_exit_sites.collect(check_exit_sites.SOURCE_ROOT)

@@ -243,8 +243,9 @@ def _validated(data: object, name: str) -> Baseline:
             raise ValueError(f"{name}: 'files' must map module paths to per-function integer counts")
         counts: dict[str, int] = {}
         for scope, count in scopes.items():
-            if not isinstance(scope, str) or type(count) is not int:
-                raise ValueError(f"{name}: {relative} must map function names to integer counts")
+            # A zero or negative entry could offset an increase elsewhere in the file.
+            if not isinstance(scope, str) or type(count) is not int or count < 1:
+                raise ValueError(f"{name}: {relative} must map function names to positive integer counts")
             counts[scope] = count
         baseline[relative] = counts
     return baseline
