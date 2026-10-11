@@ -144,7 +144,7 @@ quality:
 	$(call RUN_QUALITY_STAGE,mypy,--quality-base "$(QUALITY_BASE)",uv run mypy src/fieldkit/ hooks/*.py --no-error-summary)
 	$(call RUN_QUALITY_STAGE,tach,--quality-base "$(QUALITY_BASE)",uvx tach check)
 	$(call RUN_QUALITY_STAGE,hook-boundaries,--quality-base "$(QUALITY_BASE)",uv run python scripts/check_hook_boundaries.py)
-	$(call RUN_QUALITY_STAGE,exit-sites,--quality-base "$(QUALITY_BASE)",uv run python scripts/check_exit_sites.py)
+	$(call RUN_QUALITY_STAGE,exit-sites,--quality-base "$(QUALITY_BASE)",uv run python scripts/check_exit_sites.py --base "$(QUALITY_BASE)")
 	$(call RUN_QUALITY_STAGE,dependency-profiles,--quality-base "$(QUALITY_BASE)",uv run python scripts/check_dependency_profiles.py)
 	$(call RUN_QUALITY_STAGE,compatibility-policy,--quality-base "$(QUALITY_BASE)",uv run python scripts/check_compatibility_policy.py)
 	$(call RUN_QUALITY_STAGE,public-identity,--quality-base "$(QUALITY_BASE)",uv run python scripts/check_public_identity.py)

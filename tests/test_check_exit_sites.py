@@ -2,6 +2,7 @@
 
 import json
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -35,6 +36,7 @@ def _module(root: Path, relative: str, source: str) -> None:
         ("from os import _exit as hard_stop\nhard_stop(1)\n", {"<module>": [2]}),
         ("from click.exceptions import Exit as Done\nraise Done(0)\n", {"<module>": [2]}),
         ("from builtins import SystemExit as Stop\nraise Stop\n", {"<module>": [2]}),
+        ("def helper():\n    if __name__ == '__main__':\n        raise SystemExit(3)\n", {"helper": [3]}),
     ],
 )
 def test_exit_sites_counts_every_exit_form_by_enclosing_function(source: str, expected: dict[str, list[int]]) -> None:
@@ -145,6 +147,76 @@ def test_write_baseline_records_removals_and_moves_within_a_file(
 
     assert exit_code == 0
     assert json.loads(baseline.read_text(encoding="utf-8"))["files"] == {"commands/demo.py": {"helper": 1}}
+
+
+@pytest.mark.parametrize(
+    ("current", "base", "expected"),
+    [
+        ({"commands/demo.py": {"cli": 2}}, {"commands/demo.py": {"cli": 1}}, 1),
+        ({"commands/new.py": {"cli": 1}}, {}, 1),
+        ({"commands/demo.py": {"helper": 1}}, {"commands/demo.py": {"cli": 1}}, 0),
+        ({"commands/demo.py": {"cli": 1}}, {"commands/demo.py": {"cli": 2}}, 0),
+    ],
+    ids=["count-raised", "file-added", "moved-in-file", "lowered"],
+)
+def test_baseline_growth_rejects_only_a_larger_file_total(
+    current: check_exit_sites.Baseline, base: check_exit_sites.Baseline, expected: int
+) -> None:
+    problems = check_exit_sites.baseline_growth(current, base)
+
+    assert len(problems) == expected
+    assert all("the baseline may only shrink" in problem for problem in problems)
+
+
+def _git(repo: Path, *arguments: str) -> None:
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Example",
+            "-c",
+            "user.email=dev@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            *arguments,
+        ],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        timeout=30,
+    )
+
+
+def test_main_with_base_rejects_a_hand_edited_baseline_increase(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    baseline = tmp_path / ".exit-sites-baseline.json"
+    source = tmp_path / "src"
+    _module(source, "commands/demo.py", "def cli():\n    raise SystemExit(1)\n")
+    check_exit_sites.write_baseline({"commands/demo.py": {"cli": [2]}}, baseline)
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-q", "-m", "base")
+    _module(source, "commands/demo.py", "def cli():\n    raise SystemExit(1)\n    raise SystemExit(3)\n")
+    check_exit_sites.write_baseline({"commands/demo.py": {"cli": [2, 3]}}, baseline)
+    _patch_paths(monkeypatch, source, baseline)
+    monkeypatch.setattr(check_exit_sites, "_ROOT", tmp_path)
+
+    exit_code = check_exit_sites.main(["--base", "HEAD"])
+
+    assert exit_code == 1
+    assert "records 2 exit sites, 1 at the base revision" in capsys.readouterr().err
+    assert check_exit_sites.main([]) == 0
+
+
+def test_base_baseline_is_none_before_the_baseline_existed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / "README.md").write_text("demo\n", encoding="utf-8")
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-q", "-m", "base")
+    monkeypatch.setattr(check_exit_sites, "_ROOT", tmp_path)
+
+    assert check_exit_sites.base_baseline("HEAD") is None
 
 
 def test_repository_exit_sites_match_the_committed_baseline() -> None:

@@ -89,6 +89,10 @@ jobs:
       GITLEAKS_LINUX_X64_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # The merge commit and its first parent, the base tip, so the exit-site
+          # baseline can be compared with the one this pull request started from.
+          fetch-depth: 2
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
         with:
           enable-cache: true
@@ -114,6 +118,8 @@ jobs:
         run: make public-tree-safety
       - name: Enforce public identity policy
         run: python3 scripts/check_public_identity.py
+      - name: Enforce the exit-site ratchet
+        run: python3 scripts/check_exit_sites.py --base HEAD^1
       - name: Install dependencies
         run: uv sync --locked --all-extras --dev
       - name: Enforce workflow security policy

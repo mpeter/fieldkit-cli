@@ -16,11 +16,13 @@ point and is not counted.
 
 Usage:
     uv run python scripts/check_exit_sites.py                   # check
+    uv run python scripts/check_exit_sites.py --base origin/main  # also check the baseline file itself
     uv run python scripts/check_exit_sites.py --write-baseline  # after removing or moving sites
 
 ``--write-baseline`` refuses to record a file whose total grew. A site that
 moved to another function within its file is recorded, and the move is visible
-in the baseline diff for review.
+in the baseline diff for review. ``--base`` compares the committed baseline with
+the one at the merge-base, so a hand-edited increase fails too.
 
 Exit codes:
     0 — every function matches its baseline (pass)
@@ -32,6 +34,7 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import subprocess
 import sys
 from collections.abc import Iterator
 from pathlib import Path
@@ -39,6 +42,7 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parent.parent
 SOURCE_ROOT = _ROOT / "src" / "fieldkit"
 BASELINE_PATH = _ROOT / ".exit-sites-baseline.json"
+_GIT_TIMEOUT_SECONDS = 30
 
 # The two process boundaries; every other function raises or returns instead.
 BOUNDARY_SCOPES = frozenset({("cli_exit.py", "cli_main"), ("__main__.py", "main")})
@@ -115,7 +119,7 @@ def exit_sites(source: str) -> dict[str, list[int]]:
             yield from visit(node, scope)
 
     def visit(node: ast.AST, scope: str) -> Iterator[tuple[str, int]]:
-        if isinstance(node, ast.If) and _is_main_guard(node):
+        if scope == MODULE_SCOPE and isinstance(node, ast.If) and _is_main_guard(node):
             # Only the guarded body is a separate entry point; ``else`` runs on import.
             yield from walk_nodes(node.orelse, scope)
             return
@@ -190,16 +194,60 @@ def growth(sites: Sites, baseline: Baseline) -> list[str]:
     return problems
 
 
-def load_baseline(path: Path) -> Baseline:
-    data = json.loads(path.read_text(encoding="utf-8"))
-    files = data["files"]
-    valid = isinstance(files, dict) and all(
-        isinstance(scopes, dict) and all(isinstance(count, int) for count in scopes.values())
-        for scopes in files.values()
+def baseline_growth(current: Baseline, base: Baseline) -> list[str]:
+    """Return the files whose recorded total is higher than at the base revision."""
+    problems: list[str] = []
+    for relative, scopes in sorted(current.items()):
+        total, allowed = sum(scopes.values()), sum(base.get(relative, {}).values())
+        if total > allowed:
+            problems.append(
+                f"{BASELINE_PATH.name}: src/fieldkit/{relative} records {total} exit sites, "
+                f"{allowed} at the base revision; the baseline may only shrink"
+            )
+    return problems
+
+
+def _git(*arguments: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", *arguments],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=_ROOT,
+        timeout=_GIT_TIMEOUT_SECONDS,
     )
-    if not valid:
-        raise ValueError(f"{path.name}: 'files' must map module paths to per-function integer counts")
-    return files
+
+
+def base_baseline(base: str) -> Baseline | None:
+    """Return the baseline at the merge-base with ``base``, or ``None`` if it did not exist yet."""
+    merge_base = _git("merge-base", base, "HEAD")
+    if merge_base.returncode != 0:
+        raise ValueError(f"cannot find the merge-base of {base} and HEAD: {merge_base.stderr.strip()}")
+    shown = _git("show", f"{merge_base.stdout.strip()}:{BASELINE_PATH.name}")
+    if shown.returncode != 0:
+        return None
+    return _validated(json.loads(shown.stdout), BASELINE_PATH.name)
+
+
+def load_baseline(path: Path) -> Baseline:
+    return _validated(json.loads(path.read_text(encoding="utf-8")), path.name)
+
+
+def _validated(data: object, name: str) -> Baseline:
+    files = data.get("files") if isinstance(data, dict) else None
+    if not isinstance(files, dict):
+        raise ValueError(f"{name}: 'files' must map module paths to per-function integer counts")
+    baseline: Baseline = {}
+    for relative, scopes in files.items():
+        if not isinstance(relative, str) or not isinstance(scopes, dict):
+            raise ValueError(f"{name}: 'files' must map module paths to per-function integer counts")
+        counts: dict[str, int] = {}
+        for scope, count in scopes.items():
+            if not isinstance(scope, str) or type(count) is not int:
+                raise ValueError(f"{name}: {relative} must map function names to integer counts")
+            counts[scope] = count
+        baseline[relative] = counts
+    return baseline
 
 
 def write_baseline(sites: Sites, path: Path) -> None:
@@ -225,6 +273,10 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Record the current counts after removing or moving sites; refuses to record growth.",
     )
+    parser.add_argument(
+        "--base",
+        help="Also fail if the committed baseline records more sites than at the merge-base with this revision.",
+    )
     args = parser.parse_args(argv)
 
     sites = collect(SOURCE_ROOT)
@@ -239,6 +291,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     problems = violations(sites, baseline)
+    if args.base:
+        previous = base_baseline(args.base)
+        if previous is not None:
+            problems += baseline_growth(baseline, previous)
     if problems:
         print("\n".join(problems), file=sys.stderr)
         return 1
