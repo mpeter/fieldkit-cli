@@ -19,9 +19,9 @@ Only `cli_exit.cli_main()` and the `__main__.main()` dispatcher end the process.
 A command reports failure by raising a typed `FieldkitError`, which
 `handle_cli_exception()` maps to the documented exit code. Domain code never
 exits. Command sites that predate this rule and still raise `SystemExit` or call
-`ctx.exit()` are counted per file in `.exit-sites-baseline.json`;
-`scripts/check_exit_sites.py` fails if a count rises, a new file adds a site, or
-domain code exits, and each migration lowers the baseline.
+`ctx.exit()` are counted per enclosing function in `.exit-sites-baseline.json`;
+`scripts/check_exit_sites.py` fails if a count rises, a site moves or appears in
+another function, or domain code exits, and each migration lowers the baseline.
 
 ## Consequences
 

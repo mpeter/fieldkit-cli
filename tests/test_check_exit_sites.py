@@ -20,86 +20,131 @@ def _module(root: Path, relative: str, source: str) -> None:
 @pytest.mark.parametrize(
     ("source", "expected"),
     [
-        ("raise SystemExit(3)\n", [1]),
-        ("raise SystemExit\n", [1]),
-        ("import click\nraise click.exceptions.Exit(0)\n", [2]),
-        ("import sys\nsys.exit(1)\n", [2]),
-        ("def f(ctx):\n    ctx.exit(1)\n", [2]),
-        ("import os\nos._exit(1)\n", [2]),
-        ("exit(1)\n", [1]),
-        ("raise ValueError('bad')\n", []),
-        ("if __name__ == '__main__':\n    raise SystemExit(main())\n", []),
+        ("raise SystemExit(3)\n", {"<module>": [1]}),
+        ("raise SystemExit\n", {"<module>": [1]}),
+        ("import click\nraise click.exceptions.Exit(0)\n", {"<module>": [2]}),
+        ("import sys\nsys.exit(1)\n", {"<module>": [2]}),
+        ("def cli(ctx):\n    ctx.exit(1)\n", {"cli": [2]}),
+        ("import os\nos._exit(1)\n", {"<module>": [2]}),
+        ("exit(1)\n", {"<module>": [1]}),
+        ("class Run:\n    def go(self):\n        raise SystemExit(3)\n", {"Run.go": [3]}),
+        ("raise ValueError('bad')\n", {}),
+        ("if __name__ == '__main__':\n    raise SystemExit(main())\n", {}),
     ],
 )
-def test_exit_site_lines_counts_every_exit_form_outside_a_main_guard(source: str, expected: list[int]) -> None:
-    assert check_exit_sites.exit_site_lines(source) == expected
+def test_exit_sites_counts_every_exit_form_by_enclosing_function(source: str, expected: dict[str, list[int]]) -> None:
+    assert check_exit_sites.exit_sites(source) == expected
+
+
+@pytest.mark.parametrize(
+    "guard",
+    ["if __name__ != '__main__':", "if __name__ == PLUGIN_NAME:", "if __name__ == '__main__' == True:"],
+)
+def test_exit_sites_exempt_only_the_exact_main_guard(guard: str) -> None:
+    assert check_exit_sites.exit_sites(f"{guard}\n    raise SystemExit(3)\n") == {"<module>": [2]}
 
 
 def test_collect_skips_the_two_process_boundaries(tmp_path: Path) -> None:
     _module(tmp_path, "cli_exit.py", "import sys\nsys.exit(3)\n")
     _module(tmp_path, "__main__.py", "import sys\nsys.exit(0)\n")
-    _module(tmp_path, "commands/demo.py", "raise SystemExit(3)\n")
+    _module(tmp_path, "commands/demo.py", "def cli():\n    raise SystemExit(3)\n")
 
     sites = check_exit_sites.collect(tmp_path)
 
-    assert sites == {"commands/demo.py": [1]}
+    assert sites == {"commands/demo.py": {"cli": [2]}}
 
 
-def test_violations_pass_when_every_file_matches_its_baseline() -> None:
-    problems = check_exit_sites.violations({"commands/demo.py": [4, 9]}, {"commands/demo.py": 2})
+def test_violations_pass_when_every_function_matches_its_baseline() -> None:
+    problems = check_exit_sites.violations({"commands/demo.py": {"cli": [4, 9]}}, {"commands/demo.py": {"cli": 2}})
 
     assert problems == []
 
 
 @pytest.mark.parametrize(
-    ("sites", "baseline", "message"),
+    ("sites", "baseline", "messages"),
     [
-        ({"commands/demo.py": [4, 9]}, {"commands/demo.py": 1}, r"commands/demo\.py:4,9: 2 exit sites, baseline 1"),
-        ({"commands/new.py": [7]}, {}, r"commands/new\.py:7: 1 exit sites, baseline 0"),
-        ({"pursuit/io.py": [12]}, {}, r"pursuit/io\.py:12: domain code must raise a typed FieldkitError"),
-        ({"commands/demo.py": [4]}, {"commands/demo.py": 2}, r"commands/demo\.py: 1 exit sites, baseline 2; lower"),
-        ({}, {"commands/gone.py": 1}, r"commands/gone\.py: 0 exit sites, baseline 1; lower"),
+        (
+            {"commands/demo.py": {"cli": [4, 9]}},
+            {"commands/demo.py": {"cli": 1}},
+            [r"commands/demo\.py:4,9 \(cli\): 2 exit sites, baseline 1"],
+        ),
+        ({"commands/new.py": {"cli": [7]}}, {}, [r"commands/new\.py:7 \(cli\): 1 exit sites, baseline 0"]),
+        ({"pursuit/io.py": {"<module>": [12]}}, {}, [r"pursuit/io\.py:12 \(<module>\): domain code must raise"]),
+        (
+            {"commands/demo.py": {"cli": [4]}},
+            {"commands/demo.py": {"cli": 2}},
+            [r"commands/demo\.py \(cli\): 1 exit sites, baseline 2; lower"],
+        ),
+        ({}, {"commands/gone.py": {"cli": 1}}, [r"commands/gone\.py \(cli\): 0 exit sites, baseline 1; lower"]),
+        (
+            {"commands/demo.py": {"other": [20]}},
+            {"commands/demo.py": {"cli": 1}},
+            [r"commands/demo\.py:20 \(other\): 1 exit sites, baseline 0", r"commands/demo\.py \(cli\): 0 exit sites"],
+        ),
     ],
-    ids=["added-site", "new-file", "domain-site", "removed-site", "file-cleared"],
+    ids=["added-site", "new-file", "domain-site", "removed-site", "file-cleared", "site-moved-in-file"],
 )
-def test_violations_reject_growth_domain_exits_and_stale_baselines(
-    sites: dict[str, list[int]], baseline: dict[str, int], message: str
+def test_violations_reject_growth_domain_exits_moves_and_stale_baselines(
+    sites: check_exit_sites.Sites, baseline: check_exit_sites.Baseline, messages: list[str]
 ) -> None:
     problems = check_exit_sites.violations(sites, baseline)
 
-    assert len(problems) == 1
-    assert re.search(message, problems[0])
+    assert len(problems) == len(messages)
+    for problem, message in zip(problems, messages, strict=True):
+        assert re.search(message, problem)
 
 
-def test_write_baseline_refuses_to_record_a_new_site(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    baseline = tmp_path / "baseline.json"
-    check_exit_sites.write_baseline({"commands/demo.py": [3]}, baseline)
-    _module(tmp_path / "src", "commands/demo.py", "raise SystemExit(1)\nraise SystemExit(3)\n")
-    monkeypatch.setattr(check_exit_sites, "SOURCE_ROOT", tmp_path / "src")
+def _patch_paths(monkeypatch: pytest.MonkeyPatch, source_root: Path, baseline: Path) -> None:
+    monkeypatch.setattr(check_exit_sites, "SOURCE_ROOT", source_root)
     monkeypatch.setattr(check_exit_sites, "BASELINE_PATH", baseline)
+
+
+def test_write_baseline_refuses_to_record_a_larger_file_total(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    baseline = tmp_path / "baseline.json"
+    check_exit_sites.write_baseline({"commands/demo.py": {"cli": [2]}}, baseline)
+    _module(tmp_path / "src", "commands/demo.py", "def cli():\n    raise SystemExit(1)\n    raise SystemExit(3)\n")
+    _patch_paths(monkeypatch, tmp_path / "src", baseline)
 
     exit_code = check_exit_sites.main(["--write-baseline"])
 
     assert exit_code == 1
-    assert check_exit_sites.load_baseline(baseline) == {"commands/demo.py": 1}
+    assert check_exit_sites.load_baseline(baseline) == {"commands/demo.py": {"cli": 1}}
 
 
-def test_write_baseline_lowers_counts_after_a_migration(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_write_baseline_refuses_to_record_a_domain_exit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     baseline = tmp_path / "baseline.json"
-    check_exit_sites.write_baseline({"commands/demo.py": [3, 5], "commands/done.py": [1]}, baseline)
-    _module(tmp_path / "src", "commands/demo.py", "raise SystemExit(1)\n")
-    _module(tmp_path / "src", "commands/done.py", "raise ValueError('typed now')\n")
-    monkeypatch.setattr(check_exit_sites, "SOURCE_ROOT", tmp_path / "src")
-    monkeypatch.setattr(check_exit_sites, "BASELINE_PATH", baseline)
+    check_exit_sites.write_baseline({}, baseline)
+    _module(tmp_path / "src", "pursuit/io.py", "import sys\nsys.exit(1)\n")
+    _patch_paths(monkeypatch, tmp_path / "src", baseline)
+
+    exit_code = check_exit_sites.main(["--write-baseline"])
+
+    assert exit_code == 1
+    assert check_exit_sites.load_baseline(baseline) == {}
+
+
+def test_write_baseline_records_removals_and_moves_within_a_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    baseline = tmp_path / "baseline.json"
+    check_exit_sites.write_baseline(
+        {"commands/demo.py": {"cli": [3, 5]}, "commands/done.py": {"cli": [1]}},
+        baseline,
+    )
+    _module(tmp_path / "src", "commands/demo.py", "def helper():\n    raise SystemExit(1)\n")
+    _module(tmp_path / "src", "commands/done.py", "def cli():\n    raise ValueError('typed now')\n")
+    _patch_paths(monkeypatch, tmp_path / "src", baseline)
 
     exit_code = check_exit_sites.main(["--write-baseline"])
 
     assert exit_code == 0
-    assert json.loads(baseline.read_text(encoding="utf-8"))["files"] == {"commands/demo.py": 1}
+    assert json.loads(baseline.read_text(encoding="utf-8"))["files"] == {"commands/demo.py": {"helper": 1}}
 
 
 def test_repository_exit_sites_match_the_committed_baseline() -> None:
-    """No module gains an exit site and every removal lowers the committed baseline."""
-    problems = check_exit_sites.violations(check_exit_sites.collect(), check_exit_sites.load_baseline())
+    """No function gains an exit site and every removal lowers the committed baseline."""
+    sites = check_exit_sites.collect(check_exit_sites.SOURCE_ROOT)
+
+    problems = check_exit_sites.violations(sites, check_exit_sites.load_baseline(check_exit_sites.BASELINE_PATH))
 
     assert problems == []

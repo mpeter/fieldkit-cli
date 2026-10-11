@@ -16,10 +16,11 @@ built around `SystemExit` need reworking alongside the code.
 1. State the target rule: only `cli_main()` and the `__main__.main()` dispatcher
    end the process. Commands report failure by raising a typed `FieldkitError`
    that `handle_cli_exception()` maps. Domain code never exits.
-2. Add `scripts/check_exit_sites.py` and the committed per-file
-   `.exit-sites-baseline.json`. The check fails when domain code exits, a
-   command file's count rises, a file without an entry adds a site, or a count
-   falls without the baseline being lowered. It runs as the `exit-sites` stage of
+2. Add `scripts/check_exit_sites.py` and the committed
+   `.exit-sites-baseline.json`, which counts sites per enclosing function. The
+   check fails when domain code exits, a function's count rises, a function
+   without an entry adds a site, or a count falls without the baseline being
+   lowered. It runs as the `exit-sites` stage of
    `make pr-check` and `make quality-full`.
 3. Update `AGENTS.md`, ADR 0003 and the exit-code reference to match, and record
    the deliberate `print()` use in `cli_exit.py`.

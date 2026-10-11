@@ -27,6 +27,7 @@
       "category": "build",
       "patterns": [
         ".agentready-config.yaml",
+        ".exit-sites-baseline.json",
         ".gaze.yaml",
         ".gitignore",
         ".markdown-link-check.json",
