@@ -21,6 +21,11 @@ exceeds its recorded count or falls below it without the baseline being lowered.
 - **WHEN** the exit-site check runs
 - **THEN** it SHALL fail and name both functions
 
+#### Scenario: A change raises the recorded baseline by hand
+- **GIVEN** a pull request that adds a direct exit and increases its count in the baseline file
+- **WHEN** pull-request CI or `make pr-check` runs
+- **THEN** the exit-site check SHALL compare the baseline with the base revision and fail
+
 #### Scenario: Domain code exits
 - **GIVEN** a module outside `commands/` that calls `sys.exit()`
 - **WHEN** the exit-site check runs
