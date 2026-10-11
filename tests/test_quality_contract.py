@@ -77,8 +77,10 @@ def test_quality_recipes_run_each_stage_through_timing_runner() -> None:
 
     assert "scripts/quality_stage.py" in makefile
     assert " --full-enforcement $(2) -- " in makefile
-    assert quality_recipe.count("$(call RUN_QUALITY_STAGE") == 17
-    assert full_recipe.count("$(call RUN_FULL_QUALITY_STAGE") == 31
+    assert quality_recipe.count("$(call RUN_QUALITY_STAGE") == 18
+    assert full_recipe.count("$(call RUN_FULL_QUALITY_STAGE") == 32
+    assert "scripts/check_exit_sites.py" in quality_recipe
+    assert "scripts/check_exit_sites.py" in full_recipe
     assert '--quality-base "$(QUALITY_BASE)"' in quality_recipe
     assert "scripts/check_dependency_profiles.py" in quality_recipe
     assert "scripts/check_compatibility_policy.py" in quality_recipe
