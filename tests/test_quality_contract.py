@@ -6,6 +6,7 @@ import re
 import signal
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -420,6 +421,27 @@ def test_pr_ci_gates_crap_regressions_in_changed_functions_within_budget() -> No
     assert "--cov-report=json:coverage.json" not in workflow
 
 
+def test_pr_ci_runs_the_full_suite_on_the_oldest_and_newest_supported_python() -> None:
+    """The suite runs at both ends of the supported range, so a version-specific behavior change fails a PR."""
+    project = tomllib.loads((_ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    classified = [
+        classifier.removeprefix("Programming Language :: Python :: ")
+        for classifier in project["classifiers"]
+        if re.fullmatch(r"Programming Language :: Python :: 3\.\d+", classifier)
+    ]
+    newest = max(classified, key=lambda version: tuple(map(int, version.split("."))))
+    oldest = project["requires-python"].removeprefix(">=")
+    workflow = yaml.load(
+        (_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"), Loader=yaml.BaseLoader
+    )
+    test_job = workflow["jobs"]["test"]
+    setup_uv = next(step for step in test_job["steps"] if "astral-sh/setup-uv@" in step.get("uses", ""))
+
+    assert test_job["strategy"]["matrix"]["python"] == [oldest, newest]
+    assert test_job["strategy"]["fail-fast"] == "false"
+    assert setup_uv["with"]["python-version"] == "${{ matrix.python }}"
+
+
 def test_required_checks_rollup_names_match_the_evidence_script() -> None:
     """Every rollup child the workflow passes must be one ci_evidence.py accepts, and none may be missing."""
     import ci_evidence
@@ -522,7 +544,10 @@ def test_ci_artifacts_are_revision_named_bounded_and_fail_closed() -> None:
 
     assert "--junitxml=reports/pytest.xml" in ci
     assert "scripts/ci_evidence.py junit" in ci
-    assert "pytest-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}" in ci
+    assert (
+        "pytest-py${{ matrix.python }}-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}"
+        in ci
+    )
     assert "required-checks-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}" in ci
     assert ci.count("if-no-files-found: error") == ci.count("actions/upload-artifact@")
     assert ci.count("retention-days:") == ci.count("actions/upload-artifact@")
