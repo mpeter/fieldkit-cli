@@ -14,6 +14,10 @@ in ``.exit-sites-baseline.json`` and fails when:
 The body of an exact ``if __name__ == "__main__":`` guard is a separate process entry
 point and is not counted.
 
+The scan catches ordinary exits, including ones imported under another name. It
+is a guard against mistakes, not deliberate evasion such as
+``getattr(sys, "exit")()``; review covers that.
+
 Usage:
     uv run python scripts/check_exit_sites.py                   # check
     uv run python scripts/check_exit_sites.py --base origin/main  # also check the baseline file itself
@@ -98,14 +102,18 @@ def _exit_aliases(tree: ast.AST) -> tuple[frozenset[str], frozenset[str]]:
     return frozenset(exceptions), frozenset(calls)
 
 
+def _is_exit_reference(node: ast.expr, calls: frozenset[str]) -> bool:
+    if isinstance(node, ast.Attribute):
+        return node.attr in _EXIT_CALLS
+    return isinstance(node, ast.Name) and node.id in _EXIT_BUILTINS | calls
+
+
 def _is_exit_site(node: ast.AST, exceptions: frozenset[str], calls: frozenset[str]) -> bool:
     if isinstance(node, ast.Raise) and node.exc is not None:
         return _callee_name(node.exc) in _EXIT_EXCEPTIONS | exceptions
     if not isinstance(node, ast.Call):
         return False
-    if isinstance(node.func, ast.Attribute):
-        return node.func.attr in _EXIT_CALLS
-    return isinstance(node.func, ast.Name) and node.func.id in _EXIT_BUILTINS | calls
+    return _is_exit_reference(node.func, calls)
 
 
 def exit_sites(source: str) -> dict[str, list[int]]:
@@ -123,13 +131,22 @@ def exit_sites(source: str) -> dict[str, list[int]]:
             # Only the guarded body is a separate entry point; ``else`` runs on import.
             yield from walk_nodes(node.orelse, scope)
             return
-        child_scope = scope
         if isinstance(node, _SCOPES):
-            child_scope = node.name if scope == MODULE_SCOPE else f"{scope}.{node.name}"
-        elif _is_exit_site(node, exceptions, calls):
+            # Only the body runs in the definition's scope; decorators, defaults,
+            # annotations and base classes run when the enclosing scope defines it.
+            body_scope = node.name if scope == MODULE_SCOPE else f"{scope}.{node.name}"
+            body = {id(statement) for statement in node.body}
+            for decorator in node.decorator_list:
+                # A bare ``@sys.exit`` calls the exit function with the definition.
+                if not isinstance(decorator, ast.Call) and _is_exit_reference(decorator, calls):
+                    yield scope, decorator.lineno
+            for child in ast.iter_child_nodes(node):
+                yield from visit(child, body_scope if id(child) in body else scope)
+            return
+        if _is_exit_site(node, exceptions, calls):
             yield scope, getattr(node, "lineno", 0)
         for child in ast.iter_child_nodes(node):
-            yield from visit(child, child_scope)
+            yield from visit(child, scope)
 
     sites: dict[str, list[int]] = {}
     for scope, line in walk_nodes(tree.body, MODULE_SCOPE):
