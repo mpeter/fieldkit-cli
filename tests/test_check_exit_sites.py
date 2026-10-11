@@ -30,6 +30,11 @@ def _module(root: Path, relative: str, source: str) -> None:
         ("class Run:\n    def go(self):\n        raise SystemExit(3)\n", {"Run.go": [3]}),
         ("raise ValueError('bad')\n", {}),
         ("if __name__ == '__main__':\n    raise SystemExit(main())\n", {}),
+        ("if __name__ == '__main__':\n    main()\nelse:\n    raise SystemExit(3)\n", {"<module>": [4]}),
+        ("from sys import exit as terminate\nterminate(3)\n", {"<module>": [2]}),
+        ("from os import _exit as hard_stop\nhard_stop(1)\n", {"<module>": [2]}),
+        ("from click.exceptions import Exit as Done\nraise Done(0)\n", {"<module>": [2]}),
+        ("from builtins import SystemExit as Stop\nraise Stop\n", {"<module>": [2]}),
     ],
 )
 def test_exit_sites_counts_every_exit_form_by_enclosing_function(source: str, expected: dict[str, list[int]]) -> None:
@@ -44,14 +49,15 @@ def test_exit_sites_exempt_only_the_exact_main_guard(guard: str) -> None:
     assert check_exit_sites.exit_sites(f"{guard}\n    raise SystemExit(3)\n") == {"<module>": [2]}
 
 
-def test_collect_skips_the_two_process_boundaries(tmp_path: Path) -> None:
-    _module(tmp_path, "cli_exit.py", "import sys\nsys.exit(3)\n")
-    _module(tmp_path, "__main__.py", "import sys\nsys.exit(0)\n")
+def test_collect_exempts_only_the_two_boundary_functions(tmp_path: Path) -> None:
+    _module(tmp_path, "cli_exit.py", "import sys\ndef cli_main():\n    sys.exit(3)\ndef helper():\n    sys.exit(1)\n")
+    _module(tmp_path, "__main__.py", "def main():\n    raise SystemExit(0)\n")
     _module(tmp_path, "commands/demo.py", "def cli():\n    raise SystemExit(3)\n")
 
     sites = check_exit_sites.collect(tmp_path)
 
-    assert sites == {"commands/demo.py": {"cli": [2]}}
+    assert sites == {"cli_exit.py": {"helper": [5]}, "commands/demo.py": {"cli": [2]}}
+    assert "domain code must raise" in check_exit_sites.violations(sites, {"commands/demo.py": {"cli": 1}})[0]
 
 
 def test_violations_pass_when_every_function_matches_its_baseline() -> None:

@@ -11,7 +11,7 @@ in ``.exit-sites-baseline.json`` and fails when:
 - a function has fewer sites than its baseline, so the baseline is lowered with
   the migration that removed them and can never be spent on a new site.
 
-Code under an ``if __name__ == "__main__":`` guard is a separate process entry
+The body of an exact ``if __name__ == "__main__":`` guard is a separate process entry
 point and is not counted.
 
 Usage:
@@ -40,13 +40,15 @@ _ROOT = Path(__file__).resolve().parent.parent
 SOURCE_ROOT = _ROOT / "src" / "fieldkit"
 BASELINE_PATH = _ROOT / ".exit-sites-baseline.json"
 
-# The two process boundaries; every other module raises or returns instead.
-BOUNDARY_FILES = frozenset({"cli_exit.py", "__main__.py"})
+# The two process boundaries; every other function raises or returns instead.
+BOUNDARY_SCOPES = frozenset({("cli_exit.py", "cli_main"), ("__main__.py", "main")})
 COMMANDS_PREFIX = "commands/"
 MODULE_SCOPE = "<module>"
 _EXIT_EXCEPTIONS = frozenset({"SystemExit", "Exit"})
 _EXIT_CALLS = frozenset({"exit", "_exit"})
 _EXIT_BUILTINS = frozenset({"exit", "quit"})
+# Modules whose exit functions and exceptions can be imported under another name.
+_EXIT_MODULES = frozenset({"sys", "os", "builtins", "click", "click.exceptions"})
 _SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
 
 Sites = dict[str, dict[str, list[int]]]
@@ -77,32 +79,56 @@ def _callee_name(node: ast.expr) -> str | None:
     return None
 
 
-def _is_exit_site(node: ast.AST) -> bool:
+def _exit_aliases(tree: ast.AST) -> tuple[frozenset[str], frozenset[str]]:
+    """Return local names bound to exit exceptions and exit functions by ``from ... import``."""
+    exceptions: set[str] = set()
+    calls: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom) or node.module not in _EXIT_MODULES:
+            continue
+        for alias in node.names:
+            if alias.name in _EXIT_EXCEPTIONS:
+                exceptions.add(alias.asname or alias.name)
+            elif alias.name in _EXIT_CALLS | _EXIT_BUILTINS:
+                calls.add(alias.asname or alias.name)
+    return frozenset(exceptions), frozenset(calls)
+
+
+def _is_exit_site(node: ast.AST, exceptions: frozenset[str], calls: frozenset[str]) -> bool:
     if isinstance(node, ast.Raise) and node.exc is not None:
-        return _callee_name(node.exc) in _EXIT_EXCEPTIONS
+        return _callee_name(node.exc) in _EXIT_EXCEPTIONS | exceptions
     if not isinstance(node, ast.Call):
         return False
     if isinstance(node.func, ast.Attribute):
         return node.func.attr in _EXIT_CALLS
-    return isinstance(node.func, ast.Name) and node.func.id in _EXIT_BUILTINS
+    return isinstance(node.func, ast.Name) and node.func.id in _EXIT_BUILTINS | calls
 
 
 def exit_sites(source: str) -> dict[str, list[int]]:
     """Map each enclosing function's qualified name to its exit-site lines."""
 
-    def walk(node: ast.AST, scope: str) -> Iterator[tuple[str, int]]:
+    tree = ast.parse(source)
+    exceptions, calls = _exit_aliases(tree)
+
+    def walk_nodes(nodes: list[ast.stmt], scope: str) -> Iterator[tuple[str, int]]:
+        for node in nodes:
+            yield from visit(node, scope)
+
+    def visit(node: ast.AST, scope: str) -> Iterator[tuple[str, int]]:
+        if isinstance(node, ast.If) and _is_main_guard(node):
+            # Only the guarded body is a separate entry point; ``else`` runs on import.
+            yield from walk_nodes(node.orelse, scope)
+            return
+        child_scope = scope
+        if isinstance(node, _SCOPES):
+            child_scope = node.name if scope == MODULE_SCOPE else f"{scope}.{node.name}"
+        elif _is_exit_site(node, exceptions, calls):
+            yield scope, getattr(node, "lineno", 0)
         for child in ast.iter_child_nodes(node):
-            if _is_main_guard(child):
-                continue
-            child_scope = scope
-            if isinstance(child, _SCOPES):
-                child_scope = child.name if scope == MODULE_SCOPE else f"{scope}.{child.name}"
-            elif _is_exit_site(child):
-                yield scope, getattr(child, "lineno", 0)
-            yield from walk(child, child_scope)
+            yield from visit(child, child_scope)
 
     sites: dict[str, list[int]] = {}
-    for scope, line in walk(ast.parse(source), MODULE_SCOPE):
+    for scope, line in walk_nodes(tree.body, MODULE_SCOPE):
         sites.setdefault(scope, []).append(line)
     return {scope: sorted(lines) for scope, lines in sorted(sites.items())}
 
@@ -112,9 +138,11 @@ def collect(source_root: Path) -> Sites:
     sites: Sites = {}
     for path in sorted(source_root.rglob("*.py")):
         relative = path.relative_to(source_root).as_posix()
-        if relative in BOUNDARY_FILES:
-            continue
-        found = exit_sites(path.read_text(encoding="utf-8"))
+        found = {
+            scope: lines
+            for scope, lines in exit_sites(path.read_text(encoding="utf-8")).items()
+            if (relative, scope) not in BOUNDARY_SCOPES
+        }
         if found:
             sites[relative] = found
     return sites

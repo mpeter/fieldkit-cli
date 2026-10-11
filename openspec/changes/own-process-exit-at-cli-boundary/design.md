@@ -23,9 +23,12 @@ mapping.
   file, so the move shows up in the baseline diff for review rather than
   passing silently. Line numbers are deliberately not part of the identity,
   since unrelated edits shift them.
-- **Scope.** The check scans `src/fieldkit/` with the AST, skipping
-  `cli_exit.py`, `__main__.py` and exact `if __name__ == "__main__":` blocks, which are
-  separate process entry points. `scripts/` and `hooks/` are standalone programs
+- **Scope.** The check scans all of `src/fieldkit/` with the AST. It exempts
+  only `cli_exit.cli_main()`, `__main__.main()` and the body of an exact
+  `if __name__ == "__main__":` block, which is a separate process entry point;
+  the block's `else` branch runs on import and is scanned. Exit functions and
+  exceptions imported under another name from `sys`, `os`, `builtins` or
+  `click` are recognised. `scripts/` and `hooks/` are standalone programs
   and keep their own `sys.exit()`.
 
 ## Risks
