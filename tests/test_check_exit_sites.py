@@ -57,12 +57,18 @@ def test_exit_sites_exempt_only_the_exact_main_guard(guard: str) -> None:
 
 def test_collect_exempts_only_the_two_boundary_functions(tmp_path: Path) -> None:
     _module(tmp_path, "cli_exit.py", "import sys\ndef cli_main():\n    sys.exit(3)\ndef helper():\n    sys.exit(1)\n")
-    _module(tmp_path, "__main__.py", "def main():\n    raise SystemExit(0)\n")
+    _module(
+        tmp_path, "__main__.py", "import sys\ndef main():\n    handler = lambda: sys.exit(3)\n    raise SystemExit(0)\n"
+    )
     _module(tmp_path, "commands/demo.py", "def cli():\n    raise SystemExit(3)\n")
 
     sites = check_exit_sites.collect(tmp_path)
 
-    assert sites == {"cli_exit.py": {"helper": [5]}, "commands/demo.py": {"cli": [2]}}
+    assert sites == {
+        "__main__.py": {"main.<lambda>": [3]},
+        "cli_exit.py": {"helper": [5]},
+        "commands/demo.py": {"cli": [2]},
+    }
     assert "domain code must raise" in check_exit_sites.violations(sites, {"commands/demo.py": {"cli": 1}})[0]
 
 

@@ -143,6 +143,11 @@ def exit_sites(source: str) -> dict[str, list[int]]:
             for child in ast.iter_child_nodes(node):
                 yield from visit(child, body_scope if id(child) in body else scope)
             return
+        if isinstance(node, ast.Lambda):
+            # A lambda runs wherever it is called, so it never inherits a boundary exemption.
+            yield from visit(node.args, scope)
+            yield from visit(node.body, f"{scope}.<lambda>")
+            return
         if _is_exit_site(node, exceptions, calls):
             yield scope, getattr(node, "lineno", 0)
         for child in ast.iter_child_nodes(node):
