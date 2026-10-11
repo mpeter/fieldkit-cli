@@ -24,7 +24,9 @@ maps them to the canonical code. The guarantee holds for every command group:
 
 **Precision note:** the two layers guarantee both the canonical range and the
 exception-to-code semantics for command failures. Domain and command code raise
-typed exceptions; the dispatcher is the final process boundary.
+typed exceptions; the dispatcher is the final process boundary. Some older command
+adapters still exit directly with one of the canonical codes. A contributor check
+keeps that set from growing.
 
 ---
 

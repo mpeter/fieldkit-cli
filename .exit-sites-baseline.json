@@ -1,0 +1,270 @@
+{
+  "description": "Process-exit sites in command adapters that predate the exit boundary rule, counted per enclosing function. Counts may only fall; see scripts/check_exit_sites.py.",
+  "files": {
+    "commands/_account_guard.py": {
+      "validate_account_slug": 1
+    },
+    "commands/auth/google.py": {
+      "auth_google_cmd": 1
+    },
+    "commands/auth/sf.py": {
+      "_authenticate_injected_sid": 1,
+      "_authenticate_prompted_sid": 1,
+      "_prompt_for_sid": 1,
+      "_require_interactive_sid": 1
+    },
+    "commands/auth/shadowbot.py": {
+      "_inject_refresh_token": 1,
+      "_prompt_for_refresh_token": 1,
+      "_recover_authentication": 1
+    },
+    "commands/brief/cli.py": {
+      "cli": 1,
+      "cmd_generate": 3,
+      "cmd_open": 2
+    },
+    "commands/companion/cli.py": {
+      "_validate_act_allowlist": 1,
+      "allowed": 2,
+      "loop": 4,
+      "run": 3
+    },
+    "commands/completion/cli.py": {
+      "cli": 2
+    },
+    "commands/contact/find_cmd.py": {
+      "cli": 1
+    },
+    "commands/contact/list_cmd.py": {
+      "cli": 1
+    },
+    "commands/datasync/cli.py": {
+      "cli": 2
+    },
+    "commands/doctor/cli.py": {
+      "cli": 1
+    },
+    "commands/doctor/gmail.py": {
+      "doctor_gmail_cmd": 1
+    },
+    "commands/doctor/google.py": {
+      "doctor_google_cmd": 1
+    },
+    "commands/doctor/sf.py": {
+      "doctor_sf_cmd": 1
+    },
+    "commands/doctor/shadowbot.py": {
+      "doctor_shadowbot_cmd": 1
+    },
+    "commands/gmail/account_tags.py": {
+      "build_account_tags": 1
+    },
+    "commands/gmail/backstory_gap.py": {
+      "connect": 1,
+      "load_config": 1
+    },
+    "commands/gmail/decay.py": {
+      "cli": 1
+    },
+    "commands/gmail/enrich_pursuits.py": {
+      "cli": 1
+    },
+    "commands/gmail/query.py": {
+      "_cli_connect": 1
+    },
+    "commands/gmail/sync_lock.py": {
+      "gmail_sync_lock": 1
+    },
+    "commands/ingest/backfill.py": {
+      "cli": 1
+    },
+    "commands/ingest/cli.py": {
+      "cli": 1
+    },
+    "commands/ingest/discover.py": {
+      "cli": 1
+    },
+    "commands/ingest/promote.py": {
+      "_help_callback": 1,
+      "cli": 3
+    },
+    "commands/ingest/reprocess.py": {
+      "cli": 1
+    },
+    "commands/ingest/route.py": {
+      "cli": 6
+    },
+    "commands/ingest/run.py": {
+      "cli": 1
+    },
+    "commands/init/cli.py": {
+      "cli": 1
+    },
+    "commands/init/migrate.py": {
+      "migrate_cmd": 1
+    },
+    "commands/init/wizard.py": {
+      "_prompt": 1
+    },
+    "commands/meeting/link_cmd.py": {
+      "cli": 1
+    },
+    "commands/meeting/note_cmd.py": {
+      "cli": 2
+    },
+    "commands/meeting/open_cmd.py": {
+      "cli": 2
+    },
+    "commands/pipeline/cli.py": {
+      "_fetch_sf_closed_won_or_exit": 3,
+      "_validate_pipeline_account": 1,
+      "cli": 2,
+      "cmd_open": 2,
+      "cmd_quota": 2
+    },
+    "commands/pipeline/main.py": {
+      "_run": 2
+    },
+    "commands/pursuit/advance_cmd.py": {
+      "_resolve_advance_target": 1,
+      "advance_cmd": 9
+    },
+    "commands/pursuit/archive_cmd.py": {
+      "_data_root": 1,
+      "cli": 6
+    },
+    "commands/pursuit/audit_cmd.py": {
+      "_data_root": 1,
+      "_emit_results": 3,
+      "_run_check_yaml": 2,
+      "cli": 3
+    },
+    "commands/pursuit/create_cmd.py": {
+      "_data_root": 1,
+      "_refuse_if_reserved": 1,
+      "cli": 4
+    },
+    "commands/pursuit/forecast.py": {
+      "cli": 5
+    },
+    "commands/pursuit/pipeline_health.py": {
+      "_emit_health_results": 2,
+      "cli": 3
+    },
+    "commands/pursuit/projects_health.py": {
+      "cli": 7
+    },
+    "commands/pursuit/rename_cmd.py": {
+      "_data_root": 1,
+      "_refuse": 1,
+      "_refuse_if_reserved": 1,
+      "cli": 3
+    },
+    "commands/pursuit/repair_dates_cmd.py": {
+      "cli": 1
+    },
+    "commands/sf/account.py": {
+      "cli": 4,
+      "run_account": 5
+    },
+    "commands/sf/drift.py": {
+      "_open_client": 2,
+      "cli": 3
+    },
+    "commands/sf/frontmatter.py": {
+      "_assert_single_frontmatter": 1,
+      "_dispatch_validate": 2,
+      "_finish_sf_mode": 1,
+      "_load_sf_payload": 1,
+      "_read_quality_check_content": 2,
+      "_run_sf_mode": 3
+    },
+    "commands/sf/listview.py": {
+      "_check_sf_auth": 2,
+      "_resolve_territory_target": 1,
+      "_run_listview": 2
+    },
+    "commands/sf/meddpicc.py": {
+      "_exit_for_result": 2,
+      "_validate_record_id": 1
+    },
+    "commands/sf/opportunity.py": {
+      "_fetch_opportunity": 4,
+      "cli": 3
+    },
+    "commands/sf/quote.py": {
+      "_fetch_quote": 4,
+      "cli": 2
+    },
+    "commands/sf/reconcile.py": {
+      "cli": 1
+    },
+    "commands/sf/schema.py": {
+      "cli": 3
+    },
+    "commands/sf/session_check.py": {
+      "cli": 1
+    },
+    "commands/sf/set_field.py": {
+      "_fetch_record_data": 2,
+      "_validate_allowlist": 2,
+      "_write_field": 1,
+      "cli": 2
+    },
+    "commands/sf/set_next_steps.py": {
+      "cli": 4
+    },
+    "commands/sf/sync.py": {
+      "_parse_json": 1,
+      "do_write_account": 3,
+      "do_write_opp": 3
+    },
+    "commands/sf/update_closeplan.py": {
+      "cli": 2
+    },
+    "commands/shadowbot/cli.py": {
+      "cli": 1,
+      "cmd_query": 3
+    },
+    "commands/skill/cli.py": {
+      "cli": 1,
+      "cmd_eval": 1,
+      "cmd_install": 1,
+      "cmd_list": 1,
+      "cmd_show": 1,
+      "cmd_variables": 1
+    },
+    "commands/version/cli.py": {
+      "cli": 1
+    },
+    "commands/watch/backstory_health.py": {
+      "cli": 1
+    },
+    "commands/watch/cli.py": {
+      "_handle_install_cron": 1,
+      "_raise_for_preflight_failures": 1,
+      "cli": 1,
+      "run_all": 4,
+      "run_group": 1
+    },
+    "commands/watch/close_date_countdown.py": {
+      "cli": 1
+    },
+    "commands/watch/contract_expiry.py": {
+      "cli": 1
+    },
+    "commands/watch/draft_queue.py": {
+      "cli": 1
+    },
+    "commands/watch/pursuit_stalls.py": {
+      "ack_cmd": 1,
+      "cli": 1
+    },
+    "commands/watch/slack_threads.py": {
+      "cli": 1
+    },
+    "commands/watch/waiting_on_tracker.py": {
+      "cli": 1
+    }
+  }
+}

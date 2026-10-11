@@ -77,8 +77,10 @@ def test_quality_recipes_run_each_stage_through_timing_runner() -> None:
 
     assert "scripts/quality_stage.py" in makefile
     assert " --full-enforcement $(2) -- " in makefile
-    assert quality_recipe.count("$(call RUN_QUALITY_STAGE") == 17
-    assert full_recipe.count("$(call RUN_FULL_QUALITY_STAGE") == 31
+    assert quality_recipe.count("$(call RUN_QUALITY_STAGE") == 18
+    assert full_recipe.count("$(call RUN_FULL_QUALITY_STAGE") == 32
+    assert 'scripts/check_exit_sites.py --base "$(QUALITY_BASE)"' in quality_recipe
+    assert "scripts/check_exit_sites.py" in full_recipe
     assert '--quality-base "$(QUALITY_BASE)"' in quality_recipe
     assert "scripts/check_dependency_profiles.py" in quality_recipe
     assert "scripts/check_compatibility_policy.py" in quality_recipe
@@ -444,6 +446,19 @@ def test_pr_ci_runs_the_full_suite_on_the_oldest_and_newest_supported_python() -
     setup_uv["with"].pop("python-version")
     upload["with"]["name"] = upload["with"]["name"].replace("pytest-newest-python-", "pytest-", 1)
     assert newest_steps == jobs["test"]["steps"]
+
+
+def test_pr_ci_checks_the_exit_site_baseline_against_the_base_revision() -> None:
+    """A hand-edited increase to the exit-site baseline fails pull-request CI, not only local runs."""
+    jobs = yaml.load((_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"), Loader=yaml.BaseLoader)[
+        "jobs"
+    ]
+    steps = jobs["fast-checks"]["steps"]
+    ratchet = next(step for step in steps if step.get("name") == "Enforce the exit-site ratchet")
+
+    assert steps[0]["with"]["fetch-depth"] == "2"
+    assert ratchet["run"] == "python3 scripts/check_exit_sites.py --base HEAD^1"
+    assert "if" not in ratchet
 
 
 def test_required_checks_rollup_names_match_the_evidence_script() -> None:

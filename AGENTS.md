@@ -32,7 +32,8 @@ Run commands from the repository root. When testing worktree changes, use `uv ru
   `get_fieldkit_data()`.
 - Cross-module mappings use a `TypedDict` or dataclass. Fixed-value strings use
   `Literal`. A `cast()` needs an adjacent runtime type check.
-- CLI output uses `click.echo()` or Rich rather than `print()`. Text file I/O
+- CLI output uses `click.echo()` or Rich rather than `print()`; `cli_exit.py`
+  alone uses `print()` so the exit boundary never imports Click. Text file I/O
   uses `pathlib.Path` with an explicit UTF-8 encoding.
 - Constants have one authoritative home. Extend the existing domain table or
   policy instead of copying it into a command or test.
@@ -42,9 +43,13 @@ Run commands from the repository root. When testing worktree changes, use `uv ru
 - Quality thresholds, action pins, severity definitions, and architecture
   boundaries are release controls. Do not weaken a gate to make a change pass.
 - Exit statuses are `0` success, `1` partial/retryable, `2` authentication or
-  user action required, and `3` invalid data or usage. Only
-  `cli_exit.cli_main()` calls `sys.exit()`. Click usage errors are normalized by
-  the top-level handler; domain code must not raise them.
+  user action required, and `3` invalid data or usage. Only `cli_main()` and
+  the `__main__.main()` dispatcher end the process. Commands signal failure by
+  raising a typed `FieldkitError` that `handle_cli_exception()` maps, never with
+  `SystemExit`, `sys.exit()` or `ctx.exit()`. Older command sites are listed in
+  `.exit-sites-baseline.json`, which `make pr-check` lets only shrink. Click
+  usage errors are normalized by the top-level handler; domain code must not
+  raise them.
 - Do not add shell scripts, `shell=True`, or shell-composed directory changes.
   Every subprocess, network request, and LLM call needs a named timeout.
 - Runtime writes are limited to the configured workspace, runtime-data root,
