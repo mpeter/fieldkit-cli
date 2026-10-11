@@ -20,7 +20,7 @@ CI also installs the complete `all` optional-dependency profile and imports ever
 integration dependency on CPython 3.11 for Ubuntu 24.04 and macOS 15. This optional-profile check does
 not extend the core's four-version matrix to every integration.
 
-Every pull request also runs the complete test suite on CPython 3.11 and CPython 3.14, the oldest
+Every code-changing pull request also runs the complete test suite on CPython 3.11 and CPython 3.14, the oldest
 and newest supported versions, so version-specific behavior fails before merge.
 
 Windows is experimental because the same path, subprocess, and file-write contract has not yet been

@@ -115,7 +115,7 @@ def test_hosted_public_tree_scans_install_the_pinned_scanner_on_path() -> None:
     ci = (_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     release = (_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
-    assert ci.count('binary="$RUNNER_TEMP/gitleaks"') == 2
+    assert ci.count('binary="$RUNNER_TEMP/gitleaks"') == 3
     assert 'scanner_binary="$RUNNER_TEMP/gitleaks"' in release
     assert 'echo "$RUNNER_TEMP" >> "$GITHUB_PATH"' in ci
     assert 'echo "$RUNNER_TEMP" >> "$GITHUB_PATH"' in release
@@ -431,15 +431,19 @@ def test_pr_ci_runs_the_full_suite_on_the_oldest_and_newest_supported_python() -
     ]
     newest = max(classified, key=lambda version: tuple(map(int, version.split("."))))
     oldest = project["requires-python"].removeprefix(">=")
-    workflow = yaml.load(
-        (_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"), Loader=yaml.BaseLoader
-    )
-    test_job = workflow["jobs"]["test"]
-    setup_uv = next(step for step in test_job["steps"] if "astral-sh/setup-uv@" in step.get("uses", ""))
+    jobs = yaml.load((_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"), Loader=yaml.BaseLoader)[
+        "jobs"
+    ]
+    newest_steps = jobs["test-newest-python"]["steps"]
+    setup_uv = next(step for step in newest_steps if "astral-sh/setup-uv@" in step.get("uses", ""))
+    upload = next(step for step in newest_steps if step.get("name") == "Upload bounded pytest evidence")
 
-    assert test_job["strategy"]["matrix"]["python"] == [oldest, newest]
-    assert test_job["strategy"]["fail-fast"] == "false"
-    assert setup_uv["with"]["python-version"] == "${{ matrix.python }}"
+    assert (_ROOT / ".python-version").read_text(encoding="utf-8").strip() == oldest
+    assert setup_uv["with"]["python-version"] == newest
+    # Apart from the interpreter and the artifact name, the newest-Python job is the default test job.
+    setup_uv["with"].pop("python-version")
+    upload["with"]["name"] = upload["with"]["name"].replace("pytest-newest-python-", "pytest-", 1)
+    assert newest_steps == jobs["test"]["steps"]
 
 
 def test_required_checks_rollup_names_match_the_evidence_script() -> None:
@@ -469,6 +473,7 @@ def test_pr_ci_exposes_stable_bounded_aggregate_and_keeps_compatibility_dispatch
         "commit-msg-pii",
         "fast-checks",
         "test",
+        "test-newest-python",
         "crap-changed",
         "skillsaw",
         "agentready",
@@ -544,9 +549,9 @@ def test_ci_artifacts_are_revision_named_bounded_and_fail_closed() -> None:
 
     assert "--junitxml=reports/pytest.xml" in ci
     assert "scripts/ci_evidence.py junit" in ci
+    assert "pytest-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}" in ci
     assert (
-        "pytest-py${{ matrix.python }}-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}"
-        in ci
+        "pytest-newest-python-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}" in ci
     )
     assert "required-checks-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}" in ci
     assert ci.count("if-no-files-found: error") == ci.count("actions/upload-artifact@")
