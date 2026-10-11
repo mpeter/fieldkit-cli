@@ -69,8 +69,9 @@ QUALITY_BASE=upstream/main make pr-check
 Locally, the gate runs only the tests Tach selects for your production-code
 changes, which keeps the loop fast. Tach does not see `hooks/` or `scripts/`, so
 their tests are not selected there. Hosted `Test (pytest)` runs the whole suite
-in parallel on every code PR, so nothing is skipped before merge. Run it locally
-with `uv run pytest tests/ -p no:tach -q -n 4`.
+in parallel on every code PR, so nothing is skipped before merge, and
+`Test (pytest, newest Python)` repeats it on the newest supported Python. Run it
+locally with `uv run pytest tests/ -p no:tach -q -n 4`.
 
 The command reports each failing stage separately. You can run focused tests and linters while
 iterating, but `make pr-check` is the supported local readiness signal. Complete enforcement and the
