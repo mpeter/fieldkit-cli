@@ -38,7 +38,7 @@ def _module(root: Path, relative: str, source: str) -> None:
         ("from builtins import SystemExit as Stop\nraise Stop\n", {"<module>": [2]}),
         ("def helper():\n    if __name__ == '__main__':\n        raise SystemExit(3)\n", {"helper": [3]}),
         ("import sys\ndef cli_main(code=sys.exit(3)):\n    pass\n", {"<module>": [2]}),
-        ("import sys\n@sys.exit\ndef main():\n    pass\n", {"<module>": [2]}),
+        ("import sys\n@(sys.exit)\ndef main():\n    pass\n", {"<module>": [2]}),
         ("import sys\n@guard(sys.exit(1))\ndef main():\n    pass\n", {"<module>": [2]}),
         ("import sys\nclass Run(base(sys.exit(1))):\n    pass\n", {"<module>": [2]}),
     ],
